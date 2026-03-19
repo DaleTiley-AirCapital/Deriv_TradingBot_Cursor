@@ -11,7 +11,7 @@ import type { PlatformSettings, SetTradingModeRequestMode, ActionResponse } from
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui-elements";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
-import { Shield, TrendingUp, Clock, Crosshair, Save, RotateCcw, CheckCircle2, Key, Eye, EyeOff, AlertTriangle, Zap, Bot, Lock, Unlock } from "lucide-react";
+import { Shield, TrendingUp, Clock, Crosshair, Save, RotateCcw, CheckCircle2, Key, Eye, EyeOff, AlertTriangle, Zap, Bot, Lock, Unlock, Database, Download, FlaskConical, Sparkles, ChevronRight, XCircle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 
@@ -346,6 +346,237 @@ function OverrideConfirmDialog({
   );
 }
 
+interface SetupStatus {
+  hasToken: boolean;
+  totalCandles: number;
+  hasEnoughData: boolean;
+  hasInitialBacktests: boolean;
+  backtestCount: number;
+  expectedBacktests: number;
+  setupComplete: boolean;
+}
+
+interface SetupProgress {
+  phase: string;
+  message?: string;
+  symbol?: string;
+  symbolIndex?: number;
+  totalSymbols?: number;
+  candlesForSymbol?: number;
+  grandTotal?: number;
+  completed?: number;
+  total?: number;
+  estimatedSecondsRemaining?: number;
+  settings?: Record<string, number>;
+  backtestsCreated?: number;
+}
+
+function InitialSetupWizard({ onComplete }: { onComplete: () => void }) {
+  const { toast } = useToast();
+  const [status, setStatus] = useState<SetupStatus | null>(null);
+  const [running, setRunning] = useState(false);
+  const [currentStep, setCurrentStep] = useState<"idle" | "backfill" | "analyse" | "done">("idle");
+  const [progress, setProgress] = useState<SetupProgress | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+  const base = import.meta.env.BASE_URL || "/";
+
+  const fetchStatus = async () => {
+    try {
+      const r = await fetch(`${base}api/setup/status`);
+      if (r.ok) setStatus(await r.json());
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => { fetchStatus(); }, []);
+
+  const streamPhase = async (url: string): Promise<boolean> => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!response.body) throw new Error("No response body");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const raw = line.slice(5).trim();
+        if (raw === "[DONE]") return true;
+        let data: SetupProgress | null = null;
+        try { data = JSON.parse(raw); } catch { continue; }
+        if (data) {
+          setProgress(data);
+          if (data.phase === "error") throw new Error(data.message ?? "Unknown error");
+        }
+      }
+    }
+    return true;
+  };
+
+  const handleStartSetup = async () => {
+    if (running) return;
+    setRunning(true);
+
+    try {
+      setCurrentStep("backfill");
+      setProgress({ phase: "start", message: "Connecting to Deriv API..." });
+      await streamPhase(`${base}api/setup/backfill`);
+
+      setCurrentStep("analyse");
+      setProgress({ phase: "start", message: "Starting strategy analysis..." });
+      await streamPhase(`${base}api/setup/initial-analyse`);
+
+      setCurrentStep("done");
+      setProgress(null);
+      toast({ title: "Initial Setup Complete", description: "24 months of data downloaded, all strategies backtested, and settings optimised." });
+      fetchStatus();
+      onComplete();
+    } catch (err) {
+      setProgress({ phase: "error", message: err instanceof Error ? err.message : "Setup failed" });
+      setRunning(false);
+      setCurrentStep("idle");
+    }
+  };
+
+  if (dismissed || status?.setupComplete) return null;
+  if (!status) return null;
+
+  const STEP_LABELS = [
+    { key: "backfill", icon: Download, label: "Download 24 months of trading history" },
+    { key: "analyse", icon: FlaskConical, label: "Run all strategies as backtests" },
+    { key: "done", icon: Sparkles, label: "AI optimises your settings" },
+  ] as const;
+
+  const backfillPct = progress?.phase === "symbol_progress" || progress?.phase === "symbol_done"
+    ? Math.round(((progress.symbolIndex ?? 0) / (progress.totalSymbols ?? 13)) * 100)
+    : progress?.phase === "backfill_complete" ? 100 : 0;
+
+  const analysePct = progress?.completed && progress.total
+    ? Math.round((progress.completed / progress.total) * 100)
+    : 0;
+
+  const progressPct = currentStep === "backfill" ? backfillPct : currentStep === "analyse" ? analysePct : currentStep === "done" ? 100 : 0;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+      <Card className="border-2 border-primary/40 bg-primary/5">
+        <CardHeader className="pb-3">
+          <div className="flex items-start justify-between gap-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Database className="w-4 h-4 text-primary" />
+              {currentStep === "done" ? "Initial Setup Complete" : "Initial Setup Required"}
+            </CardTitle>
+            {!running && (
+              <button
+                onClick={() => setDismissed(true)}
+                className="text-muted-foreground hover:text-foreground transition-colors mt-0.5"
+                title="Dismiss"
+              >
+                <XCircle className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!running && currentStep === "idle" && (
+            <>
+              {!status.hasToken ? (
+                <p className="text-sm text-muted-foreground">
+                  Enter your <span className="text-primary font-medium">Deriv API token</span> in the API Keys section below, then return here to run initial setup.
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Before trading, the system needs to download 24 months of price history and run all strategies as backtests across every index. The AI will then recommend your optimal starting settings.
+                  </p>
+                  <div className="flex flex-col gap-2 pl-1">
+                    {STEP_LABELS.map(({ key, icon: Icon, label }) => (
+                      <div key={key} className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Icon className="w-3.5 h-3.5 text-primary/70 shrink-0" />
+                        {label}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 pt-1">
+                    <p className="text-xs text-muted-foreground">
+                      {status.totalCandles > 0
+                        ? `${status.totalCandles.toLocaleString()} candles already stored · ${status.backtestCount} of ${status.expectedBacktests} backtests complete`
+                        : "No historical data yet"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleStartSetup}
+                    className="flex items-center gap-2 px-5 py-2.5 bg-primary text-primary-foreground rounded-lg text-sm font-medium shadow-lg shadow-primary/20 hover:shadow-primary/40 transition-all"
+                  >
+                    <Zap className="w-4 h-4" />
+                    Run Initial Setup
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </>
+              )}
+            </>
+          )}
+
+          {running && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                {STEP_LABELS.map(({ key, icon: Icon, label }, i) => {
+                  const isDone = currentStep === "done" || (key === "backfill" && (currentStep === "analyse" || currentStep === "done"));
+                  const isActive = currentStep === key;
+                  return (
+                    <React.Fragment key={key}>
+                      <div className={cn(
+                        "flex items-center gap-1.5 text-xs font-medium transition-colors",
+                        isDone ? "text-success" : isActive ? "text-primary" : "text-muted-foreground/40"
+                      )}>
+                        <Icon className="w-3.5 h-3.5 shrink-0" />
+                        <span className="hidden sm:inline">{label.split(" ").slice(0, 3).join(" ")}</span>
+                      </div>
+                      {i < STEP_LABELS.length - 1 && (
+                        <div className={cn("flex-1 h-px", isDone ? "bg-success/40" : "bg-border/50")} />
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="w-full h-2 bg-border/40 rounded-full overflow-hidden">
+                  <motion.div
+                    className="h-full bg-primary rounded-full"
+                    initial={{ width: "0%" }}
+                    animate={{ width: `${progressPct}%` }}
+                    transition={{ ease: "easeOut" }}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground min-h-[1.25rem]">
+                  {progress?.message ?? "Working..."}
+                  {progress?.estimatedSecondsRemaining && progress.estimatedSecondsRemaining > 5
+                    ? ` · ~${Math.ceil(progress.estimatedSecondsRemaining / 60)} min remaining`
+                    : ""}
+                </p>
+              </div>
+
+              {progress?.phase === "error" && (
+                <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg p-3">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{progress.message}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
 export default function Settings() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -635,6 +866,15 @@ export default function Settings() {
           </button>
         </div>
       </div>
+
+      <AnimatePresence>
+        <InitialSetupWizard
+          onComplete={() => {
+            queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
+            fetchAiStatus();
+          }}
+        />
+      </AnimatePresence>
 
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0 }}>
         <Card className={cn("border-2", aiStatus?.locked ? "border-emerald-500/30" : "border-border/50")}>

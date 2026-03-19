@@ -9,6 +9,7 @@ import portfolioRouter from "./portfolio";
 import riskRouter from "./risk";
 import settingsRouter from "./settings";
 import accountRouter from "./account";
+import setupRouter from "./setup";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use(portfolioRouter);
 router.use(riskRouter);
 router.use(settingsRouter);
 router.use(accountRouter);
+router.use(setupRouter);
 
 export default router;

@@ -357,6 +357,28 @@ class DerivClient {
     return response.history as DerivTickHistory;
   }
 
+  async getCandleHistoryWithEnd(symbol: string, granularity: number, count = 5000, endEpoch?: number): Promise<DerivCandle[] | null> {
+    if (!this.authorized) throw new Error("Not authorized");
+    const tf = Object.entries(TIMEFRAMES).find(([, s]) => s === granularity)?.[0] || `${granularity}s`;
+    const endLabel = endEpoch ? new Date(endEpoch * 1000).toISOString().slice(0, 10) : "latest";
+    console.log(`[Deriv] Fetching ${count} candles (${tf}) for ${symbol} ending ${endLabel}...`);
+    const response = await this.send({
+      ticks_history: symbol,
+      count,
+      end: endEpoch ?? "latest",
+      style: "candles",
+      granularity,
+    }) as Record<string, unknown>;
+
+    if (response.error) {
+      const err = response.error as Record<string, unknown>;
+      console.error(`[Deriv] Candle history error for ${symbol}:`, err.message);
+      return null;
+    }
+
+    return response.candles as DerivCandle[];
+  }
+
   async getCandleHistory(symbol: string, granularity: number, count = 1000): Promise<DerivCandle[] | null> {
     if (!this.authorized) throw new Error("Not authorized");
     const tf = Object.entries(TIMEFRAMES).find(([, s]) => s === granularity)?.[0] || `${granularity}s`;

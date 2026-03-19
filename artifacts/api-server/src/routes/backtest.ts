@@ -18,7 +18,7 @@ interface TradeRecord {
   exitReason: string;
 }
 
-async function runBacktestSimulation(
+export async function runBacktestSimulation(
   strategyName: string,
   symbol: string,
   initialCapital: number,
