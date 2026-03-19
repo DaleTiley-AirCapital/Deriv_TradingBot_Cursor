@@ -77,6 +77,25 @@ export default function Research() {
 
   const { mutate: analyseBacktest, isPending: analysing } = useAnalyseBacktest();
 
+  const STRATEGY_INFO: Record<string, { label: string; description: string }> = {
+    "trend-pullback": {
+      label: "Trend Pullback",
+      description: "Identifies a strong prevailing trend, then waits for a short counter-move (pullback) before entering in the trend direction. Works best on Boom/Crash indices during sustained directional runs.",
+    },
+    "exhaustion-rebound": {
+      label: "Exhaustion Rebound",
+      description: "Detects when price has moved too far, too fast — using RSI extremes and momentum divergence — and bets on a mean-reversion snap-back. Suited for Volatility indices and rangy Boom/Crash phases.",
+    },
+    "volatility-breakout": {
+      label: "Volatility Breakout",
+      description: "Monitors Bollinger Band width compression (low volatility squeezes), then enters the first large expansion candle in the breakout direction. Effective on all synthetic indices during consolidation periods.",
+    },
+    "spike-hazard": {
+      label: "Spike Hazard",
+      description: "Estimates the probability of an imminent spike on Boom or Crash indices using tick-rate analysis and inter-spike timing models. Positions are sized conservatively given the high uncertainty of spike timing.",
+    },
+  };
+
   const [form, setForm] = useState({
     strategyName: "trend-pullback",
     symbol: "BOOM1000",
@@ -143,6 +162,11 @@ export default function Research() {
                     <option value="volatility-breakout">Volatility Breakout</option>
                     <option value="spike-hazard">Spike Hazard</option>
                   </Select>
+                  {STRATEGY_INFO[form.strategyName] && (
+                    <p className="text-xs text-muted-foreground leading-relaxed pt-1">
+                      {STRATEGY_INFO[form.strategyName].description}
+                    </p>
+                  )}
                 </div>
                 
                 <div className="space-y-2">

@@ -1,6 +1,6 @@
 import React from "react";
 import { cn } from "@/lib/utils";
-import { Loader2 } from "lucide-react";
+import { Loader2, Info } from "lucide-react";
 
 export function Card({ className, children, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
@@ -179,6 +179,18 @@ export function Divider({ className }: { className?: string }) {
   return <div className={cn("border-t border-border/50", className)} />;
 }
 
+export function InfoTooltip({ content, className }: { content: React.ReactNode; className?: string }) {
+  return (
+    <div className={cn("relative group inline-flex shrink-0", className)}>
+      <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help hover:text-foreground transition-colors" />
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 w-60 p-3 rounded-lg bg-popover border border-border text-xs text-muted-foreground shadow-xl z-50 invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-all duration-150 pointer-events-none leading-relaxed">
+        {content}
+        <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-border" />
+      </div>
+    </div>
+  );
+}
+
 export function KpiCard({
   label,
   value,
@@ -188,6 +200,7 @@ export function KpiCard({
   detail,
   accentColor = "blue",
   icon,
+  tooltip,
   className
 }: {
   label: string;
@@ -198,6 +211,7 @@ export function KpiCard({
   detail?: React.ReactNode;
   accentColor?: "blue" | "green" | "red" | "amber" | "purple";
   icon?: React.ReactNode;
+  tooltip?: React.ReactNode;
   className?: string;
 }) {
   const accentClass = {
@@ -219,9 +233,12 @@ export function KpiCard({
   return (
     <div className={cn("glass-panel rounded-xl p-5 flex flex-col gap-3", accentClass, className)}>
       <div className="flex items-start justify-between">
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider truncate">{label}</span>
+          {tooltip && <InfoTooltip content={tooltip} />}
+        </div>
         {icon && (
-          <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center text-sm", iconBgClass)}>
+          <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0", iconBgClass)}>
             {icon}
           </div>
         )}

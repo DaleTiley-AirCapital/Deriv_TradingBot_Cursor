@@ -561,7 +561,7 @@ export default function Settings() {
               />
               <SettingField
                 label="Total Capital"
-                description="Total account capital used for position sizing calculations"
+                description="The amount you plan to deposit and trade with (e.g. $600). This is used to calculate how much to risk per trade. Set it to your intended deposit — not your total net worth."
                 value={form.total_capital || "10000"}
                 onChange={(v) => update("total_capital", v)}
                 suffix="$"

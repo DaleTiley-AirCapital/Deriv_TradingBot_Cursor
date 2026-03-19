@@ -53,10 +53,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     : "bg-muted-foreground/50";
 
   const sidebarBorder = isLive
-    ? "border-destructive/20"
+    ? "border-destructive/30"
     : isPaper
-    ? "border-warning/20"
-    : "border-border/60";
+    ? "border-warning/30"
+    : "border-border";
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
@@ -65,8 +65,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         sidebarBorder
       )}
         style={{
-          background: "linear-gradient(180deg, hsl(220 18% 8%) 0%, hsl(220 16% 7%) 100%)",
-          boxShadow: "2px 0 24px rgba(0,0,0,0.4)"
+          background: "linear-gradient(180deg, hsl(228 45% 11%) 0%, hsl(228 42% 9%) 100%)",
+          boxShadow: "2px 0 20px rgba(0,0,0,0.5), inset -1px 0 0 rgba(255,255,255,0.04)"
         }}
       >
         <div className="h-14 flex items-center px-5 border-b border-border/50">

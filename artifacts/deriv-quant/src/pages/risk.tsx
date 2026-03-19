@@ -2,15 +2,12 @@ import React from "react";
 import { 
   useGetRiskStatus, 
   useTriggerKillSwitch, 
-  useSetPortfolioMode, 
   getGetRiskStatusQueryKey,
-  useGetPortfolioStatus,
-  getGetPortfolioStatusQueryKey
 } from "@workspace/api-client-react";
-import { Card, CardContent, CardHeader, CardTitle, Badge, Button, MetricValue } from "@/components/ui-elements";
+import { Card, CardContent, CardHeader, CardTitle, Badge, Button } from "@/components/ui-elements";
 import { formatPercent, cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
-import { ShieldAlert, AlertOctagon, Lock } from "lucide-react";
+import { ShieldAlert, AlertOctagon, Lock, Info } from "lucide-react";
 import { motion } from "framer-motion";
 
 function RiskGauge({ value, max, breached, label }: { value: number; max: number; breached: boolean; label: string }) {
@@ -37,7 +34,6 @@ function RiskGauge({ value, max, breached, label }: { value: number; max: number
 export default function Risk() {
   const queryClient = useQueryClient();
   const { data: risk } = useGetRiskStatus({ query: { refetchInterval: 3000 } });
-  const { data: portfolio } = useGetPortfolioStatus();
 
   const { mutate: triggerKill, isPending: killing } = useTriggerKillSwitch({
     mutation: {
@@ -45,19 +41,18 @@ export default function Risk() {
     }
   });
 
-  const { mutate: setMode, isPending: settingMode } = useSetPortfolioMode({
-    mutation: {
-      onSuccess: () => queryClient.invalidateQueries({ queryKey: getGetPortfolioStatusQueryKey() })
-    }
-  });
-
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="page-title">Risk Manager</h1>
-          <p className="page-subtitle">Global portfolio constraints and exposure limits</p>
+          <h1 className="page-title">Risk Monitor</h1>
+          <p className="page-subtitle">Live read-out of exposure limits and circuit-breaker status</p>
         </div>
+      </div>
+
+      <div className="flex items-start gap-2 px-4 py-3 rounded-xl bg-muted/30 border border-border/40 text-xs text-muted-foreground">
+        <Info className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary" />
+        <span>This is a <span className="text-foreground font-medium">read-only status panel</span>. To change risk limits, allocation mode, or enable/disable strategies, go to <span className="text-primary">Settings → Risk Controls</span>.</span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -95,7 +90,7 @@ export default function Risk() {
             <CardHeader>
               <CardTitle>
                 <ShieldAlert className="w-4 h-4 text-primary" />
-                Strategy Constraints
+                Strategy Status
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -135,7 +130,7 @@ export default function Risk() {
           </Card>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-5">
+        <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
           <Card className={cn(
             "border-2 transition-all duration-500",
             risk?.killSwitchActive ? "border-destructive/50 bg-destructive/5" : "border-border"
@@ -149,7 +144,7 @@ export default function Risk() {
               </div>
               <h2 className="text-lg font-semibold mb-2 text-foreground">Global Kill Switch</h2>
               <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
-                Instantly flattens all open positions and blocks all new entries.
+                Instantly flattens all open positions and blocks all new entries. Use in an emergency.
               </p>
               <Button 
                 variant="destructive"
@@ -162,33 +157,11 @@ export default function Risk() {
                 <AlertOctagon className="w-5 h-5" />
                 {risk?.killSwitchActive ? "System Halted" : "Engage Kill Switch"}
               </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Allocation Mode</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {(['conservative', 'balanced', 'aggressive'] as const).map(mode => {
-                const isActive = portfolio?.allocationMode === mode;
-                return (
-                  <button
-                    key={mode}
-                    disabled={settingMode || isActive}
-                    onClick={() => setMode({ data: { mode } })}
-                    className={cn(
-                      "w-full text-left px-4 py-3 rounded-lg border transition-all flex items-center justify-between",
-                      isActive 
-                        ? "bg-primary/10 border-primary/40 text-primary" 
-                        : "border-border/60 hover:border-primary/30 hover:bg-muted/30 text-muted-foreground hover:text-foreground disabled:opacity-40"
-                    )}
-                  >
-                    <span className="text-sm font-medium capitalize">{mode}</span>
-                    {isActive && <Badge variant="default">Active</Badge>}
-                  </button>
-                );
-              })}
+              {risk?.killSwitchActive && (
+                <p className="text-xs text-muted-foreground mt-3">
+                  To resume trading, disable the kill switch from <span className="text-primary">Settings → Risk Controls</span>.
+                </p>
+              )}
             </CardContent>
           </Card>
         </motion.div>
