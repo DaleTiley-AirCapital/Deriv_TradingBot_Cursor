@@ -9,7 +9,7 @@ router.get("/portfolio/status", async (_req, res): Promise<void> => {
   const stateMap: Record<string, string> = {};
   for (const s of states) stateMap[s.key] = s.value;
 
-  const totalCapital = parseFloat(stateMap["total_capital"] || "10000");
+  const totalCapital = parseFloat(stateMap["total_capital"] || "1000");
   const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
   const closedTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "closed"));
 
@@ -60,7 +60,7 @@ router.get("/overview", async (_req, res): Promise<void> => {
 
   const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
   const closedTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "closed"));
-  const totalCapital = parseFloat(stateMap["total_capital"] || "10000");
+  const totalCapital = parseFloat(stateMap["total_capital"] || "1000");
   const openRisk = openTrades.reduce((sum, t) => sum + t.size * 0.015, 0);
   const realisedPnl = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
   const wins = closedTrades.filter(t => (t.pnl || 0) > 0).length;

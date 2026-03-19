@@ -158,7 +158,7 @@ async function initDb(): Promise<void> {
       ('mode',                'idle'),
       ('kill_switch',         'false'),
       ('allocation_mode',     'balanced'),
-      ('total_capital',       '10000'),
+      ('total_capital',       '1000'),
       ('max_daily_loss_pct',  '3'),
       ('max_weekly_loss_pct', '8'),
       ('max_drawdown_pct',    '15'),

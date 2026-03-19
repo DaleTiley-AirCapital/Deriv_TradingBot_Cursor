@@ -195,7 +195,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number)
   for (const s of states) stateMap[s.key] = s.value;
   const mode = stateMap["mode"] || "idle";
 
-  let equity = parseFloat(stateMap["total_capital"] || "10000");
+  let equity = parseFloat(stateMap["total_capital"] || "1000");
   if (mode === "live") {
     try {
       const balanceData = await client.getAccountBalance();
@@ -242,10 +242,23 @@ export async function openPosition(decision: AllocationDecision, atrPct: number)
     return null;
   }
 
-  const tpMultiplierStrong = parseFloat(stateMap["tp_multiplier_strong"] || "2.5");
-  const tpMultiplierMedium = parseFloat(stateMap["tp_multiplier_medium"] || "2.0");
-  const tpMultiplierWeak = parseFloat(stateMap["tp_multiplier_weak"] || "1.5");
-  const slRatio = parseFloat(stateMap["sl_ratio"] || "1.0");
+  const sharedTpStrong = parseFloat(stateMap["tp_multiplier_strong"] || "2.5");
+  const sharedTpMedium = parseFloat(stateMap["tp_multiplier_medium"] || "2.0");
+  const sharedTpWeak = parseFloat(stateMap["tp_multiplier_weak"] || "1.5");
+  const sharedSlRatio = parseFloat(stateMap["sl_ratio"] || "1.0");
+
+  const tpMultiplierStrong = mode === "live"
+    ? parseFloat(stateMap["live_tp_multiplier_strong"] || String(sharedTpStrong))
+    : parseFloat(stateMap["paper_tp_multiplier_strong"] || String(sharedTpStrong));
+  const tpMultiplierMedium = mode === "live"
+    ? parseFloat(stateMap["live_tp_multiplier_medium"] || String(sharedTpMedium))
+    : parseFloat(stateMap["paper_tp_multiplier_medium"] || String(sharedTpMedium));
+  const tpMultiplierWeak = mode === "live"
+    ? parseFloat(stateMap["live_tp_multiplier_weak"] || String(sharedTpWeak))
+    : parseFloat(stateMap["paper_tp_multiplier_weak"] || String(sharedTpWeak));
+  const slRatio = mode === "live"
+    ? parseFloat(stateMap["live_sl_ratio"] || String(sharedSlRatio))
+    : parseFloat(stateMap["paper_sl_ratio"] || String(sharedSlRatio));
   const trailingStopBufferPct = parseFloat(stateMap["trailing_stop_buffer_pct"] || "0.3");
   const timeExitHours = parseFloat(stateMap["time_exit_window_hours"] || String(INITIAL_EXIT_HOURS));
 

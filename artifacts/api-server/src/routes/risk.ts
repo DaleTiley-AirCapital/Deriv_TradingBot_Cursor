@@ -9,7 +9,7 @@ router.get("/risk/status", async (_req, res): Promise<void> => {
   const stateMap: Record<string, string> = {};
   for (const s of states) stateMap[s.key] = s.value;
 
-  const totalCapital = parseFloat(stateMap["total_capital"] || "10000");
+  const totalCapital = parseFloat(stateMap["total_capital"] || "1000");
   const closedTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "closed"));
   const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
 
