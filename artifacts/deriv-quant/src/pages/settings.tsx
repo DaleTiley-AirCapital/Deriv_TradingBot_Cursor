@@ -574,45 +574,6 @@ function InitialSetupWizard({ onComplete }: { onComplete: () => void }) {
         </CardContent>
       </Card>
     </motion.div>
-function ResetPaperConfirmDialog({ onConfirm, onCancel, resetting }: { onConfirm: () => void; onCancel: () => void; resetting: boolean }) {
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="bg-card border border-destructive/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl"
-      >
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center">
-            <AlertTriangle className="w-6 h-6 text-destructive" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-foreground">Reset & Start Fresh</h3>
-            <p className="text-sm text-muted-foreground">This action cannot be undone</p>
-          </div>
-        </div>
-        <div className="space-y-3 mb-6 text-sm text-muted-foreground">
-          <p>This will permanently delete <span className="text-foreground font-semibold">all paper trade history</span>, open paper positions, and reset paper P&amp;L to zero.</p>
-          <p>Live trade records will not be affected. Your settings will remain unchanged.</p>
-        </div>
-        <div className="flex gap-3">
-          <button
-            onClick={onCancel}
-            disabled={resetting}
-            className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={resetting}
-            className="flex-1 px-4 py-2.5 rounded-lg bg-destructive text-destructive-foreground text-sm font-bold uppercase tracking-wider hover:bg-destructive/90 transition-all disabled:opacity-50"
-          >
-            {resetting ? "Resetting..." : "Reset Paper Data"}
-          </button>
-        </div>
-      </motion.div>
-    </div>
   );
 }
 
@@ -625,8 +586,6 @@ export default function Settings() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [hasChanges, setHasChanges] = useState(false);
   const [showLiveConfirm, setShowLiveConfirm] = useState(false);
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [resetting, setResetting] = useState(false);
   const [aiHealth, setAiHealth] = useState<{ configured: boolean; working: boolean; error?: string } | null>(null);
   const [aiHealthLoading, setAiHealthLoading] = useState(false);
 
@@ -839,26 +798,6 @@ export default function Settings() {
     setMode({ data: { mode: "live" as SetTradingModeRequestMode, confirmed: true } });
   };
 
-  const handleResetPaper = async () => {
-    setResetting(true);
-    try {
-      const base = import.meta.env.BASE_URL || "/";
-      const resp = await fetch(`${base}api/settings/reset-paper`, { method: "POST" });
-      const data = await resp.json();
-      if (data.success) {
-        toast({ title: "Paper data reset", description: data.message });
-        queryClient.invalidateQueries();
-      } else {
-        toast({ title: "Reset failed", description: data.message, variant: "destructive" });
-      }
-    } catch {
-      toast({ title: "Reset failed", description: "Could not reset paper data.", variant: "destructive" });
-    } finally {
-      setResetting(false);
-      setShowResetConfirm(false);
-    }
-  };
-
   const currentMode = form.trading_mode || "idle";
 
   if (isLoading) {
@@ -885,13 +824,6 @@ export default function Settings() {
             monthsOfData={6}
             onConfirm={confirmOverride}
             onCancel={() => setOverrideKey(null)}
-          />
-        )}
-        {showResetConfirm && (
-          <ResetPaperConfirmDialog
-            onConfirm={handleResetPaper}
-            onCancel={() => setShowResetConfirm(false)}
-            resetting={resetting}
           />
         )}
       </AnimatePresence>
@@ -1188,19 +1120,31 @@ export default function Settings() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Paper Mode</p>
               <SettingField
-                label="Paper Capital"
-                description="Starting capital for paper trading simulation"
-                value={form.total_capital || "1000"}
-                onChange={(v) => update("total_capital", v)}
-                suffix="$"
-                min={100}
-                step={100}
+                label="Max Simultaneous Trades"
+                description="Maximum number of open positions at any time"
+                value={form.max_open_trades || "4"}
+                onChange={(v) => update("max_open_trades", v)}
+                step={1}
+                min={1}
+                max={20}
               />
               <SettingField
-                label="Paper — Equity %"
-                description="Position size as a percentage of capital in paper mode (simulated)"
+                label="Equity % Per Trade"
+                description="Default percentage of total capital risked on each trade"
+                value={form.equity_pct_per_trade || "2"}
+                onChange={(v) => update("equity_pct_per_trade", v)}
+                suffix="%"
+                min={0.1}
+                max={25}
+                step={0.5}
+                aiLocked={isAiLocked("equity_pct_per_trade")}
+                aiValue={getAiValue("equity_pct_per_trade")}
+                onOverride={() => handleOverride("equity_pct_per_trade", "Equity % Per Trade")}
+              />
+              <SettingField
+                label="Paper Mode — Equity %"
+                description="Position size when trading in paper mode (simulated)"
                 value={form.paper_equity_pct_per_trade || "1"}
                 onChange={(v) => update("paper_equity_pct_per_trade", v)}
                 suffix="%"
@@ -1209,22 +1153,11 @@ export default function Settings() {
                 step={0.5}
                 aiLocked={isAiLocked("paper_equity_pct_per_trade")}
                 aiValue={getAiValue("paper_equity_pct_per_trade")}
-                onOverride={() => handleOverride("paper_equity_pct_per_trade", "Paper — Equity %")}
+                onOverride={() => handleOverride("paper_equity_pct_per_trade", "Paper Mode — Equity %")}
               />
               <SettingField
-                label="Paper — Max Trades"
-                description="Max open positions in paper mode"
-                value={form.paper_max_open_trades || "4"}
-                onChange={(v) => update("paper_max_open_trades", v)}
-                step={1}
-                min={1}
-                max={20}
-              />
-              <div className="border-t border-border/30 my-4" />
-              <p className="text-xs font-semibold text-destructive/70 mb-2 uppercase tracking-wider">Live Mode</p>
-              <SettingField
-                label="Live — Equity %"
-                description="Position size as a percentage of live account balance"
+                label="Live Mode — Equity %"
+                description="Position size when trading in live mode (real money)"
                 value={form.live_equity_pct_per_trade || "2"}
                 onChange={(v) => update("live_equity_pct_per_trade", v)}
                 suffix="%"
@@ -1233,10 +1166,19 @@ export default function Settings() {
                 step={0.5}
                 aiLocked={isAiLocked("live_equity_pct_per_trade")}
                 aiValue={getAiValue("live_equity_pct_per_trade")}
-                onOverride={() => handleOverride("live_equity_pct_per_trade", "Live — Equity %")}
+                onOverride={() => handleOverride("live_equity_pct_per_trade", "Live Mode — Equity %")}
               />
               <SettingField
-                label="Live — Max Trades"
+                label="Paper Mode — Max Trades"
+                description="Max open positions in paper mode"
+                value={form.paper_max_open_trades || "4"}
+                onChange={(v) => update("paper_max_open_trades", v)}
+                step={1}
+                min={1}
+                max={20}
+              />
+              <SettingField
+                label="Live Mode — Max Trades"
                 description="Max open positions in live mode"
                 value={form.live_max_open_trades || "3"}
                 onChange={(v) => update("live_max_open_trades", v)}
@@ -1244,7 +1186,15 @@ export default function Settings() {
                 min={1}
                 max={20}
               />
-              <div className="border-t border-border/30 my-4" />
+              <SettingField
+                label="Total Capital"
+                description="Recommended: your actual deposit amount (e.g. $600). This is the amount you plan to trade with — set it to your intended deposit, not your total net worth. The platform uses this to calculate how much to risk per trade."
+                value={form.total_capital || "10000"}
+                onChange={(v) => update("total_capital", v)}
+                suffix="$"
+                min={100}
+                step={100}
+              />
               <SettingField
                 label="Allocation Mode"
                 description="Controls how aggressively capital is deployed on signals"
@@ -1270,93 +1220,61 @@ export default function Settings() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Paper Mode</p>
               <SettingField
-                label="Paper TP — Strong Signal"
-                description="Take profit multiplier for high-confidence signals in paper mode (score >= 0.75)"
-                value={form.paper_tp_multiplier_strong || "2.5"}
-                onChange={(v) => update("paper_tp_multiplier_strong", v)}
+                label="TP Multiplier — Strong Signal"
+                description="Take profit multiplier for high-confidence signals (score >= 0.75)"
+                value={form.tp_multiplier_strong || "2.5"}
+                onChange={(v) => update("tp_multiplier_strong", v)}
                 suffix="x"
                 min={0.5}
                 max={10}
                 step={0.1}
+                aiLocked={isAiLocked("tp_multiplier_strong")}
+                aiValue={getAiValue("tp_multiplier_strong")}
+                onOverride={() => handleOverride("tp_multiplier_strong", "TP Multiplier — Strong Signal")}
               />
               <SettingField
-                label="Paper TP — Medium Signal"
-                description="Take profit multiplier for medium-confidence signals in paper mode (score 0.65-0.75)"
-                value={form.paper_tp_multiplier_medium || "2.0"}
-                onChange={(v) => update("paper_tp_multiplier_medium", v)}
+                label="TP Multiplier — Medium Signal"
+                description="Take profit multiplier for medium-confidence signals (score 0.65-0.75)"
+                value={form.tp_multiplier_medium || "2.0"}
+                onChange={(v) => update("tp_multiplier_medium", v)}
                 suffix="x"
                 min={0.5}
                 max={10}
                 step={0.1}
+                aiLocked={isAiLocked("tp_multiplier_medium")}
+                aiValue={getAiValue("tp_multiplier_medium")}
+                onOverride={() => handleOverride("tp_multiplier_medium", "TP Multiplier — Medium Signal")}
               />
               <SettingField
-                label="Paper TP — Weak Signal"
-                description="Take profit multiplier for weaker signals in paper mode (score 0.55-0.65)"
-                value={form.paper_tp_multiplier_weak || "1.5"}
-                onChange={(v) => update("paper_tp_multiplier_weak", v)}
+                label="TP Multiplier — Weak Signal"
+                description="Take profit multiplier for weaker signals (score 0.55-0.65)"
+                value={form.tp_multiplier_weak || "1.5"}
+                onChange={(v) => update("tp_multiplier_weak", v)}
                 suffix="x"
                 min={0.5}
                 max={10}
                 step={0.1}
+                aiLocked={isAiLocked("tp_multiplier_weak")}
+                aiValue={getAiValue("tp_multiplier_weak")}
+                onOverride={() => handleOverride("tp_multiplier_weak", "TP Multiplier — Weak Signal")}
               />
               <SettingField
-                label="Paper SL Ratio"
-                description="Stop loss distance as a ratio of TP distance in paper mode"
-                value={form.paper_sl_ratio || "1.0"}
-                onChange={(v) => update("paper_sl_ratio", v)}
+                label="Stop Loss Ratio"
+                description="SL distance as a ratio of the TP distance (1.0 = symmetric risk/reward)"
+                value={form.sl_ratio || "1.0"}
+                onChange={(v) => update("sl_ratio", v)}
                 suffix="x"
                 min={0.1}
                 max={5}
                 step={0.1}
+                aiLocked={isAiLocked("sl_ratio")}
+                aiValue={getAiValue("sl_ratio")}
+                onOverride={() => handleOverride("sl_ratio", "Stop Loss Ratio")}
               />
-              <div className="border-t border-border/30 my-4" />
-              <p className="text-xs font-semibold text-destructive/70 mb-2 uppercase tracking-wider">Live Mode</p>
-              <SettingField
-                label="Live TP — Strong Signal"
-                description="Take profit multiplier for high-confidence signals in live mode (score >= 0.75)"
-                value={form.live_tp_multiplier_strong || "2.5"}
-                onChange={(v) => update("live_tp_multiplier_strong", v)}
-                suffix="x"
-                min={0.5}
-                max={10}
-                step={0.1}
-              />
-              <SettingField
-                label="Live TP — Medium Signal"
-                description="Take profit multiplier for medium-confidence signals in live mode (score 0.65-0.75)"
-                value={form.live_tp_multiplier_medium || "2.0"}
-                onChange={(v) => update("live_tp_multiplier_medium", v)}
-                suffix="x"
-                min={0.5}
-                max={10}
-                step={0.1}
-              />
-              <SettingField
-                label="Live TP — Weak Signal"
-                description="Take profit multiplier for weaker signals in live mode (score 0.55-0.65)"
-                value={form.live_tp_multiplier_weak || "1.5"}
-                onChange={(v) => update("live_tp_multiplier_weak", v)}
-                suffix="x"
-                min={0.5}
-                max={10}
-                step={0.1}
-              />
-              <SettingField
-                label="Live SL Ratio"
-                description="Stop loss distance as a ratio of TP distance in live mode"
-                value={form.live_sl_ratio || "1.0"}
-                onChange={(v) => update("live_sl_ratio", v)}
-                suffix="x"
-                min={0.1}
-                max={5}
-                step={0.1}
-              />
-              <div className="border-t border-border/30 my-4" />
               <SettingField
                 label="Trailing Stop Buffer"
-                description="Buffer percentage above break-even before trailing stop activates (shared)"
+                description="Buffer percentage above break-even before trailing stop activates"
                 value={form.trailing_stop_buffer_pct || "0.3"}
                 onChange={(v) => update("trailing_stop_buffer_pct", v)}
                 suffix="%"
@@ -1482,7 +1400,7 @@ export default function Settings() {
               <SettingField
                 label="Time Exit Window"
                 description="Automatically close positions that have been open longer than this"
-                value={form.time_exit_window_hours || "72"}
+                value={form.time_exit_window_hours || "4"}
                 onChange={(v) => update("time_exit_window_hours", v)}
                 suffix="hrs"
                 min={0.5}
@@ -1516,32 +1434,6 @@ export default function Settings() {
           </Card>
         </motion.div>
       </div>
-
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-        <Card className="border-2 border-destructive/20">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="w-4 h-4" />
-              Danger Zone
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between py-2">
-              <div>
-                <p className="text-sm font-medium text-foreground">Reset & Start Fresh</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Delete all paper trade history and reset P&amp;L to zero. Live trade records are not affected.</p>
-              </div>
-              <button
-                onClick={() => setShowResetConfirm(true)}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-destructive/50 text-destructive text-sm font-semibold hover:bg-destructive/5 hover:border-destructive transition-all"
-              >
-                <RotateCcw className="w-4 h-4" />
-                Reset Paper Data
-              </button>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
     </div>
   );
 }

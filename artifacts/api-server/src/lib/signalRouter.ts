@@ -43,7 +43,7 @@ export async function getPortfolioContext(): Promise<PortfolioContext> {
 
   const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
   const closedTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "closed"));
-  const totalCapital = parseFloat(stateMap["total_capital"] || "1000");
+  const totalCapital = parseFloat(stateMap["total_capital"] || "10000");
   const totalDeployedCapital = openTrades.reduce((sum, t) => sum + t.size, 0);
   const openRisk = totalDeployedCapital;
 

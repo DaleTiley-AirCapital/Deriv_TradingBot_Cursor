@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { eq } from "drizzle-orm";
-import { db, platformStateTable, candlesTable, tradesTable } from "@workspace/db";
+import { db, platformStateTable, candlesTable } from "@workspace/db";
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypto";
 import { checkOpenAiHealth } from "../lib/openai.js";
 import { desc } from "drizzle-orm";
@@ -40,13 +40,13 @@ const SETTING_DEFAULTS: Record<string, string> = {
   tp_multiplier_weak: "1.5",
   sl_ratio: "1.0",
   trailing_stop_buffer_pct: "0.3",
-  time_exit_window_hours: "72",
+  time_exit_window_hours: "4",
   max_daily_loss_pct: "3",
   max_weekly_loss_pct: "8",
   max_drawdown_pct: "15",
   kill_switch: "false",
   allocation_mode: "balanced",
-  total_capital: "1000",
+  total_capital: "10000",
   scan_interval_seconds: "30",
   paper_equity_pct_per_trade: "1",
   live_equity_pct_per_trade: "2",
@@ -60,14 +60,6 @@ const SETTING_DEFAULTS: Record<string, string> = {
   live_max_weekly_loss_pct: "8",
   paper_max_drawdown_pct: "20",
   live_max_drawdown_pct: "15",
-  paper_tp_multiplier_strong: "2.5",
-  paper_tp_multiplier_medium: "2.0",
-  paper_tp_multiplier_weak: "1.5",
-  paper_sl_ratio: "1.0",
-  live_tp_multiplier_strong: "2.5",
-  live_tp_multiplier_medium: "2.0",
-  live_tp_multiplier_weak: "1.5",
-  live_sl_ratio: "1.0",
 };
 
 const API_KEY_KEYS = ["deriv_api_token", "openai_api_key"];
@@ -398,7 +390,7 @@ router.post("/settings/ai-optimise", async (req, res): Promise<void> => {
 
   const enabledSymbolsRaw = stateMap["enabled_symbols"] || DEFAULT_SYMBOLS.join(",");
   const symbols = enabledSymbolsRaw.split(",").filter(Boolean);
-  const initialCapital = parseFloat(stateMap["total_capital"] || "1000");
+  const initialCapital = parseFloat(stateMap["total_capital"] || "10000");
 
   const combinations: { strategy: string; symbol: string }[] = [];
   for (const strategy of STRATEGIES) {
@@ -551,28 +543,6 @@ router.post("/settings/ai-optimise", async (req, res): Promise<void> => {
   });
 
   res.end();
-});
-
-router.post("/settings/reset-paper", async (_req, res): Promise<void> => {
-  try {
-    await db.delete(tradesTable).where(eq(tradesTable.mode, "paper"));
-
-    const pnlKeys = ["daily_pnl", "weekly_pnl", "cumulative_pnl", "paper_daily_pnl", "paper_weekly_pnl", "paper_cumulative_pnl"];
-    for (const key of pnlKeys) {
-      await db
-        .insert(platformStateTable)
-        .values({ key, value: "0" })
-        .onConflictDoUpdate({
-          target: platformStateTable.key,
-          set: { value: "0", updatedAt: new Date() },
-        });
-    }
-
-    res.json({ success: true, message: "Paper trading data cleared. Ready for a fresh start." });
-  } catch (err) {
-    console.error("[Settings] Reset paper data failed:", err instanceof Error ? err.message : err);
-    res.status(500).json({ success: false, message: "Failed to reset paper data" });
-  }
 });
 
 export default router;
