@@ -270,6 +270,46 @@ function PaperResetConfirmDialog({ onConfirm, onCancel }: { onConfirm: () => voi
   );
 }
 
+function FactoryResetConfirmDialog({ onConfirm, onCancel, resetting }: { onConfirm: () => void; onCancel: () => void; resetting: boolean }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-card border border-destructive/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl"
+      >
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center">
+            <Trash2 className="w-6 h-6 text-destructive" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-foreground">Factory Reset</h3>
+            <p className="text-sm text-muted-foreground">This cannot be undone</p>
+          </div>
+        </div>
+        <div className="space-y-3 mb-6 text-sm text-muted-foreground">
+          <p>This will permanently delete:</p>
+          <ul className="list-disc list-inside space-y-1 ml-2">
+            <li>All candle data (24 months of history)</li>
+            <li>All backtest results and AI optimisations</li>
+            <li>All trades (paper, demo, and real)</li>
+            <li>All settings (reset to defaults)</li>
+          </ul>
+          <p className="text-xs">Your API keys will be <span className="font-medium text-foreground">preserved</span>. After reset, the setup wizard will run again.</p>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onCancel} disabled={resetting} className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={onConfirm} disabled={resetting} className="flex-1 px-4 py-2.5 rounded-lg bg-destructive text-destructive-foreground text-sm font-bold uppercase tracking-wider hover:bg-destructive/90 transition-all disabled:opacity-50">
+            {resetting ? "Resetting..." : "Factory Reset"}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 const ALL_INSTRUMENTS = [
   { symbol: "BOOM1000", label: "Boom 1000", category: "Boom/Crash" },
   { symbol: "CRASH1000", label: "Crash 1000", category: "Boom/Crash" },
@@ -1080,6 +1120,8 @@ export default function Settings() {
   const [hasChanges, setHasChanges] = useState(false);
   const [showLiveConfirm, setShowLiveConfirm] = useState(false);
   const [showPaperReset, setShowPaperReset] = useState(false);
+  const [showFactoryReset, setShowFactoryReset] = useState(false);
+  const [factoryResetting, setFactoryResetting] = useState(false);
   const [aiHealth, setAiHealth] = useState<{ configured: boolean; working: boolean; error?: string } | null>(null);
   const [aiHealthLoading, setAiHealthLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("general");
@@ -1257,6 +1299,26 @@ export default function Settings() {
     }
   };
 
+  const handleFactoryReset = async () => {
+    setFactoryResetting(true);
+    try {
+      const base = import.meta.env.BASE_URL || "/";
+      const resp = await fetch(`${base}api/setup/reset`, { method: "POST", headers: { "Content-Type": "application/json" } });
+      const data = await resp.json();
+      if (data.success) {
+        toast({ title: "Factory Reset Complete", description: "Redirecting to setup wizard..." });
+        setTimeout(() => { window.location.reload(); }, 1500);
+      } else {
+        toast({ title: "Reset failed", description: data.message, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Reset failed", variant: "destructive" });
+    } finally {
+      setFactoryResetting(false);
+      setShowFactoryReset(false);
+    }
+  };
+
   const paperActive = form.paper_mode_active === "true";
   const demoActive = form.demo_mode_active === "true";
   const realActive = form.real_mode_active === "true";
@@ -1274,6 +1336,7 @@ export default function Settings() {
       <AnimatePresence>
         {showLiveConfirm && <LiveModeConfirmDialog onConfirm={confirmRealToggle} onCancel={() => setShowLiveConfirm(false)} />}
         {showPaperReset && <PaperResetConfirmDialog onConfirm={handlePaperReset} onCancel={() => setShowPaperReset(false)} />}
+        {showFactoryReset && <FactoryResetConfirmDialog onConfirm={handleFactoryReset} onCancel={() => setShowFactoryReset(false)} resetting={factoryResetting} />}
         {overrideKey && (
           <OverrideConfirmDialog settingLabel={overrideLabel} totalBacktests={52} monthsOfData={24} onConfirm={confirmOverride} onCancel={() => setOverrideKey(null)} />
         )}
@@ -1618,6 +1681,21 @@ export default function Settings() {
           )}
         </motion.div>
       </AnimatePresence>
+
+      <div className="mt-8 border border-destructive/20 rounded-xl p-6 bg-destructive/5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-destructive">Factory Reset</h3>
+            <p className="text-xs text-muted-foreground mt-1">Clear all data, backtests, and settings. API keys are preserved. Re-runs the setup wizard from scratch.</p>
+          </div>
+          <button
+            onClick={() => setShowFactoryReset(true)}
+            className="px-4 py-2 rounded-lg border border-destructive/30 text-sm font-medium text-destructive hover:bg-destructive hover:text-destructive-foreground transition-all"
+          >
+            Factory Reset
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

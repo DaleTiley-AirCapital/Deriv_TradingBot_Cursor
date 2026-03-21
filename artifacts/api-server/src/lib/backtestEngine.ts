@@ -8,13 +8,13 @@ import type { ScoringWeights } from "./scoring.js";
 const DEFAULT_TRAILING_STOP_PCT = 0.25;
 const INITIAL_EXIT_HOURS = 72;
 const EXTENSION_HOURS = 24;
-const MAX_EXIT_HOURS = 120;
+const MAX_EXIT_HOURS = 168;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
 
-const DEFAULT_MAX_CONCURRENT_LIVE = 3;
-const DEFAULT_MAX_CONCURRENT_PAPER = 4;
+const DEFAULT_MAX_CONCURRENT_LIVE = 2;
+const DEFAULT_MAX_CONCURRENT_PAPER = 3;
 const DEFAULT_LIVE_BASE_PCT = 0.22;
-const DEFAULT_PAPER_BASE_PCT = 0.13;
+const DEFAULT_PAPER_BASE_PCT = 0.18;
 
 export interface BacktestConfig {
   symbol?: string;

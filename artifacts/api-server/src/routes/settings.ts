@@ -49,7 +49,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   max_drawdown_pct: "15",
   kill_switch: "false",
   allocation_mode: "balanced",
-  total_capital: "10000",
+  total_capital: "600",
   scan_interval_seconds: "30",
   scan_stagger_seconds: "10",
   paper_equity_pct_per_trade: "18",
@@ -73,7 +73,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   scoring_weight_volatility_condition: "16.67",
   scoring_weight_reward_risk: "16.67",
   scoring_weight_probability_of_success: "16.67",
-  paper_capital: "10000",
+  paper_capital: "600",
   demo_capital: "600",
   real_capital: "600",
   demo_equity_pct_per_trade: "22",
@@ -343,7 +343,7 @@ async function runBacktestForOptimisation(
   let maxDrawdown = 0;
   const equityCurve: number[] = [initialCapital];
 
-  for (let i = 50; i < candles.length - 20; i += 15) {
+  for (let i = 50; i < candles.length - 20; i += 20) {
     const windowCandles = candles.slice(0, i + 1);
     const closes = windowCandles.map(c => c.close);
     const last = windowCandles[windowCandles.length - 1];
@@ -386,14 +386,14 @@ async function runBacktestForOptimisation(
       ? recentPrices.map((c, idx, arr) => idx > 0 ? Math.abs(c - arr[idx - 1]) / arr[idx - 1] : 0).slice(1).reduce((a, b) => a + b, 0) / (recentPrices.length - 1)
       : 0.005;
     const slPct = atrPct * 1.5;
-    const tpPct = atrPct * 2.0;
+    const tpPct = atrPct * 3.5;
     const sl = direction === 1 ? price * (1 - slPct) : price * (1 + slPct);
     const tp = direction === 1 ? price * (1 + tpPct) : price * (1 - tpPct);
 
     const candleDurationMs = i > 0
       ? Math.abs(candles[i].openTs - candles[i - 1].openTs) * 1000
       : 3600000;
-    const maxHoldMs = 120 * 3600000;
+    const maxHoldMs = 168 * 3600000;
     const maxHoldCandles = Math.ceil(maxHoldMs / Math.max(candleDurationMs, 1000));
 
     let exitPrice = candles[Math.min(i + maxHoldCandles, candles.length - 1)].close;

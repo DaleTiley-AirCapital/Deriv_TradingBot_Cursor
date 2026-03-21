@@ -11,7 +11,7 @@ const STRATEGIES = ["trend-pullback", "exhaustion-rebound", "volatility-breakout
 const GRANULARITY_1H = 3600;
 const MONTHS_24_SECONDS = 24 * 30 * 24 * 3600;
 const MAX_BATCH = 5000;
-const DEFAULT_CAPITAL = 10000;
+const DEFAULT_CAPITAL = 600;
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade", "live_equity_pct_per_trade",
   "tp_multiplier_strong", "tp_multiplier_medium", "tp_multiplier_weak",
@@ -273,7 +273,7 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
 
     for (const { strategy, symbol } of combinations) {
       try {
-        const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced");
+        const result = await runBacktestSimulation(strategy, symbol, initialCapital, "aggressive");
 
         const [row] = await db.insert(backtestRunsTable).values({
           strategyName: strategy, symbol, initialCapital,
@@ -282,7 +282,7 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
           maxDrawdown: result.maxDrawdown, tradeCount: result.tradeCount,
           avgHoldingHours: result.avgHoldingHours, expectancy: result.expectancy,
           sharpeRatio: result.sharpeRatio,
-          configJson: { allocationMode: "balanced", symbol, strategyName: strategy, source: "initial-setup" },
+          configJson: { allocationMode: "aggressive", symbol, strategyName: strategy, source: "initial-setup" },
           metricsJson: {
             equityCurve: result.equityCurve, grossProfit: result.grossProfit,
             grossLoss: result.grossLoss, avgWin: result.avgWin, avgLoss: result.avgLoss,
@@ -312,7 +312,7 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
           r.tpSum += Math.min(Math.max(1.5 + result.profitFactor * 0.4, 1.2), 4.0);
           r.slSum += Math.min(Math.max(1.0 / result.profitFactor, 0.5), 2.0);
         } else { r.tpSum += 2.0; r.slSum += 1.0; }
-        r.equitySum += Math.min(Math.max(result.winRate * 4, 0.5), 5.0);
+        r.equitySum += Math.min(Math.max(result.winRate * 30, 18), 30);
 
         if (result.tradeCount >= 3) {
           const comboScore = (result.sharpeRatio * 0.4) + (result.winRate * 0.25) + (result.profitFactor * 0.2) + (result.expectancy * 0.15);
@@ -377,7 +377,7 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
       }
       if (n === 0) return settings;
       const trailPct = prefix === "real" ? 20 : 25;
-      const modeEquity = prefix === "real" ? optEquity : Math.min(optEquity * 0.7, 18);
+      const modeEquity = prefix === "real" ? optEquity : (prefix === "demo" ? optEquity : 18);
       settings[`${prefix}_tp_multiplier_strong`] = parseFloat((tpS / n).toFixed(2)).toString();
       settings[`${prefix}_tp_multiplier_medium`] = parseFloat((tpM / n).toFixed(2)).toString();
       settings[`${prefix}_tp_multiplier_weak`] = parseFloat((tpW / n).toFixed(2)).toString();
@@ -395,7 +395,7 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
 
     const aiSettings: Record<string, string> = {
       ai_equity_pct_per_trade: String(optEquity),
-      ai_paper_equity_pct_per_trade: String(Math.min(optEquity * 0.7, 18).toFixed(2)),
+      ai_paper_equity_pct_per_trade: "18",
       ai_live_equity_pct_per_trade: String(optEquity),
       ai_tp_multiplier_strong: String(optTpStrong),
       ai_tp_multiplier_medium: String(optTpMed),
@@ -445,6 +445,35 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
   } catch (err) {
     send({ phase: "error", message: err instanceof Error ? err.message : "Initialisation failed" });
     res.end();
+  }
+});
+
+router.post("/setup/reset", async (_req, res): Promise<void> => {
+  try {
+    const API_KEY_KEYS = ["deriv_api_token", "deriv_api_token_demo", "deriv_api_token_real", "openai_api_key"];
+
+    const existingKeys = await db.select().from(platformStateTable)
+      .where(inArray(platformStateTable.key, API_KEY_KEYS));
+    const savedKeys: Record<string, string> = {};
+    for (const row of existingKeys) {
+      if (row.value) savedKeys[row.key] = row.value;
+    }
+
+    await db.delete(backtestTradesTable);
+    await db.delete(backtestRunsTable);
+    await db.delete(candlesTable);
+    await db.delete(platformStateTable);
+
+    const { tradesTable } = await import("@workspace/db");
+    await db.delete(tradesTable);
+
+    for (const [key, value] of Object.entries(savedKeys)) {
+      await db.insert(platformStateTable).values({ key, value });
+    }
+
+    res.json({ success: true, message: "All data cleared (API keys preserved). Ready for fresh setup." });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err instanceof Error ? err.message : "Reset failed" });
   }
 });
 

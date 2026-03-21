@@ -291,7 +291,7 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
   let ran = 0;
   for (const { strategy, symbol } of combinations) {
     try {
-      const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced");
+      const result = await runBacktestSimulation(strategy, symbol, initialCapital, "aggressive");
 
       await db.insert(backtestRunsTable).values({
         strategyName: strategy,
@@ -306,7 +306,7 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
         avgHoldingHours: result.avgHoldingHours,
         expectancy: result.expectancy,
         sharpeRatio: result.sharpeRatio,
-        configJson: { allocationMode: "balanced", symbol, strategyName: strategy, source: "monthly-reoptimise" },
+        configJson: { allocationMode: "aggressive", symbol, strategyName: strategy, source: "monthly-reoptimise" },
         metricsJson: {
           equityCurve: result.equityCurve,
           grossProfit: result.grossProfit,
@@ -328,7 +328,7 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
       const optSl = result.profitFactor > 0 ? Math.min(Math.max(1.0 / result.profitFactor, 0.5), 2.0) : 1.0;
       r.tpSum += optTp;
       r.slSum += optSl;
-      r.equitySum += Math.min(Math.max(result.winRate * 4, 0.5), 5.0);
+      r.equitySum += Math.min(Math.max(result.winRate * 30, 18), 30);
       ran++;
     } catch { /* skip failed */ }
   }
@@ -336,7 +336,7 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
   const comboResults: { strategy: string; symbol: string; pf: number; hold: number; score: number }[] = [];
   for (const { strategy, symbol } of combinations) {
     try {
-      const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced");
+      const result = await runBacktestSimulation(strategy, symbol, initialCapital, "aggressive");
       if (result.tradeCount >= 3) {
         comboResults.push({
           strategy, symbol,
@@ -365,7 +365,7 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
 
   const aiSettings: Record<string, string> = {
     ai_equity_pct_per_trade: String(optEquity),
-    ai_paper_equity_pct_per_trade: String(Math.min(optEquity * 0.7, 18).toFixed(2)),
+    ai_paper_equity_pct_per_trade: "18",
     ai_live_equity_pct_per_trade: String(optEquity),
     ai_tp_multiplier_strong: String(optTpStrong),
     ai_tp_multiplier_medium: String(optTpMed),
