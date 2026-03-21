@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
-import { CheckCircle2, Circle, Loader2, AlertCircle, Database, BarChart3, Zap, ArrowRight, Key, Eye, EyeOff } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, AlertCircle, Database, BarChart3, Zap, ArrowRight, ArrowLeft, Key, Eye, EyeOff } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL || "/";
 const api = (path: string) => `${BASE}api${path}`;
@@ -209,7 +209,22 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   ];
 
   const stepToIndex: Record<Step, number> = { welcome: 0, apikeys: 1, testing: 1, backfill: 2, analyse: 3, complete: 4 };
+  const indexToStep: Step[] = ["welcome", "apikeys", "backfill", "analyse", "complete"];
   const stepIndex = stepToIndex[step];
+
+  const goBack = () => {
+    setError(null);
+    if (abortRef.current) abortRef.current.abort();
+    const prevIndex = Math.max(0, stepIndex - 1);
+    setStep(indexToStep[prevIndex]);
+  };
+
+  const goToStep = (targetIndex: number) => {
+    if (targetIndex >= stepIndex) return;
+    setError(null);
+    if (abortRef.current) abortRef.current.abort();
+    setStep(indexToStep[targetIndex]);
+  };
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -225,17 +240,22 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
         <div className="flex items-center justify-center gap-2 mb-8">
           {stepDefs.map((s, i) => (
             <div key={s.label} className="flex items-center gap-2">
-              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                i < stepIndex ? "bg-green-500/10 text-green-400" :
-                i === stepIndex ? "bg-primary/10 text-primary" :
-                "bg-muted/30 text-muted-foreground"
-              }`}>
+              <button
+                type="button"
+                disabled={i >= stepIndex}
+                onClick={() => goToStep(i)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                  i < stepIndex ? "bg-green-500/10 text-green-400 cursor-pointer hover:bg-green-500/20" :
+                  i === stepIndex ? "bg-primary/10 text-primary" :
+                  "bg-muted/30 text-muted-foreground"
+                }`}
+              >
                 {i < stepIndex ? <CheckCircle2 className="w-3.5 h-3.5" /> :
                  i === stepIndex && step !== "welcome" && step !== "complete" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> :
                  i === stepIndex && step === "complete" ? <CheckCircle2 className="w-3.5 h-3.5" /> :
                  <Circle className="w-3.5 h-3.5" />}
                 <span className="hidden sm:inline">{s.label}</span>
-              </div>
+              </button>
               {i < stepDefs.length - 1 && <ArrowRight className="w-3 h-3 text-muted-foreground/40" />}
             </div>
           ))}
@@ -394,7 +414,10 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                   )}
                 </div>
 
-                <div className="text-center">
+                <div className="flex justify-center gap-3">
+                  <Button variant="outline" onClick={goBack} disabled={saving} className="px-6">
+                    <ArrowLeft className="w-4 h-4 mr-2" /> Back
+                  </Button>
                   <Button onClick={saveKeysAndTest} disabled={saving || (!derivTokenDemo.trim() && !derivTokenReal.trim())} className="px-8">
                     {saving ? (
                       <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Testing Connections...</>
@@ -460,9 +483,14 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       Fetch 24 months of historical candle data for all supported instruments from Deriv.
                       This may take a few minutes.
                     </p>
-                    <Button onClick={runBackfill}>
-                      Start Backfill <ArrowRight className="w-4 h-4 ml-2" />
-                    </Button>
+                    <div className="flex justify-center gap-3">
+                      <Button variant="outline" onClick={goBack} className="px-6">
+                        <ArrowLeft className="w-4 h-4 mr-2" /> Back
+                      </Button>
+                      <Button onClick={runBackfill}>
+                        Start Backfill <ArrowRight className="w-4 h-4 ml-2" />
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -484,9 +512,14 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       Run backtests across all strategy/instrument combinations and let AI
                       optimise your TP, SL, position sizing, and trailing stop parameters.
                     </p>
-                    <Button onClick={runAnalyse}>
-                      Start Analysis <ArrowRight className="w-4 h-4 ml-2" />
-                    </Button>
+                    <div className="flex justify-center gap-3">
+                      <Button variant="outline" onClick={goBack} className="px-6">
+                        <ArrowLeft className="w-4 h-4 mr-2" /> Back
+                      </Button>
+                      <Button onClick={runAnalyse}>
+                        Start Analysis <ArrowRight className="w-4 h-4 ml-2" />
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
