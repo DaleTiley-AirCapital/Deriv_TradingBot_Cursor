@@ -72,7 +72,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
       }
 
       const saveRes = await fetch(api("/settings"), {
-        method: "PUT",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(keysToSave),
       });
