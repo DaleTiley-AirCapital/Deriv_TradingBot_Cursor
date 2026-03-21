@@ -6,9 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { PlatformOverviewMode } from "./platformOverviewMode";
+import type { PlatformOverviewPerMode } from "./platformOverviewPerMode";
 
 export interface PlatformOverview {
   mode: PlatformOverviewMode;
+  activeModes?: string[];
   openPositions: number;
   availableCapital: number;
   openRisk: number;
@@ -20,4 +22,8 @@ export interface PlatformOverview {
   realisedPnl: number;
   activeStrategies: number;
   killSwitchActive: boolean;
+  perMode?: PlatformOverviewPerMode;
+  paperModeActive?: boolean;
+  demoModeActive?: boolean;
+  realModeActive?: boolean;
 }

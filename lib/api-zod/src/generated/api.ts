@@ -18,11 +18,16 @@ export const HealthCheckResponse = zod.object({
 /**
  * @summary Start historical data backfill
  */
-export const startBackfillBodyDaysDefault = 30;
+export const startBackfillBodyMonthsDefault = 12;
+export const startBackfillBodyMonthsMax = 24;
 
 export const StartBackfillBody = zod.object({
   symbol: zod.string(),
-  days: zod.number().default(startBackfillBodyDaysDefault),
+  months: zod
+    .number()
+    .min(1)
+    .max(startBackfillBodyMonthsMax)
+    .default(startBackfillBodyMonthsDefault),
 });
 
 export const StartBackfillResponse = zod.object({
@@ -54,7 +59,15 @@ export const StopStreamResponse = zod.object({
  * @summary Get data collection status
  */
 export const GetDataStatusResponse = zod.object({
-  mode: zod.enum(["idle", "collecting", "paper", "live"]),
+  mode: zod.enum([
+    "idle",
+    "collecting",
+    "paper",
+    "live",
+    "demo",
+    "real",
+    "multi",
+  ]),
   streaming: zod.boolean(),
   lastSyncAt: zod.string().nullable(),
   tickCount: zod.number(),
@@ -356,6 +369,20 @@ export const GetLatestSignalsResponseItem = zod.object({
 export const GetLatestSignalsResponse = zod.array(GetLatestSignalsResponseItem);
 
 /**
+ * @summary Toggle a trading mode on or off
+ */
+export const ToggleTradingModeBody = zod.object({
+  mode: zod.enum(["paper", "demo", "real"]),
+  active: zod.boolean(),
+  confirmed: zod.boolean().optional(),
+});
+
+export const ToggleTradingModeResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string(),
+});
+
+/**
  * @summary Start paper trading mode
  */
 export const StartPaperTradingResponse = zod.object({
@@ -397,7 +424,7 @@ export const GetOpenTradesResponseItem = zod.object({
   size: zod.number(),
   pnl: zod.number().nullable(),
   status: zod.enum(["open", "closed", "cancelled"]),
-  mode: zod.enum(["paper", "live"]),
+  mode: zod.enum(["paper", "demo", "real"]),
   notes: zod.string().nullable(),
   confidence: zod.number().nullable(),
   trailingStopPct: zod.number().nullable(),
@@ -428,7 +455,7 @@ export const GetLivePositionsResponseItem = zod.object({
   maxExitTs: zod.string().nullable(),
   peakPrice: zod.number().nullable(),
   confidence: zod.number().nullable(),
-  mode: zod.enum(["paper", "live"]),
+  mode: zod.enum(["paper", "demo", "real"]),
 });
 export const GetLivePositionsResponse = zod.array(GetLivePositionsResponseItem);
 
@@ -459,7 +486,7 @@ export const GetTradeHistoryResponseItem = zod.object({
   size: zod.number(),
   pnl: zod.number().nullable(),
   status: zod.enum(["open", "closed", "cancelled"]),
-  mode: zod.enum(["paper", "live"]),
+  mode: zod.enum(["paper", "demo", "real"]),
   notes: zod.string().nullable(),
   confidence: zod.number().nullable(),
   trailingStopPct: zod.number().nullable(),
@@ -511,9 +538,34 @@ export const GetRiskStatusResponse = zod.object({
   dailyLossPct: zod.number(),
   weeklyLossPct: zod.number(),
   drawdownPct: zod.number(),
+  maxDailyLossPct: zod.number().optional(),
+  maxWeeklyLossPct: zod.number().optional(),
+  maxDrawdownPct: zod.number().optional(),
   activeCooldowns: zod.array(zod.string()),
   disabledStrategies: zod.array(zod.string()),
   openRiskPct: zod.number(),
+  perMode: zod
+    .record(
+      zod.string(),
+      zod.object({
+        mode: zod.string().optional(),
+        totalCapital: zod.number().optional(),
+        dailyLossBreached: zod.boolean().optional(),
+        weeklyLossBreached: zod.boolean().optional(),
+        maxDrawdownBreached: zod.boolean().optional(),
+        dailyLossPct: zod.number().optional(),
+        weeklyLossPct: zod.number().optional(),
+        drawdownPct: zod.number().optional(),
+        maxDailyLossPct: zod.number().optional(),
+        maxWeeklyLossPct: zod.number().optional(),
+        maxDrawdownPct: zod.number().optional(),
+        openRiskPct: zod.number().optional(),
+        openTradeCount: zod.number().optional(),
+        realisedPnl: zod.number().optional(),
+      }),
+    )
+    .optional(),
+  activeModes: zod.array(zod.string()).optional(),
 });
 
 /**
@@ -544,6 +596,10 @@ export const GetSettingsResponse = zod.object({
   deriv_api_token: zod.string().optional(),
   openai_api_key: zod.string().optional(),
   deriv_api_token_set: zod.string().optional(),
+  deriv_api_token_demo: zod.string().optional(),
+  deriv_api_token_demo_set: zod.string().optional(),
+  deriv_api_token_real: zod.string().optional(),
+  deriv_api_token_real_set: zod.string().optional(),
   openai_api_key_set: zod.string().optional(),
   trading_mode: zod.string().optional(),
   enabled_symbols: zod.string().optional(),
@@ -553,6 +609,22 @@ export const GetSettingsResponse = zod.object({
   live_max_weekly_loss_pct: zod.string().optional(),
   paper_max_drawdown_pct: zod.string().optional(),
   live_max_drawdown_pct: zod.string().optional(),
+  paper_capital: zod.string().optional(),
+  demo_capital: zod.string().optional(),
+  real_capital: zod.string().optional(),
+  demo_equity_pct_per_trade: zod.string().optional(),
+  real_equity_pct_per_trade: zod.string().optional(),
+  demo_max_open_trades: zod.string().optional(),
+  real_max_open_trades: zod.string().optional(),
+  demo_max_daily_loss_pct: zod.string().optional(),
+  real_max_daily_loss_pct: zod.string().optional(),
+  demo_max_weekly_loss_pct: zod.string().optional(),
+  real_max_weekly_loss_pct: zod.string().optional(),
+  demo_max_drawdown_pct: zod.string().optional(),
+  real_max_drawdown_pct: zod.string().optional(),
+  paper_mode_active: zod.string().optional(),
+  demo_mode_active: zod.string().optional(),
+  real_mode_active: zod.string().optional(),
 });
 
 /**
@@ -583,6 +655,10 @@ export const UpdateSettingsBody = zod.object({
   deriv_api_token: zod.string().optional(),
   openai_api_key: zod.string().optional(),
   deriv_api_token_set: zod.string().optional(),
+  deriv_api_token_demo: zod.string().optional(),
+  deriv_api_token_demo_set: zod.string().optional(),
+  deriv_api_token_real: zod.string().optional(),
+  deriv_api_token_real_set: zod.string().optional(),
   openai_api_key_set: zod.string().optional(),
   trading_mode: zod.string().optional(),
   enabled_symbols: zod.string().optional(),
@@ -592,6 +668,22 @@ export const UpdateSettingsBody = zod.object({
   live_max_weekly_loss_pct: zod.string().optional(),
   paper_max_drawdown_pct: zod.string().optional(),
   live_max_drawdown_pct: zod.string().optional(),
+  paper_capital: zod.string().optional(),
+  demo_capital: zod.string().optional(),
+  real_capital: zod.string().optional(),
+  demo_equity_pct_per_trade: zod.string().optional(),
+  real_equity_pct_per_trade: zod.string().optional(),
+  demo_max_open_trades: zod.string().optional(),
+  real_max_open_trades: zod.string().optional(),
+  demo_max_daily_loss_pct: zod.string().optional(),
+  real_max_daily_loss_pct: zod.string().optional(),
+  demo_max_weekly_loss_pct: zod.string().optional(),
+  real_max_weekly_loss_pct: zod.string().optional(),
+  demo_max_drawdown_pct: zod.string().optional(),
+  real_max_drawdown_pct: zod.string().optional(),
+  paper_mode_active: zod.string().optional(),
+  demo_mode_active: zod.string().optional(),
+  real_mode_active: zod.string().optional(),
 });
 
 export const UpdateSettingsResponse = zod.object({
@@ -645,10 +737,34 @@ export const SetTradingModeResponse = zod.object({
 });
 
 /**
+ * @summary Get AI optimisation status and locked values
+ */
+export const GetAiOptimisationStatusResponse = zod.object({
+  locked: zod.boolean().optional(),
+  optimisedAt: zod.string().nullish(),
+  aiValues: zod.record(zod.string(), zod.string()).optional(),
+  lockedKeys: zod.array(zod.string()).optional(),
+});
+
+/**
+ * @summary Override a single AI-locked setting
+ */
+export const OverrideAiSettingBody = zod.object({
+  key: zod.string().describe("The setting key to unlock"),
+});
+
+export const OverrideAiSettingResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string(),
+});
+
+/**
  * @summary Check which API keys are configured
  */
 export const GetApiKeyStatusResponse = zod.object({
   deriv_api_token_set: zod.boolean(),
+  deriv_api_token_demo_set: zod.boolean().optional(),
+  deriv_api_token_real_set: zod.boolean().optional(),
   openai_api_key_set: zod.boolean(),
 });
 
@@ -664,7 +780,16 @@ export const TriggerKillSwitchResponse = zod.object({
  * @summary Get platform overview stats
  */
 export const GetOverviewResponse = zod.object({
-  mode: zod.enum(["idle", "collecting", "paper", "live"]),
+  mode: zod.enum([
+    "idle",
+    "collecting",
+    "paper",
+    "live",
+    "demo",
+    "real",
+    "multi",
+  ]),
+  activeModes: zod.array(zod.string()).optional(),
   openPositions: zod.number(),
   availableCapital: zod.number(),
   openRisk: zod.number(),
@@ -675,4 +800,20 @@ export const GetOverviewResponse = zod.object({
   realisedPnl: zod.number(),
   activeStrategies: zod.number(),
   killSwitchActive: zod.boolean(),
+  perMode: zod
+    .record(
+      zod.string(),
+      zod.object({
+        capital: zod.number().optional(),
+        openPositions: zod.number().optional(),
+        realisedPnl: zod.number().optional(),
+        winRate: zod.number().optional(),
+        totalTrades: zod.number().optional(),
+        active: zod.boolean().optional(),
+      }),
+    )
+    .optional(),
+  paperModeActive: zod.boolean().optional(),
+  demoModeActive: zod.boolean().optional(),
+  realModeActive: zod.boolean().optional(),
 });

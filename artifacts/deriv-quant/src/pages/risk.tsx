@@ -1,7 +1,8 @@
 import React from "react";
 import { useGetRiskStatus } from "@workspace/api-client-react";
+import type { ModeRiskSnapshot } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, Badge } from "@/components/ui-elements";
-import { formatPercent, cn } from "@/lib/utils";
+import { formatPercent, formatCurrency, cn } from "@/lib/utils";
 import { ShieldAlert, Lock, Info, ExternalLink } from "lucide-react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
@@ -50,7 +51,7 @@ export default function Risk() {
             <CardHeader>
               <CardTitle>
                 <Lock className="w-4 h-4 text-primary" />
-                Exposure Limits
+                Aggregate Exposure Limits
               </CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -74,6 +75,62 @@ export default function Risk() {
               />
             </CardContent>
           </Card>
+
+          {risk?.perMode && Object.keys(risk.perMode).length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  <Lock className="w-4 h-4 text-primary" />
+                  Per-Mode Risk
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-6">
+                  {(["paper", "demo", "real"] as const).map(mode => {
+                    const snap = risk.perMode?.[mode] as ModeRiskSnapshot | undefined;
+                    if (!snap) return null;
+                    const colorMap = { paper: "warning", demo: "primary", real: "destructive" } as const;
+                    const color = colorMap[mode];
+                    return (
+                      <div key={mode} className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: `hsl(var(--${color}))` }} />
+                          <span className="text-sm font-bold uppercase tracking-wider" style={{ color: `hsl(var(--${color}))` }}>{mode}</span>
+                          <span className="text-xs text-muted-foreground ml-auto">Capital: {formatCurrency(snap.totalCapital)}</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                          <RiskGauge
+                            label="Daily Loss"
+                            value={snap.dailyLossPct ?? 0}
+                            max={snap.maxDailyLossPct ?? 5}
+                            breached={snap.dailyLossBreached ?? false}
+                          />
+                          <RiskGauge
+                            label="Weekly Loss"
+                            value={snap.weeklyLossPct ?? 0}
+                            max={snap.maxWeeklyLossPct ?? 12}
+                            breached={snap.weeklyLossBreached ?? false}
+                          />
+                          <RiskGauge
+                            label="Max Drawdown"
+                            value={snap.drawdownPct ?? 0}
+                            max={snap.maxDrawdownPct ?? 20}
+                            breached={snap.maxDrawdownBreached ?? false}
+                          />
+                        </div>
+                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                          <span>Open Risk: <span className="font-mono text-foreground">{formatPercent(snap.openRiskPct)}</span></span>
+                          <span>Open Trades: <span className="font-mono text-foreground">{snap.openTradeCount ?? 0}</span></span>
+                          <span>P&L: <span className={cn("font-mono", (snap.realisedPnl ?? 0) >= 0 ? "text-success" : "text-destructive")}>{formatCurrency(snap.realisedPnl)}</span></span>
+                        </div>
+                        {mode !== "real" && <div className="border-t border-border/30" />}
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>

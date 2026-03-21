@@ -6,11 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface BackfillRequest {
-  symbol: string;
-  /**
-   * @minimum 1
-   * @maximum 24
-   */
-  months?: number;
-}
+export type OverrideAiSettingBody = {
+  /** The setting key to unlock */
+  key: string;
+};

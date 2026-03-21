@@ -1,20 +1,21 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { 
   useGetOpenTrades, 
   useGetTradeHistory, 
   useGetLivePositions,
-  useStartPaperTrading, 
-  useStartLiveTrading, 
+  useToggleTradingMode,
   useStopTrading,
   getGetOpenTradesQueryKey,
   getGetTradeHistoryQueryKey,
   getGetLivePositionsQueryKey,
-  useGetDataStatus
+  useGetDataStatus,
+  useGetOverview,
 } from "@workspace/api-client-react";
+import type { ToggleTradingModeRequestMode } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, Badge, Button } from "@/components/ui-elements";
 import { formatCurrency, formatNumber, cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, Square, Activity, ArrowUpRight, ArrowDownRight, Clock, Target, ShieldAlert, TrendingUp } from "lucide-react";
+import { Play, Square, ArrowUpRight, ArrowDownRight, Clock, Target, ShieldAlert, TrendingUp, Filter } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 function formatHours(hours: number): string {
@@ -25,11 +26,19 @@ function formatHours(hours: number): string {
   return `${h}h`;
 }
 
+const MODE_COLORS: Record<string, string> = {
+  paper: "warning",
+  demo: "primary",
+  real: "destructive",
+};
+
 export default function Trades() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<'positions' | 'history'>('positions');
+  const [modeFilter, setModeFilter] = useState<string>("all");
   
   const { data: status } = useGetDataStatus({ query: { refetchInterval: 3000 } });
+  const { data: overview } = useGetOverview({ query: { refetchInterval: 3000 } });
   const { data: positions } = useGetLivePositions({ query: { refetchInterval: 2000 } });
   const { data: openTrades, isLoading: openLoading } = useGetOpenTrades({ query: { refetchInterval: 3000 } });
   const { data: historyTrades, isLoading: historyLoading } = useGetTradeHistory({ query: { refetchInterval: 10000 } });
@@ -42,21 +51,42 @@ export default function Trades() {
     }
   };
 
-  const { mutate: startPaper, isPending: startingPaper } = useStartPaperTrading({ mutation: invalidator });
-  const { mutate: startLive, isPending: startingLive } = useStartLiveTrading({ mutation: invalidator });
+  const { mutate: toggleMode, isPending: toggling } = useToggleTradingMode({ mutation: invalidator });
   const { mutate: stopTrades, isPending: stopping } = useStopTrading({ mutation: invalidator });
 
-  const chartData = React.useMemo(() => {
+  const paperActive = overview?.paperModeActive ?? false;
+  const demoActive = overview?.demoModeActive ?? false;
+  const realActive = overview?.realModeActive ?? false;
+
+  const filteredOpen = useMemo(() => {
+    if (!openTrades) return [];
+    if (modeFilter === "all") return openTrades;
+    return openTrades.filter(t => t.mode === modeFilter);
+  }, [openTrades, modeFilter]);
+
+  const filteredHistory = useMemo(() => {
     if (!historyTrades) return [];
+    if (modeFilter === "all") return historyTrades;
+    return historyTrades.filter(t => t.mode === modeFilter);
+  }, [historyTrades, modeFilter]);
+
+  const filteredPositions = useMemo(() => {
+    if (!positions) return [];
+    if (modeFilter === "all") return positions;
+    return positions.filter(p => p.mode === modeFilter);
+  }, [positions, modeFilter]);
+
+  const chartData = useMemo(() => {
+    if (!filteredHistory.length) return [];
     let cum = 0;
-    return [...historyTrades].reverse().map(t => {
+    return [...filteredHistory].reverse().map(t => {
       cum += (t.pnl || 0);
       return { time: new Date(t.exitTs || t.entryTs).toLocaleTimeString(), pnl: cum };
     });
-  }, [historyTrades]);
+  }, [filteredHistory]);
 
-  const isTrading = status?.mode === 'paper' || status?.mode === 'live';
-  const totalFloatingPnl = positions?.reduce((sum, p) => sum + p.floatingPnl, 0) ?? 0;
+  const isTrading = status?.mode === 'paper' || status?.mode === 'live' || status?.mode === 'demo' || status?.mode === 'real' || status?.mode === 'multi';
+  const totalFloatingPnl = filteredPositions.reduce((sum, p) => sum + p.floatingPnl, 0);
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
@@ -67,42 +97,63 @@ export default function Trades() {
         </div>
         
         <div className="flex items-center gap-2">
-          {isTrading ? (
-            <Button variant="destructive" onClick={() => stopTrades()} isLoading={stopping}>
-              <Square className="w-3.5 h-3.5" fill="currentColor" />
-              Stop Trading
+          <div className="flex items-center gap-1 mr-2">
+            <Filter className="w-3.5 h-3.5 text-muted-foreground" />
+            {["all", "paper", "demo", "real"].map(m => (
+              <button
+                key={m}
+                onClick={() => setModeFilter(m)}
+                className={cn(
+                  "px-2.5 py-1 rounded-md text-xs font-medium uppercase tracking-wider transition-all border",
+                  modeFilter === m
+                    ? "bg-primary/10 border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          {([
+            { mode: "paper" as const, label: "Paper", active: paperActive, color: "warning" },
+            { mode: "demo" as const,  label: "Demo",  active: demoActive,  color: "primary" },
+            { mode: "real" as const,  label: "Real",  active: realActive,  color: "destructive" },
+          ]).map(({ mode, label, active, color }) => (
+            <Button
+              key={mode}
+              variant={active ? "default" : "outline"}
+              className={cn(
+                active
+                  ? `bg-${color}/15 border-${color}/40 text-${color} hover:bg-${color}/25`
+                  : `text-muted-foreground border-border hover:border-${color}/40 hover:text-${color}`
+              )}
+              style={active ? {
+                backgroundColor: `hsl(var(--${color}) / 0.15)`,
+                borderColor: `hsl(var(--${color}) / 0.4)`,
+                color: `hsl(var(--${color}))`,
+              } : undefined}
+              onClick={() => toggleMode({ data: { mode: mode as ToggleTradingModeRequestMode, active: !active } })}
+              isLoading={toggling}
+            >
+              {active ? <Square className="w-3 h-3" fill="currentColor" /> : <Play className="w-3 h-3" />}
+              {label}
             </Button>
-          ) : (
-            <>
-              <Button
-                variant="outline"
-                className="text-warning border-warning/40 hover:bg-warning/8 hover:border-warning/60"
-                onClick={() => startPaper()}
-                isLoading={startingPaper}
-              >
-                <Play className="w-3.5 h-3.5" />
-                Paper
-              </Button>
-              <Button
-                variant="outline"
-                className="text-success border-success/40 hover:bg-success/8 hover:border-success/60"
-                onClick={() => startLive()}
-                isLoading={startingLive}
-              >
-                <Activity className="w-3.5 h-3.5" />
-                Live
-              </Button>
-            </>
+          ))}
+          {isTrading && (
+            <Button variant="destructive" onClick={() => stopTrades()} isLoading={stopping} className="ml-1">
+              <Square className="w-3.5 h-3.5" fill="currentColor" />
+              Stop All
+            </Button>
           )}
         </div>
       </div>
 
-      {positions && positions.length > 0 && (
+      {filteredPositions.length > 0 && (
         <Card className="border-primary/15">
           <CardHeader>
             <CardTitle>
               <TrendingUp className="w-4 h-4 text-primary" />
-              Live Positions ({positions.length}/3)
+              Live Positions ({filteredPositions.length})
             </CardTitle>
             <div className={cn("text-base font-bold font-mono tabular-nums", totalFloatingPnl >= 0 ? "text-success" : "text-destructive")}>
               {totalFloatingPnl >= 0 ? "+" : ""}{formatCurrency(totalFloatingPnl)}
@@ -110,7 +161,7 @@ export default function Trades() {
           </CardHeader>
           <CardContent className="p-0">
             <div className="grid gap-3 p-4">
-              {positions.map(p => (
+              {filteredPositions.map(p => (
                 <div key={p.id} className="rounded-xl border border-border/60 p-4 bg-muted/15">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2.5">
@@ -233,9 +284,9 @@ export default function Trades() {
               {tab === 'positions' ? (
                 openLoading
                   ? <tr><td colSpan={10} className="text-center py-10 text-muted-foreground">Loading…</td></tr>
-                  : !openTrades?.length
-                  ? <tr><td colSpan={10} className="text-center py-10 text-muted-foreground">No open trades.</td></tr>
-                  : openTrades.map(t => (
+                  : !filteredOpen.length
+                  ? <tr><td colSpan={10} className="text-center py-10 text-muted-foreground">No open trades{modeFilter !== "all" ? ` in ${modeFilter} mode` : ""}.</td></tr>
+                  : filteredOpen.map(t => (
                     <tr key={t.id}>
                       <td className="mono-num text-muted-foreground">#{t.id}</td>
                       <td className="mono-num text-xs">{new Date(t.entryTs).toLocaleTimeString()}</td>
@@ -261,9 +312,9 @@ export default function Trades() {
               ) : (
                 historyLoading
                   ? <tr><td colSpan={11} className="text-center py-10 text-muted-foreground">Loading…</td></tr>
-                  : !historyTrades?.length
-                  ? <tr><td colSpan={11} className="text-center py-10 text-muted-foreground">No trade history.</td></tr>
-                  : historyTrades.map(t => (
+                  : !filteredHistory.length
+                  ? <tr><td colSpan={11} className="text-center py-10 text-muted-foreground">No trade history{modeFilter !== "all" ? ` in ${modeFilter} mode` : ""}.</td></tr>
+                  : filteredHistory.map(t => (
                     <tr key={t.id}>
                       <td className="mono-num text-muted-foreground">#{t.id}</td>
                       <td className="mono-num text-xs">{new Date(t.entryTs).toLocaleDateString()} {new Date(t.entryTs).toLocaleTimeString()}</td>

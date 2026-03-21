@@ -5,12 +5,6 @@
  * Deriv Quant Research & Execution Platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { ModeOverviewSnapshot } from "./modeOverviewSnapshot";
 
-export interface BackfillRequest {
-  symbol: string;
-  /**
-   * @minimum 1
-   * @maximum 24
-   */
-  months?: number;
-}
+export type PlatformOverviewPerMode = { [key: string]: ModeOverviewSnapshot };

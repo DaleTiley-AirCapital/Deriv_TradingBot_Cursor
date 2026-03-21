@@ -74,9 +74,10 @@ artifacts-monorepo/
 - `POST /api/signals/scan` — immediately run all 4 strategies on all symbols
 - `GET /api/signals/features/:symbol` — live feature vector for a symbol
 - `GET /api/signals/strategies/:symbol` — which strategies fire on a symbol right now
-- `POST /api/trade/paper/start|live/start|stop` — trading mode control
+- `POST /api/trade/mode/toggle` — toggle trading mode (paper/demo/real) on/off independently
+- `POST /api/trade/paper/start|live/start|stop` — legacy trading mode control (backward compat)
 - `GET /api/trade/open|history` — trade management
-- `GET /api/trade/positions` — live positions with floating P&L, time remaining
+- `GET /api/trade/positions` — live positions with floating P&L, time remaining, mode tag
 - `GET /api/portfolio/status` — portfolio state
 - `POST /api/portfolio/mode` — set allocation mode (conservative/balanced/aggressive)
 - `GET /api/risk/status` — risk manager state
@@ -85,7 +86,23 @@ artifacts-monorepo/
 - `POST /api/settings` — update one or more settings (validated, persisted to platform_state, supports API keys)
 - `GET /api/settings/api-key-status` — check which API keys are configured
 - `GET /api/account/info` — live Deriv account balance and connection status (auto-refreshes every 30s)
-- `POST /api/account/set-mode` — switch trading mode (paper/live/idle) with confirmation for live
+- `POST /api/account/set-mode` — switch trading mode (paper/live/idle) with confirmation for live (legacy)
+
+## Trading Modes
+
+Three independent trading modes that can run simultaneously:
+- **Paper** — Simulated trades with virtual capital (default $10,000)
+- **Demo** — Trades on Deriv demo account (requires demo API token)
+- **Real** — Trades on Deriv real account (requires real API token, confirmation needed)
+
+Each mode has independent:
+- Capital allocation (`paper_capital`, `demo_capital`, `real_capital`)
+- Risk limits (daily/weekly loss, max drawdown per mode)
+- Position sizing (equity %, max open trades per mode)
+- Deriv API tokens (`deriv_api_token_demo`, `deriv_api_token_real`)
+- State flags (`paper_mode_active`, `demo_mode_active`, `real_mode_active`)
+
+Signals are generated once; positions are opened independently per active mode. All trades are tagged with their mode.
 
 ## Signal & ML Pipeline
 

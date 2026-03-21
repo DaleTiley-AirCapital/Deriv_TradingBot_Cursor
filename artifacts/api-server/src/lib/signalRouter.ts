@@ -1,6 +1,8 @@
 import { db, signalLogTable, platformStateTable, tradesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { SignalCandidate } from "./strategies.js";
+import type { TradingMode } from "./deriv.js";
+import { getModeCapitalKey, getModeCapitalDefault } from "./deriv.js";
 
 export interface AllocationDecision {
   signal: SignalCandidate;
@@ -39,14 +41,29 @@ interface PortfolioContext {
   minRrRatio: number;
 }
 
-export async function getPortfolioContext(): Promise<PortfolioContext> {
+function getModePrefix(mode: TradingMode): string {
+  switch (mode) {
+    case "paper": return "paper";
+    case "demo": return "demo";
+    case "real": return "real";
+  }
+}
+
+export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioContext> {
   const states = await db.select().from(platformStateTable);
   const stateMap: Record<string, string> = {};
   for (const s of states) stateMap[s.key] = s.value;
 
-  const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
-  const closedTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "closed"));
-  const totalCapital = Math.max(1, parseFloat(stateMap["total_capital"] || "10000"));
+  const openTrades = await db.select().from(tradesTable).where(
+    and(eq(tradesTable.status, "open"), eq(tradesTable.mode, mode))
+  );
+  const closedTrades = await db.select().from(tradesTable).where(
+    and(eq(tradesTable.status, "closed"), eq(tradesTable.mode, mode))
+  );
+
+  const capitalKey = getModeCapitalKey(mode);
+  const capitalDefault = getModeCapitalDefault(mode);
+  const totalCapital = Math.max(1, parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault));
   const totalDeployedCapital = openTrades.reduce((sum, t) => sum + t.size, 0);
   const openRisk = totalDeployedCapital;
 
@@ -57,25 +74,33 @@ export async function getPortfolioContext(): Promise<PortfolioContext> {
   const weeklyPnl = closedTrades.filter(t => t.exitTs && t.exitTs.getTime() > weekStart).reduce((s, t) => s + (t.pnl || 0), 0);
   const disabled = stateMap["disabled_strategies"] ? stateMap["disabled_strategies"].split(",").filter(Boolean) : [];
 
-  const currentMode = stateMap["mode"] || "idle";
-  const isLive = currentMode === "live";
+  const prefix = getModePrefix(mode);
 
-  const modeEquityPct = isLive
-    ? parseFloat(stateMap["live_equity_pct_per_trade"] || stateMap["equity_pct_per_trade"] || "22")
-    : parseFloat(stateMap["paper_equity_pct_per_trade"] || stateMap["equity_pct_per_trade"] || "13");
-  const modeMaxTrades = isLive
-    ? parseInt(stateMap["live_max_open_trades"] || stateMap["max_open_trades"] || "3")
-    : parseInt(stateMap["paper_max_open_trades"] || stateMap["max_open_trades"] || "4");
+  const modeEquityPct = parseFloat(
+    stateMap[`${prefix}_equity_pct_per_trade`] ||
+    (mode === "paper" ? stateMap["paper_equity_pct_per_trade"] : stateMap["live_equity_pct_per_trade"]) ||
+    stateMap["equity_pct_per_trade"] ||
+    (mode === "paper" ? "13" : "22")
+  );
+  const modeMaxTrades = parseInt(
+    stateMap[`${prefix}_max_open_trades`] ||
+    (mode === "paper" ? stateMap["paper_max_open_trades"] : stateMap["live_max_open_trades"]) ||
+    stateMap["max_open_trades"] ||
+    (mode === "paper" ? "4" : "3")
+  );
 
-  const modeMaxDailyLoss = isLive
-    ? parseFloat(stateMap["live_max_daily_loss_pct"] || stateMap["max_daily_loss_pct"] || "3")
-    : parseFloat(stateMap["paper_max_daily_loss_pct"] || stateMap["max_daily_loss_pct"] || "5");
-  const modeMaxWeeklyLoss = isLive
-    ? parseFloat(stateMap["live_max_weekly_loss_pct"] || stateMap["max_weekly_loss_pct"] || "8")
-    : parseFloat(stateMap["paper_max_weekly_loss_pct"] || stateMap["max_weekly_loss_pct"] || "12");
-  const modeMaxDrawdown = isLive
-    ? parseFloat(stateMap["live_max_drawdown_pct"] || stateMap["max_drawdown_pct"] || "15")
-    : parseFloat(stateMap["paper_max_drawdown_pct"] || stateMap["max_drawdown_pct"] || "20");
+  const modeMaxDailyLoss = parseFloat(
+    stateMap[`${prefix}_max_daily_loss_pct`] ||
+    (mode === "paper" ? stateMap["paper_max_daily_loss_pct"] : stateMap["live_max_daily_loss_pct"]) ||
+    stateMap["max_daily_loss_pct"] ||
+    (mode === "paper" ? "5" : "3")
+  );
+  const modeMaxWeeklyLoss = parseFloat(
+    stateMap[`${prefix}_max_weekly_loss_pct`] ||
+    (mode === "paper" ? stateMap["paper_max_weekly_loss_pct"] : stateMap["live_max_weekly_loss_pct"]) ||
+    stateMap["max_weekly_loss_pct"] ||
+    (mode === "paper" ? "12" : "8")
+  );
 
   return {
     totalCapital,
@@ -125,8 +150,8 @@ function getAllocationPct(compositeScore: number, mode: string): number {
   }
 }
 
-export async function routeSignals(candidates: SignalCandidate[]): Promise<AllocationDecision[]> {
-  const ctx = await getPortfolioContext();
+export async function routeSignals(candidates: SignalCandidate[], tradingMode: TradingMode): Promise<AllocationDecision[]> {
+  const ctx = await getPortfolioContext(tradingMode);
   const decisions: AllocationDecision[] = [];
 
   const sorted = [...candidates].sort((a, b) => b.compositeScore - a.compositeScore);

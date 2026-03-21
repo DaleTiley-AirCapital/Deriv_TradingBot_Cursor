@@ -5,9 +5,10 @@ import {
   getGetSettingsQueryKey,
   useGetAccountInfo,
   useSetTradingMode,
+  useToggleTradingMode,
   getGetAccountInfoQueryKey,
 } from "@workspace/api-client-react";
-import type { PlatformSettings, SetTradingModeRequestMode, ActionResponse } from "@workspace/api-client-react";
+import type { PlatformSettings, SetTradingModeRequestMode, ToggleTradingModeRequestMode, ActionResponse } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui-elements";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -844,6 +845,19 @@ export default function Settings() {
     },
   });
 
+  const { mutate: toggleMode } = useToggleTradingMode({
+    mutation: {
+      onSuccess: (data) => {
+        queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
+        const resp = data as ActionResponse;
+        toast({ title: "Mode toggled", description: resp.message || "Trading mode updated." });
+      },
+      onError: () => {
+        toast({ title: "Toggle failed", variant: "destructive" });
+      },
+    },
+  });
+
   const update = (key: string, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
     setHasChanges(true);
@@ -878,7 +892,24 @@ export default function Settings() {
     setMode({ data: { mode: "live" as SetTradingModeRequestMode, confirmed: true } });
   };
 
+  const handleToggleMode = (mode: "paper" | "demo" | "real", currentlyActive: boolean) => {
+    if (mode === "real" && !currentlyActive) {
+      setShowLiveConfirm(true);
+      return;
+    }
+    toggleMode({ data: { mode: mode as ToggleTradingModeRequestMode, active: !currentlyActive } });
+  };
+
+  const confirmRealToggle = () => {
+    setShowLiveConfirm(false);
+    toggleMode({ data: { mode: "real" as ToggleTradingModeRequestMode, active: true, confirmed: true } });
+  };
+
   const currentMode = form.trading_mode || "idle";
+  const paperActive = form.paper_mode_active === "true";
+  const demoActive = form.demo_mode_active === "true";
+  const realActive = form.real_mode_active === "true";
+  const anyModeActive = paperActive || demoActive || realActive;
 
   if (isLoading) {
     return (
@@ -893,7 +924,7 @@ export default function Settings() {
       <AnimatePresence>
         {showLiveConfirm && (
           <LiveModeConfirmDialog
-            onConfirm={confirmLiveMode}
+            onConfirm={realActive ? confirmLiveMode : confirmRealToggle}
             onCancel={() => setShowLiveConfirm(false)}
           />
         )}
@@ -1008,50 +1039,59 @@ export default function Settings() {
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0 }}>
         <Card className={cn(
           "border-2",
-          currentMode === "live" ? "border-destructive/30" :
-          currentMode === "paper" ? "border-warning/30" : "border-border/50"
+          realActive ? "border-destructive/30" :
+          anyModeActive ? "border-warning/30" : "border-border/50"
         )}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Zap className="w-4 h-4" />
-              Trading Mode
+              Trading Modes
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between py-2">
-              <div>
-                <p className="text-sm font-medium text-foreground">Current Mode</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Switch between paper trading (simulated) and live trading (real money)</p>
-              </div>
-              <div className="flex gap-2">
-                {["idle", "paper", "live"].map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => handleModeSwitch(m)}
-                    className={cn(
-                      "px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border-2",
-                      currentMode === m
-                        ? m === "live"
-                          ? "bg-destructive/10 border-destructive text-destructive"
-                          : m === "paper"
-                            ? "bg-warning/10 border-warning text-warning"
-                            : "bg-muted border-border text-muted-foreground"
-                        : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
-                    )}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
+          <CardContent className="space-y-4">
+            <p className="text-xs text-muted-foreground">Enable any combination of modes. Each runs independently with its own capital, positions, and risk limits.</p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {([
+                { key: "paper" as const, label: "Paper", desc: "Simulated trades", active: paperActive, color: "warning" },
+                { key: "demo" as const,  label: "Demo",  desc: "Deriv demo account", active: demoActive,  color: "primary" },
+                { key: "real" as const,  label: "Real",  desc: "Deriv real account", active: realActive,  color: "destructive" },
+              ]).map(({ key, label, desc, active, color }) => (
+                <button
+                  key={key}
+                  onClick={() => handleToggleMode(key, active)}
+                  className={cn(
+                    "flex flex-col items-start gap-1 p-4 rounded-xl border-2 text-left transition-all",
+                    active
+                      ? `bg-${color}/10 border-${color} text-${color}`
+                      : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                  )}
+                  style={active ? {
+                    backgroundColor: `hsl(var(--${color}) / 0.1)`,
+                    borderColor: `hsl(var(--${color}))`,
+                    color: `hsl(var(--${color}))`,
+                  } : undefined}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className={cn("w-2.5 h-2.5 rounded-full", active ? "animate-pulse" : "bg-muted-foreground/30")}
+                      style={active ? { backgroundColor: `hsl(var(--${color}))` } : undefined}
+                    />
+                    <span className="text-sm font-bold uppercase tracking-wider">{label}</span>
+                  </div>
+                  <span className="text-xs opacity-70">{desc}</span>
+                  <span className="text-[10px] font-semibold uppercase mt-1">{active ? "Active" : "Inactive"}</span>
+                </button>
+              ))}
             </div>
-            {currentMode === "live" && (
-              <div className="mt-3 p-3 bg-destructive/5 border border-destructive/20 rounded-lg flex items-center gap-2 text-destructive text-sm">
+
+            {realActive && (
+              <div className="p-3 bg-destructive/5 border border-destructive/20 rounded-lg flex items-center gap-2 text-destructive text-sm">
                 <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                <span className="font-medium">LIVE MODE ACTIVE — Real trades will execute on your Deriv account</span>
+                <span className="font-medium">REAL MODE ACTIVE — Real trades will execute on your Deriv account</span>
               </div>
             )}
             {accountInfo?.connected && accountInfo.balance != null && (
-              <div className="mt-3 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+              <div className="p-3 bg-primary/5 border border-primary/20 rounded-lg">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">Deriv Account Balance</span>
                   <span className="font-mono font-bold text-foreground">
@@ -1074,12 +1114,28 @@ export default function Settings() {
           </CardHeader>
           <CardContent>
             <SettingField
-              label="Deriv API Token"
-              description={form.deriv_api_token_set === "true" ? "Token is configured" : "Enter your Deriv API token for live trading and account data"}
+              label="Deriv API Token (Legacy)"
+              description={form.deriv_api_token_set === "true" ? "Token is configured" : "Legacy token — use Demo/Real tokens below instead"}
               value={form.deriv_api_token || ""}
               onChange={(v) => update("deriv_api_token", v)}
               type="password"
               placeholder={form.deriv_api_token_set === "true" ? "****configured****" : "Enter Deriv API token"}
+            />
+            <SettingField
+              label="Deriv Demo Token"
+              description={form.deriv_api_token_demo_set === "true" ? "Demo token is configured" : "API token for your Deriv demo account"}
+              value={form.deriv_api_token_demo || ""}
+              onChange={(v) => update("deriv_api_token_demo", v)}
+              type="password"
+              placeholder={form.deriv_api_token_demo_set === "true" ? "****configured****" : "Enter Deriv demo API token"}
+            />
+            <SettingField
+              label="Deriv Real Token"
+              description={form.deriv_api_token_real_set === "true" ? "Real token is configured" : "API token for your Deriv real account"}
+              value={form.deriv_api_token_real || ""}
+              onChange={(v) => update("deriv_api_token_real", v)}
+              type="password"
+              placeholder={form.deriv_api_token_real_set === "true" ? "****configured****" : "Enter Deriv real API token"}
             />
             <SettingField
               label="OpenAI API Key"
@@ -1320,13 +1376,83 @@ export default function Settings() {
                 max={20}
               />
               <SettingField
-                label="Total Capital"
-                description="Recommended: your actual deposit amount (e.g. $600). This is the amount you plan to trade with — set it to your intended deposit, not your total net worth. The platform uses this to calculate how much to risk per trade."
+                label="Total Capital (Legacy)"
+                description="Overall capital base. Per-mode capitals below take priority."
                 value={form.total_capital || "10000"}
                 onChange={(v) => update("total_capital", v)}
                 suffix="$"
                 min={100}
                 step={100}
+              />
+              <div className="border-t border-border/30 my-4" />
+              <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Per-Mode Capital</p>
+              <SettingField
+                label="Paper Capital"
+                description="Simulated capital for paper trading"
+                value={form.paper_capital || "10000"}
+                onChange={(v) => update("paper_capital", v)}
+                suffix="$"
+                min={100}
+                step={100}
+              />
+              <SettingField
+                label="Demo Capital"
+                description="Capital for Deriv demo account trading"
+                value={form.demo_capital || "600"}
+                onChange={(v) => update("demo_capital", v)}
+                suffix="$"
+                min={100}
+                step={100}
+              />
+              <SettingField
+                label="Real Capital"
+                description="Capital for Deriv real account trading"
+                value={form.real_capital || "600"}
+                onChange={(v) => update("real_capital", v)}
+                suffix="$"
+                min={100}
+                step={100}
+              />
+              <div className="border-t border-border/30 my-4" />
+              <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Demo Mode Position Sizing</p>
+              <SettingField
+                label="Demo — Equity %"
+                description="Position size when trading in demo mode"
+                value={form.demo_equity_pct_per_trade || "22"}
+                onChange={(v) => update("demo_equity_pct_per_trade", v)}
+                suffix="%"
+                min={0.1}
+                max={25}
+                step={0.5}
+              />
+              <SettingField
+                label="Demo — Max Trades"
+                description="Max open positions in demo mode"
+                value={form.demo_max_open_trades || "3"}
+                onChange={(v) => update("demo_max_open_trades", v)}
+                step={1}
+                min={1}
+                max={20}
+              />
+              <p className="text-xs font-semibold text-muted-foreground mb-2 mt-4 uppercase tracking-wider">Real Mode Position Sizing</p>
+              <SettingField
+                label="Real — Equity %"
+                description="Position size when trading in real mode"
+                value={form.real_equity_pct_per_trade || "22"}
+                onChange={(v) => update("real_equity_pct_per_trade", v)}
+                suffix="%"
+                min={0.1}
+                max={25}
+                step={0.5}
+              />
+              <SettingField
+                label="Real — Max Trades"
+                description="Max open positions in real mode"
+                value={form.real_max_open_trades || "3"}
+                onChange={(v) => update("real_max_open_trades", v)}
+                step={1}
+                min={1}
+                max={20}
               />
               <SettingField
                 label="Allocation Mode"
@@ -1468,10 +1594,74 @@ export default function Settings() {
                 step={1}
               />
               <div className="border-t border-border/30 my-4" />
-              <p className="text-xs font-semibold text-destructive/70 mb-2 uppercase tracking-wider">Live Mode Limits</p>
+              <p className="text-xs font-semibold text-primary/70 mb-2 uppercase tracking-wider">Demo Mode Limits</p>
+              <SettingField
+                label="Demo — Max Daily Loss"
+                description="Trading halts for the day in demo mode"
+                value={form.demo_max_daily_loss_pct || "5"}
+                onChange={(v) => update("demo_max_daily_loss_pct", v)}
+                suffix="%"
+                min={0.5}
+                max={25}
+                step={0.5}
+              />
+              <SettingField
+                label="Demo — Max Weekly Loss"
+                description="Trading halts for the week in demo mode"
+                value={form.demo_max_weekly_loss_pct || "12"}
+                onChange={(v) => update("demo_max_weekly_loss_pct", v)}
+                suffix="%"
+                min={1}
+                max={50}
+                step={0.5}
+              />
+              <SettingField
+                label="Demo — Max Drawdown"
+                description="Kill switch triggers at this drawdown in demo mode"
+                value={form.demo_max_drawdown_pct || "20"}
+                onChange={(v) => update("demo_max_drawdown_pct", v)}
+                suffix="%"
+                min={1}
+                max={50}
+                step={1}
+              />
+              <div className="border-t border-border/30 my-4" />
+              <p className="text-xs font-semibold text-destructive/70 mb-2 uppercase tracking-wider">Real Mode Limits</p>
+              <SettingField
+                label="Real — Max Daily Loss"
+                description="Trading halts for the day in real mode"
+                value={form.real_max_daily_loss_pct || "3"}
+                onChange={(v) => update("real_max_daily_loss_pct", v)}
+                suffix="%"
+                min={0.5}
+                max={25}
+                step={0.5}
+              />
+              <SettingField
+                label="Real — Max Weekly Loss"
+                description="Trading halts for the week in real mode"
+                value={form.real_max_weekly_loss_pct || "8"}
+                onChange={(v) => update("real_max_weekly_loss_pct", v)}
+                suffix="%"
+                min={1}
+                max={50}
+                step={0.5}
+              />
+              <SettingField
+                label="Real — Max Drawdown"
+                description="Kill switch triggers at this drawdown in real mode"
+                value={form.real_max_drawdown_pct || "15"}
+                onChange={(v) => update("real_max_drawdown_pct", v)}
+                suffix="%"
+                min={1}
+                max={50}
+                step={1}
+              />
+              <div className="border-t border-border/30 my-4" />
+              <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Legacy Live Mode Limits</p>
               <SettingField
                 label="Live — Max Daily Loss"
-                description="Trading halts for the day in live mode"
+                description="Trading halts for the day in live mode (legacy)"
                 value={form.live_max_daily_loss_pct || "3"}
                 onChange={(v) => update("live_max_daily_loss_pct", v)}
                 suffix="%"
@@ -1481,7 +1671,7 @@ export default function Settings() {
               />
               <SettingField
                 label="Live — Max Weekly Loss"
-                description="Trading halts for the week in live mode"
+                description="Trading halts for the week in live mode (legacy)"
                 value={form.live_max_weekly_loss_pct || "8"}
                 onChange={(v) => update("live_max_weekly_loss_pct", v)}
                 suffix="%"
@@ -1491,7 +1681,7 @@ export default function Settings() {
               />
               <SettingField
                 label="Live — Max Drawdown"
-                description="Kill switch triggers at this drawdown in live mode"
+                description="Kill switch triggers at this drawdown in live mode (legacy)"
                 value={form.live_max_drawdown_pct || "15"}
                 onChange={(v) => update("live_max_drawdown_pct", v)}
                 suffix="%"

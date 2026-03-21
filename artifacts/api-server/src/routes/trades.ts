@@ -4,7 +4,55 @@ import { db, tradesTable, platformStateTable, signalLogTable } from "@workspace/
 
 const router: IRouter = Router();
 
+router.post("/trade/mode/toggle", async (req, res): Promise<void> => {
+  const { mode, active, confirmed } = req.body ?? {};
+
+  if (!["paper", "demo", "real"].includes(mode)) {
+    res.status(400).json({ success: false, message: "Mode must be paper, demo, or real" });
+    return;
+  }
+
+  if (typeof active !== "boolean") {
+    res.status(400).json({ success: false, message: "active must be a boolean" });
+    return;
+  }
+
+  if (mode === "real" && active && !confirmed) {
+    res.status(400).json({
+      success: false,
+      message: "Real trading requires confirmation. Send { confirmed: true } to proceed.",
+      requiresConfirmation: true,
+    });
+    return;
+  }
+
+  if ((mode === "demo" || mode === "real") && active) {
+    const tokenKey = mode === "demo" ? "deriv_api_token_demo" : "deriv_api_token_real";
+    const tokenRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, tokenKey)).limit(1);
+    const legacyTokenRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token")).limit(1);
+    if ((!tokenRow.length || !tokenRow[0].value) && (!legacyTokenRow.length || !legacyTokenRow[0].value)) {
+      res.status(403).json({
+        success: false,
+        message: `${mode === "demo" ? "Demo" : "Real"} trading requires a Deriv API token. Set it in Settings → API Keys first.`,
+      });
+      return;
+    }
+  }
+
+  const stateKey = `${mode}_mode_active`;
+  await db.insert(platformStateTable).values({ key: stateKey, value: active ? "true" : "false" })
+    .onConflictDoUpdate({ target: platformStateTable.key, set: { value: active ? "true" : "false", updatedAt: new Date() } });
+
+  const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1);
+  res.json({
+    success: true,
+    message: `${modeLabel} trading ${active ? "activated" : "deactivated"}.`,
+  });
+});
+
 router.post("/trade/paper/start", async (_req, res): Promise<void> => {
+  await db.insert(platformStateTable).values({ key: "paper_mode_active", value: "true" })
+    .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "true", updatedAt: new Date() } });
   await db.insert(platformStateTable).values({ key: "mode", value: "paper" })
     .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "paper", updatedAt: new Date() } });
   res.json({ success: true, message: "Paper trading mode activated. System is now routing signals through portfolio allocator." });
@@ -21,16 +69,23 @@ router.post("/trade/live/start", async (req, res): Promise<void> => {
     return;
   }
   const tokenRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token")).limit(1);
-  if (!tokenRow.length || !tokenRow[0].value) {
+  const demoTokenRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token_demo")).limit(1);
+  if ((!tokenRow.length || !tokenRow[0].value) && (!demoTokenRow.length || !demoTokenRow[0].value)) {
     res.status(403).json({ success: false, message: "Live trading requires a Deriv API token. Set it in Settings → API Keys first." });
     return;
   }
+  await db.insert(platformStateTable).values({ key: "demo_mode_active", value: "true" })
+    .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "true", updatedAt: new Date() } });
   await db.insert(platformStateTable).values({ key: "mode", value: "live" })
     .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "live", updatedAt: new Date() } });
-  res.json({ success: true, message: "Live trading mode activated." });
+  res.json({ success: true, message: "Demo trading mode activated." });
 });
 
 router.post("/trade/stop", async (_req, res): Promise<void> => {
+  for (const modeKey of ["paper_mode_active", "demo_mode_active", "real_mode_active"]) {
+    await db.insert(platformStateTable).values({ key: modeKey, value: "false" })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "false", updatedAt: new Date() } });
+  }
   await db.insert(platformStateTable).values({ key: "mode", value: "idle" })
     .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "idle", updatedAt: new Date() } });
   res.json({ success: true, message: "Trading stopped. All new signals will be rejected." });

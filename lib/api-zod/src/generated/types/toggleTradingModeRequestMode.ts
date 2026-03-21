@@ -6,9 +6,10 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type TradeMode = (typeof TradeMode)[keyof typeof TradeMode];
+export type ToggleTradingModeRequestMode =
+  (typeof ToggleTradingModeRequestMode)[keyof typeof ToggleTradingModeRequestMode];
 
-export const TradeMode = {
+export const ToggleTradingModeRequestMode = {
   paper: "paper",
   demo: "demo",
   real: "real",

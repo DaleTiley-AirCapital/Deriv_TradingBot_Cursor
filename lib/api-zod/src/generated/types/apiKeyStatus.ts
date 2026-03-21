@@ -8,5 +8,7 @@
 
 export interface ApiKeyStatus {
   deriv_api_token_set: boolean;
+  deriv_api_token_demo_set?: boolean;
+  deriv_api_token_real_set?: boolean;
   openai_api_key_set: boolean;
 }

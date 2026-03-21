@@ -104,9 +104,13 @@ router.post("/account/set-mode", async (req, res): Promise<void> => {
     return;
   }
 
-  if (mode === "live") {
+  if (mode === "paper") {
+    await db.insert(platformStateTable).values({ key: "paper_mode_active", value: "true" })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "true", updatedAt: new Date() } });
+  } else if (mode === "live") {
     const tokenRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token")).limit(1);
-    if (!tokenRow.length || !tokenRow[0].value) {
+    const demoTokenRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token_demo")).limit(1);
+    if ((!tokenRow.length || !tokenRow[0].value) && (!demoTokenRow.length || !demoTokenRow[0].value)) {
       res.status(403).json({
         success: false,
         message: "Live trading requires a Deriv API token. Set it in Settings → API Keys first.",
@@ -120,6 +124,13 @@ router.post("/account/set-mode", async (req, res): Promise<void> => {
         requiresConfirmation: true,
       });
       return;
+    }
+    await db.insert(platformStateTable).values({ key: "demo_mode_active", value: "true" })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "true", updatedAt: new Date() } });
+  } else {
+    for (const modeKey of ["paper_mode_active", "demo_mode_active", "real_mode_active"]) {
+      await db.insert(platformStateTable).values({ key: modeKey, value: "false" })
+        .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "false", updatedAt: new Date() } });
     }
   }
 

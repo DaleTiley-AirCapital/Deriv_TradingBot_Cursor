@@ -1,6 +1,7 @@
 import { db, tradesTable, platformStateTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
-import { getDerivClientWithDbToken } from "./deriv.js";
+import { getDerivClientForMode, getDerivClientWithDbToken, getModeCapitalKey, getModeCapitalDefault } from "./deriv.js";
+import type { TradingMode } from "./deriv.js";
 import type { AllocationDecision } from "./signalRouter.js";
 
 const MAX_OPEN_TRADES = 3;
@@ -186,59 +187,89 @@ export async function getHistoricalAvgMove(symbol: string, strategyName: string)
   return moves.reduce((a, b) => a + b, 0) / moves.length;
 }
 
-export async function openPosition(decision: AllocationDecision, atrPct: number): Promise<number | null> {
+export async function openPosition(decision: AllocationDecision, atrPct: number, mode: TradingMode): Promise<number | null> {
   const { signal } = decision;
-  const client = await getDerivClientWithDbToken();
 
   const states = await db.select().from(platformStateTable);
   const stateMap: Record<string, string> = {};
   for (const s of states) stateMap[s.key] = s.value;
-  const mode = stateMap["mode"] || "idle";
 
-  let equity = parseFloat(stateMap["total_capital"] || "10000");
-  if (mode === "live") {
+  const capitalKey = getModeCapitalKey(mode);
+  const capitalDefault = getModeCapitalDefault(mode);
+  let equity = parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault);
+
+  const client = await getDerivClientForMode(mode);
+
+  if ((mode === "demo" || mode === "real") && client) {
     try {
+      if (!client.isStreaming()) {
+        await client.connect();
+      }
       const balanceData = await client.getAccountBalance();
       if (balanceData) {
         equity = balanceData.balance;
       }
     } catch (err) {
-      console.warn("[TradeEngine] Could not fetch live balance, using total_capital setting:", err instanceof Error ? err.message : err);
+      console.warn(`[TradeEngine] Could not fetch ${mode} balance, using configured capital:`, err instanceof Error ? err.message : err);
     }
   }
 
-  const modeMaxTrades = mode === "live"
-    ? parseInt(stateMap["live_max_open_trades"] || String(MAX_OPEN_TRADES))
-    : parseInt(stateMap["paper_max_open_trades"] || "4");
-  const modeEquityPct = mode === "live"
-    ? parseFloat(stateMap["live_equity_pct_per_trade"] || "22")
-    : parseFloat(stateMap["paper_equity_pct_per_trade"] || "13");
+  const prefix = mode === "paper" ? "paper" : mode === "demo" ? "demo" : "real";
+  const modeMaxTrades = parseInt(
+    stateMap[`${prefix}_max_open_trades`] ||
+    (mode === "paper" ? stateMap["paper_max_open_trades"] : stateMap["live_max_open_trades"]) ||
+    String(MAX_OPEN_TRADES)
+  );
+  const modeEquityPct = parseFloat(
+    stateMap[`${prefix}_equity_pct_per_trade`] ||
+    (mode === "paper" ? stateMap["paper_equity_pct_per_trade"] : stateMap["live_equity_pct_per_trade"]) ||
+    "22"
+  );
 
-  const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
+  const openTrades = await db.select().from(tradesTable).where(
+    and(eq(tradesTable.status, "open"), eq(tradesTable.mode, mode))
+  );
   const totalDeployed = openTrades.reduce((sum, t) => sum + t.size, 0);
 
   const sizing = calculatePositionSize(equity, openTrades.length, totalDeployed, signal.confidence, modeMaxTrades, modeEquityPct);
   if (!sizing.allowed) {
-    console.log(`[TradeEngine] Position sizing rejected: ${sizing.reason}`);
+    console.log(`[TradeEngine] [${mode.toUpperCase()}] Position sizing rejected: ${sizing.reason}`);
     return null;
   }
 
   if (decision.capitalAmount > 0 && decision.capitalAmount < sizing.size) {
-    console.log(`[TradeEngine] AI-adjusted size cap: ${sizing.size.toFixed(2)} → ${decision.capitalAmount.toFixed(2)}`);
+    console.log(`[TradeEngine] [${mode.toUpperCase()}] AI-adjusted size cap: ${sizing.size.toFixed(2)} → ${decision.capitalAmount.toFixed(2)}`);
     sizing.size = decision.capitalAmount;
   }
 
   const historicalAvgMovePct = await getHistoricalAvgMove(signal.symbol, signal.strategyName);
-  let spotPrice = client.getLatestQuote(signal.symbol) ?? 0;
+
+  let spotPrice = 0;
+  if (client) {
+    spotPrice = client.getLatestQuote(signal.symbol) ?? 0;
+    if (spotPrice <= 0) {
+      try {
+        spotPrice = (await client.getSpotPrice(signal.symbol)) ?? 0;
+      } catch {
+        spotPrice = 0;
+      }
+    }
+  }
+
   if (spotPrice <= 0) {
     try {
-      spotPrice = (await client.getSpotPrice(signal.symbol)) ?? 0;
+      const fallbackClient = await getDerivClientWithDbToken();
+      spotPrice = fallbackClient.getLatestQuote(signal.symbol) ?? 0;
+      if (spotPrice <= 0) {
+        spotPrice = (await fallbackClient.getSpotPrice(signal.symbol)) ?? 0;
+      }
     } catch {
       spotPrice = 0;
     }
   }
+
   if (spotPrice <= 0) {
-    console.log(`[TradeEngine] No spot price available for ${signal.symbol}`);
+    console.log(`[TradeEngine] [${mode.toUpperCase()}] No spot price available for ${signal.symbol}`);
     return null;
   }
 
@@ -272,7 +303,16 @@ export async function openPosition(decision: AllocationDecision, atrPct: number)
   const entryTs = new Date();
   const maxExitTs = new Date(entryTs.getTime() + timeExitHours * 60 * 60 * 1000);
 
-  if (mode === "live") {
+  if ((mode === "demo" || mode === "real") && client) {
+    try {
+      if (!client.isStreaming()) {
+        await client.connect();
+      }
+    } catch {
+      console.log(`[TradeEngine] [${mode.toUpperCase()}] Could not connect Deriv client for trading`);
+      return null;
+    }
+
     const contractType = signal.direction === "buy" ? "CALL" as const : "PUT" as const;
     const result = await client.buyContract({
       symbol: signal.symbol,
@@ -287,7 +327,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number)
     });
 
     if (!result) {
-      console.log(`[TradeEngine] Failed to open live position on ${signal.symbol}`);
+      console.log(`[TradeEngine] [${mode.toUpperCase()}] Failed to open position on ${signal.symbol}`);
       return null;
     }
 
@@ -301,7 +341,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number)
       tp,
       size: sizing.size,
       status: "open",
-      mode: "live",
+      mode,
       confidence: signal.confidence,
       trailingStopPct: trailingStopBufferPct / 100,
       peakPrice: result.entrySpot,
@@ -310,7 +350,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number)
       notes: `Strategy: ${signal.strategyName}, Reason: ${signal.reason}`,
     }).returning();
 
-    console.log(`[TradeEngine] Opened LIVE ${signal.direction} on ${signal.symbol} @ ${result.entrySpot} | Size: $${sizing.size.toFixed(2)} | TP: ${tp.toFixed(4)} | SL: ${sl.toFixed(4)}`);
+    console.log(`[TradeEngine] Opened ${mode.toUpperCase()} ${signal.direction} on ${signal.symbol} @ ${result.entrySpot} | Size: $${sizing.size.toFixed(2)} | TP: ${tp.toFixed(4)} | SL: ${sl.toFixed(4)}`);
     return inserted.id;
   } else {
     const [inserted] = await db.insert(tradesTable).values({
@@ -340,16 +380,22 @@ export async function manageOpenPositions(): Promise<void> {
   const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
   if (openTrades.length === 0) return;
 
-  let client;
+  let fallbackClient;
   try {
-    client = await getDerivClientWithDbToken();
+    fallbackClient = await getDerivClientWithDbToken();
   } catch {
-    return;
+    // no fallback client available
   }
 
   for (const trade of openTrades) {
     try {
-      const currentPrice = client.getLatestQuote(trade.symbol);
+      const tradeMode = trade.mode as TradingMode;
+      const modeClient = await getDerivClientForMode(tradeMode);
+      const activeClient = modeClient || fallbackClient;
+
+      if (!activeClient) continue;
+
+      const currentPrice = activeClient.getLatestQuote(trade.symbol);
       if (!currentPrice) continue;
 
       await db.update(tradesTable)
@@ -382,8 +428,8 @@ export async function manageOpenPositions(): Promise<void> {
           .set({ sl: trailingResult.newSl, peakPrice: newPeak })
           .where(eq(tradesTable.id, trade.id));
 
-        if (trade.mode === "live" && trade.brokerTradeId) {
-          await client.updateStopLoss(parseInt(trade.brokerTradeId), Math.abs(trailingResult.newSl - trade.entryPrice));
+        if ((tradeMode === "demo" || tradeMode === "real") && trade.brokerTradeId && modeClient) {
+          await modeClient.updateStopLoss(parseInt(trade.brokerTradeId), Math.abs(trailingResult.newSl - trade.entryPrice));
         }
         console.log(`[TradeEngine] Updated trailing SL for trade #${trade.id}: ${trailingResult.newSl.toFixed(4)}`);
       } else {
@@ -444,10 +490,13 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
     ? ((exitPrice - trade.entryPrice) / trade.entryPrice) * trade.size
     : ((trade.entryPrice - exitPrice) / trade.entryPrice) * trade.size;
 
-  if (trade.mode === "live" && trade.brokerTradeId) {
+  const tradeMode = trade.mode as TradingMode;
+  if ((tradeMode === "demo" || tradeMode === "real") && trade.brokerTradeId) {
     try {
-      const client = await getDerivClientWithDbToken();
-      await client.sellContract(parseInt(trade.brokerTradeId));
+      const client = await getDerivClientForMode(tradeMode);
+      if (client) {
+        await client.sellContract(parseInt(trade.brokerTradeId));
+      }
     } catch (err) {
       console.error(`[TradeEngine] Failed to sell contract on Deriv:`, err instanceof Error ? err.message : err);
     }
@@ -464,5 +513,5 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
     })
     .where(eq(tradesTable.id, tradeId));
 
-  console.log(`[TradeEngine] Closed trade #${tradeId} (${trade.symbol} ${trade.side}) | Exit: ${exitPrice.toFixed(4)} | P&L: $${pnl.toFixed(2)} | Reason: ${exitReason}`);
+  console.log(`[TradeEngine] Closed trade #${tradeId} (${trade.symbol} ${trade.side} [${tradeMode}]) | Exit: ${exitPrice.toFixed(4)} | P&L: $${pnl.toFixed(2)} | Reason: ${exitReason}`);
 }

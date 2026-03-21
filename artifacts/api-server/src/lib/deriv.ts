@@ -11,6 +11,8 @@ export const SUPPORTED_SYMBOLS = [
   "R_75", "R_100", "JD75", "STPIDX", "RDBEAR"
 ];
 
+export type TradingMode = "paper" | "demo" | "real";
+
 const TIMEFRAMES: Record<string, number> = {
   "1m": 60,
   "5m": 300,
@@ -653,8 +655,6 @@ class DerivClient {
     }
     await db.insert(platformStateTable).values({ key: "streaming", value: "true" })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "true", updatedAt: new Date() } });
-    await db.insert(platformStateTable).values({ key: "mode", value: "collecting" })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "collecting", updatedAt: new Date() } });
     await db.insert(platformStateTable).values({ key: "streaming_symbols", value: symbols.join(",") })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: symbols.join(","), updatedAt: new Date() } });
     await db.insert(platformStateTable).values({ key: "last_sync_at", value: new Date().toISOString() })
@@ -675,8 +675,6 @@ class DerivClient {
     this.authorized = false;
     await db.insert(platformStateTable).values({ key: "streaming", value: "false" })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "false", updatedAt: new Date() } });
-    await db.insert(platformStateTable).values({ key: "mode", value: "idle" })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "idle", updatedAt: new Date() } });
   }
 
   isStreaming(): boolean {
@@ -685,20 +683,6 @@ class DerivClient {
 
   getSubscribedSymbols(): string[] {
     return Array.from(this.subscribedSymbols);
-  }
-}
-
-let derivClient: DerivClient | null = null;
-let lastToken: string | null = null;
-
-export async function getDbApiToken(): Promise<string | null> {
-  try {
-    const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token"));
-    const raw = rows[0]?.value || null;
-    if (!raw) return null;
-    return decryptStoredSecret(raw);
-  } catch {
-    return null;
   }
 }
 
@@ -719,10 +703,58 @@ function decryptStoredSecret(stored: string): string {
   return decrypted;
 }
 
+export async function getDbApiToken(): Promise<string | null> {
+  try {
+    const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token"));
+    const raw = rows[0]?.value || null;
+    if (!raw) return null;
+    return decryptStoredSecret(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function getDbApiTokenForMode(mode: TradingMode): Promise<string | null> {
+  const key = mode === "demo" ? "deriv_api_token_demo" : mode === "real" ? "deriv_api_token_real" : null;
+  if (!key) return null;
+  try {
+    const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, key));
+    let raw = rows[0]?.value || null;
+    if (!raw) {
+      const fallbackRows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token"));
+      raw = fallbackRows[0]?.value || null;
+    }
+    if (!raw) return null;
+    return decryptStoredSecret(raw);
+  } catch {
+    return null;
+  }
+}
+
+let derivClientDemo: DerivClient | null = null;
+let lastTokenDemo: string | null = null;
+let derivClientReal: DerivClient | null = null;
+let lastTokenReal: string | null = null;
+let derivClient: DerivClient | null = null;
+let lastToken: string | null = null;
+
 export async function getDerivClientWithDbToken(): Promise<DerivClient> {
   const token = await getDbApiToken();
   if (!token) {
-    throw new Error("No Deriv API token configured. Add it in Settings → API Keys.");
+    const demoToken = await getDbApiTokenForMode("demo");
+    const realToken = await getDbApiTokenForMode("real");
+    const fallbackToken = demoToken || realToken;
+    if (!fallbackToken) {
+      throw new Error("No Deriv API token configured. Add it in Settings → API Keys.");
+    }
+    if (!derivClient || lastToken !== fallbackToken) {
+      if (derivClient) {
+        derivClient.stopStreaming();
+      }
+      derivClient = new DerivClient(fallbackToken);
+      lastToken = fallbackToken;
+    }
+    return derivClient;
   }
   if (!derivClient || lastToken !== token) {
     if (derivClient) {
@@ -734,6 +766,33 @@ export async function getDerivClientWithDbToken(): Promise<DerivClient> {
   return derivClient;
 }
 
+export async function getDerivClientForMode(mode: TradingMode): Promise<DerivClient | null> {
+  if (mode === "paper") return null;
+
+  const token = await getDbApiTokenForMode(mode);
+  if (!token) return null;
+
+  if (mode === "demo") {
+    if (!derivClientDemo || lastTokenDemo !== token) {
+      if (derivClientDemo) {
+        derivClientDemo.stopStreaming();
+      }
+      derivClientDemo = new DerivClient(token);
+      lastTokenDemo = token;
+    }
+    return derivClientDemo;
+  } else {
+    if (!derivClientReal || lastTokenReal !== token) {
+      if (derivClientReal) {
+        derivClientReal.stopStreaming();
+      }
+      derivClientReal = new DerivClient(token);
+      lastTokenReal = token;
+    }
+    return derivClientReal;
+  }
+}
+
 async function getEnabledSymbols(): Promise<string[]> {
   try {
     const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "enabled_symbols"));
@@ -743,6 +802,34 @@ async function getEnabledSymbols(): Promise<string[]> {
     }
   } catch {}
   return [...SUPPORTED_SYMBOLS];
+}
+
+export function getActiveModes(stateMap: Record<string, string>): TradingMode[] {
+  const modes: TradingMode[] = [];
+  if (stateMap["paper_mode_active"] === "true") modes.push("paper");
+  if (stateMap["demo_mode_active"] === "true") modes.push("demo");
+  if (stateMap["real_mode_active"] === "true") modes.push("real");
+  return modes;
+}
+
+export function isAnyModeActive(stateMap: Record<string, string>): boolean {
+  return getActiveModes(stateMap).length > 0;
+}
+
+export function getModeCapitalKey(mode: TradingMode): string {
+  switch (mode) {
+    case "paper": return "paper_capital";
+    case "demo": return "demo_capital";
+    case "real": return "real_capital";
+  }
+}
+
+export function getModeCapitalDefault(mode: TradingMode): string {
+  switch (mode) {
+    case "paper": return "10000";
+    case "demo": return "600";
+    case "real": return "600";
+  }
 }
 
 export { DerivClient, getEnabledSymbols };

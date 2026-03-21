@@ -1,6 +1,8 @@
 import { Router, type IRouter } from "express";
 import { desc, eq, sql, and } from "drizzle-orm";
 import { db, tradesTable, platformStateTable, signalLogTable } from "@workspace/db";
+import { getActiveModes, getModeCapitalKey, getModeCapitalDefault } from "../lib/deriv.js";
+import type { TradingMode } from "../lib/deriv.js";
 
 const router: IRouter = Router();
 
@@ -66,8 +68,43 @@ router.get("/overview", async (_req, res): Promise<void> => {
   const wins = closedTrades.filter(t => (t.pnl || 0) > 0).length;
   const winRate = closedTrades.length > 0 ? wins / closedTrades.length : 0;
 
+  const activeModes = getActiveModes(stateMap);
+  const legacyMode = stateMap["mode"] || "idle";
+
+  const perMode: Record<string, {
+    capital: number;
+    openPositions: number;
+    realisedPnl: number;
+    winRate: number;
+    totalTrades: number;
+    active: boolean;
+  }> = {};
+
+  for (const mode of ["paper", "demo", "real"] as TradingMode[]) {
+    const modeOpen = openTrades.filter(t => t.mode === mode);
+    const modeClosed = closedTrades.filter(t => t.mode === mode);
+    const modeWins = modeClosed.filter(t => (t.pnl || 0) > 0).length;
+    const capitalKey = getModeCapitalKey(mode);
+    const capitalDefault = getModeCapitalDefault(mode);
+
+    perMode[mode] = {
+      capital: parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault),
+      openPositions: modeOpen.length,
+      realisedPnl: modeClosed.reduce((sum, t) => sum + (t.pnl || 0), 0),
+      winRate: modeClosed.length > 0 ? modeWins / modeClosed.length : 0,
+      totalTrades: modeClosed.length,
+      active: activeModes.includes(mode),
+    };
+  }
+
+  let effectiveMode = legacyMode;
+  if (activeModes.length > 0) {
+    effectiveMode = activeModes.length === 1 ? activeModes[0] : "multi";
+  }
+
   res.json({
-    mode: stateMap["mode"] || "idle",
+    mode: effectiveMode,
+    activeModes,
     openPositions: openTrades.length,
     availableCapital: totalCapital - openRisk,
     openRisk,
@@ -78,6 +115,10 @@ router.get("/overview", async (_req, res): Promise<void> => {
     realisedPnl,
     activeStrategies: parseInt(stateMap["active_strategies"] || "4"),
     killSwitchActive: stateMap["kill_switch"] === "true",
+    perMode,
+    paperModeActive: stateMap["paper_mode_active"] === "true",
+    demoModeActive: stateMap["demo_mode_active"] === "true",
+    realModeActive: stateMap["real_mode_active"] === "true",
   });
 });
 

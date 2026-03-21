@@ -11,5 +11,6 @@ export type LivePositionMode =
 
 export const LivePositionMode = {
   paper: "paper",
-  live: "live",
+  demo: "demo",
+  real: "real",
 } as const;

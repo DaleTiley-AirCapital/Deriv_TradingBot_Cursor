@@ -20,6 +20,10 @@ export interface ActionResponse {
 
 export interface BackfillRequest {
   symbol: string;
+  /**
+   * @minimum 1
+   * @maximum 24
+   */
   months?: number;
 }
 
@@ -35,6 +39,9 @@ export const DataStatusMode = {
   collecting: "collecting",
   paper: "paper",
   live: "live",
+  demo: "demo",
+  real: "real",
+  multi: "multi",
 } as const;
 
 export interface DataStatus {
@@ -291,7 +298,8 @@ export type TradeMode = (typeof TradeMode)[keyof typeof TradeMode];
 
 export const TradeMode = {
   paper: "paper",
-  live: "live",
+  demo: "demo",
+  real: "real",
 } as const;
 
 export interface Trade {
@@ -343,7 +351,8 @@ export type LivePositionMode =
 
 export const LivePositionMode = {
   paper: "paper",
-  live: "live",
+  demo: "demo",
+  real: "real",
 } as const;
 
 export interface LivePosition {
@@ -406,6 +415,25 @@ export interface SetPortfolioModeRequest {
   mode: SetPortfolioModeRequestMode;
 }
 
+export interface ModeRiskSnapshot {
+  mode?: string;
+  totalCapital?: number;
+  dailyLossBreached?: boolean;
+  weeklyLossBreached?: boolean;
+  maxDrawdownBreached?: boolean;
+  dailyLossPct?: number;
+  weeklyLossPct?: number;
+  drawdownPct?: number;
+  maxDailyLossPct?: number;
+  maxWeeklyLossPct?: number;
+  maxDrawdownPct?: number;
+  openRiskPct?: number;
+  openTradeCount?: number;
+  realisedPnl?: number;
+}
+
+export type RiskStatusPerMode = { [key: string]: ModeRiskSnapshot };
+
 export interface RiskStatus {
   killSwitchActive: boolean;
   dailyLossBreached: boolean;
@@ -414,12 +442,14 @@ export interface RiskStatus {
   dailyLossPct: number;
   weeklyLossPct: number;
   drawdownPct: number;
-  maxDailyLossPct: number;
-  maxWeeklyLossPct: number;
-  maxDrawdownPct: number;
+  maxDailyLossPct?: number;
+  maxWeeklyLossPct?: number;
+  maxDrawdownPct?: number;
   activeCooldowns: string[];
   disabledStrategies: string[];
   openRiskPct: number;
+  perMode?: RiskStatusPerMode;
+  activeModes?: string[];
 }
 
 export interface AccountInfo {
@@ -466,6 +496,8 @@ export interface SetModeErrorResponse {
 
 export interface ApiKeyStatus {
   deriv_api_token_set: boolean;
+  deriv_api_token_demo_set?: boolean;
+  deriv_api_token_real_set?: boolean;
   openai_api_key_set: boolean;
 }
 
@@ -485,7 +517,6 @@ export interface PlatformSettings {
   allocation_mode?: string;
   total_capital?: string;
   scan_interval_seconds?: string;
-  scan_stagger_seconds?: string;
   paper_equity_pct_per_trade?: string;
   live_equity_pct_per_trade?: string;
   paper_max_open_trades?: string;
@@ -494,6 +525,10 @@ export interface PlatformSettings {
   deriv_api_token?: string;
   openai_api_key?: string;
   deriv_api_token_set?: string;
+  deriv_api_token_demo?: string;
+  deriv_api_token_demo_set?: string;
+  deriv_api_token_real?: string;
+  deriv_api_token_real_set?: string;
   openai_api_key_set?: string;
   trading_mode?: string;
   enabled_symbols?: string;
@@ -503,6 +538,56 @@ export interface PlatformSettings {
   live_max_weekly_loss_pct?: string;
   paper_max_drawdown_pct?: string;
   live_max_drawdown_pct?: string;
+  paper_capital?: string;
+  demo_capital?: string;
+  real_capital?: string;
+  demo_equity_pct_per_trade?: string;
+  real_equity_pct_per_trade?: string;
+  demo_max_open_trades?: string;
+  real_max_open_trades?: string;
+  demo_max_daily_loss_pct?: string;
+  real_max_daily_loss_pct?: string;
+  demo_max_weekly_loss_pct?: string;
+  real_max_weekly_loss_pct?: string;
+  demo_max_drawdown_pct?: string;
+  real_max_drawdown_pct?: string;
+  paper_mode_active?: string;
+  demo_mode_active?: string;
+  real_mode_active?: string;
+}
+
+export type AiOptimisationStatusAiValues = { [key: string]: string };
+
+export interface AiOptimisationStatus {
+  locked?: boolean;
+  /** @nullable */
+  optimisedAt?: string | null;
+  aiValues?: AiOptimisationStatusAiValues;
+  lockedKeys?: string[];
+}
+
+export type ToggleTradingModeRequestMode =
+  (typeof ToggleTradingModeRequestMode)[keyof typeof ToggleTradingModeRequestMode];
+
+export const ToggleTradingModeRequestMode = {
+  paper: "paper",
+  demo: "demo",
+  real: "real",
+} as const;
+
+export interface ToggleTradingModeRequest {
+  mode: ToggleTradingModeRequestMode;
+  active: boolean;
+  confirmed?: boolean;
+}
+
+export interface ModeOverviewSnapshot {
+  capital?: number;
+  openPositions?: number;
+  realisedPnl?: number;
+  winRate?: number;
+  totalTrades?: number;
+  active?: boolean;
 }
 
 export type PlatformOverviewMode =
@@ -513,10 +598,16 @@ export const PlatformOverviewMode = {
   collecting: "collecting",
   paper: "paper",
   live: "live",
+  demo: "demo",
+  real: "real",
+  multi: "multi",
 } as const;
+
+export type PlatformOverviewPerMode = { [key: string]: ModeOverviewSnapshot };
 
 export interface PlatformOverview {
   mode: PlatformOverviewMode;
+  activeModes?: string[];
   openPositions: number;
   availableCapital: number;
   openRisk: number;
@@ -528,6 +619,10 @@ export interface PlatformOverview {
   realisedPnl: number;
   activeStrategies: number;
   killSwitchActive: boolean;
+  perMode?: PlatformOverviewPerMode;
+  paperModeActive?: boolean;
+  demoModeActive?: boolean;
+  realModeActive?: boolean;
 }
 
 export type GetTicksParams = {
@@ -559,4 +654,9 @@ export type GetTradeHistoryParams = {
   symbol?: string;
   strategy?: string;
   mode?: string;
+};
+
+export type OverrideAiSettingBody = {
+  /** The setting key to unlock */
+  key: string;
 };

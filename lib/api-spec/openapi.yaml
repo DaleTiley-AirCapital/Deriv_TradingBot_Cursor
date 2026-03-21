@@ -432,6 +432,31 @@ paths:
                 items:
                   $ref: "#/components/schemas/SignalLog"
 
+  /trade/mode/toggle:
+    post:
+      operationId: toggleTradingMode
+      tags: [trades]
+      summary: Toggle a trading mode on or off
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToggleTradingModeRequest"
+      responses:
+        "200":
+          description: Mode toggled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+        "400":
+          description: Invalid request or confirmation required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetModeErrorResponse"
+
   /trade/paper/start:
     post:
       operationId: startPaperTrading
@@ -809,7 +834,7 @@ components:
       properties:
         mode:
           type: string
-          enum: [idle, collecting, paper, live]
+          enum: [idle, collecting, paper, live, demo, real, multi]
         streaming:
           type: boolean
         lastSyncAt:
@@ -1269,7 +1294,7 @@ components:
           enum: [open, closed, cancelled]
         mode:
           type: string
-          enum: [paper, live]
+          enum: [paper, demo, real]
         notes:
           type: ["string", "null"]
         confidence:
@@ -1346,7 +1371,7 @@ components:
           type: ["number", "null"]
         mode:
           type: string
-          enum: [paper, live]
+          enum: [paper, demo, real]
       required:
         - id
         - symbol
@@ -1434,6 +1459,12 @@ components:
           type: number
         drawdownPct:
           type: number
+        maxDailyLossPct:
+          type: number
+        maxWeeklyLossPct:
+          type: number
+        maxDrawdownPct:
+          type: number
         activeCooldowns:
           type: array
           items:
@@ -1444,6 +1475,14 @@ components:
             type: string
         openRiskPct:
           type: number
+        perMode:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ModeRiskSnapshot"
+        activeModes:
+          type: array
+          items:
+            type: string
       required:
         - killSwitchActive
         - dailyLossBreached
@@ -1514,6 +1553,10 @@ components:
       properties:
         deriv_api_token_set:
           type: boolean
+        deriv_api_token_demo_set:
+          type: boolean
+        deriv_api_token_real_set:
+          type: boolean
         openai_api_key_set:
           type: boolean
       required:
@@ -1569,6 +1612,14 @@ components:
           type: string
         deriv_api_token_set:
           type: string
+        deriv_api_token_demo:
+          type: string
+        deriv_api_token_demo_set:
+          type: string
+        deriv_api_token_real:
+          type: string
+        deriv_api_token_real_set:
+          type: string
         openai_api_key_set:
           type: string
         trading_mode:
@@ -1587,6 +1638,38 @@ components:
           type: string
         live_max_drawdown_pct:
           type: string
+        paper_capital:
+          type: string
+        demo_capital:
+          type: string
+        real_capital:
+          type: string
+        demo_equity_pct_per_trade:
+          type: string
+        real_equity_pct_per_trade:
+          type: string
+        demo_max_open_trades:
+          type: string
+        real_max_open_trades:
+          type: string
+        demo_max_daily_loss_pct:
+          type: string
+        real_max_daily_loss_pct:
+          type: string
+        demo_max_weekly_loss_pct:
+          type: string
+        real_max_weekly_loss_pct:
+          type: string
+        demo_max_drawdown_pct:
+          type: string
+        real_max_drawdown_pct:
+          type: string
+        paper_mode_active:
+          type: string
+        demo_mode_active:
+          type: string
+        real_mode_active:
+          type: string
 
     AiOptimisationStatus:
       type: object
@@ -1604,12 +1687,78 @@ components:
           items:
             type: string
 
+    ToggleTradingModeRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [paper, demo, real]
+        active:
+          type: boolean
+        confirmed:
+          type: boolean
+      required:
+        - mode
+        - active
+
+    ModeRiskSnapshot:
+      type: object
+      properties:
+        mode:
+          type: string
+        totalCapital:
+          type: number
+        dailyLossBreached:
+          type: boolean
+        weeklyLossBreached:
+          type: boolean
+        maxDrawdownBreached:
+          type: boolean
+        dailyLossPct:
+          type: number
+        weeklyLossPct:
+          type: number
+        drawdownPct:
+          type: number
+        maxDailyLossPct:
+          type: number
+        maxWeeklyLossPct:
+          type: number
+        maxDrawdownPct:
+          type: number
+        openRiskPct:
+          type: number
+        openTradeCount:
+          type: integer
+        realisedPnl:
+          type: number
+
+    ModeOverviewSnapshot:
+      type: object
+      properties:
+        capital:
+          type: number
+        openPositions:
+          type: integer
+        realisedPnl:
+          type: number
+        winRate:
+          type: number
+        totalTrades:
+          type: integer
+        active:
+          type: boolean
+
     PlatformOverview:
       type: object
       properties:
         mode:
           type: string
-          enum: [idle, collecting, paper, live]
+          enum: [idle, collecting, paper, live, demo, real, multi]
+        activeModes:
+          type: array
+          items:
+            type: string
         openPositions:
           type: integer
         availableCapital:
@@ -1629,6 +1778,16 @@ components:
         activeStrategies:
           type: integer
         killSwitchActive:
+          type: boolean
+        perMode:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ModeOverviewSnapshot"
+        paperModeActive:
+          type: boolean
+        demoModeActive:
+          type: boolean
+        realModeActive:
           type: boolean
       required:
         - mode

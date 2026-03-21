@@ -69,9 +69,25 @@ const SETTING_DEFAULTS: Record<string, string> = {
   scoring_weight_volatility_condition: "16.67",
   scoring_weight_reward_risk: "16.67",
   scoring_weight_probability_of_success: "16.67",
+  paper_capital: "10000",
+  demo_capital: "600",
+  real_capital: "600",
+  demo_equity_pct_per_trade: "22",
+  real_equity_pct_per_trade: "22",
+  demo_max_open_trades: "3",
+  real_max_open_trades: "3",
+  demo_max_daily_loss_pct: "3",
+  real_max_daily_loss_pct: "3",
+  demo_max_weekly_loss_pct: "8",
+  real_max_weekly_loss_pct: "8",
+  demo_max_drawdown_pct: "15",
+  real_max_drawdown_pct: "15",
+  paper_mode_active: "false",
+  demo_mode_active: "false",
+  real_mode_active: "false",
 };
 
-const API_KEY_KEYS = ["deriv_api_token", "openai_api_key"];
+const API_KEY_KEYS = ["deriv_api_token", "deriv_api_token_demo", "deriv_api_token_real", "openai_api_key"];
 
 const ALL_SETTING_KEYS = Object.keys(SETTING_DEFAULTS);
 
@@ -128,7 +144,8 @@ router.post("/settings", async (req, res): Promise<void> => {
 
     if (!ALL_SETTING_KEYS.includes(key)) continue;
 
-    if (key === "kill_switch" || key === "ai_verification_enabled") {
+    if (key === "kill_switch" || key === "ai_verification_enabled" ||
+        key === "paper_mode_active" || key === "demo_mode_active" || key === "real_mode_active") {
       if (strVal !== "true" && strVal !== "false") {
         errors.push(`${key}: must be "true" or "false"`);
         continue;
@@ -167,6 +184,15 @@ router.post("/settings", async (req, res): Promise<void> => {
   }
 
   if (updates.find((u) => u.key === "kill_switch" && u.value === "true")) {
+    for (const modeKey of ["paper_mode_active", "demo_mode_active", "real_mode_active"]) {
+      await db
+        .insert(platformStateTable)
+        .values({ key: modeKey, value: "false" })
+        .onConflictDoUpdate({
+          target: platformStateTable.key,
+          set: { value: "false", updatedAt: new Date() },
+        });
+    }
     await db
       .insert(platformStateTable)
       .values({ key: "mode", value: "idle" })
@@ -185,7 +211,9 @@ router.get("/settings/api-key-status", async (_req, res): Promise<void> => {
   for (const s of states) stateMap[s.key] = s.value;
 
   res.json({
-    deriv_api_token_set: !!stateMap["deriv_api_token"],
+    deriv_api_token_set: !!(stateMap["deriv_api_token"] || stateMap["deriv_api_token_demo"] || stateMap["deriv_api_token_real"]),
+    deriv_api_token_demo_set: !!(stateMap["deriv_api_token_demo"] || stateMap["deriv_api_token"]),
+    deriv_api_token_real_set: !!stateMap["deriv_api_token_real"],
     openai_api_key_set: !!stateMap["openai_api_key"],
   });
 });

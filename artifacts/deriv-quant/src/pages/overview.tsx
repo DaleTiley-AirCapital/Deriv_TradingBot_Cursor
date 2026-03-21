@@ -45,8 +45,12 @@ export default function Overview() {
   }
 
   const pnlTrend        = (overview?.realisedPnl || 0) >= 0 ? "up" : "down";
-  const isLive          = overview?.mode === "live";
+  const isLive          = overview?.mode === "live" || overview?.mode === "real";
   const isPaper         = overview?.mode === "paper";
+  const isDemo          = overview?.mode === "demo";
+  const isMulti         = overview?.mode === "multi";
+  const activeModes     = overview?.activeModes || [];
+  const perMode         = overview?.perMode || {};
   const isDefaultCapital = !settings?.total_capital || Number(settings.total_capital) === DEFAULT_CAPITAL;
 
   const accountConnected = accountInfo?.connected && accountInfo.balance != null;
@@ -167,8 +171,8 @@ export default function Overview() {
                   </div>
                 </div>
                 <div className="text-right flex flex-col items-end gap-1">
-                  <Badge variant={isLive ? "destructive" : isPaper ? "warning" : "outline"}>
-                    {overview?.mode?.toUpperCase() || "IDLE"}
+                  <Badge variant={isLive ? "destructive" : isPaper ? "warning" : isDemo ? "default" : "outline"}>
+                    {isMulti ? activeModes.map(m => m.toUpperCase()).join(" + ") : (overview?.mode?.toUpperCase() || "IDLE")}
                   </Badge>
                   {accountInfo.account_type && (
                     <p className="text-xs text-muted-foreground capitalize">{accountInfo.account_type}</p>
@@ -311,6 +315,58 @@ export default function Overview() {
         </motion.div>
       </div>
 
+      {activeModes.length > 0 && (
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.22 }}>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {(["paper", "demo", "real"] as const).map(mode => {
+              const snap = perMode[mode];
+              if (!snap) return null;
+              const colorMap = { paper: "warning", demo: "primary", real: "destructive" } as const;
+              const color = colorMap[mode];
+              return (
+                <Card key={mode} className={cn("border", snap.active ? `border-${color}/30` : "border-border/30 opacity-60")}
+                  style={snap.active ? { borderColor: `hsl(var(--${color}) / 0.3)` } : undefined}
+                >
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className={cn("w-2 h-2 rounded-full", snap.active ? "animate-pulse" : "")}
+                          style={{ backgroundColor: snap.active ? `hsl(var(--${color}))` : "hsl(var(--muted-foreground) / 0.3)" }}
+                        />
+                        <span className="text-sm font-bold uppercase tracking-wider" style={snap.active ? { color: `hsl(var(--${color}))` } : undefined}>{mode}</span>
+                      </div>
+                      <Badge variant={snap.active ? (mode === "real" ? "destructive" : mode === "demo" ? "default" : "warning") : "outline"}>
+                        {snap.active ? "Active" : "Off"}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <span className="text-muted-foreground">Capital</span>
+                        <p className="font-mono font-semibold text-foreground">{formatCurrency(snap.capital)}</p>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Positions</span>
+                        <p className="font-mono font-semibold text-foreground">{snap.openPositions}</p>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">P&L</span>
+                        <p className={cn("font-mono font-semibold", (snap.realisedPnl || 0) >= 0 ? "text-success" : "text-destructive")}>
+                          {formatCurrency(snap.realisedPnl)}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Win Rate</span>
+                        <p className="font-mono font-semibold text-foreground">{formatNumber(snap.winRate, 1)}%</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </motion.div>
+      )}
+
       {/* ── Live Positions (when open) ───────────────────────────── */}
       {positions && positions.length > 0 && (
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}>
@@ -351,7 +407,7 @@ export default function Overview() {
                       </td>
                       <td className="text-right mono-num">{p.hoursRemaining}h</td>
                       <td className="text-center">
-                        <Badge variant={p.mode === "live" ? "destructive" : "warning"}>{p.mode}</Badge>
+                        <Badge variant={p.mode === "real" ? "destructive" : p.mode === "demo" ? "default" : "warning"}>{p.mode}</Badge>
                       </td>
                     </tr>
                   ))}

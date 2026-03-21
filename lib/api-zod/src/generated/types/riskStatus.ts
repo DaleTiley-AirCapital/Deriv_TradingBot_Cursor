@@ -5,6 +5,7 @@
  * Deriv Quant Research & Execution Platform API
  * OpenAPI spec version: 0.1.0
  */
+import type { RiskStatusPerMode } from "./riskStatusPerMode";
 
 export interface RiskStatus {
   killSwitchActive: boolean;
@@ -14,7 +15,12 @@ export interface RiskStatus {
   dailyLossPct: number;
   weeklyLossPct: number;
   drawdownPct: number;
+  maxDailyLossPct?: number;
+  maxWeeklyLossPct?: number;
+  maxDrawdownPct?: number;
   activeCooldowns: string[];
   disabledStrategies: string[];
   openRiskPct: number;
+  perMode?: RiskStatusPerMode;
+  activeModes?: string[];
 }

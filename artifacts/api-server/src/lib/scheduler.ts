@@ -7,6 +7,9 @@ import { verifySignal } from "./openai.js";
 import { db, platformStateTable, tradesTable, candlesTable, backtestRunsTable, backtestTradesTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { runBacktestSimulation } from "./backtestEngine.js";
+import { getActiveModes, isAnyModeActive } from "./deriv.js";
+import type { TradingMode } from "./deriv.js";
+import type { AllocationDecision } from "./signalRouter.js";
 
 const DEFAULT_SYMBOLS = [
   "BOOM1000", "CRASH1000", "BOOM500", "CRASH500",
@@ -56,84 +59,90 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
   if (candidates.length === 0) return;
 
   const allCandidates = candidates.map(c => ({ candidate: c, atr: features.atr14 }));
-  const decisions = await routeSignals(allCandidates.map(c => c.candidate));
 
   const aiEnabled = stateMap["ai_verification_enabled"] === "true";
-  const finalDecisions = [];
 
-  for (const decision of decisions) {
-    if (decision.allowed && aiEnabled) {
-      try {
-        const matchingCandidate = allCandidates.find(c => c.candidate.symbol === decision.signal.symbol && c.candidate.strategyName === decision.signal.strategyName);
-        const feats = matchingCandidate ? await computeFeatures(decision.signal.symbol) : null;
+  const activeModes = getActiveModes(stateMap);
+  if (activeModes.length === 0) return;
 
-        const recentTrades = await db.select().from(tradesTable)
-          .where(eq(tradesTable.symbol, decision.signal.symbol))
-          .orderBy(desc(tradesTable.entryTs))
-          .limit(5);
-        const recentWinLoss = recentTrades.length > 0
-          ? recentTrades.map(t => `${t.side} ${t.status} PnL:${(t.pnl ?? 0).toFixed(2)}`).join("; ")
-          : "No recent trades";
+  for (const mode of activeModes) {
+    const decisions = await routeSignals(allCandidates.map(c => c.candidate), mode);
 
-        const last5Candles = await db.select().from(candlesTable)
-          .where(and(eq(candlesTable.symbol, decision.signal.symbol), eq(candlesTable.timeframe, "1m")))
-          .orderBy(desc(candlesTable.openTs))
-          .limit(5);
-        const candleDescriptions = last5Candles.length > 0
-          ? last5Candles.map((c, i) => `[${i+1}] O:${c.open.toFixed(2)} H:${c.high.toFixed(2)} L:${c.low.toFixed(2)} C:${c.close.toFixed(2)} Vol:${c.tickCount}`).join("; ")
-          : "No recent candles";
+    const finalDecisions: AllocationDecision[] = [];
 
-        const ema20Value = feats ? feats.priceVsEma20 : 0;
-        const currentPrice = last5Candles.length > 0 ? last5Candles[0].close : 0;
-        const estimatedEma20 = currentPrice > 0 ? currentPrice / (1 + ema20Value) : 0;
+    for (const decision of decisions) {
+      if (decision.allowed && aiEnabled) {
+        try {
+          const matchingCandidate = allCandidates.find(c => c.candidate.symbol === decision.signal.symbol && c.candidate.strategyName === decision.signal.strategyName);
+          const feats = matchingCandidate ? await computeFeatures(decision.signal.symbol) : null;
 
-        const verdict = await verifySignal({
-          symbol: decision.signal.symbol,
-          direction: decision.signal.direction,
-          confidence: decision.signal.confidence,
-          score: decision.signal.score,
-          strategyName: decision.signal.strategyName,
-          reason: decision.signal.reason,
-          rsi14: feats?.rsi14 ?? 50,
-          atr14: feats?.atr14 ?? 0.01,
-          ema20: estimatedEma20,
-          bbWidth: feats?.bbWidth ?? 0,
-          zScore: feats?.zScore ?? 0,
-          recentCandles: candleDescriptions,
-          recentWinLoss,
-        });
+          const recentTrades = await db.select().from(tradesTable)
+            .where(eq(tradesTable.symbol, decision.signal.symbol))
+            .orderBy(desc(tradesTable.entryTs))
+            .limit(5);
+          const recentWinLoss = recentTrades.length > 0
+            ? recentTrades.map(t => `${t.side} ${t.status} PnL:${(t.pnl ?? 0).toFixed(2)}`).join("; ")
+            : "No recent trades";
 
-        if (verdict) {
-          decision.aiVerdict = verdict.verdict;
-          decision.aiReasoning = verdict.reasoning;
-          decision.aiConfidenceAdj = verdict.confidenceAdjustment;
+          const last5Candles = await db.select().from(candlesTable)
+            .where(and(eq(candlesTable.symbol, decision.signal.symbol), eq(candlesTable.timeframe, "1m")))
+            .orderBy(desc(candlesTable.openTs))
+            .limit(5);
+          const candleDescriptions = last5Candles.length > 0
+            ? last5Candles.map((c, i) => `[${i+1}] O:${c.open.toFixed(2)} H:${c.high.toFixed(2)} L:${c.low.toFixed(2)} C:${c.close.toFixed(2)} Vol:${c.tickCount}`).join("; ")
+            : "No recent candles";
 
-          if (verdict.verdict === "disagree") {
-            decision.allowed = false;
-            decision.rejectionReason = `AI disagree: ${verdict.reasoning}`;
-          } else if (verdict.verdict === "uncertain") {
-            decision.capitalAmount = decision.capitalAmount * 0.5;
+          const ema20Value = feats ? feats.priceVsEma20 : 0;
+          const currentPrice = last5Candles.length > 0 ? last5Candles[0].close : 0;
+          const estimatedEma20 = currentPrice > 0 ? currentPrice / (1 + ema20Value) : 0;
+
+          const verdict = await verifySignal({
+            symbol: decision.signal.symbol,
+            direction: decision.signal.direction,
+            confidence: decision.signal.confidence,
+            score: decision.signal.score,
+            strategyName: decision.signal.strategyName,
+            reason: decision.signal.reason,
+            rsi14: feats?.rsi14 ?? 50,
+            atr14: feats?.atr14 ?? 0.01,
+            ema20: estimatedEma20,
+            bbWidth: feats?.bbWidth ?? 0,
+            zScore: feats?.zScore ?? 0,
+            recentCandles: candleDescriptions,
+            recentWinLoss,
+          });
+
+          if (verdict) {
+            decision.aiVerdict = verdict.verdict;
+            decision.aiReasoning = verdict.reasoning;
+            decision.aiConfidenceAdj = verdict.confidenceAdjustment;
+
+            if (verdict.verdict === "disagree") {
+              decision.allowed = false;
+              decision.rejectionReason = `AI disagree: ${verdict.reasoning}`;
+            } else if (verdict.verdict === "uncertain") {
+              decision.capitalAmount = decision.capitalAmount * 0.5;
+            }
           }
+        } catch (err) {
+          decision.allowed = false;
+          decision.rejectionReason = `AI verification unavailable: ${err instanceof Error ? err.message : "unknown error"}`;
+          decision.aiVerdict = "error";
+          decision.aiReasoning = `Verification failed: ${err instanceof Error ? err.message : "unknown error"}`;
         }
-      } catch (err) {
-        decision.allowed = false;
-        decision.rejectionReason = `AI verification unavailable: ${err instanceof Error ? err.message : "unknown error"}`;
-        decision.aiVerdict = "error";
-        decision.aiReasoning = `Verification failed: ${err instanceof Error ? err.message : "unknown error"}`;
       }
+      finalDecisions.push(decision);
     }
-    finalDecisions.push(decision);
-  }
 
-  await logSignalDecisions(finalDecisions);
+    if (mode === activeModes[0]) {
+      await logSignalDecisions(finalDecisions);
+    }
 
-  const mode = stateMap["mode"] || "idle";
-  const allowed = finalDecisions.filter(d => d.allowed);
-  if (mode === "paper" || mode === "live") {
+    const allowed = finalDecisions.filter(d => d.allowed);
     for (const decision of allowed) {
       const matchingCandidate = allCandidates.find(c => c.candidate.symbol === decision.signal.symbol && c.candidate.strategyName === decision.signal.strategyName);
       const atr = matchingCandidate?.atr ?? 0.01;
-      await openPosition(decision, atr);
+      await openPosition(decision, atr, mode);
     }
   }
 }
@@ -173,15 +182,27 @@ async function scanCycle(): Promise<void> {
       }
     }
 
-    const mode = stateMap["mode"] || "idle";
     const killSwitch = stateMap["kill_switch"] === "true";
+    const anyActive = isAnyModeActive(stateMap);
 
-    if (mode === "idle" || killSwitch) {
+    const legacyMode = stateMap["mode"] || "idle";
+    const hasLegacyActive = legacyMode === "paper" || legacyMode === "live";
+    const shouldRun = anyActive || hasLegacyActive;
+
+    if (!shouldRun || killSwitch) {
       if (staggeredScanActive) {
         staggeredScanActive = false;
         if (staggerTimerHandle) { clearTimeout(staggerTimerHandle); staggerTimerHandle = null; }
       }
       return;
+    }
+
+    if (hasLegacyActive && !anyActive) {
+      if (legacyMode === "paper") {
+        stateMap["paper_mode_active"] = "true";
+      } else if (legacyMode === "live") {
+        stateMap["demo_mode_active"] = "true";
+      }
     }
 
     const enabledSymbolsRaw = stateMap["enabled_symbols"] || "";
@@ -213,8 +234,10 @@ async function positionManagementCycle(): Promise<void> {
     const states = await db.select().from(platformStateTable);
     const stateMap: Record<string, string> = {};
     for (const s of states) stateMap[s.key] = s.value;
-    const mode = stateMap["mode"] || "idle";
-    if (mode === "idle") return;
+
+    const anyActive = isAnyModeActive(stateMap);
+    const legacyMode = stateMap["mode"] || "idle";
+    if (!anyActive && legacyMode === "idle") return;
 
     await manageOpenPositions();
   } catch (err) {

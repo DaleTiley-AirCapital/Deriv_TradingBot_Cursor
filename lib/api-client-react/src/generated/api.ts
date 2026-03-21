@@ -19,6 +19,7 @@ import type {
 import type {
   AccountInfo,
   ActionResponse,
+  AiOptimisationStatus,
   ApiKeyStatus,
   BackfillRequest,
   BacktestAnalysis,
@@ -39,6 +40,7 @@ import type {
   LivePosition,
   ModelRun,
   OhlcCandle,
+  OverrideAiSettingBody,
   PlatformOverview,
   PlatformSettings,
   PortfolioStatus,
@@ -52,6 +54,7 @@ import type {
   SpikeEvent,
   StreamRequest,
   Tick,
+  ToggleTradingModeRequest,
   Trade,
   TrainModelRequest,
 } from "./api.schemas";
@@ -1710,6 +1713,92 @@ export function useGetLatestSignals<
 }
 
 /**
+ * @summary Toggle a trading mode on or off
+ */
+export const getToggleTradingModeUrl = () => {
+  return `/api/trade/mode/toggle`;
+};
+
+export const toggleTradingMode = async (
+  toggleTradingModeRequest: ToggleTradingModeRequest,
+  options?: RequestInit,
+): Promise<ActionResponse> => {
+  return customFetch<ActionResponse>(getToggleTradingModeUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(toggleTradingModeRequest),
+  });
+};
+
+export const getToggleTradingModeMutationOptions = <
+  TError = ErrorType<SetModeErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof toggleTradingMode>>,
+    TError,
+    { data: BodyType<ToggleTradingModeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof toggleTradingMode>>,
+  TError,
+  { data: BodyType<ToggleTradingModeRequest> },
+  TContext
+> => {
+  const mutationKey = ["toggleTradingMode"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof toggleTradingMode>>,
+    { data: BodyType<ToggleTradingModeRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return toggleTradingMode(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ToggleTradingModeMutationResult = NonNullable<
+  Awaited<ReturnType<typeof toggleTradingMode>>
+>;
+export type ToggleTradingModeMutationBody = BodyType<ToggleTradingModeRequest>;
+export type ToggleTradingModeMutationError = ErrorType<SetModeErrorResponse>;
+
+/**
+ * @summary Toggle a trading mode on or off
+ */
+export const useToggleTradingMode = <
+  TError = ErrorType<SetModeErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof toggleTradingMode>>,
+    TError,
+    { data: BodyType<ToggleTradingModeRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof toggleTradingMode>>,
+  TError,
+  { data: BodyType<ToggleTradingModeRequest> },
+  TContext
+> => {
+  return useMutation(getToggleTradingModeMutationOptions(options));
+};
+
+/**
  * @summary Start paper trading mode
  */
 export const getStartPaperTradingUrl = () => {
@@ -2829,6 +2918,250 @@ export const useSetTradingMode = <
   TContext
 > => {
   return useMutation(getSetTradingModeMutationOptions(options));
+};
+
+/**
+ * @summary Get AI optimisation status and locked values
+ */
+export const getGetAiOptimisationStatusUrl = () => {
+  return `/api/settings/ai-status`;
+};
+
+export const getAiOptimisationStatus = async (
+  options?: RequestInit,
+): Promise<AiOptimisationStatus> => {
+  return customFetch<AiOptimisationStatus>(getGetAiOptimisationStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAiOptimisationStatusQueryKey = () => {
+  return [`/api/settings/ai-status`] as const;
+};
+
+export const getGetAiOptimisationStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAiOptimisationStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAiOptimisationStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAiOptimisationStatusQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAiOptimisationStatus>>
+  > = ({ signal }) => getAiOptimisationStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAiOptimisationStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAiOptimisationStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAiOptimisationStatus>>
+>;
+export type GetAiOptimisationStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get AI optimisation status and locked values
+ */
+
+export function useGetAiOptimisationStatus<
+  TData = Awaited<ReturnType<typeof getAiOptimisationStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAiOptimisationStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAiOptimisationStatusQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Streams progress via SSE (text/event-stream). Each event contains type, message, progress, and final settings.
+ * @summary Run AI optimisation across all symbol × strategy combinations
+ */
+export const getRunAiOptimisationUrl = () => {
+  return `/api/settings/ai-optimise`;
+};
+
+export const runAiOptimisation = async (
+  options?: RequestInit,
+): Promise<string> => {
+  return customFetch<string>(getRunAiOptimisationUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getRunAiOptimisationMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runAiOptimisation>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof runAiOptimisation>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["runAiOptimisation"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof runAiOptimisation>>,
+    void
+  > = () => {
+    return runAiOptimisation(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RunAiOptimisationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof runAiOptimisation>>
+>;
+
+export type RunAiOptimisationMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Run AI optimisation across all symbol × strategy combinations
+ */
+export const useRunAiOptimisation = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof runAiOptimisation>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof runAiOptimisation>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getRunAiOptimisationMutationOptions(options));
+};
+
+/**
+ * @summary Override a single AI-locked setting
+ */
+export const getOverrideAiSettingUrl = () => {
+  return `/api/settings/ai-override`;
+};
+
+export const overrideAiSetting = async (
+  overrideAiSettingBody: OverrideAiSettingBody,
+  options?: RequestInit,
+): Promise<ActionResponse> => {
+  return customFetch<ActionResponse>(getOverrideAiSettingUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(overrideAiSettingBody),
+  });
+};
+
+export const getOverrideAiSettingMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof overrideAiSetting>>,
+    TError,
+    { data: BodyType<OverrideAiSettingBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof overrideAiSetting>>,
+  TError,
+  { data: BodyType<OverrideAiSettingBody> },
+  TContext
+> => {
+  const mutationKey = ["overrideAiSetting"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof overrideAiSetting>>,
+    { data: BodyType<OverrideAiSettingBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return overrideAiSetting(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type OverrideAiSettingMutationResult = NonNullable<
+  Awaited<ReturnType<typeof overrideAiSetting>>
+>;
+export type OverrideAiSettingMutationBody = BodyType<OverrideAiSettingBody>;
+export type OverrideAiSettingMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Override a single AI-locked setting
+ */
+export const useOverrideAiSetting = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof overrideAiSetting>>,
+    TError,
+    { data: BodyType<OverrideAiSettingBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof overrideAiSetting>>,
+  TError,
+  { data: BodyType<OverrideAiSettingBody> },
+  TContext
+> => {
+  return useMutation(getOverrideAiSettingMutationOptions(options));
 };
 
 /**

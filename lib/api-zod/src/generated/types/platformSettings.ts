@@ -30,6 +30,10 @@ export interface PlatformSettings {
   deriv_api_token?: string;
   openai_api_key?: string;
   deriv_api_token_set?: string;
+  deriv_api_token_demo?: string;
+  deriv_api_token_demo_set?: string;
+  deriv_api_token_real?: string;
+  deriv_api_token_real_set?: string;
   openai_api_key_set?: string;
   trading_mode?: string;
   enabled_symbols?: string;
@@ -39,4 +43,20 @@ export interface PlatformSettings {
   live_max_weekly_loss_pct?: string;
   paper_max_drawdown_pct?: string;
   live_max_drawdown_pct?: string;
+  paper_capital?: string;
+  demo_capital?: string;
+  real_capital?: string;
+  demo_equity_pct_per_trade?: string;
+  real_equity_pct_per_trade?: string;
+  demo_max_open_trades?: string;
+  real_max_open_trades?: string;
+  demo_max_daily_loss_pct?: string;
+  real_max_daily_loss_pct?: string;
+  demo_max_weekly_loss_pct?: string;
+  real_max_weekly_loss_pct?: string;
+  demo_max_drawdown_pct?: string;
+  real_max_drawdown_pct?: string;
+  paper_mode_active?: string;
+  demo_mode_active?: string;
+  real_mode_active?: string;
 }

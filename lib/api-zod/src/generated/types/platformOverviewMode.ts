@@ -14,4 +14,7 @@ export const PlatformOverviewMode = {
   collecting: "collecting",
   paper: "paper",
   live: "live",
+  demo: "demo",
+  real: "real",
+  multi: "multi",
 } as const;
