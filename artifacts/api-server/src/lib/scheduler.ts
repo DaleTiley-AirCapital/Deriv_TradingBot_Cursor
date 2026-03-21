@@ -28,7 +28,7 @@ let staggeredScanActive = false;
 let staggerSymbolIndex = 0;
 let staggerTimerHandle: ReturnType<typeof setTimeout> | null = null;
 
-function parseScoringWeights(stateMap: Record<string, string>): ScoringWeights | undefined {
+function parseScoringWeights(stateMap: Record<string, string>, modePrefix?: string): ScoringWeights | undefined {
   const keys: (keyof ScoringWeights)[] = [
     "regimeFit", "setupQuality", "trendAlignment",
     "volatilityCondition", "rewardRisk", "probabilityOfSuccess",
@@ -41,11 +41,18 @@ function parseScoringWeights(stateMap: Record<string, string>): ScoringWeights |
     rewardRisk: "scoring_weight_reward_risk",
     probabilityOfSuccess: "scoring_weight_probability_of_success",
   };
-  const hasAny = keys.some(k => stateMap[stateKeys[k]] !== undefined);
+  const resolve = (globalKey: string): string | undefined => {
+    if (modePrefix) {
+      const modeKey = `${modePrefix}_${globalKey}`;
+      if (stateMap[modeKey] !== undefined) return stateMap[modeKey];
+    }
+    return stateMap[globalKey];
+  };
+  const hasAny = keys.some(k => resolve(stateKeys[k]) !== undefined);
   if (!hasAny) return undefined;
   const weights: ScoringWeights = {} as ScoringWeights;
   for (const k of keys) {
-    weights[k] = parseFloat(stateMap[stateKeys[k]] || "1");
+    weights[k] = parseFloat(resolve(stateKeys[k]) || "1");
   }
   return weights;
 }
@@ -53,12 +60,6 @@ function parseScoringWeights(stateMap: Record<string, string>): ScoringWeights |
 async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>): Promise<void> {
   const features = await computeFeatures(symbol);
   if (!features) return;
-
-  const weights = parseScoringWeights(stateMap);
-  const candidates = runAllStrategies(features, weights);
-  if (candidates.length === 0) return;
-
-  const allCandidates = candidates.map(c => ({ candidate: c, atr: features.atr14 }));
 
   const aiEnabled = stateMap["ai_verification_enabled"] === "true";
 
@@ -70,6 +71,12 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
     const modeSymbolsRaw = stateMap[`${modePrefix}_enabled_symbols`] || stateMap["enabled_symbols"] || "";
     const modeSymbols = modeSymbolsRaw ? modeSymbolsRaw.split(",").map((s: string) => s.trim()).filter(Boolean) : null;
     if (modeSymbols && !modeSymbols.includes(symbol)) continue;
+
+    const weights = parseScoringWeights(stateMap, modePrefix);
+    const candidates = runAllStrategies(features, weights);
+    if (candidates.length === 0) continue;
+
+    const allCandidates = candidates.map(c => ({ candidate: c, atr: features.atr14 }));
 
     const decisions = await routeSignals(allCandidates.map(c => c.candidate), mode);
 

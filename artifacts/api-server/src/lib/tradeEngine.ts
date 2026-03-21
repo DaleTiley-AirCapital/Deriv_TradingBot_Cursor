@@ -273,12 +273,12 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
     return null;
   }
 
-  const tpMultiplierStrong = parseFloat(stateMap["tp_multiplier_strong"] || "2.5");
-  const tpMultiplierMedium = parseFloat(stateMap["tp_multiplier_medium"] || "2.0");
-  const tpMultiplierWeak = parseFloat(stateMap["tp_multiplier_weak"] || "1.5");
-  const slRatio = parseFloat(stateMap["sl_ratio"] || "1.0");
-  const trailingStopBufferPct = parseFloat(stateMap["trailing_stop_buffer_pct"] || "0.3");
-  const timeExitHours = parseFloat(stateMap["time_exit_window_hours"] || String(INITIAL_EXIT_HOURS));
+  const tpMultiplierStrong = parseFloat(stateMap[`${prefix}_tp_multiplier_strong`] || stateMap["tp_multiplier_strong"] || "2.5");
+  const tpMultiplierMedium = parseFloat(stateMap[`${prefix}_tp_multiplier_medium`] || stateMap["tp_multiplier_medium"] || "2.0");
+  const tpMultiplierWeak = parseFloat(stateMap[`${prefix}_tp_multiplier_weak`] || stateMap["tp_multiplier_weak"] || "1.5");
+  const slRatio = parseFloat(stateMap[`${prefix}_sl_ratio`] || stateMap["sl_ratio"] || "1.0");
+  const trailingStopBufferPct = parseFloat(stateMap[`${prefix}_trailing_stop_buffer_pct`] || stateMap["trailing_stop_buffer_pct"] || "0.3");
+  const timeExitHours = parseFloat(stateMap[`${prefix}_time_exit_window_hours`] || stateMap["time_exit_window_hours"] || String(INITIAL_EXIT_HOURS));
 
   const tpMultiplier = signal.confidence >= 0.75 ? tpMultiplierStrong
     : signal.confidence >= 0.65 ? tpMultiplierMedium

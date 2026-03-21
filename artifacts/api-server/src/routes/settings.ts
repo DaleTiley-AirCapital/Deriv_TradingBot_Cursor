@@ -155,6 +155,30 @@ const API_KEY_KEYS = ["deriv_api_token", "deriv_api_token_demo", "deriv_api_toke
 
 const ALL_SETTING_KEYS = Object.keys(SETTING_DEFAULTS);
 
+const MODE_PREFIXES = ["paper", "demo", "real"] as const;
+const INHERITABLE_SUFFIXES = [
+  "tp_multiplier_strong", "tp_multiplier_medium", "tp_multiplier_weak",
+  "sl_ratio", "trailing_stop_buffer_pct", "time_exit_window_hours",
+  "allocation_mode", "scan_interval_seconds", "scan_stagger_seconds",
+  "min_composite_score", "min_ev_threshold", "min_rr_ratio",
+  "scoring_weight_regime_fit", "scoring_weight_setup_quality",
+  "scoring_weight_trend_alignment", "scoring_weight_volatility_condition",
+  "scoring_weight_reward_risk", "scoring_weight_probability_of_success",
+  "enabled_symbols", "enabled_strategies",
+];
+
+function getLegacyFallbackKey(modeKey: string): string | null {
+  for (const prefix of MODE_PREFIXES) {
+    if (modeKey.startsWith(`${prefix}_`)) {
+      const suffix = modeKey.slice(prefix.length + 1);
+      if (INHERITABLE_SUFFIXES.includes(suffix)) {
+        return suffix;
+      }
+    }
+  }
+  return null;
+}
+
 function maskSecret(value: string): string {
   if (!value || value.length < 8) return value ? "****" : "";
   return value.substring(0, 4) + "****" + value.substring(value.length - 4);
@@ -167,7 +191,16 @@ router.get("/settings", async (_req, res): Promise<void> => {
 
   const settings: Record<string, string> = {};
   for (const key of ALL_SETTING_KEYS) {
-    settings[key] = stateMap[key] ?? SETTING_DEFAULTS[key];
+    if (stateMap[key] !== undefined) {
+      settings[key] = stateMap[key];
+    } else {
+      const legacyKey = getLegacyFallbackKey(key);
+      if (legacyKey && stateMap[legacyKey] !== undefined) {
+        settings[key] = stateMap[legacyKey];
+      } else {
+        settings[key] = SETTING_DEFAULTS[key];
+      }
+    }
   }
 
   for (const key of API_KEY_KEYS) {
