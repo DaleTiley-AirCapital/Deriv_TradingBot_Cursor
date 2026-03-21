@@ -10,7 +10,7 @@ import {
 import type { BacktestAnalysis, BacktestRun, BacktestTrade, OhlcCandle } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, Button, Badge, Input, Label, Select } from "@/components/ui-elements";
 import { formatCurrency, formatNumber, formatPercent, cn } from "@/lib/utils";
-import { Play, Search, Beaker, Brain, Lightbulb, X, CheckCircle2, ChevronRight, BarChart2, TrendingUp, List } from "lucide-react";
+import { Play, Search, Beaker, Brain, Lightbulb, X, CheckCircle2, ChevronRight, ChevronLeft, BarChart2, TrendingUp, List } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -624,9 +624,15 @@ function BacktestDetailPanel({ run, onClose }: { run: BacktestRun; onClose: () =
   );
 }
 
+const PAGE_SIZE = 40;
+
 export default function Research() {
   const queryClient = useQueryClient();
-  const { data: results, isLoading } = useGetBacktestResults();
+  const [page, setPage] = useState(0);
+  const { data: paginatedData, isLoading } = useGetBacktestResults({ limit: PAGE_SIZE, offset: page * PAGE_SIZE });
+  const results = paginatedData?.data;
+  const totalResults = paginatedData?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalResults / PAGE_SIZE));
 
   const { mutate: runBacktest, isPending } = useRunBacktest({
     mutation: {
@@ -770,10 +776,10 @@ export default function Research() {
                 <tbody>
                   {isLoading ? (
                     <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">Loading...</td></tr>
-                  ) : results?.length === 0 ? (
+                  ) : !results || results.length === 0 ? (
                     <tr><td colSpan={8} className="text-center py-8 text-muted-foreground">No backtests run yet.</td></tr>
                   ) : (
-                    results?.map((run) => (
+                    results.map((run) => (
                       <tr
                         key={run.id}
                         className={cn(
@@ -813,6 +819,36 @@ export default function Research() {
                 </tbody>
               </table>
             </div>
+            {totalResults > 0 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t border-border/50">
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalResults)} of {totalResults}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page === 0}
+                    onClick={() => setPage(p => p - 1)}
+                    className="h-8 px-3 text-xs"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5 mr-1" /> Prev
+                  </Button>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    Page {page + 1} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= totalPages - 1}
+                    onClick={() => setPage(p => p + 1)}
+                    className="h-8 px-3 text-xs"
+                  >
+                    Next <ChevronRight className="w-3.5 h-3.5 ml-1" />
+                  </Button>
+                </div>
+              </div>
+            )}
           </Card>
         </motion.div>
       </div>

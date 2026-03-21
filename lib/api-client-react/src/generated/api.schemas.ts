@@ -642,6 +642,14 @@ export type GetSpikeEventsParams = {
 
 export type GetBacktestResultsParams = {
   limit?: number;
+  offset?: number;
+};
+
+export type PaginatedBacktestResults = {
+  data: BacktestRun[];
+  total: number;
+  limit: number;
+  offset: number;
 };
 
 export type GetLatestSignalsParams = {

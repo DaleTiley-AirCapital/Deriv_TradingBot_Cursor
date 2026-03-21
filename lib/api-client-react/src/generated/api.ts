@@ -31,6 +31,7 @@ import type {
   ErrorResponse,
   FeatureBuildRequest,
   GetBacktestResultsParams,
+  PaginatedBacktestResults,
   GetCandlesParams,
   GetLatestSignalsParams,
   GetSpikeEventsParams,
@@ -1195,8 +1196,8 @@ export const getGetBacktestResultsUrl = (params?: GetBacktestResultsParams) => {
 export const getBacktestResults = async (
   params?: GetBacktestResultsParams,
   options?: RequestInit,
-): Promise<BacktestRun[]> => {
-  return customFetch<BacktestRun[]>(getGetBacktestResultsUrl(params), {
+): Promise<PaginatedBacktestResults> => {
+  return customFetch<PaginatedBacktestResults>(getGetBacktestResultsUrl(params), {
     ...options,
     method: "GET",
   });

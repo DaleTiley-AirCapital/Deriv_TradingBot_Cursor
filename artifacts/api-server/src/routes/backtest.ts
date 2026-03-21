@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { desc, eq, asc } from "drizzle-orm";
+import { desc, eq, asc, count } from "drizzle-orm";
 import { db, backtestRunsTable, backtestTradesTable, candlesTable } from "@workspace/db";
 import { analyseBacktest, isOpenAIConfigured } from "../lib/openai.js";
 import {
@@ -245,29 +245,43 @@ router.post("/backtest/portfolio", async (req, res): Promise<void> => {
 });
 
 router.get("/backtest/results", async (req, res): Promise<void> => {
-  const limit = Math.min(Number(req.query.limit || 20), 100);
-  const rows = await db.select().from(backtestRunsTable)
-    .orderBy(desc(backtestRunsTable.createdAt))
-    .limit(limit);
-  res.json(rows.map(r => ({
-    id: r.id,
-    strategyName: r.strategyName,
-    symbol: r.symbol,
-    initialCapital: r.initialCapital,
-    totalReturn: r.totalReturn,
-    netProfit: r.netProfit,
-    winRate: r.winRate,
-    profitFactor: r.profitFactor,
-    maxDrawdown: r.maxDrawdown,
-    tradeCount: r.tradeCount,
-    avgHoldingHours: r.avgHoldingHours,
-    expectancy: r.expectancy,
-    sharpeRatio: r.sharpeRatio,
-    status: r.status,
-    createdAt: r.createdAt.toISOString(),
-    configJson: r.configJson,
-    metricsJson: r.metricsJson,
-  })));
+  const limit = Math.min(Number(req.query.limit || 40), 200);
+  const offset = Math.max(Number(req.query.offset || 0), 0);
+
+  const [[countResult], rows] = await Promise.all([
+    db.select({ n: count() }).from(backtestRunsTable),
+    db.select().from(backtestRunsTable)
+      .orderBy(desc(backtestRunsTable.createdAt))
+      .limit(limit)
+      .offset(offset),
+  ]);
+
+  const total = countResult?.n ?? 0;
+
+  res.json({
+    data: rows.map(r => ({
+      id: r.id,
+      strategyName: r.strategyName,
+      symbol: r.symbol,
+      initialCapital: r.initialCapital,
+      totalReturn: r.totalReturn,
+      netProfit: r.netProfit,
+      winRate: r.winRate,
+      profitFactor: r.profitFactor,
+      maxDrawdown: r.maxDrawdown,
+      tradeCount: r.tradeCount,
+      avgHoldingHours: r.avgHoldingHours,
+      expectancy: r.expectancy,
+      sharpeRatio: r.sharpeRatio,
+      status: r.status,
+      createdAt: r.createdAt.toISOString(),
+      configJson: r.configJson,
+      metricsJson: r.metricsJson,
+    })),
+    total,
+    limit,
+    offset,
+  });
 });
 
 router.get("/backtest/:id", async (req, res): Promise<void> => {
