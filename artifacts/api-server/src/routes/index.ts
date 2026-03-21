@@ -10,6 +10,7 @@ import riskRouter from "./risk";
 import settingsRouter from "./settings";
 import accountRouter from "./account";
 import setupRouter from "./setup";
+import aiChatRouter from "./aiChat";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(riskRouter);
 router.use(settingsRouter);
 router.use(accountRouter);
 router.use(setupRouter);
+router.use(aiChatRouter);
 
 export default router;

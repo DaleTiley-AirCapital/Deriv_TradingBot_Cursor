@@ -28,7 +28,7 @@ let staggeredScanActive = false;
 let staggerSymbolIndex = 0;
 let staggerTimerHandle: ReturnType<typeof setTimeout> | null = null;
 
-function parseScoringWeights(stateMap: Record<string, string>, modePrefix?: string): ScoringWeights | undefined {
+function parseScoringWeights(stateMap: Record<string, string>): ScoringWeights | undefined {
   const keys: (keyof ScoringWeights)[] = [
     "regimeFit", "setupQuality", "trendAlignment",
     "volatilityCondition", "rewardRisk", "probabilityOfSuccess",
@@ -41,18 +41,11 @@ function parseScoringWeights(stateMap: Record<string, string>, modePrefix?: stri
     rewardRisk: "scoring_weight_reward_risk",
     probabilityOfSuccess: "scoring_weight_probability_of_success",
   };
-  const resolve = (globalKey: string): string | undefined => {
-    if (modePrefix) {
-      const modeKey = `${modePrefix}_${globalKey}`;
-      if (stateMap[modeKey] !== undefined) return stateMap[modeKey];
-    }
-    return stateMap[globalKey];
-  };
-  const hasAny = keys.some(k => resolve(stateKeys[k]) !== undefined);
+  const hasAny = keys.some(k => stateMap[stateKeys[k]] !== undefined);
   if (!hasAny) return undefined;
   const weights: ScoringWeights = {} as ScoringWeights;
   for (const k of keys) {
-    weights[k] = parseFloat(resolve(stateKeys[k]) || "1");
+    weights[k] = parseFloat(stateMap[stateKeys[k]] || "1");
   }
   return weights;
 }
@@ -72,7 +65,7 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
     const modeSymbols = modeSymbolsRaw ? modeSymbolsRaw.split(",").map((s: string) => s.trim()).filter(Boolean) : null;
     if (modeSymbols && !modeSymbols.includes(symbol)) continue;
 
-    const weights = parseScoringWeights(stateMap, modePrefix);
+    const weights = parseScoringWeights(stateMap);
     const candidates = runAllStrategies(features, weights);
     if (candidates.length === 0) continue;
 
@@ -159,7 +152,7 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
   }
 }
 
-async function scheduleStaggeredScan(symbols: string[], staggerMs: number, stateMap: Record<string, string>): Promise<void> {
+async function scheduleStaggeredScan(symbols: string[], staggerMs: number): Promise<void> {
   if (staggerSymbolIndex >= symbols.length) {
     staggerSymbolIndex = 0;
   }
@@ -168,13 +161,16 @@ async function scheduleStaggeredScan(symbols: string[], staggerMs: number, state
   staggerSymbolIndex++;
 
   try {
-    await scanSingleSymbol(symbol, stateMap);
+    const freshStates = await db.select().from(platformStateTable);
+    const freshMap: Record<string, string> = {};
+    for (const s of freshStates) freshMap[s.key] = s.value;
+    await scanSingleSymbol(symbol, freshMap);
   } catch (err) {
     console.error(`[Scheduler] Stagger scan error for ${symbol}:`, err instanceof Error ? err.message : err);
   }
 
   if (staggeredScanActive) {
-    staggerTimerHandle = setTimeout(() => scheduleStaggeredScan(symbols, staggerMs, stateMap), staggerMs);
+    staggerTimerHandle = setTimeout(() => scheduleStaggeredScan(symbols, staggerMs), staggerMs);
   }
 }
 
@@ -184,12 +180,7 @@ async function scanCycle(): Promise<void> {
     const stateMap: Record<string, string> = {};
     for (const s of states) stateMap[s.key] = s.value;
 
-    const activeScanModes = getActiveModes(stateMap);
-    const modeIntervals = activeScanModes.map(m => {
-      const p = m === "paper" ? "paper" : m === "demo" ? "demo" : "real";
-      return parseInt(stateMap[`${p}_scan_interval_seconds`] || stateMap["scan_interval_seconds"] || "30") * 1000;
-    });
-    const configuredInterval = modeIntervals.length > 0 ? Math.min(...modeIntervals) : parseInt(stateMap["scan_interval_seconds"] || "30") * 1000;
+    const configuredInterval = parseInt(stateMap["scan_interval_seconds"] || "30") * 1000;
     if (configuredInterval !== currentIntervalMs && configuredInterval >= 5000) {
       currentIntervalMs = configuredInterval;
       if (schedulerHandle) {
@@ -231,18 +222,14 @@ async function scanCycle(): Promise<void> {
     const symbols = [...new Set(modeSymbolSets.flat())];
     if (symbols.length === 0) symbols.push(...DEFAULT_SYMBOLS);
 
-    const modeStaggerValues = activeModes.map(m => {
-      const p = m === "paper" ? "paper" : m === "demo" ? "demo" : "real";
-      return parseInt(stateMap[`${p}_scan_stagger_seconds`] || stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS));
-    });
-    const staggerSeconds = modeStaggerValues.length > 0 ? Math.min(...modeStaggerValues) : parseInt(stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS));
+    const staggerSeconds = parseInt(stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS));
     const staggerMs = Math.max(staggerSeconds * 1000, 1000);
 
     if (!staggeredScanActive) {
       staggeredScanActive = true;
       staggerSymbolIndex = 0;
       console.log(`[Scheduler] Starting staggered scan: ${symbols.length} symbols, ${staggerSeconds}s apart`);
-      scheduleStaggeredScan(symbols, staggerMs, stateMap).catch(console.error);
+      scheduleStaggeredScan(symbols, staggerMs).catch(console.error);
     } else {
       const newStaggerMs = Math.max(parseInt(stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS)) * 1000, 1000);
       if (newStaggerMs !== staggerMs) {
@@ -275,7 +262,13 @@ const STRATEGIES_LIST = ["trend-pullback", "exhaustion-rebound", "volatility-bre
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade", "live_equity_pct_per_trade",
   "tp_multiplier_strong", "tp_multiplier_medium", "tp_multiplier_weak",
-  "sl_ratio", "time_exit_window_hours",
+  "sl_ratio", "trailing_stop_pct", "time_exit_window_hours",
+  "paper_tp_multiplier_strong", "paper_tp_multiplier_medium", "paper_tp_multiplier_weak",
+  "paper_sl_ratio", "paper_trailing_stop_pct", "paper_time_exit_window_hours",
+  "demo_tp_multiplier_strong", "demo_tp_multiplier_medium", "demo_tp_multiplier_weak",
+  "demo_sl_ratio", "demo_trailing_stop_pct", "demo_equity_pct_per_trade", "demo_time_exit_window_hours",
+  "real_tp_multiplier_strong", "real_tp_multiplier_medium", "real_tp_multiplier_weak",
+  "real_sl_ratio", "real_trailing_stop_pct", "real_equity_pct_per_trade", "real_time_exit_window_hours",
 ];
 let monthlyHandle: ReturnType<typeof setInterval> | null = null;
 

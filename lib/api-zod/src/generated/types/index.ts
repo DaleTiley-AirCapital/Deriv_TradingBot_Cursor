@@ -50,6 +50,7 @@ export * from "./riskStatus";
 export * from "./riskStatusPerMode";
 export * from "./scoreRequest";
 export * from "./scoreResult";
+export * from "./scoringDimensions";
 export * from "./setModeErrorResponse";
 export * from "./setPortfolioModeRequest";
 export * from "./setPortfolioModeRequestMode";

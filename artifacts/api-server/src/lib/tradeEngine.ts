@@ -8,7 +8,7 @@ const MAX_OPEN_TRADES = 3;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
 const POSITION_SIZE_MIN_PCT = 0.20;
 const POSITION_SIZE_MAX_PCT = 0.25;
-const TRAILING_STOP_LOCK_PCT = 0.50;
+const DEFAULT_TRAILING_STOP_PCT = 0.25;
 const INITIAL_EXIT_HOURS = 72;
 const EXTENSION_HOURS = 24;
 const MAX_EXIT_HOURS = 120;
@@ -96,9 +96,9 @@ export function calculateTrailingStop(params: {
   peakPrice: number;
   direction: "buy" | "sell";
   currentSl: number;
-  lockPct?: number;
+  trailPct?: number;
 }): { newSl: number; updated: boolean } {
-  const { entryPrice, currentPrice, peakPrice, direction, currentSl, lockPct = TRAILING_STOP_LOCK_PCT } = params;
+  const { currentPrice, peakPrice, direction, currentSl, trailPct = DEFAULT_TRAILING_STOP_PCT } = params;
 
   let newPeak = peakPrice;
   if (direction === "buy") {
@@ -108,22 +108,14 @@ export function calculateTrailingStop(params: {
   }
 
   if (direction === "buy") {
-    const profit = newPeak - entryPrice;
-    if (profit <= 0) return { newSl: currentSl, updated: false };
-
-    const lockedProfit = profit * lockPct;
-    const trailingSl = entryPrice + lockedProfit;
-
+    if (newPeak <= 0) return { newSl: currentSl, updated: false };
+    const trailingSl = newPeak * (1 - trailPct);
     if (trailingSl > currentSl) {
       return { newSl: trailingSl, updated: true };
     }
   } else {
-    const profit = entryPrice - newPeak;
-    if (profit <= 0) return { newSl: currentSl, updated: false };
-
-    const lockedProfit = profit * lockPct;
-    const trailingSl = entryPrice - lockedProfit;
-
+    if (newPeak <= 0) return { newSl: currentSl, updated: false };
+    const trailingSl = newPeak * (1 + trailPct);
     if (trailingSl < currentSl) {
       return { newSl: trailingSl, updated: true };
     }
@@ -277,7 +269,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
   const tpMultiplierMedium = parseFloat(stateMap[`${prefix}_tp_multiplier_medium`] || stateMap["tp_multiplier_medium"] || "2.0");
   const tpMultiplierWeak = parseFloat(stateMap[`${prefix}_tp_multiplier_weak`] || stateMap["tp_multiplier_weak"] || "1.5");
   const slRatio = parseFloat(stateMap[`${prefix}_sl_ratio`] || stateMap["sl_ratio"] || "1.0");
-  const trailingStopBufferPct = parseFloat(stateMap[`${prefix}_trailing_stop_buffer_pct`] || stateMap["trailing_stop_buffer_pct"] || "0.3");
+  const trailingStopPct = parseFloat(stateMap[`${prefix}_trailing_stop_pct`] || stateMap["trailing_stop_pct"] || "25") / 100;
   const timeExitHours = parseFloat(stateMap[`${prefix}_time_exit_window_hours`] || stateMap["time_exit_window_hours"] || String(INITIAL_EXIT_HOURS));
 
   const tpMultiplier = signal.confidence >= 0.75 ? tpMultiplierStrong
@@ -343,7 +335,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
       status: "open",
       mode,
       confidence: signal.confidence,
-      trailingStopPct: trailingStopBufferPct / 100,
+      trailingStopPct: trailingStopPct,
       peakPrice: result.entrySpot,
       maxExitTs,
       currentPrice: result.entrySpot,
@@ -364,7 +356,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
       status: "open",
       mode: "paper",
       confidence: signal.confidence,
-      trailingStopPct: trailingStopBufferPct / 100,
+      trailingStopPct: trailingStopPct,
       peakPrice: spotPrice,
       maxExitTs,
       currentPrice: spotPrice,
@@ -413,7 +405,7 @@ export async function manageOpenPositions(): Promise<void> {
         peakPrice: trade.peakPrice ?? trade.entryPrice,
         direction,
         currentSl: trade.sl,
-        lockPct: trade.trailingStopPct ?? TRAILING_STOP_LOCK_PCT,
+        trailPct: trade.trailingStopPct ?? DEFAULT_TRAILING_STOP_PCT,
       });
 
       const newPeak = direction === "buy"

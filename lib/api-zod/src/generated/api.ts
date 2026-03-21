@@ -365,6 +365,18 @@ export const GetLatestSignalsResponseItem = zod.object({
   aiVerdict: zod.string().nullable(),
   aiReasoning: zod.string().nullable(),
   aiConfidenceAdj: zod.number().nullable(),
+  compositeScore: zod.number().nullable(),
+  scoringDimensions: zod.union([
+    zod.object({
+      regimeFit: zod.number(),
+      setupQuality: zod.number(),
+      trendAlignment: zod.number(),
+      volatilityCondition: zod.number(),
+      rewardRisk: zod.number(),
+      probabilityOfSuccess: zod.number(),
+    }),
+    zod.null(),
+  ]),
 });
 export const GetLatestSignalsResponse = zod.array(GetLatestSignalsResponseItem);
 
@@ -579,7 +591,7 @@ export const GetSettingsResponse = zod.object({
   tp_multiplier_medium: zod.string().optional(),
   tp_multiplier_weak: zod.string().optional(),
   sl_ratio: zod.string().optional(),
-  trailing_stop_buffer_pct: zod.string().optional(),
+  trailing_stop_pct: zod.string().optional(),
   time_exit_window_hours: zod.string().optional(),
   max_daily_loss_pct: zod.string().optional(),
   max_weekly_loss_pct: zod.string().optional(),
@@ -638,7 +650,7 @@ export const UpdateSettingsBody = zod.object({
   tp_multiplier_medium: zod.string().optional(),
   tp_multiplier_weak: zod.string().optional(),
   sl_ratio: zod.string().optional(),
-  trailing_stop_buffer_pct: zod.string().optional(),
+  trailing_stop_pct: zod.string().optional(),
   time_exit_window_hours: zod.string().optional(),
   max_daily_loss_pct: zod.string().optional(),
   max_weekly_loss_pct: zod.string().optional(),

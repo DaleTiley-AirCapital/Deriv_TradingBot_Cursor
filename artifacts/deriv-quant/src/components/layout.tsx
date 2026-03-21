@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useGetDataStatus } from "@workspace/api-client-react";
+import { AiChat } from "./AiChat";
 
 const NAV_ITEMS = [
   { name: "Overview",  href: "/",          icon: Activity },
@@ -388,7 +389,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const bp = useBreakpoint();
 
-  if (bp === "mobile")  return <MobileLayout  location={location}>{children}</MobileLayout>;
-  if (bp === "tablet")  return <TabletLayout  location={location}>{children}</TabletLayout>;
-  return                       <DesktopLayout location={location}>{children}</DesktopLayout>;
+  const layout = bp === "mobile"
+    ? <MobileLayout location={location}>{children}</MobileLayout>
+    : bp === "tablet"
+      ? <TabletLayout location={location}>{children}</TabletLayout>
+      : <DesktopLayout location={location}>{children}</DesktopLayout>;
+
+  return (
+    <>
+      {layout}
+      <AiChat />
+    </>
+  );
 }

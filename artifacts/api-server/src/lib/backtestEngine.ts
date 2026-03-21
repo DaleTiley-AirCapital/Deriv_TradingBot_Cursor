@@ -5,7 +5,7 @@ import { calculateTrailingStop } from "./tradeEngine.js";
 import type { FeatureVector } from "./features.js";
 import type { ScoringWeights } from "./scoring.js";
 
-const TRAILING_STOP_LOCK_PCT = 0.50;
+const DEFAULT_TRAILING_STOP_PCT = 0.25;
 const INITIAL_EXIT_HOURS = 72;
 const EXTENSION_HOURS = 24;
 const MAX_EXIT_HOURS = 120;
@@ -569,7 +569,7 @@ function simulateOnCandles(
           peakPrice: pos.peakPrice,
           direction: pos.direction,
           currentSl: pos.currentSl,
-          lockPct: TRAILING_STOP_LOCK_PCT,
+          trailPct: DEFAULT_TRAILING_STOP_PCT,
         });
         if (trailResult.updated) {
           pos.currentSl = trailResult.newSl;

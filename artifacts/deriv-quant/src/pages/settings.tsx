@@ -851,31 +851,6 @@ function ModeSettingsTab({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Crosshair className="w-4 h-4 text-primary" />
-            Signal Scoring Thresholds
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-xs text-muted-foreground mb-3">
-            Scoring thresholds for {modeLabel} mode. Signals must pass all thresholds to be traded.
-          </p>
-          <SettingField label="Minimum Composite Score" description="Signals must score at least this high (0–100)" value={form[p("min_composite_score")] || form.min_composite_score || "85"} onChange={(v) => update(p("min_composite_score"), v)} min={50} max={100} step={1} />
-          <SettingField label="Minimum Expected Value" description="Minimum expected value required" value={form[p("min_ev_threshold")] || form.min_ev_threshold || "0.003"} onChange={(v) => update(p("min_ev_threshold"), v)} min={0} max={0.1} step={0.001} />
-          <SettingField label="Minimum Reward/Risk Ratio" description="Minimum TP/SL ratio" value={form[p("min_rr_ratio")] || form.min_rr_ratio || "1.5"} onChange={(v) => update(p("min_rr_ratio"), v)} suffix="x" min={0.5} max={5} step={0.1} />
-          <div className="border-t border-border/30 my-4" />
-          <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Dimension Weights (%)</p>
-          <SettingField label="Regime Fit" description="How well the market regime matches" value={form[p("scoring_weight_regime_fit")] || form.scoring_weight_regime_fit || "16.67"} onChange={(v) => update(p("scoring_weight_regime_fit"), v)} suffix="%" min={0} max={100} step={1} />
-          <SettingField label="Setup Quality" description="How cleanly entry conditions are met" value={form[p("scoring_weight_setup_quality")] || form.scoring_weight_setup_quality || "16.67"} onChange={(v) => update(p("scoring_weight_setup_quality"), v)} suffix="%" min={0} max={100} step={1} />
-          <SettingField label="Trend Alignment" description="Higher-timeframe trend support" value={form[p("scoring_weight_trend_alignment")] || form.scoring_weight_trend_alignment || "16.67"} onChange={(v) => update(p("scoring_weight_trend_alignment"), v)} suffix="%" min={0} max={100} step={1} />
-          <SettingField label="Volatility Condition" description="Volatility in ideal range" value={form[p("scoring_weight_volatility_condition")] || form.scoring_weight_volatility_condition || "16.67"} onChange={(v) => update(p("scoring_weight_volatility_condition"), v)} suffix="%" min={0} max={100} step={1} />
-          <SettingField label="Reward/Risk" description="R:R normalized score" value={form[p("scoring_weight_reward_risk")] || form.scoring_weight_reward_risk || "16.67"} onChange={(v) => update(p("scoring_weight_reward_risk"), v)} suffix="%" min={0} max={100} step={1} />
-          <SettingField label="Probability of Success" description="Estimated probability of profit" value={form[p("scoring_weight_probability_of_success")] || form.scoring_weight_probability_of_success || "16.67"} onChange={(v) => update(p("scoring_weight_probability_of_success"), v)} suffix="%" min={0} max={100} step={1} />
-        </CardContent>
-      </Card>
-
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
@@ -895,11 +870,11 @@ function ModeSettingsTab({
               min={0.1}
               max={25}
               step={0.5}
-              aiLocked={isAiLocked(mode === "paper" ? "paper_equity_pct_per_trade" : "live_equity_pct_per_trade")}
-              aiValue={getAiValue(mode === "paper" ? "paper_equity_pct_per_trade" : "live_equity_pct_per_trade")}
-              aiSuggestion={aiStatus?.aiSuggestions?.[mode === "paper" ? "paper_equity_pct_per_trade" : "live_equity_pct_per_trade"]}
-              onOverride={() => handleOverride(mode === "paper" ? "paper_equity_pct_per_trade" : "live_equity_pct_per_trade", `${modeLabel} Equity %`)}
-              onRevert={aiStatus?.aiSuggestions?.[mode === "paper" ? "paper_equity_pct_per_trade" : "live_equity_pct_per_trade"] !== undefined ? () => handleRevertToAi(mode === "paper" ? "paper_equity_pct_per_trade" : "live_equity_pct_per_trade") : undefined}
+              aiLocked={isAiLocked(p("equity_pct_per_trade"))}
+              aiValue={getAiValue(p("equity_pct_per_trade"))}
+              aiSuggestion={aiStatus?.aiSuggestions?.[p("equity_pct_per_trade")]}
+              onOverride={() => handleOverride(p("equity_pct_per_trade"), `${modeLabel} Equity %`)}
+              onRevert={aiStatus?.aiSuggestions?.[p("equity_pct_per_trade")] !== undefined ? () => handleRevertToAi(p("equity_pct_per_trade")) : undefined}
             />
             <SettingField label="Max Simultaneous Trades" description={`Maximum open positions in ${modeLabel} mode`} value={form[p("max_open_trades")] || (mode === "paper" ? "4" : "3")} onChange={(v) => update(p("max_open_trades"), v)} step={1} min={1} max={20} />
             <SettingField
@@ -931,11 +906,11 @@ function ModeSettingsTab({
               value={form[p("tp_multiplier_strong")] || form.tp_multiplier_strong || "2.5"}
               onChange={(v) => update(p("tp_multiplier_strong"), v)}
               suffix="x" min={0.5} max={10} step={0.1}
-              aiLocked={isAiLocked("tp_multiplier_strong")}
-              aiValue={getAiValue("tp_multiplier_strong")}
-              aiSuggestion={aiStatus?.aiSuggestions?.["tp_multiplier_strong"]}
-              onOverride={() => handleOverride("tp_multiplier_strong", "TP Strong")}
-              onRevert={aiStatus?.aiSuggestions?.["tp_multiplier_strong"] !== undefined ? () => handleRevertToAi("tp_multiplier_strong") : undefined}
+              aiLocked={isAiLocked(p("tp_multiplier_strong"))}
+              aiValue={getAiValue(p("tp_multiplier_strong"))}
+              aiSuggestion={aiStatus?.aiSuggestions?.[p("tp_multiplier_strong")]}
+              onOverride={() => handleOverride(p("tp_multiplier_strong"), `${modeLabel} TP Strong`)}
+              onRevert={aiStatus?.aiSuggestions?.[p("tp_multiplier_strong")] !== undefined ? () => handleRevertToAi(p("tp_multiplier_strong")) : undefined}
             />
             <SettingField
               label="TP Multiplier — Medium"
@@ -943,11 +918,11 @@ function ModeSettingsTab({
               value={form[p("tp_multiplier_medium")] || form.tp_multiplier_medium || "2.0"}
               onChange={(v) => update(p("tp_multiplier_medium"), v)}
               suffix="x" min={0.5} max={10} step={0.1}
-              aiLocked={isAiLocked("tp_multiplier_medium")}
-              aiValue={getAiValue("tp_multiplier_medium")}
-              aiSuggestion={aiStatus?.aiSuggestions?.["tp_multiplier_medium"]}
-              onOverride={() => handleOverride("tp_multiplier_medium", "TP Medium")}
-              onRevert={aiStatus?.aiSuggestions?.["tp_multiplier_medium"] !== undefined ? () => handleRevertToAi("tp_multiplier_medium") : undefined}
+              aiLocked={isAiLocked(p("tp_multiplier_medium"))}
+              aiValue={getAiValue(p("tp_multiplier_medium"))}
+              aiSuggestion={aiStatus?.aiSuggestions?.[p("tp_multiplier_medium")]}
+              onOverride={() => handleOverride(p("tp_multiplier_medium"), `${modeLabel} TP Medium`)}
+              onRevert={aiStatus?.aiSuggestions?.[p("tp_multiplier_medium")] !== undefined ? () => handleRevertToAi(p("tp_multiplier_medium")) : undefined}
             />
             <SettingField
               label="TP Multiplier — Weak"
@@ -955,11 +930,11 @@ function ModeSettingsTab({
               value={form[p("tp_multiplier_weak")] || form.tp_multiplier_weak || "1.5"}
               onChange={(v) => update(p("tp_multiplier_weak"), v)}
               suffix="x" min={0.5} max={10} step={0.1}
-              aiLocked={isAiLocked("tp_multiplier_weak")}
-              aiValue={getAiValue("tp_multiplier_weak")}
-              aiSuggestion={aiStatus?.aiSuggestions?.["tp_multiplier_weak"]}
-              onOverride={() => handleOverride("tp_multiplier_weak", "TP Weak")}
-              onRevert={aiStatus?.aiSuggestions?.["tp_multiplier_weak"] !== undefined ? () => handleRevertToAi("tp_multiplier_weak") : undefined}
+              aiLocked={isAiLocked(p("tp_multiplier_weak"))}
+              aiValue={getAiValue(p("tp_multiplier_weak"))}
+              aiSuggestion={aiStatus?.aiSuggestions?.[p("tp_multiplier_weak")]}
+              onOverride={() => handleOverride(p("tp_multiplier_weak"), `${modeLabel} TP Weak`)}
+              onRevert={aiStatus?.aiSuggestions?.[p("tp_multiplier_weak")] !== undefined ? () => handleRevertToAi(p("tp_multiplier_weak")) : undefined}
             />
             <SettingField
               label="Stop Loss Ratio"
@@ -967,13 +942,24 @@ function ModeSettingsTab({
               value={form[p("sl_ratio")] || form.sl_ratio || "1.0"}
               onChange={(v) => update(p("sl_ratio"), v)}
               suffix="x" min={0.1} max={5} step={0.1}
-              aiLocked={isAiLocked("sl_ratio")}
-              aiValue={getAiValue("sl_ratio")}
-              aiSuggestion={aiStatus?.aiSuggestions?.["sl_ratio"]}
-              onOverride={() => handleOverride("sl_ratio", "SL Ratio")}
-              onRevert={aiStatus?.aiSuggestions?.["sl_ratio"] !== undefined ? () => handleRevertToAi("sl_ratio") : undefined}
+              aiLocked={isAiLocked(p("sl_ratio"))}
+              aiValue={getAiValue(p("sl_ratio"))}
+              aiSuggestion={aiStatus?.aiSuggestions?.[p("sl_ratio")]}
+              onOverride={() => handleOverride(p("sl_ratio"), `${modeLabel} SL Ratio`)}
+              onRevert={aiStatus?.aiSuggestions?.[p("sl_ratio")] !== undefined ? () => handleRevertToAi(p("sl_ratio")) : undefined}
             />
-            <SettingField label="Trailing Stop Buffer" description="Buffer % before trailing stop activates" value={form[p("trailing_stop_buffer_pct")] || form.trailing_stop_buffer_pct || "0.3"} onChange={(v) => update(p("trailing_stop_buffer_pct"), v)} suffix="%" min={0} max={5} step={0.05} />
+            <SettingField
+              label="Trailing Stop %"
+              description="SL trails this % behind the highest point reached"
+              value={form[p("trailing_stop_pct")] || form.trailing_stop_pct || "25"}
+              onChange={(v) => update(p("trailing_stop_pct"), v)}
+              suffix="%" min={1} max={50} step={1}
+              aiLocked={isAiLocked(p("trailing_stop_pct"))}
+              aiValue={getAiValue(p("trailing_stop_pct"))}
+              aiSuggestion={aiStatus?.aiSuggestions?.[p("trailing_stop_pct")]}
+              onOverride={() => handleOverride(p("trailing_stop_pct"), `${modeLabel} Trailing Stop`)}
+              onRevert={aiStatus?.aiSuggestions?.[p("trailing_stop_pct")] !== undefined ? () => handleRevertToAi(p("trailing_stop_pct")) : undefined}
+            />
           </CardContent>
         </Card>
 
@@ -999,19 +985,17 @@ function ModeSettingsTab({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <SettingField label="Scan Interval" description={`How often ${modeLabel} mode scans for signals`} value={form[p("scan_interval_seconds")] || form.scan_interval_seconds || "30"} onChange={(v) => update(p("scan_interval_seconds"), v)} suffix="sec" min={5} max={300} step={5} />
-            <SettingField label="Symbol Scan Stagger" description={`Delay between scanning each symbol in ${modeLabel} mode`} value={form[p("scan_stagger_seconds")] || form.scan_stagger_seconds || "10"} onChange={(v) => update(p("scan_stagger_seconds"), v)} suffix="sec" min={1} max={60} step={1} />
             <SettingField
               label="Time Exit Window"
               description="Auto-close positions after this duration"
               value={form[p("time_exit_window_hours")] || form.time_exit_window_hours || "72"}
               onChange={(v) => update(p("time_exit_window_hours"), v)}
               suffix="hrs" min={1} max={120} step={0.5}
-              aiLocked={isAiLocked("time_exit_window_hours")}
-              aiValue={getAiValue("time_exit_window_hours")}
-              aiSuggestion={aiStatus?.aiSuggestions?.["time_exit_window_hours"]}
-              onOverride={() => handleOverride("time_exit_window_hours", "Time Exit")}
-              onRevert={aiStatus?.aiSuggestions?.["time_exit_window_hours"] !== undefined ? () => handleRevertToAi("time_exit_window_hours") : undefined}
+              aiLocked={isAiLocked(p("time_exit_window_hours"))}
+              aiValue={getAiValue(p("time_exit_window_hours"))}
+              aiSuggestion={aiStatus?.aiSuggestions?.[p("time_exit_window_hours")]}
+              onOverride={() => handleOverride(p("time_exit_window_hours"), `${modeLabel} Time Exit`)}
+              onRevert={aiStatus?.aiSuggestions?.[p("time_exit_window_hours")] !== undefined ? () => handleRevertToAi(p("time_exit_window_hours")) : undefined}
             />
           </CardContent>
         </Card>
@@ -1138,11 +1122,17 @@ export default function Settings() {
 
   const isAiLocked = (key: string): boolean => {
     if (!aiStatus?.locked) return false;
-    return aiStatus.aiValues[key] !== undefined;
+    if (aiStatus.aiValues[key] !== undefined) return true;
+    const base = key.replace(/^(paper|demo|real)_/, "");
+    if (base !== key && aiStatus.aiValues[base] !== undefined) return true;
+    return false;
   };
 
   const getAiValue = (key: string): string | undefined => {
-    return aiStatus?.aiValues[key];
+    if (aiStatus?.aiValues[key] !== undefined) return aiStatus.aiValues[key];
+    const base = key.replace(/^(paper|demo|real)_/, "");
+    if (base !== key) return aiStatus?.aiValues[base];
+    return undefined;
   };
 
   const handleOverride = (key: string, label: string) => {
@@ -1515,6 +1505,47 @@ export default function Settings() {
                       )}
                     </div>
                   )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Crosshair className="w-4 h-4 text-primary" />
+                    Signal Scoring Thresholds
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    These thresholds apply uniformly across all trading modes. Signals must pass all thresholds to be traded.
+                  </p>
+                  <SettingField label="Minimum Composite Score" description="Signals must score at least this high (0–100)" value={form.min_composite_score || "85"} onChange={(v) => update("min_composite_score", v)} min={50} max={100} step={1} />
+                  <SettingField label="Minimum Expected Value" description="Minimum expected value required" value={form.min_ev_threshold || "0.003"} onChange={(v) => update("min_ev_threshold", v)} min={0} max={0.1} step={0.001} />
+                  <SettingField label="Minimum Reward/Risk Ratio" description="Minimum TP/SL ratio" value={form.min_rr_ratio || "1.5"} onChange={(v) => update("min_rr_ratio", v)} suffix="x" min={0.5} max={5} step={0.1} />
+                  <div className="border-t border-border/30 my-4" />
+                  <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Dimension Weights (%)</p>
+                  <SettingField label="Regime Fit" description="How well the market regime matches" value={form.scoring_weight_regime_fit || "16.67"} onChange={(v) => update("scoring_weight_regime_fit", v)} suffix="%" min={0} max={100} step={1} />
+                  <SettingField label="Setup Quality" description="How cleanly entry conditions are met" value={form.scoring_weight_setup_quality || "16.67"} onChange={(v) => update("scoring_weight_setup_quality", v)} suffix="%" min={0} max={100} step={1} />
+                  <SettingField label="Trend Alignment" description="Higher-timeframe trend support" value={form.scoring_weight_trend_alignment || "16.67"} onChange={(v) => update("scoring_weight_trend_alignment", v)} suffix="%" min={0} max={100} step={1} />
+                  <SettingField label="Volatility Condition" description="Volatility in ideal range" value={form.scoring_weight_volatility_condition || "16.67"} onChange={(v) => update("scoring_weight_volatility_condition", v)} suffix="%" min={0} max={100} step={1} />
+                  <SettingField label="Reward/Risk" description="R:R normalized score" value={form.scoring_weight_reward_risk || "16.67"} onChange={(v) => update("scoring_weight_reward_risk", v)} suffix="%" min={0} max={100} step={1} />
+                  <SettingField label="Probability of Success" description="Estimated probability of profit" value={form.scoring_weight_probability_of_success || "16.67"} onChange={(v) => update("scoring_weight_probability_of_success", v)} suffix="%" min={0} max={100} step={1} />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Clock className="w-4 h-4" />
+                    Scan Timing
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Global scan timing — applies to all modes. Time exit is configured per-mode in each mode's tab.
+                  </p>
+                  <SettingField label="Scan Interval" description="How often the system scans for new signals" value={form.scan_interval_seconds || "30"} onChange={(v) => update("scan_interval_seconds", v)} suffix="sec" min={5} max={300} step={5} />
+                  <SettingField label="Symbol Scan Stagger" description="Delay between scanning each symbol" value={form.scan_stagger_seconds || "10"} onChange={(v) => update("scan_stagger_seconds", v)} suffix="sec" min={1} max={60} step={1} />
                 </CardContent>
               </Card>
 

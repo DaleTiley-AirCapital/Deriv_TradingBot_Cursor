@@ -140,7 +140,7 @@ The platform includes a full swing trade execution engine (`lib/tradeEngine.ts`)
 
 - **Position Sizing** — 20-25% of equity per trade, max 3 simultaneous trades, 80% equity cap
 - **Dynamic TP** — calculated at entry using: confidence × ATR × historical average move
-- **Trailing Stop** — updates SL as price moves favorably, locks in 50% of peak floating profit
+- **Trailing Stop** — SL trails 25% behind the highest point reached (configurable per mode, AI-optimized: Real=20%, Demo=25%)
 - **3-Layer Exit** — TP hit (Deriv handles), trailing stop triggered, time-based exit (72h with 24h extensions up to 5 days)
 - **Deriv Execution** — buy/sell/close via WebSocket API, SL/TP placement, contract updates
 
@@ -159,7 +159,7 @@ The platform includes a full swing trade execution engine (`lib/tradeEngine.ts`)
 - **Trades** — live positions panel (entry/current price, floating P&L, SL, TP, time remaining), open/closed trades, P&L chart, paper/live controls
 - **Risk** — risk limits, cooldowns, disabled strategies, kill switch
 - **Data** — backfill, streaming, tick/candle/spike viewer
-- **Settings** — trading mode (idle/paper/live) toggle, API keys (Deriv token, OpenAI key) with masked display, paper/live independent position sizing, TP/SL multipliers, risk controls, timing, AI verification toggle
+- **Settings** — 4-tab settings (General/Paper/Demo/Real), General tab: trading mode toggles, API keys, signal scoring thresholds (global), scan timing (global), kill switch. Mode tabs: per-mode TP/SL, trailing stop %, time exit, position sizing, risk controls, instruments, strategies. AI chat popup (floating GPT-4o assistant)
 
 ## Configuration
 

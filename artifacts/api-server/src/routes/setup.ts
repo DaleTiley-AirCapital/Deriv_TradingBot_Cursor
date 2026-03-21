@@ -15,7 +15,11 @@ const DEFAULT_CAPITAL = 10000;
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade", "live_equity_pct_per_trade",
   "tp_multiplier_strong", "tp_multiplier_medium", "tp_multiplier_weak",
-  "sl_ratio", "time_exit_window_hours",
+  "sl_ratio", "trailing_stop_pct", "time_exit_window_hours",
+  "demo_tp_multiplier_strong", "demo_tp_multiplier_medium", "demo_tp_multiplier_weak",
+  "demo_sl_ratio", "demo_trailing_stop_pct", "demo_equity_pct_per_trade", "demo_time_exit_window_hours",
+  "real_tp_multiplier_strong", "real_tp_multiplier_medium", "real_tp_multiplier_weak",
+  "real_sl_ratio", "real_trailing_stop_pct", "real_equity_pct_per_trade", "real_time_exit_window_hours",
 ];
 
 router.post("/setup/preflight", async (_req, res): Promise<void> => {
@@ -413,6 +417,43 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
     const allStrategies = STRATEGIES.join(",");
     const allSymbols = SUPPORTED_SYMBOLS.join(",");
 
+    function computeModeSettings(combos: typeof comboResults, prefix: string) {
+      const settings: Record<string, string> = {};
+      if (combos.length === 0) return settings;
+
+      let tpS = 0, tpM = 0, tpW = 0, sl = 0, eq = 0, hold = 0, n = 0;
+      for (const c of combos) {
+        const key = `${c.strategy}`;
+        const agg = strategyAgg[key];
+        if (!agg || agg.count === 0) continue;
+        const cnt = Math.max(agg.count, 1);
+        const avgTp = agg.tpSum / cnt;
+        tpS += Math.min(avgTp * 1.15, 4.0);
+        tpM += avgTp;
+        tpW += Math.max(avgTp * 0.8, 1.0);
+        sl += agg.slSum / cnt;
+        eq += agg.equitySum / cnt;
+        hold += agg.holdSum / cnt;
+        n++;
+      }
+      if (n === 0) return settings;
+
+      const trailPct = prefix === "real" ? 20 : 25;
+      settings[`${prefix}_tp_multiplier_strong`] = parseFloat((tpS / n).toFixed(2)).toString();
+      settings[`${prefix}_tp_multiplier_medium`] = parseFloat((tpM / n).toFixed(2)).toString();
+      settings[`${prefix}_tp_multiplier_weak`] = parseFloat((tpW / n).toFixed(2)).toString();
+      settings[`${prefix}_sl_ratio`] = parseFloat((sl / n).toFixed(2)).toString();
+      settings[`${prefix}_trailing_stop_pct`] = String(trailPct);
+      settings[`${prefix}_equity_pct_per_trade`] = parseFloat((eq / n).toFixed(2)).toString();
+      settings[`${prefix}_time_exit_window_hours`] = parseFloat((hold / n).toFixed(1)).toString();
+      return settings;
+    }
+
+    const demoTop = sortedCombos.slice(0, Math.min(8, sortedCombos.length));
+    const realTop = sortedCombos.slice(0, Math.min(4, sortedCombos.length));
+    const demoModeSettings = computeModeSettings(demoTop, "demo");
+    const realModeSettings = computeModeSettings(realTop, "real");
+
     const aiSettings: Record<string, string> = {
       ai_equity_pct_per_trade: String(optEquity),
       ai_paper_equity_pct_per_trade: String(Math.max(optEquity * 0.6, 0.5).toFixed(2)),
@@ -421,6 +462,7 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
       ai_tp_multiplier_medium: String(optTpMed),
       ai_tp_multiplier_weak: String(optTpWeak),
       ai_sl_ratio: String(optSl),
+      ai_trailing_stop_pct: "25",
       ai_time_exit_window_hours: String(optHold),
       ai_settings_locked: "true",
       ai_optimised_at: new Date().toISOString(),
@@ -434,6 +476,8 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
       real_enabled_symbols: realSymbols.length > 0 ? realSymbols.join(",") : allSymbols,
       ai_recommended_strategies: realStrategies.join(","),
       ai_recommended_symbols: realSymbols.join(","),
+      ...demoModeSettings,
+      ...realModeSettings,
     };
 
     for (const [key, value] of Object.entries(aiSettings)) {

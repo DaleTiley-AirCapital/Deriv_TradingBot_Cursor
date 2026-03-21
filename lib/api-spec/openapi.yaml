@@ -1578,7 +1578,7 @@ components:
           type: string
         sl_ratio:
           type: string
-        trailing_stop_buffer_pct:
+        trailing_stop_pct:
           type: string
         time_exit_window_hours:
           type: string

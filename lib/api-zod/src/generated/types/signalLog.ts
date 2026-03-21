@@ -5,15 +5,7 @@
  * Deriv Quant Research & Execution Platform API
  * OpenAPI spec version: 0.1.0
  */
-
-export interface ScoringDimensions {
-  regimeFit: number;
-  setupQuality: number;
-  trendAlignment: number;
-  volatilityCondition: number;
-  rewardRisk: number;
-  probabilityOfSuccess: number;
-}
+import type { ScoringDimensions } from "./scoringDimensions";
 
 export interface SignalLog {
   id: number;
@@ -39,6 +31,5 @@ export interface SignalLog {
   aiConfidenceAdj: number | null;
   /** @nullable */
   compositeScore: number | null;
-  /** @nullable */
   scoringDimensions: ScoringDimensions | null;
 }

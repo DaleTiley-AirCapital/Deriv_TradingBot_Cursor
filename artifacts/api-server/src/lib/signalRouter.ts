@@ -35,7 +35,7 @@ interface PortfolioContext {
   tpMultiplierMedium: number;
   tpMultiplierWeak: number;
   slRatio: number;
-  trailingStopBufferPct: number;
+  trailingStopPct: number;
   timeExitWindowHours: number;
   minCompositeScore: number;
   minEvThreshold: number;
@@ -132,11 +132,11 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
     tpMultiplierMedium: parseFloat(stateMap[`${prefix}_tp_multiplier_medium`] || stateMap["tp_multiplier_medium"] || "2.0"),
     tpMultiplierWeak: parseFloat(stateMap[`${prefix}_tp_multiplier_weak`] || stateMap["tp_multiplier_weak"] || "1.5"),
     slRatio: parseFloat(stateMap[`${prefix}_sl_ratio`] || stateMap["sl_ratio"] || "1.0"),
-    trailingStopBufferPct: parseFloat(stateMap[`${prefix}_trailing_stop_buffer_pct`] || stateMap["trailing_stop_buffer_pct"] || "0.3"),
+    trailingStopPct: parseFloat(stateMap[`${prefix}_trailing_stop_pct`] || stateMap["trailing_stop_pct"] || "25"),
     timeExitWindowHours: parseFloat(stateMap[`${prefix}_time_exit_window_hours`] || stateMap["time_exit_window_hours"] || "72"),
-    minCompositeScore: parseFloat(stateMap[`${prefix}_min_composite_score`] || stateMap["min_composite_score"] || "85"),
-    minEvThreshold: parseFloat(stateMap[`${prefix}_min_ev_threshold`] || stateMap["min_ev_threshold"] || "0.003"),
-    minRrRatio: parseFloat(stateMap[`${prefix}_min_rr_ratio`] || stateMap["min_rr_ratio"] || "1.5"),
+    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "85"),
+    minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.003"),
+    minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
   };
 }
 

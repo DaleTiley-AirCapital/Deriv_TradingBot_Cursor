@@ -13,7 +13,7 @@ export interface PlatformSettings {
   tp_multiplier_medium?: string;
   tp_multiplier_weak?: string;
   sl_ratio?: string;
-  trailing_stop_buffer_pct?: string;
+  trailing_stop_pct?: string;
   time_exit_window_hours?: string;
   max_daily_loss_pct?: string;
   max_weekly_loss_pct?: string;
