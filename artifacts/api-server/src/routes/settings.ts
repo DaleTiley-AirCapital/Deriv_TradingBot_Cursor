@@ -149,6 +149,8 @@ const SETTING_DEFAULTS: Record<string, string> = {
   real_scoring_weight_probability_of_success: "16.67",
   real_enabled_symbols: ALL_SYMBOLS_DEFAULT,
   real_enabled_strategies: ALL_STRATEGIES_DEFAULT,
+  ai_recommended_strategies: "",
+  ai_recommended_symbols: "",
 };
 
 const API_KEY_KEYS = ["deriv_api_token", "deriv_api_token_demo", "deriv_api_token_real", "openai_api_key"];

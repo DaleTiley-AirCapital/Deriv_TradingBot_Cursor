@@ -411,7 +411,7 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
     const realStrategies = [...new Set(top4.map(c => c.strategy))];
     const realSymbols = [...new Set(top4.map(c => c.symbol))];
     const allStrategies = STRATEGIES.join(",");
-    const allSymbols = enabledSymbols.join(",");
+    const allSymbols = SUPPORTED_SYMBOLS.join(",");
 
     const aiSettings: Record<string, string> = {
       ai_equity_pct_per_trade: String(optEquity),
