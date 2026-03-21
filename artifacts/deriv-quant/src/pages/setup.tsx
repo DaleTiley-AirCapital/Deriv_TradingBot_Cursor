@@ -9,7 +9,7 @@ import { CheckCircle2, Circle, Loader2, AlertCircle, Database, BarChart3, Zap, A
 const BASE = import.meta.env.BASE_URL || "/";
 const api = (path: string) => `${BASE}api${path}`;
 
-type Step = "welcome" | "apikeys" | "testing" | "backfill" | "analyse" | "complete";
+type Step = "welcome" | "apikeys" | "testing" | "initialise" | "complete";
 
 async function consumeSSE(
   url: string,
@@ -36,6 +36,20 @@ async function consumeSSE(
   }
 }
 
+function formatTime(seconds: number): string {
+  if (seconds >= 3600) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    return `${h}h ${m}m`;
+  }
+  if (seconds >= 60) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}m ${s}s`;
+  }
+  return `${seconds}s`;
+}
+
 export default function SetupWizard({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState<Step>("welcome");
   const [derivTokenDemo, setDerivTokenDemo] = useState("");
@@ -45,11 +59,15 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [showDerivReal, setShowDerivReal] = useState(false);
   const [showOpenai, setShowOpenai] = useState(false);
   const [testResult, setTestResult] = useState<{ derivDemo: { ok: boolean; error?: string }; derivReal: { ok: boolean; error?: string }; openai: { ok: boolean; error?: string } } | null>(null);
-  const [backfillProgress, setBackfillProgress] = useState(0);
-  const [backfillStatus, setBackfillStatus] = useState("");
-  const [backfillDetails, setBackfillDetails] = useState<{ grandTotal?: number; estRemainingSec?: number; currentSymbol?: string } >({});
-  const [analyseProgress, setAnalyseProgress] = useState(0);
-  const [analyseStatus, setAnalyseStatus] = useState("");
+
+  const [initProgress, setInitProgress] = useState(0);
+  const [initStage, setInitStage] = useState<"backfill" | "backtest" | "optimise" | "complete">("backfill");
+  const [initStatus, setInitStatus] = useState("");
+  const [candleTotal, setCandleTotal] = useState(0);
+  const [btCompleted, setBtCompleted] = useState(0);
+  const [btTotal, setBtTotal] = useState(0);
+  const [estRemainingSec, setEstRemainingSec] = useState(0);
+
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -101,7 +119,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
 
       const anyDerivOk = result.derivDemo.ok || result.derivReal.ok;
       if (anyDerivOk) {
-        setStep("backfill");
+        setStep("initialise");
       } else {
         setError("No Deriv API connection succeeded. Please check your tokens.");
         setStep("apikeys");
@@ -114,74 +132,66 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     }
   }, [derivTokenDemo, derivTokenReal, openaiKey]);
 
-  const runBackfill = useCallback(async () => {
+  const runInitialise = useCallback(async () => {
     setError(null);
-    setBackfillProgress(1);
-    setBackfillStatus("Starting data backfill...");
+    setInitProgress(1);
+    setInitStage("backfill");
+    setInitStatus("Starting initialisation...");
+    setCandleTotal(0);
+    setBtCompleted(0);
+    setBtTotal(0);
+    setEstRemainingSec(0);
     abortRef.current = new AbortController();
     completedRef.current = false;
-    try {
-      await consumeSSE(api("/setup/backfill"), (evt) => {
-        const phase = evt.phase as string;
-        if (phase === "start") {
-          setBackfillStatus(evt.message as string);
-        } else if (phase === "symbol_start") {
-          setBackfillDetails(d => ({ ...d, currentSymbol: evt.symbol as string }));
-          setBackfillStatus(evt.message as string);
-        } else if (phase === "symbol_progress") {
-          const pct = (evt.overallPct as number) || Math.round(((evt.symbolIndex as number) / (evt.totalSymbols as number)) * 100);
-          setBackfillProgress(Math.max(pct, 1));
-          setBackfillStatus(evt.message as string);
-          setBackfillDetails({
-            grandTotal: evt.grandTotal as number,
-            estRemainingSec: evt.estRemainingSec as number,
-            currentSymbol: evt.symbol as string,
-          });
-        } else if (phase === "symbol_done") {
-          const pct = (evt.overallPct as number) || Math.round((((evt.symbolIndex as number) + 1) / (evt.totalSymbols as number)) * 100);
-          setBackfillProgress(pct);
-          setBackfillStatus(evt.message as string);
-          setBackfillDetails(d => ({ ...d, grandTotal: evt.grandTotal as number, currentSymbol: evt.symbol as string }));
-        } else if (phase === "backfill_complete") {
-          completedRef.current = true;
-          setBackfillProgress(100);
-          setBackfillStatus(evt.message as string);
-          setBackfillDetails(d => ({ ...d, estRemainingSec: 0 }));
-          setStep("analyse");
-        } else if (phase === "error") {
-          setError(evt.message as string);
-        }
-      }, abortRef.current.signal);
-      if (!completedRef.current) {
-        setBackfillProgress(100);
-        setStep("analyse");
-      }
-    } catch (err) {
-      if ((err as Error).name !== "AbortError") {
-        setError(err instanceof Error ? err.message : "Backfill failed");
-      }
-    }
-  }, []);
 
-  const runAnalyse = useCallback(async () => {
-    setError(null);
-    setAnalyseProgress(1);
-    setAnalyseStatus("Starting AI analysis & optimisation...");
-    abortRef.current = new AbortController();
-    completedRef.current = false;
     try {
-      await consumeSSE(api("/setup/initial-analyse"), (evt) => {
+      await consumeSSE(api("/setup/initialise"), (evt) => {
         const phase = evt.phase as string;
-        if (phase === "start") {
-          setAnalyseStatus(evt.message as string);
-        } else if (phase === "progress") {
-          const pct = Math.round(((evt.completed as number) / (evt.total as number)) * 90);
-          setAnalyseProgress(Math.max(pct, 1));
-          setAnalyseStatus(evt.message as string);
+        const pct = (evt.overallPct as number) || 0;
+
+        if (phase === "backfill_start") {
+          setInitStage("backfill");
+          setInitStatus(evt.message as string);
+        } else if (phase === "backfill_progress") {
+          setInitStage("backfill");
+          setInitProgress(Math.max(pct, 1));
+          setInitStatus(evt.message as string);
+          setCandleTotal(evt.candleTotal as number || 0);
+          setEstRemainingSec(evt.estRemainingSec as number || 0);
+        } else if (phase === "backfill_symbol_done") {
+          setInitProgress(Math.max(pct, 1));
+          setInitStatus(evt.message as string);
+          setCandleTotal(evt.candleTotal as number || 0);
+        } else if (phase === "backfill_complete") {
+          setInitProgress(50);
+          setInitStatus(evt.message as string);
+          setCandleTotal(evt.candleTotal as number || 0);
+          setEstRemainingSec(0);
+        } else if (phase === "backtest_start") {
+          setInitStage("backtest");
+          setBtTotal(evt.btTotal as number || 0);
+          setInitStatus(evt.message as string);
+        } else if (phase === "backtest_progress") {
+          setInitStage("backtest");
+          setInitProgress(Math.max(pct, 50));
+          setBtCompleted(evt.btCompleted as number || 0);
+          setBtTotal(evt.btTotal as number || 0);
+          setCandleTotal(evt.candleTotal as number || 0);
+          setEstRemainingSec(evt.estRemainingSec as number || 0);
+          setInitStatus(evt.message as string);
+        } else if (phase === "optimising") {
+          setInitStage("optimise");
+          setInitProgress(95);
+          setInitStatus(evt.message as string);
+          setEstRemainingSec(0);
         } else if (phase === "complete") {
           completedRef.current = true;
-          setAnalyseProgress(100);
-          setAnalyseStatus("Setup complete!");
+          setInitStage("complete");
+          setInitProgress(100);
+          setInitStatus(evt.message as string);
+          setCandleTotal(evt.candleTotal as number || 0);
+          setBtCompleted(evt.btCompleted as number || 0);
+          setEstRemainingSec(0);
           queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
           queryClient.invalidateQueries({ queryKey: ["/api/setup/status"] });
           setStep("complete");
@@ -189,13 +199,14 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           setError(evt.message as string);
         }
       }, abortRef.current.signal);
+
       if (!completedRef.current) {
-        setAnalyseProgress(100);
+        setInitProgress(100);
         setStep("complete");
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        setError(err instanceof Error ? err.message : "Analysis failed");
+        setError(err instanceof Error ? err.message : "Initialisation failed");
       }
     }
   }, [queryClient]);
@@ -203,13 +214,12 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const stepDefs = [
     { label: "Welcome" },
     { label: "API Keys" },
-    { label: "Data Backfill" },
-    { label: "AI Analysis" },
+    { label: "Initialise" },
     { label: "Ready" },
   ];
 
-  const stepToIndex: Record<Step, number> = { welcome: 0, apikeys: 1, testing: 1, backfill: 2, analyse: 3, complete: 4 };
-  const indexToStep: Step[] = ["welcome", "apikeys", "backfill", "analyse", "complete"];
+  const stepToIndex: Record<Step, number> = { welcome: 0, apikeys: 1, testing: 1, initialise: 2, complete: 3 };
+  const indexToStep: Step[] = ["welcome", "apikeys", "initialise", "complete"];
   const stepIndex = stepToIndex[step];
 
   const goBack = () => {
@@ -278,8 +288,9 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 <div className="space-y-3">
                   <h2 className="text-xl font-semibold text-foreground">Welcome</h2>
                   <p className="text-muted-foreground leading-relaxed max-w-md mx-auto">
-                    This wizard will configure your platform by connecting to your Deriv account,
-                    fetching historical market data, and optimising your trading parameters using AI.
+                    Before trading, the system needs to download 24 months of price history
+                    and run all strategies as backtests across every index. The AI will then
+                    recommend your optimal starting settings.
                   </p>
                 </div>
                 <div className="grid grid-cols-3 gap-4 max-w-lg mx-auto">
@@ -289,11 +300,11 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                   </div>
                   <div className="p-4 rounded-lg bg-muted/20 text-center">
                     <Database className="w-6 h-6 text-blue-400 mx-auto mb-2" />
-                    <p className="text-xs text-muted-foreground">Fetch 24 months of data</p>
+                    <p className="text-xs text-muted-foreground">Download 24 months of trading history</p>
                   </div>
                   <div className="p-4 rounded-lg bg-muted/20 text-center">
                     <BarChart3 className="w-6 h-6 text-green-400 mx-auto mb-2" />
-                    <p className="text-xs text-muted-foreground">AI-optimise settings</p>
+                    <p className="text-xs text-muted-foreground">Run all strategies & AI optimise</p>
                   </div>
                 </div>
                 <Button size="lg" onClick={() => { setError(null); setStep("apikeys"); }} className="px-8">
@@ -429,7 +440,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
               </div>
             )}
 
-            {step === "backfill" && (
+            {step === "initialise" && (
               <div className="space-y-6">
                 {testResult && (
                   <div className="flex gap-4 justify-center mb-4 flex-wrap">
@@ -452,72 +463,94 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                   </div>
                 )}
 
-                {backfillProgress > 0 ? (
-                  <div className="space-y-4">
-                    <h2 className="text-lg font-semibold text-center">Fetching Historical Data</h2>
+                {initProgress > 0 ? (
+                  <div className="space-y-5">
+                    <div className="text-center space-y-1">
+                      <h2 className="text-lg font-semibold">
+                        {initStage === "backfill" && "Downloading Price History"}
+                        {initStage === "backtest" && "Running Strategy Backtests"}
+                        {initStage === "optimise" && "AI Optimising Settings"}
+                        {initStage === "complete" && "Setup Complete"}
+                      </h2>
+                      <p className="text-xs text-muted-foreground">
+                        {initStage === "backfill" && "Fetching 24 months of candle data from Deriv"}
+                        {initStage === "backtest" && "Testing all strategies across every index"}
+                        {initStage === "optimise" && "Calculating optimal parameters from backtest results"}
+                        {initStage === "complete" && "Your platform is ready"}
+                      </p>
+                    </div>
+
                     <div className="space-y-2">
-                      <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>{backfillProgress}%</span>
-                        {backfillDetails.estRemainingSec != null && backfillDetails.estRemainingSec > 0 && (
-                          <span>
-                            ~{backfillDetails.estRemainingSec >= 60
-                              ? `${Math.floor(backfillDetails.estRemainingSec / 60)}m ${backfillDetails.estRemainingSec % 60}s`
-                              : `${backfillDetails.estRemainingSec}s`} remaining
-                          </span>
+                      <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
+                        <span>{initProgress}%</span>
+                        {estRemainingSec > 0 && (
+                          <span>~{formatTime(estRemainingSec)} remaining</span>
                         )}
                       </div>
-                      <Progress value={backfillProgress} className="h-3" />
+                      <Progress value={initProgress} className="h-3" />
                     </div>
-                    <p className="text-sm text-muted-foreground text-center">{backfillStatus}</p>
-                    {backfillDetails.grandTotal != null && backfillDetails.grandTotal > 0 && (
-                      <p className="text-xs text-muted-foreground text-center tabular-nums">
-                        {backfillDetails.grandTotal.toLocaleString()} candles downloaded so far
-                      </p>
-                    )}
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className={`p-3 rounded-lg border text-center transition-colors ${
+                        initStage === "backfill" ? "bg-blue-500/10 border-blue-500/30" :
+                        initProgress >= 50 ? "bg-green-500/5 border-green-500/20" :
+                        "bg-muted/20 border-border/40"
+                      }`}>
+                        <Database className={`w-5 h-5 mx-auto mb-1 ${
+                          initStage === "backfill" ? "text-blue-400" :
+                          initProgress >= 50 ? "text-green-400" : "text-muted-foreground"
+                        }`} />
+                        <p className="text-xs font-medium">Candles</p>
+                        <p className="text-sm font-bold tabular-nums mt-0.5">
+                          {candleTotal > 0 ? candleTotal.toLocaleString() : "—"}
+                        </p>
+                      </div>
+                      <div className={`p-3 rounded-lg border text-center transition-colors ${
+                        initStage === "backtest" ? "bg-purple-500/10 border-purple-500/30" :
+                        btCompleted > 0 && btCompleted >= btTotal ? "bg-green-500/5 border-green-500/20" :
+                        "bg-muted/20 border-border/40"
+                      }`}>
+                        <BarChart3 className={`w-5 h-5 mx-auto mb-1 ${
+                          initStage === "backtest" ? "text-purple-400" :
+                          btCompleted > 0 && btCompleted >= btTotal ? "text-green-400" : "text-muted-foreground"
+                        }`} />
+                        <p className="text-xs font-medium">Backtests</p>
+                        <p className="text-sm font-bold tabular-nums mt-0.5">
+                          {btTotal > 0 ? `${btCompleted} / ${btTotal}` : "—"}
+                        </p>
+                      </div>
+                      <div className={`p-3 rounded-lg border text-center transition-colors ${
+                        initStage === "optimise" ? "bg-emerald-500/10 border-emerald-500/30" :
+                        initStage === "complete" ? "bg-green-500/5 border-green-500/20" :
+                        "bg-muted/20 border-border/40"
+                      }`}>
+                        <Zap className={`w-5 h-5 mx-auto mb-1 ${
+                          initStage === "optimise" ? "text-emerald-400 animate-pulse" :
+                          initStage === "complete" ? "text-green-400" : "text-muted-foreground"
+                        }`} />
+                        <p className="text-xs font-medium">AI Optimise</p>
+                        <p className="text-sm font-bold tabular-nums mt-0.5">
+                          {initStage === "complete" ? "Done" : initStage === "optimise" ? "Running" : "Pending"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <p className="text-sm text-muted-foreground text-center">{initStatus}</p>
                   </div>
                 ) : (
                   <div className="text-center space-y-4">
                     <Database className="w-10 h-10 text-blue-400 mx-auto" />
-                    <h2 className="text-lg font-semibold">Data Backfill</h2>
+                    <h2 className="text-lg font-semibold">System Initialisation</h2>
                     <p className="text-muted-foreground text-sm max-w-md mx-auto">
-                      Fetch 24 months of historical candle data for all supported instruments from Deriv.
-                      This may take a few minutes.
+                      Download 24 months of trading history, run all strategies as backtests
+                      across every index, and AI-optimise your settings. This may take several minutes.
                     </p>
                     <div className="flex justify-center gap-3">
                       <Button variant="outline" onClick={goBack} className="px-6">
                         <ArrowLeft className="w-4 h-4 mr-2" /> Back
                       </Button>
-                      <Button onClick={runBackfill}>
-                        Start Backfill <ArrowRight className="w-4 h-4 ml-2" />
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {step === "analyse" && (
-              <div className="space-y-6">
-                {analyseProgress > 0 ? (
-                  <div className="space-y-3">
-                    <h2 className="text-lg font-semibold text-center">AI Analysis & Optimisation</h2>
-                    <Progress value={analyseProgress} className="h-2" />
-                    <p className="text-sm text-muted-foreground text-center">{analyseStatus}</p>
-                  </div>
-                ) : (
-                  <div className="text-center space-y-4">
-                    <BarChart3 className="w-10 h-10 text-green-400 mx-auto" />
-                    <h2 className="text-lg font-semibold">AI Analysis</h2>
-                    <p className="text-muted-foreground text-sm max-w-md mx-auto">
-                      Run backtests across all strategy/instrument combinations and let AI
-                      optimise your TP, SL, position sizing, and trailing stop parameters.
-                    </p>
-                    <div className="flex justify-center gap-3">
-                      <Button variant="outline" onClick={goBack} className="px-6">
-                        <ArrowLeft className="w-4 h-4 mr-2" /> Back
-                      </Button>
-                      <Button onClick={runAnalyse}>
-                        Start Analysis <ArrowRight className="w-4 h-4 ml-2" />
+                      <Button onClick={runInitialise}>
+                        Start Initialisation <ArrowRight className="w-4 h-4 ml-2" />
                       </Button>
                     </div>
                   </div>
@@ -528,17 +561,31 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
             {step === "complete" && (
               <div className="text-center space-y-6">
                 <div className="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center mx-auto">
-                  <CheckCircle2 className="w-8 h-8 text-green-400" />
+                  <CheckCircle2 className="w-8 h-8 text-green-500" />
                 </div>
-                <div className="space-y-2">
-                  <h2 className="text-xl font-semibold">Setup Complete</h2>
+                <div className="space-y-3">
+                  <h2 className="text-xl font-semibold text-foreground">You're All Set!</h2>
                   <p className="text-muted-foreground text-sm max-w-md mx-auto">
-                    Your platform is configured and ready. All strategies have been backtested
-                    and settings have been AI-optimised for each trading mode.
+                    Your platform has been configured with AI-optimised parameters based on
+                    24 months of backtested data.
                   </p>
+                  <div className="grid grid-cols-2 gap-3 max-w-sm mx-auto text-sm">
+                    <div className="p-3 rounded-lg bg-muted/20 border border-border/40">
+                      <p className="text-xs text-muted-foreground">Candles Loaded</p>
+                      <p className="font-bold tabular-nums">{candleTotal > 0 ? candleTotal.toLocaleString() : "—"}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-muted/20 border border-border/40">
+                      <p className="text-xs text-muted-foreground">Backtests Run</p>
+                      <p className="font-bold tabular-nums">{btCompleted > 0 ? btCompleted : "—"}</p>
+                    </div>
+                  </div>
                 </div>
+                <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                  All modes start inactive. Enable Paper, Demo, or Real trading from the Settings page
+                  when you're ready.
+                </p>
                 <Button size="lg" onClick={onComplete} className="px-8">
-                  Enter Platform <ArrowRight className="w-4 h-4 ml-2" />
+                  Go to Dashboard <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
               </div>
             )}

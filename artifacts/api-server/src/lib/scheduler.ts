@@ -333,33 +333,45 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
     } catch { /* skip failed */ }
   }
 
-  let globalTpStrong = 0, globalTpMed = 0, globalTpWeak = 0, globalSl = 0, globalHold = 0, globalEquity = 0;
-  let sc = 0;
-  for (const r of Object.values(agg)) {
-    const n = Math.max(r.count, 1);
-    globalHold += r.holdSum / n;
-    globalSl += r.slSum / n;
-    globalEquity += r.equitySum / n;
-    const avgTp = r.tpSum / n;
-    globalTpStrong += Math.min(avgTp * 1.15, 4.0);
-    globalTpMed += avgTp;
-    globalTpWeak += Math.max(avgTp * 0.8, 1.0);
-    sc++;
+  const comboResults: { strategy: string; symbol: string; pf: number; hold: number; score: number }[] = [];
+  for (const { strategy, symbol } of combinations) {
+    try {
+      const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced");
+      if (result.tradeCount >= 3) {
+        comboResults.push({
+          strategy, symbol,
+          pf: result.profitFactor,
+          hold: result.avgHoldingHours,
+          score: (result.sharpeRatio * 0.4) + (result.winRate * 0.25) + (result.profitFactor * 0.2) + (result.expectancy * 0.15),
+        });
+      }
+    } catch { /* skip */ }
   }
 
-  const d = Math.max(sc, 1);
+  const sortedCombos = [...comboResults].sort((a, b) => b.score - a.score);
+  const topCombos = sortedCombos.slice(0, Math.min(6, sortedCombos.length));
+  const bestPf = topCombos.length > 0 ? topCombos.reduce((s, c) => s + c.pf, 0) / topCombos.length : 1.5;
+  const bestHold = topCombos.length > 0 ? topCombos.reduce((s, c) => s + c.hold, 0) / topCombos.length : 72;
+
+  const optTpStrong = parseFloat(Math.min(Math.max(1.8 + bestPf * 0.5, 2.5), 4.0).toFixed(2));
+  const optTpMed = parseFloat(Math.min(Math.max(1.5 + bestPf * 0.35, 2.0), 3.5).toFixed(2));
+  const optTpWeak = parseFloat(Math.min(Math.max(1.2 + bestPf * 0.25, 1.5), 2.5).toFixed(2));
+  const optSl = parseFloat(Math.min(Math.max(0.8, 1.0 / bestPf), 1.5).toFixed(2));
+  const optHold = parseFloat(Math.max(48, Math.min(bestHold * 1.3, 168)).toFixed(1));
+  const optEquity = 22;
+
   const nowIso = new Date().toISOString();
   const currentMonthKey = `${new Date().getFullYear()}-${new Date().getMonth() + 1}`;
 
   const aiSettings: Record<string, string> = {
-    ai_equity_pct_per_trade: String(parseFloat((globalEquity / d).toFixed(2))),
-    ai_paper_equity_pct_per_trade: String(Math.max(parseFloat((globalEquity / d).toFixed(2)) * 0.6, 0.5).toFixed(2)),
-    ai_live_equity_pct_per_trade: String(parseFloat((globalEquity / d).toFixed(2))),
-    ai_tp_multiplier_strong: String(parseFloat((globalTpStrong / d).toFixed(2))),
-    ai_tp_multiplier_medium: String(parseFloat((globalTpMed / d).toFixed(2))),
-    ai_tp_multiplier_weak: String(parseFloat((globalTpWeak / d).toFixed(2))),
-    ai_sl_ratio: String(parseFloat((globalSl / d).toFixed(2))),
-    ai_time_exit_window_hours: String(parseFloat((globalHold / d).toFixed(1))),
+    ai_equity_pct_per_trade: String(optEquity),
+    ai_paper_equity_pct_per_trade: String(Math.min(optEquity * 0.7, 18).toFixed(2)),
+    ai_live_equity_pct_per_trade: String(optEquity),
+    ai_tp_multiplier_strong: String(optTpStrong),
+    ai_tp_multiplier_medium: String(optTpMed),
+    ai_tp_multiplier_weak: String(optTpWeak),
+    ai_sl_ratio: String(optSl),
+    ai_time_exit_window_hours: String(optHold),
     ai_settings_locked: "true",
     ai_optimised_at: nowIso,
     last_monthly_optimise_month: currentMonthKey,

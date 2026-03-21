@@ -451,6 +451,11 @@ interface SetupStatus {
 interface SetupProgress {
   phase: string;
   message?: string;
+  overallPct?: number;
+  candleTotal?: number;
+  estRemainingSec?: number;
+  btCompleted?: number;
+  btTotal?: number;
   symbol?: string;
   symbolIndex?: number;
   totalSymbols?: number;
@@ -464,7 +469,8 @@ interface SetupProgress {
 }
 
 interface PreflightResult {
-  deriv: { ok: boolean; error?: string };
+  derivDemo: { ok: boolean; error?: string };
+  derivReal: { ok: boolean; error?: string };
   openai: { ok: boolean; error?: string };
 }
 
@@ -472,7 +478,7 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
   const { toast } = useToast();
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [running, setRunning] = useState(false);
-  const [currentStep, setCurrentStep] = useState<"idle" | "preflight" | "backfill" | "analyse" | "done">("idle");
+  const [currentStep, setCurrentStep] = useState<"idle" | "preflight" | "backfill" | "analyse" | "optimise" | "done">("idle");
   const [progress, setProgress] = useState<SetupProgress | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [preflight, setPreflight] = useState<PreflightResult | null>(null);
@@ -512,6 +518,10 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
         if (data) {
           setProgress(data);
           if (data.phase === "error") throw new Error(data.message ?? "Unknown error");
+          if (data.phase?.startsWith("backfill")) setCurrentStep("backfill");
+          else if (data.phase?.startsWith("backtest")) setCurrentStep("analyse");
+          else if (data.phase === "optimising") setCurrentStep("optimise");
+          else if (data.phase === "complete") setCurrentStep("done");
         }
       }
     }
@@ -529,7 +539,7 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
       setPreflight(data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Preflight request failed.";
-      setPreflight({ deriv: { ok: false, error: msg }, openai: { ok: false, error: msg } });
+      setPreflight({ derivDemo: { ok: false, error: msg }, derivReal: { ok: false, error: msg }, openai: { ok: false, error: msg } });
     } finally {
       setPreflightRunning(false);
     }
@@ -551,22 +561,16 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
       setPreflight(preflightData);
       setPreflightRunning(false);
 
-      if (!preflightData.deriv.ok || !preflightData.openai.ok) {
-        const failedChecks = [];
-        if (!preflightData.deriv.ok) failedChecks.push("Deriv API");
-        if (!preflightData.openai.ok) failedChecks.push("OpenAI API");
-        throw new Error(`Connection check failed for: ${failedChecks.join(", ")}. Fix your API keys in Settings and retry.`);
+      const anyDerivOk = preflightData.derivDemo.ok || preflightData.derivReal.ok;
+      if (!anyDerivOk) {
+        throw new Error("No Deriv API connection succeeded. Fix your API keys in Settings and retry.");
       }
 
       await new Promise(r => setTimeout(r, 1500));
 
       setCurrentStep("backfill");
-      setProgress({ phase: "start", message: "Connecting to Deriv API..." });
-      await streamPhase(`${base}api/setup/backfill`);
-
-      setCurrentStep("analyse");
-      setProgress({ phase: "start", message: "Starting strategy analysis..." });
-      await streamPhase(`${base}api/setup/initial-analyse`);
+      setProgress({ phase: "backfill_start", message: "Starting initialisation..." });
+      await streamPhase(`${base}api/setup/initialise`);
 
       setCurrentStep("done");
       setProgress(null);
@@ -591,15 +595,7 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
     { key: "done", icon: Sparkles, label: "AI optimises your settings" },
   ] as const;
 
-  const backfillPct = progress?.phase === "symbol_progress" || progress?.phase === "symbol_done"
-    ? Math.round(((progress.symbolIndex ?? 0) / (progress.totalSymbols ?? 13)) * 100)
-    : progress?.phase === "backfill_complete" ? 100 : 0;
-
-  const analysePct = progress?.completed && progress.total
-    ? Math.round((progress.completed / progress.total) * 100)
-    : 0;
-
-  const progressPct = currentStep === "backfill" ? backfillPct : currentStep === "analyse" ? analysePct : currentStep === "done" ? 100 : 0;
+  const progressPct = progress?.overallPct ?? (currentStep === "done" ? 100 : 0);
 
   const isRunningPost = running && currentStep !== "preflight";
   const isPreflightPhase = running && currentStep === "preflight";
@@ -655,9 +651,15 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
                     <div className="flex flex-col gap-2 p-3 rounded-lg border border-border/50 bg-background/50">
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Connection Check Results</p>
                       <div className="flex items-center gap-2 text-sm">
-                        {preflight.deriv.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
-                        <span className={preflight.deriv.ok ? "text-emerald-500 font-medium" : "text-destructive font-medium"}>
-                          Deriv API: {preflight.deriv.ok ? "Connected" : preflight.deriv.error}
+                        {preflight.derivDemo.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
+                        <span className={preflight.derivDemo.ok ? "text-emerald-500 font-medium" : "text-destructive font-medium"}>
+                          Deriv Demo: {preflight.derivDemo.ok ? "Connected" : preflight.derivDemo.error}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm">
+                        {preflight.derivReal.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
+                        <span className={preflight.derivReal.ok ? "text-emerald-500 font-medium" : "text-destructive font-medium"}>
+                          Deriv Real: {preflight.derivReal.ok ? "Connected" : preflight.derivReal.error}
                         </span>
                       </div>
                       <div className="flex items-center gap-2 text-sm">
@@ -709,12 +711,16 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
               {preflight && (
                 <div className="flex flex-col gap-1.5">
                   <div className="flex items-center gap-2 text-sm">
-                    {preflight.deriv.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
-                    <span className={preflight.deriv.ok ? "text-emerald-500" : "text-destructive"}>Deriv API: {preflight.deriv.ok ? "Connected" : preflight.deriv.error}</span>
+                    {preflight.derivDemo.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
+                    <span className={preflight.derivDemo.ok ? "text-emerald-500" : "text-destructive"}>Deriv Demo: {preflight.derivDemo.ok ? "Connected" : preflight.derivDemo.error}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm">
+                    {preflight.derivReal.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
+                    <span className={preflight.derivReal.ok ? "text-emerald-500" : "text-destructive"}>Deriv Real: {preflight.derivReal.ok ? "Connected" : preflight.derivReal.error}</span>
                   </div>
                   <div className="flex items-center gap-2 text-sm">
                     {preflight.openai.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
-                    <span className={preflight.openai.ok ? "text-emerald-500" : "text-destructive"}>OpenAI API: {preflight.openai.ok ? "Connected" : preflight.openai.error}</span>
+                    <span className={preflight.openai.ok ? "text-emerald-500" : "text-destructive"}>OpenAI: {preflight.openai.ok ? "Connected" : preflight.openai.error}</span>
                   </div>
                 </div>
               )}
@@ -725,8 +731,10 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
             <div className="space-y-4">
               <div className="flex items-center gap-3">
                 {STEP_LABELS.map(({ key, icon: Icon, label }, i) => {
-                  const isDone = currentStep === "done" || (key === "backfill" && currentStep === "analyse");
-                  const isActive = currentStep === key;
+                  const isDone = currentStep === "done" ||
+                    (key === "backfill" && (currentStep === "analyse" || currentStep === "optimise")) ||
+                    (key === "analyse" && currentStep === "optimise");
+                  const isActive = currentStep === key || (key === "done" && currentStep === "optimise");
                   return (
                     <React.Fragment key={key}>
                       <div className={cn(
@@ -749,8 +757,8 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
                 </div>
                 <p className="text-xs text-muted-foreground min-h-[1.25rem]">
                   {progress?.message ?? "Working..."}
-                  {progress?.estimatedSecondsRemaining && progress.estimatedSecondsRemaining > 5
-                    ? ` · ~${Math.ceil(progress.estimatedSecondsRemaining / 60)} min remaining`
+                  {(progress?.estRemainingSec ?? progress?.estimatedSecondsRemaining ?? 0) > 5
+                    ? ` · ~${Math.ceil((progress?.estRemainingSec ?? progress?.estimatedSecondsRemaining ?? 0) / 60)} min remaining`
                     : ""}
                 </p>
               </div>

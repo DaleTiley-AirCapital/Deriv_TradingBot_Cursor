@@ -138,38 +138,30 @@ router.get("/setup/status", async (_req, res): Promise<void> => {
   }
 });
 
-router.post("/setup/backfill", async (req, res): Promise<void> => {
+router.post("/setup/initialise", async (_req, res): Promise<void> => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
 
   const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const globalStart = Date.now();
 
   try {
     const client = await getDerivClientWithDbToken();
     const targetStartEpoch = Math.floor(Date.now() / 1000) - MONTHS_24_SECONDS;
     const expectedCandlesPerSymbol = Math.ceil(MONTHS_24_SECONDS / GRANULARITY_1H);
-    let grandTotal = 0;
-    const startTime = Date.now();
+    let candleTotal = 0;
 
     send({
-      phase: "start",
-      message: `Starting 24-month candle download for ${SUPPORTED_SYMBOLS.length} indices (~${expectedCandlesPerSymbol.toLocaleString()} candles each)...`,
+      phase: "backfill_start",
+      stage: "backfill",
+      message: `Downloading 24-month price history for ${SUPPORTED_SYMBOLS.length} indices...`,
       totalSymbols: SUPPORTED_SYMBOLS.length,
-      expectedCandlesPerSymbol,
     });
 
     for (let si = 0; si < SUPPORTED_SYMBOLS.length; si++) {
       const symbol = SUPPORTED_SYMBOLS[si];
-      send({
-        phase: "symbol_start",
-        symbol,
-        symbolIndex: si,
-        totalSymbols: SUPPORTED_SYMBOLS.length,
-        message: `[${si + 1}/${SUPPORTED_SYMBOLS.length}] Downloading ${symbol}...`,
-      });
-
       let endEpoch = Math.floor(Date.now() / 1000);
       let symbolInserted = 0;
       let batchNum = 0;
@@ -178,12 +170,10 @@ router.post("/setup/backfill", async (req, res): Promise<void> => {
       while (batchNum < MAX_BATCHES) {
         batchNum++;
         const candles = await client.getCandleHistoryWithEnd(symbol, GRANULARITY_1H, MAX_BATCH, endEpoch);
-
         if (!candles || candles.length === 0) break;
 
         const sorted = [...candles].sort((a, b) => a.epoch - b.epoch);
         const earliestEpoch = sorted[0].epoch;
-
         const toInsert = sorted.filter(c => c.epoch >= targetStartEpoch);
         const reachedTarget = earliestEpoch <= targetStartEpoch;
 
@@ -196,51 +186,34 @@ router.post("/setup/backfill", async (req, res): Promise<void> => {
               inArray(candlesTable.openTs, toInsert.map(c => c.epoch))
             ));
           const existingSet = new Set(existingTs.map(r => r.openTs));
-
-          const newRows = toInsert
-            .filter(c => !existingSet.has(c.epoch))
-            .map(c => ({
-              symbol,
-              timeframe: "1h",
-              openTs: c.epoch,
-              closeTs: c.epoch + GRANULARITY_1H,
-              open: Number(c.open),
-              high: Number(c.high),
-              low: Number(c.low),
-              close: Number(c.close),
-              tickCount: 0,
-            }));
-
+          const newRows = toInsert.filter(c => !existingSet.has(c.epoch)).map(c => ({
+            symbol, timeframe: "1h", openTs: c.epoch, closeTs: c.epoch + GRANULARITY_1H,
+            open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), tickCount: 0,
+          }));
           if (newRows.length > 0) {
             await db.insert(candlesTable).values(newRows);
             symbolInserted += newRows.length;
-            grandTotal += newRows.length;
+            candleTotal += newRows.length;
           }
         }
 
-        const elapsedMs = Date.now() - startTime;
-        const symbolFraction = si / SUPPORTED_SYMBOLS.length;
-        const withinSymbolFraction = reachedTarget ? 1 : Math.min((batchNum * MAX_BATCH) / expectedCandlesPerSymbol, 0.95);
-        const overallFraction = symbolFraction + withinSymbolFraction / SUPPORTED_SYMBOLS.length;
-        const estTotalMs = overallFraction > 0.01 ? elapsedMs / overallFraction : 0;
-        const estRemainingMs = Math.max(0, estTotalMs - elapsedMs);
-        const estRemainingSec = Math.ceil(estRemainingMs / 1000);
+        const elapsedMs = Date.now() - globalStart;
+        const symbolFrac = si / SUPPORTED_SYMBOLS.length;
+        const withinFrac = reachedTarget ? 1 : Math.min((batchNum * MAX_BATCH) / expectedCandlesPerSymbol, 0.95);
+        const backfillFrac = symbolFrac + withinFrac / SUPPORTED_SYMBOLS.length;
+        const overallPct = Math.round(backfillFrac * 50);
+        const estTotalMs = backfillFrac > 0.01 ? elapsedMs / backfillFrac : 0;
+        const estRemainingSec = Math.ceil(Math.max(0, (estTotalMs - elapsedMs) / 1000));
 
         send({
-          phase: "symbol_progress",
-          symbol,
-          symbolIndex: si,
-          totalSymbols: SUPPORTED_SYMBOLS.length,
-          candlesForSymbol: symbolInserted,
-          grandTotal,
-          batchNum,
-          overallPct: Math.round(overallFraction * 100),
-          estRemainingSec,
-          message: `[${si + 1}/${SUPPORTED_SYMBOLS.length}] ${symbol}: ${symbolInserted.toLocaleString()} candles (batch ${batchNum})`,
+          phase: "backfill_progress", stage: "backfill", symbol,
+          symbolIndex: si, totalSymbols: SUPPORTED_SYMBOLS.length,
+          candlesForSymbol: symbolInserted, candleTotal,
+          overallPct, estRemainingSec,
+          message: `Downloading ${symbol} (${si + 1}/${SUPPORTED_SYMBOLS.length}) — ${candleTotal.toLocaleString()} candles`,
         });
 
         if (reachedTarget) break;
-
         const newEnd = earliestEpoch - 1;
         if (newEnd >= endEpoch) break;
         endEpoch = newEnd;
@@ -248,42 +221,20 @@ router.post("/setup/backfill", async (req, res): Promise<void> => {
       }
 
       send({
-        phase: "symbol_done",
-        symbol,
-        symbolIndex: si,
-        totalSymbols: SUPPORTED_SYMBOLS.length,
-        candlesForSymbol: symbolInserted,
-        grandTotal,
-        overallPct: Math.round(((si + 1) / SUPPORTED_SYMBOLS.length) * 100),
-        message: `[${si + 1}/${SUPPORTED_SYMBOLS.length}] ${symbol}: done — ${symbolInserted.toLocaleString()} candles`,
+        phase: "backfill_symbol_done", stage: "backfill", symbol,
+        symbolIndex: si, totalSymbols: SUPPORTED_SYMBOLS.length,
+        candlesForSymbol: symbolInserted, candleTotal,
+        overallPct: Math.round(((si + 1) / SUPPORTED_SYMBOLS.length) * 50),
+        message: `${symbol} done — ${symbolInserted.toLocaleString()} candles`,
       });
     }
 
-    const totalSec = Math.round((Date.now() - startTime) / 1000);
     send({
-      phase: "backfill_complete",
-      grandTotal,
-      totalSec,
-      message: `Download complete — ${grandTotal.toLocaleString()} candles across ${SUPPORTED_SYMBOLS.length} indices in ${totalSec}s`,
+      phase: "backfill_complete", stage: "backfill", candleTotal,
+      overallPct: 50,
+      message: `Download complete — ${candleTotal.toLocaleString()} candles. Starting backtests...`,
     });
 
-    res.write("data: [DONE]\n\n");
-    res.end();
-  } catch (err) {
-    send({ phase: "error", message: err instanceof Error ? err.message : "Backfill failed" });
-    res.end();
-  }
-});
-
-router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-
-  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-
-  try {
     const states = await db.select().from(platformStateTable);
     const stateMap: Record<string, string> = {};
     for (const s of states) stateMap[s.key] = s.value;
@@ -300,11 +251,11 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
       }
     }
 
-    const total = combinations.length;
+    const btTotal = combinations.length;
     send({
-      phase: "start",
-      total,
-      message: `Running ${STRATEGIES.length} strategies across ${enabledSymbols.length} indices — ${total} backtests total`,
+      phase: "backtest_start", stage: "backtest",
+      btTotal, overallPct: 50,
+      message: `Running ${STRATEGIES.length} strategies × ${enabledSymbols.length} indices — ${btTotal} backtests`,
     });
 
     const strategyAgg: Record<string, {
@@ -316,39 +267,27 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
       strategyAgg[strat] = { sharpeSum: 0, sharpeCount: 0, tpSum: 0, slSum: 0, holdSum: 0, equitySum: 0, drawdownSum: 0, winRateSum: 0, count: 0 };
     }
 
-    const comboResults: { strategy: string; symbol: string; sharpe: number; winRate: number; score: number }[] = [];
-
-    let completed = 0;
-    const startTime = Date.now();
+    const comboResults: { strategy: string; symbol: string; sharpe: number; winRate: number; profitFactor: number; avgHold: number; score: number }[] = [];
+    let btCompleted = 0;
+    const btStart = Date.now();
 
     for (const { strategy, symbol } of combinations) {
       try {
         const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced");
 
         const [row] = await db.insert(backtestRunsTable).values({
-          strategyName: strategy,
-          symbol,
-          initialCapital,
-          totalReturn: result.totalReturn,
-          netProfit: result.netProfit,
-          winRate: result.winRate,
-          profitFactor: result.profitFactor,
-          maxDrawdown: result.maxDrawdown,
-          tradeCount: result.tradeCount,
-          avgHoldingHours: result.avgHoldingHours,
-          expectancy: result.expectancy,
+          strategyName: strategy, symbol, initialCapital,
+          totalReturn: result.totalReturn, netProfit: result.netProfit,
+          winRate: result.winRate, profitFactor: result.profitFactor,
+          maxDrawdown: result.maxDrawdown, tradeCount: result.tradeCount,
+          avgHoldingHours: result.avgHoldingHours, expectancy: result.expectancy,
           sharpeRatio: result.sharpeRatio,
           configJson: { allocationMode: "balanced", symbol, strategyName: strategy, source: "initial-setup" },
           metricsJson: {
-            equityCurve: result.equityCurve,
-            grossProfit: result.grossProfit,
-            grossLoss: result.grossLoss,
-            avgWin: result.avgWin,
-            avgLoss: result.avgLoss,
-            maxDrawdownDuration: result.maxDrawdownDuration,
-            monthlyReturns: result.monthlyReturns,
-            returnBySymbol: result.returnBySymbol,
-            returnByRegime: result.returnByRegime,
+            equityCurve: result.equityCurve, grossProfit: result.grossProfit,
+            grossLoss: result.grossLoss, avgWin: result.avgWin, avgLoss: result.avgLoss,
+            maxDrawdownDuration: result.maxDrawdownDuration, monthlyReturns: result.monthlyReturns,
+            returnBySymbol: result.returnBySymbol, returnByRegime: result.returnByRegime,
           },
           status: "completed",
         }).returning();
@@ -356,118 +295,95 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
         if (row && result.trades.length > 0) {
           await db.insert(backtestTradesTable).values(
             result.trades.map(t => ({
-              backtestRunId: row.id,
-              entryTs: t.entryTs,
-              exitTs: t.exitTs,
-              direction: t.direction,
-              entryPrice: t.entryPrice,
-              exitPrice: t.exitPrice,
-              pnl: t.pnl,
-              exitReason: t.exitReason,
+              backtestRunId: row.id, entryTs: t.entryTs, exitTs: t.exitTs,
+              direction: t.direction, entryPrice: t.entryPrice, exitPrice: t.exitPrice,
+              pnl: t.pnl, exitReason: t.exitReason,
             }))
           );
         }
 
         const r = strategyAgg[strategy];
         r.count++;
-        if (result.sharpeRatio > 0 && result.tradeCount > 0) {
-          r.sharpeSum += result.sharpeRatio;
-          r.sharpeCount++;
-        }
+        if (result.sharpeRatio > 0 && result.tradeCount > 0) { r.sharpeSum += result.sharpeRatio; r.sharpeCount++; }
         r.holdSum += result.avgHoldingHours;
         r.drawdownSum += Math.abs(result.maxDrawdown);
         r.winRateSum += result.winRate;
         if (result.profitFactor > 0) {
-          const optTp = 1.5 + result.profitFactor * 0.4;
-          r.tpSum += Math.min(Math.max(optTp, 1.2), 4.0);
+          r.tpSum += Math.min(Math.max(1.5 + result.profitFactor * 0.4, 1.2), 4.0);
           r.slSum += Math.min(Math.max(1.0 / result.profitFactor, 0.5), 2.0);
-        } else {
-          r.tpSum += 2.0;
-          r.slSum += 1.0;
-        }
+        } else { r.tpSum += 2.0; r.slSum += 1.0; }
         r.equitySum += Math.min(Math.max(result.winRate * 4, 0.5), 5.0);
 
         if (result.tradeCount >= 3) {
-          const comboScore = (result.sharpeRatio * 0.5) + (result.winRate * 0.3) + (result.profitFactor * 0.2);
-          comboResults.push({ strategy, symbol, sharpe: result.sharpeRatio, winRate: result.winRate, score: comboScore });
+          const comboScore = (result.sharpeRatio * 0.4) + (result.winRate * 0.25) + (result.profitFactor * 0.2) + (result.expectancy * 0.15);
+          comboResults.push({ strategy, symbol, sharpe: result.sharpeRatio, winRate: result.winRate, profitFactor: result.profitFactor, avgHold: result.avgHoldingHours, score: comboScore });
         }
-      } catch {
-        // skip failed backtest
-      }
+      } catch { /* skip */ }
 
-      completed++;
-      const elapsed = (Date.now() - startTime) / 1000;
-      const rate = completed / elapsed;
-      const remaining = rate > 0 ? Math.ceil((total - completed) / rate) : 0;
+      btCompleted++;
+      const btElapsed = (Date.now() - btStart) / 1000;
+      const btRate = btCompleted / btElapsed;
+      const btRemaining = btRate > 0 ? Math.ceil((btTotal - btCompleted) / btRate) : 0;
+      const overallPct = 50 + Math.round((btCompleted / btTotal) * 45);
 
       send({
-        phase: "progress",
-        completed,
-        total,
-        strategy,
-        symbol,
-        message: `Running ${strategy.replace(/-/g, " ")} on ${symbol} (${completed} of ${total})`,
-        estimatedSecondsRemaining: remaining,
+        phase: "backtest_progress", stage: "backtest",
+        btCompleted, btTotal, candleTotal,
+        strategy, symbol, overallPct,
+        estRemainingSec: btRemaining,
+        message: `Backtesting ${strategy.replace(/-/g, " ")} on ${symbol} (${btCompleted}/${btTotal})`,
       });
     }
 
-    let globalTpStrong = 0, globalTpMed = 0, globalTpWeak = 0, globalSl = 0, globalHold = 0, globalEquity = 0;
-    let stratCount = 0;
-    for (const [, r] of Object.entries(strategyAgg)) {
-      const n = Math.max(r.count, 1);
-      globalHold += r.holdSum / n;
-      globalSl += r.slSum / n;
-      globalEquity += r.equitySum / n;
-      const avgTp = r.tpSum / n;
-      globalTpStrong += Math.min(avgTp * 1.15, 4.0);
-      globalTpMed += avgTp;
-      globalTpWeak += Math.max(avgTp * 0.8, 1.0);
-      stratCount++;
-    }
-
-    const sc = Math.max(stratCount, 1);
-    const optEquity = parseFloat((globalEquity / sc).toFixed(2));
-    const optTpStrong = parseFloat((globalTpStrong / sc).toFixed(2));
-    const optTpMed = parseFloat((globalTpMed / sc).toFixed(2));
-    const optTpWeak = parseFloat((globalTpWeak / sc).toFixed(2));
-    const optSl = parseFloat((globalSl / sc).toFixed(2));
-    const optHold = parseFloat((globalHold / sc).toFixed(1));
+    send({
+      phase: "optimising", stage: "optimise", overallPct: 95,
+      message: "Optimising settings from backtest results...",
+    });
 
     const sortedCombos = [...comboResults].sort((a, b) => b.score - a.score);
-    const top4 = sortedCombos.slice(0, 4);
-    const realStrategies = [...new Set(top4.map(c => c.strategy))];
-    const realSymbols = [...new Set(top4.map(c => c.symbol))];
+    const topCombos = sortedCombos.slice(0, Math.min(6, sortedCombos.length));
+    const realStrategies = [...new Set(topCombos.map(c => c.strategy))];
+    const realSymbols = [...new Set(topCombos.map(c => c.symbol))];
     const allStrategies = STRATEGIES.join(",");
     const allSymbols = SUPPORTED_SYMBOLS.join(",");
+
+    const bestAvgHold = topCombos.length > 0
+      ? topCombos.reduce((s, c) => s + c.avgHold, 0) / topCombos.length : 72;
+    const bestPf = topCombos.length > 0
+      ? topCombos.reduce((s, c) => s + c.profitFactor, 0) / topCombos.length : 1.5;
+
+    const optTpStrong = parseFloat(Math.min(Math.max(1.8 + bestPf * 0.5, 2.5), 4.0).toFixed(2));
+    const optTpMed = parseFloat(Math.min(Math.max(1.5 + bestPf * 0.35, 2.0), 3.5).toFixed(2));
+    const optTpWeak = parseFloat(Math.min(Math.max(1.2 + bestPf * 0.25, 1.5), 2.5).toFixed(2));
+    const optSl = parseFloat(Math.min(Math.max(0.8, 1.0 / bestPf), 1.5).toFixed(2));
+    const optHold = parseFloat(Math.max(48, Math.min(bestAvgHold * 1.3, 168)).toFixed(1));
+    const optEquity = parseFloat(Math.min(Math.max(15, 22), 30).toFixed(2));
 
     function computeModeSettings(combos: typeof comboResults, prefix: string) {
       const settings: Record<string, string> = {};
       if (combos.length === 0) return settings;
-
       let tpS = 0, tpM = 0, tpW = 0, sl = 0, eq = 0, hold = 0, n = 0;
       for (const c of combos) {
-        const key = `${c.strategy}`;
-        const agg = strategyAgg[key];
+        const agg = strategyAgg[c.strategy];
         if (!agg || agg.count === 0) continue;
         const cnt = Math.max(agg.count, 1);
         const avgTp = agg.tpSum / cnt;
-        tpS += Math.min(avgTp * 1.15, 4.0);
+        tpS += Math.min(avgTp * 1.2, 4.0);
         tpM += avgTp;
-        tpW += Math.max(avgTp * 0.8, 1.0);
+        tpW += Math.max(avgTp * 0.85, 1.5);
         sl += agg.slSum / cnt;
-        eq += agg.equitySum / cnt;
-        hold += agg.holdSum / cnt;
+        hold += Math.max(agg.holdSum / cnt, 48);
         n++;
       }
       if (n === 0) return settings;
-
       const trailPct = prefix === "real" ? 20 : 25;
+      const modeEquity = prefix === "real" ? optEquity : Math.min(optEquity * 0.7, 18);
       settings[`${prefix}_tp_multiplier_strong`] = parseFloat((tpS / n).toFixed(2)).toString();
       settings[`${prefix}_tp_multiplier_medium`] = parseFloat((tpM / n).toFixed(2)).toString();
       settings[`${prefix}_tp_multiplier_weak`] = parseFloat((tpW / n).toFixed(2)).toString();
       settings[`${prefix}_sl_ratio`] = parseFloat((sl / n).toFixed(2)).toString();
       settings[`${prefix}_trailing_stop_pct`] = String(trailPct);
-      settings[`${prefix}_equity_pct_per_trade`] = parseFloat((eq / n).toFixed(2)).toString();
+      settings[`${prefix}_equity_pct_per_trade`] = modeEquity.toFixed(2);
       settings[`${prefix}_time_exit_window_hours`] = parseFloat((hold / n).toFixed(1)).toString();
       return settings;
     }
@@ -479,7 +395,7 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
 
     const aiSettings: Record<string, string> = {
       ai_equity_pct_per_trade: String(optEquity),
-      ai_paper_equity_pct_per_trade: String(Math.max(optEquity * 0.6, 0.5).toFixed(2)),
+      ai_paper_equity_pct_per_trade: String(Math.min(optEquity * 0.7, 18).toFixed(2)),
       ai_live_equity_pct_per_trade: String(optEquity),
       ai_tp_multiplier_strong: String(optTpStrong),
       ai_tp_multiplier_medium: String(optTpMed),
@@ -497,6 +413,9 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
       demo_mode_active: "false",
       real_mode_active: "false",
       kill_switch: "false",
+      min_composite_score: "85",
+      min_ev_threshold: "0.003",
+      min_rr_ratio: "1.5",
       paper_enabled_strategies: allStrategies,
       paper_enabled_symbols: allSymbols,
       demo_enabled_strategies: allStrategies,
@@ -510,38 +429,21 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
     };
 
     for (const [key, value] of Object.entries(aiSettings)) {
-      await db
-        .insert(platformStateTable)
-        .values({ key, value })
-        .onConflictDoUpdate({
-          target: platformStateTable.key,
-          set: { value, updatedAt: new Date() },
-        });
+      await db.insert(platformStateTable).values({ key, value })
+        .onConflictDoUpdate({ target: platformStateTable.key, set: { value, updatedAt: new Date() } });
     }
 
-    const paramCount = AI_LOCKABLE_KEYS.length;
+    const totalSec = Math.round((Date.now() - globalStart) / 1000);
     send({
-      phase: "complete",
-      completed: total,
-      total,
-      backtestsCreated: completed,
-      message: `Analysis complete — ${completed} backtests saved, ${paramCount} settings optimised`,
-      settings: {
-        equity_pct_per_trade: optEquity,
-        paper_equity_pct_per_trade: parseFloat((optEquity * 0.6).toFixed(2)),
-        live_equity_pct_per_trade: optEquity,
-        tp_multiplier_strong: optTpStrong,
-        tp_multiplier_medium: optTpMed,
-        tp_multiplier_weak: optTpWeak,
-        sl_ratio: optSl,
-        time_exit_window_hours: optHold,
-      },
+      phase: "complete", stage: "complete", overallPct: 100,
+      candleTotal, btCompleted, btTotal,
+      message: `Setup complete — ${candleTotal.toLocaleString()} candles, ${btCompleted} backtests, settings optimised (${totalSec}s)`,
     });
 
     res.write("data: [DONE]\n\n");
     res.end();
   } catch (err) {
-    send({ phase: "error", message: err instanceof Error ? err.message : "Analysis failed" });
+    send({ phase: "error", message: err instanceof Error ? err.message : "Initialisation failed" });
     res.end();
   }
 });
