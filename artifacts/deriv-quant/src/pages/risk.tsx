@@ -1,9 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import { useGetRiskStatus } from "@workspace/api-client-react";
 import type { ModeRiskSnapshot } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, Badge } from "@/components/ui-elements";
 import { formatPercent, formatCurrency, cn } from "@/lib/utils";
-import { ShieldAlert, Lock, Info, ExternalLink } from "lucide-react";
+import { ShieldAlert, Lock, Info, ExternalLink, Filter } from "lucide-react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
 
@@ -30,13 +30,33 @@ function RiskGauge({ value, max, breached, label }: { value: number; max: number
 
 export default function Risk() {
   const { data: risk } = useGetRiskStatus({ query: { refetchInterval: 3000 } });
+  const [modeFilter, setModeFilter] = useState<string>("all");
+
+  const filteredModes = (["paper", "demo", "real"] as const).filter(m => modeFilter === "all" || modeFilter === m);
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="page-title">Risk Monitor</h1>
           <p className="page-subtitle">Live read-out of exposure limits and circuit-breaker status</p>
+        </div>
+        <div className="flex items-center gap-1">
+          <Filter className="w-3.5 h-3.5 text-muted-foreground" />
+          {["all", "paper", "demo", "real"].map(m => (
+            <button
+              key={m}
+              onClick={() => setModeFilter(m)}
+              className={cn(
+                "px-2.5 py-1 rounded-md text-xs font-medium uppercase tracking-wider transition-all border",
+                modeFilter === m
+                  ? "bg-primary/10 border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {m}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -47,46 +67,48 @@ export default function Risk() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="lg:col-span-2 space-y-5">
-          <Card>
-            <CardHeader>
-              <CardTitle>
-                <Lock className="w-4 h-4 text-primary" />
-                Aggregate Exposure Limits
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-8">
-              <RiskGauge
-                label="Daily Loss"
-                value={risk?.dailyLossPct ?? 0}
-                max={risk?.maxDailyLossPct ?? 5}
-                breached={risk?.dailyLossBreached ?? false}
-              />
-              <RiskGauge
-                label="Weekly Loss"
-                value={risk?.weeklyLossPct ?? 0}
-                max={risk?.maxWeeklyLossPct ?? 12}
-                breached={risk?.weeklyLossBreached ?? false}
-              />
-              <RiskGauge
-                label="Max Drawdown"
-                value={risk?.drawdownPct ?? 0}
-                max={risk?.maxDrawdownPct ?? 20}
-                breached={risk?.maxDrawdownBreached ?? false}
-              />
-            </CardContent>
-          </Card>
-
-          {risk?.perMode && Object.keys(risk.perMode).length > 0 && (
+          {modeFilter === "all" && (
             <Card>
               <CardHeader>
                 <CardTitle>
                   <Lock className="w-4 h-4 text-primary" />
-                  Per-Mode Risk
+                  Aggregate Exposure Limits
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <RiskGauge
+                  label="Daily Loss"
+                  value={risk?.dailyLossPct ?? 0}
+                  max={risk?.maxDailyLossPct ?? 5}
+                  breached={risk?.dailyLossBreached ?? false}
+                />
+                <RiskGauge
+                  label="Weekly Loss"
+                  value={risk?.weeklyLossPct ?? 0}
+                  max={risk?.maxWeeklyLossPct ?? 12}
+                  breached={risk?.weeklyLossBreached ?? false}
+                />
+                <RiskGauge
+                  label="Max Drawdown"
+                  value={risk?.drawdownPct ?? 0}
+                  max={risk?.maxDrawdownPct ?? 20}
+                  breached={risk?.maxDrawdownBreached ?? false}
+                />
+              </CardContent>
+            </Card>
+          )}
+
+          {risk?.perMode && filteredModes.some(m => risk.perMode?.[m]) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  <Lock className="w-4 h-4 text-primary" />
+                  {modeFilter === "all" ? "Per-Mode Risk" : `${modeFilter.charAt(0).toUpperCase() + modeFilter.slice(1)} Mode Risk`}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-6">
-                  {(["paper", "demo", "real"] as const).map(mode => {
+                  {filteredModes.map(mode => {
                     const snap = risk.perMode?.[mode] as ModeRiskSnapshot | undefined;
                     if (!snap) return null;
                     const colorMap = { paper: "warning", demo: "primary", real: "destructive" } as const;
@@ -123,7 +145,7 @@ export default function Risk() {
                           <span>Open Trades: <span className="font-mono text-foreground">{snap.openTradeCount ?? 0}</span></span>
                           <span>P&L: <span className={cn("font-mono", (snap.realisedPnl ?? 0) >= 0 ? "text-success" : "text-destructive")}>{formatCurrency(snap.realisedPnl)}</span></span>
                         </div>
-                        {mode !== "real" && <div className="border-t border-border/30" />}
+                        {mode !== filteredModes[filteredModes.length - 1] && <div className="border-t border-border/30" />}
                       </div>
                     );
                   })}

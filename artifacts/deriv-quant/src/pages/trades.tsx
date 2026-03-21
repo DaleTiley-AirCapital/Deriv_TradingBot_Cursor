@@ -3,19 +3,16 @@ import {
   useGetOpenTrades, 
   useGetTradeHistory, 
   useGetLivePositions,
-  useToggleTradingMode,
+  useGetDataStatus,
   useStopTrading,
   getGetOpenTradesQueryKey,
   getGetTradeHistoryQueryKey,
   getGetLivePositionsQueryKey,
-  useGetDataStatus,
-  useGetOverview,
 } from "@workspace/api-client-react";
-import type { ToggleTradingModeRequestMode } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, Badge, Button } from "@/components/ui-elements";
 import { formatCurrency, formatNumber, cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
-import { Play, Square, ArrowUpRight, ArrowDownRight, Clock, Target, ShieldAlert, TrendingUp, Filter } from "lucide-react";
+import { ArrowUpRight, ArrowDownRight, Clock, Target, ShieldAlert, TrendingUp, Filter, Square } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 function formatHours(hours: number): string {
@@ -38,25 +35,21 @@ export default function Trades() {
   const [modeFilter, setModeFilter] = useState<string>("all");
   
   const { data: status } = useGetDataStatus({ query: { refetchInterval: 3000 } });
-  const { data: overview } = useGetOverview({ query: { refetchInterval: 3000 } });
   const { data: positions } = useGetLivePositions({ query: { refetchInterval: 2000 } });
   const { data: openTrades, isLoading: openLoading } = useGetOpenTrades({ query: { refetchInterval: 3000 } });
   const { data: historyTrades, isLoading: historyLoading } = useGetTradeHistory({ query: { refetchInterval: 10000 } });
 
-  const invalidator = {
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: getGetOpenTradesQueryKey() });
-      queryClient.invalidateQueries({ queryKey: getGetTradeHistoryQueryKey() });
-      queryClient.invalidateQueries({ queryKey: getGetLivePositionsQueryKey() });
+  const { mutate: stopTrades, isPending: stopping } = useStopTrading({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: getGetOpenTradesQueryKey() });
+        queryClient.invalidateQueries({ queryKey: getGetTradeHistoryQueryKey() });
+        queryClient.invalidateQueries({ queryKey: getGetLivePositionsQueryKey() });
+      }
     }
-  };
+  });
 
-  const { mutate: toggleMode, isPending: toggling } = useToggleTradingMode({ mutation: invalidator });
-  const { mutate: stopTrades, isPending: stopping } = useStopTrading({ mutation: invalidator });
-
-  const paperActive = overview?.paperModeActive ?? false;
-  const demoActive = overview?.demoModeActive ?? false;
-  const realActive = overview?.realModeActive ?? false;
+  const isTrading = status?.mode === 'paper' || status?.mode === 'live' || status?.mode === 'demo' || status?.mode === 'real' || status?.mode === 'multi';
 
   const filteredOpen = useMemo(() => {
     if (!openTrades) return [];
@@ -85,7 +78,6 @@ export default function Trades() {
     });
   }, [filteredHistory]);
 
-  const isTrading = status?.mode === 'paper' || status?.mode === 'live' || status?.mode === 'demo' || status?.mode === 'real' || status?.mode === 'multi';
   const totalFloatingPnl = filteredPositions.reduce((sum, p) => sum + p.floatingPnl, 0);
 
   return (
@@ -97,7 +89,7 @@ export default function Trades() {
         </div>
         
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 mr-2">
+          <div className="flex items-center gap-1">
             <Filter className="w-3.5 h-3.5 text-muted-foreground" />
             {["all", "paper", "demo", "real"].map(m => (
               <button
@@ -114,33 +106,8 @@ export default function Trades() {
               </button>
             ))}
           </div>
-          {([
-            { mode: "paper" as const, label: "Paper", active: paperActive, color: "warning" },
-            { mode: "demo" as const,  label: "Demo",  active: demoActive,  color: "primary" },
-            { mode: "real" as const,  label: "Real",  active: realActive,  color: "destructive" },
-          ]).map(({ mode, label, active, color }) => (
-            <Button
-              key={mode}
-              variant={active ? "default" : "outline"}
-              className={cn(
-                active
-                  ? `bg-${color}/15 border-${color}/40 text-${color} hover:bg-${color}/25`
-                  : `text-muted-foreground border-border hover:border-${color}/40 hover:text-${color}`
-              )}
-              style={active ? {
-                backgroundColor: `hsl(var(--${color}) / 0.15)`,
-                borderColor: `hsl(var(--${color}) / 0.4)`,
-                color: `hsl(var(--${color}))`,
-              } : undefined}
-              onClick={() => toggleMode({ data: { mode: mode as ToggleTradingModeRequestMode, active: !active } })}
-              isLoading={toggling}
-            >
-              {active ? <Square className="w-3 h-3" fill="currentColor" /> : <Play className="w-3 h-3" />}
-              {label}
-            </Button>
-          ))}
           {isTrading && (
-            <Button variant="destructive" onClick={() => stopTrades()} isLoading={stopping} className="ml-1">
+            <Button variant="destructive" onClick={() => stopTrades()} isLoading={stopping}>
               <Square className="w-3.5 h-3.5" fill="currentColor" />
               Stop All
             </Button>

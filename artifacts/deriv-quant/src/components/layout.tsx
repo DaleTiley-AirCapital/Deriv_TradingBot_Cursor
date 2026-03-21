@@ -12,8 +12,24 @@ import {
   TrendingUp,
   MoreHorizontal,
   X,
+  Play,
+  Square,
+  Power,
 } from "lucide-react";
-import { useGetDataStatus } from "@workspace/api-client-react";
+import {
+  useGetDataStatus,
+  useGetOverview,
+  useGetAccountInfo,
+  useToggleTradingMode,
+  useStopTrading,
+  getGetOpenTradesQueryKey,
+  getGetTradeHistoryQueryKey,
+  getGetLivePositionsQueryKey,
+  getGetOverviewQueryKey,
+  getGetDataStatusQueryKey,
+} from "@workspace/api-client-react";
+import type { ToggleTradingModeRequestMode } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { AiChat } from "./AiChat";
 
 const NAV_ITEMS = [
@@ -65,8 +81,100 @@ function useModeInfo() {
   return { mode, isLive, isPaper, isActive, modeColor, modeDot, logoAccent, sidebarBorder };
 }
 
+function useTradingControls() {
+  const queryClient = useQueryClient();
+  const { data: overview } = useGetOverview({ query: { refetchInterval: 5000 } });
+  const { data: accountInfo } = useGetAccountInfo({ query: { refetchInterval: 30000 } });
+
+  const invalidator = {
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: getGetOpenTradesQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetTradeHistoryQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetLivePositionsQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetOverviewQueryKey() });
+      queryClient.invalidateQueries({ queryKey: getGetDataStatusQueryKey() });
+    }
+  };
+
+  const { mutate: toggleMode, isPending: toggling } = useToggleTradingMode({ mutation: invalidator });
+  const { mutate: stopTrades, isPending: stopping } = useStopTrading({ mutation: invalidator });
+
+  const paperActive = overview?.paperModeActive ?? false;
+  const demoActive = overview?.demoModeActive ?? false;
+  const realActive = overview?.realModeActive ?? false;
+  const isTrading = paperActive || demoActive || realActive;
+
+  const realBalance = accountInfo?.connected && accountInfo.balance != null
+    ? `${accountInfo.currency || "USD"} ${accountInfo.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : null;
+
+  return { paperActive, demoActive, realActive, isTrading, toggling, stopping, toggleMode, stopTrades, realBalance };
+}
+
+type TradingControls = ReturnType<typeof useTradingControls>;
+
+function ModeToggleButtons({ compact = false, controls }: { compact?: boolean; controls: TradingControls }) {
+  const { paperActive, demoActive, realActive, isTrading, toggling, stopping, toggleMode, stopTrades } = controls;
+
+  const modes = [
+    { mode: "paper" as const, label: "Paper", active: paperActive, color: "warning" },
+    { mode: "demo" as const, label: "Demo", active: demoActive, color: "primary" },
+    { mode: "real" as const, label: "Real", active: realActive, color: "destructive" },
+  ] as const;
+
+  return (
+    <div className={cn("flex items-center", compact ? "gap-1" : "gap-1.5")}>
+      {modes.map(({ mode, label, active, color }) => (
+        <button
+          key={mode}
+          onClick={() => toggleMode({ data: { mode: mode as ToggleTradingModeRequestMode, active: !active } })}
+          disabled={toggling}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all border",
+            compact ? "px-1.5 py-0.5" : "px-2 py-1",
+            active
+              ? "border-current opacity-100"
+              : "border-transparent opacity-60 hover:opacity-100",
+          )}
+          style={active ? {
+            backgroundColor: `hsl(var(--${color}) / 0.15)`,
+            borderColor: `hsl(var(--${color}) / 0.4)`,
+            color: `hsl(var(--${color}))`,
+          } : undefined}
+        >
+          {active ? <Square className="w-2.5 h-2.5" fill="currentColor" /> : <Play className="w-2.5 h-2.5" />}
+          {label}
+        </button>
+      ))}
+      <button
+        onClick={() => isTrading ? stopTrades() : undefined}
+        disabled={stopping || !isTrading}
+        className={cn(
+          "inline-flex items-center gap-1 rounded-md font-bold uppercase tracking-wider transition-all border",
+          compact ? "px-1.5 py-0.5 text-[9px]" : "px-2 py-1 text-[10px]",
+          isTrading
+            ? "bg-destructive/15 border-destructive/40 text-destructive hover:bg-destructive/25"
+            : "bg-muted/30 border-border/50 text-muted-foreground",
+        )}
+      >
+        <Power className="w-2.5 h-2.5" />
+        Idle
+      </button>
+    </div>
+  );
+}
+
+function BalanceDisplay({ realBalance }: { realBalance: string | null }) {
+  return (
+    <div className="pt-1">
+      <p className="text-[9px] text-muted-foreground uppercase tracking-widest">Real Balance</p>
+      <p className="text-sm font-bold text-foreground font-mono mt-0.5">{realBalance || "—"}</p>
+    </div>
+  );
+}
+
 /* ─── Desktop: full labeled sidebar ─────────────────────────────────────── */
-function DesktopLayout({ children, location }: { children: React.ReactNode; location: string }) {
+function DesktopLayout({ children, location, tradingControls }: { children: React.ReactNode; location: string; tradingControls: TradingControls }) {
   const { mode, isLive, isPaper, isActive, modeColor, modeDot, logoAccent, sidebarBorder } = useModeInfo();
 
   return (
@@ -90,7 +198,7 @@ function DesktopLayout({ children, location }: { children: React.ReactNode; loca
           </div>
         </div>
 
-        <div className="px-4 py-3 border-b border-border/40">
+        <div className="px-4 py-3 border-b border-border/40 space-y-2.5">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">System</span>
             <div className={cn("flex items-center gap-1.5 text-[11px] font-semibold", modeColor)}>
@@ -101,6 +209,8 @@ function DesktopLayout({ children, location }: { children: React.ReactNode; loca
               {mode.toUpperCase()}
             </div>
           </div>
+          <ModeToggleButtons compact controls={tradingControls} />
+          <BalanceDisplay realBalance={tradingControls.realBalance} />
         </div>
 
         <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-0.5">
@@ -136,8 +246,9 @@ function DesktopLayout({ children, location }: { children: React.ReactNode; loca
   );
 }
 
+
 /* ─── Tablet: icon rail + top bar ───────────────────────────────────────── */
-function TabletLayout({ children, location }: { children: React.ReactNode; location: string }) {
+function TabletLayout({ children, location, tradingControls }: { children: React.ReactNode; location: string; tradingControls: TradingControls }) {
   const { isLive, isPaper, isActive, modeColor, modeDot, logoAccent, sidebarBorder } = useModeInfo();
 
   const modeLabel  = isLive ? "LIVE" : isPaper ? "PAPER" : isActive ? "ON" : "IDLE";
@@ -174,19 +285,13 @@ function TabletLayout({ children, location }: { children: React.ReactNode; locat
           <p className="text-[10px] text-muted-foreground mt-0.5">Research Platform</p>
         </div>
 
-        {/* Mode badge */}
-        <div className={cn("flex items-center gap-1.5 border rounded-full px-2.5 py-1 mr-4 text-[10px] font-bold", modeBadge)}>
-          <span className="relative flex h-1.5 w-1.5">
-            {isActive && <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", modeDotColor)} />}
-            <span className={cn("relative inline-flex rounded-full h-1.5 w-1.5", modeDotColor)} />
-          </span>
-          {modeLabel}
+        <div className="flex items-center gap-2 mr-3 shrink-0">
+          <ModeToggleButtons compact controls={tradingControls} />
         </div>
 
-        {/* Balance */}
         <div className="border-l border-border/50 px-4 py-2 text-right shrink-0">
-          <p className="text-[9px] text-muted-foreground uppercase tracking-widest">Balance</p>
-          <p className="text-sm font-bold text-foreground font-mono mt-0.5">USD 10,000.00</p>
+          <p className="text-[9px] text-muted-foreground uppercase tracking-widest">Real Balance</p>
+          <p className="text-sm font-bold text-foreground font-mono mt-0.5">{tradingControls.realBalance || "—"}</p>
         </div>
       </header>
 
@@ -235,8 +340,9 @@ function TabletLayout({ children, location }: { children: React.ReactNode; locat
   );
 }
 
+
 /* ─── Mobile: header + bottom tabs ──────────────────────────────────────── */
-function MobileLayout({ children, location }: { children: React.ReactNode; location: string }) {
+function MobileLayout({ children, location, tradingControls }: { children: React.ReactNode; location: string; tradingControls: TradingControls }) {
   const [showMore, setShowMore] = useState(false);
   const { isLive, isPaper, isActive, logoAccent, sidebarBorder, modeDot } = useModeInfo();
 
@@ -262,22 +368,16 @@ function MobileLayout({ children, location }: { children: React.ReactNode; locat
           background: "linear-gradient(180deg, hsl(228 45% 11%) 0%, hsl(228 42% 9%) 100%)",
         }}
       >
-        <div className="flex items-center gap-2.5">
-          <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center", logoAccent)}>
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center shrink-0", logoAccent)}>
             <TrendingUp className="w-4 h-4" />
           </div>
-          <div>
-            <p className="text-sm font-semibold text-foreground leading-none">Deriv Quant</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">Research Platform</p>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground leading-none truncate">Deriv Quant</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5 font-mono truncate">{tradingControls.realBalance ? `Real: ${tradingControls.realBalance}` : "Real: —"}</p>
           </div>
         </div>
-        <div className={cn("flex items-center gap-1.5 border rounded-full px-2.5 py-1 text-[10px] font-bold", modeBadge)}>
-          <span className="relative flex h-1.5 w-1.5">
-            {isActive && <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", modeDot)} />}
-            <span className={cn("relative inline-flex rounded-full h-1.5 w-1.5", modeDot)} />
-          </span>
-          {modeLabel}
-        </div>
+        <ModeToggleButtons compact controls={tradingControls} />
       </header>
 
       {/* Page content */}

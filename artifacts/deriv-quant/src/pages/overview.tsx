@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   useGetOverview,
   useGetPortfolioStatus,
@@ -32,6 +32,7 @@ export default function Overview() {
   const { data: positions }                                = useGetLivePositions(    { query: { refetchInterval: 10000 } });
   const { data: settings }                                 = useGetSettings(         { query: { staleTime: 60000 } });
   const { data: signals }                                  = useGetLatestSignals(    { query: { refetchInterval: 15000 } });
+  const [kpiMode, setKpiMode] = useState<string>("all");
 
   if (overviewLoading || portfolioLoading) {
     return (
@@ -52,6 +53,16 @@ export default function Overview() {
   const activeModes     = overview?.activeModes || [];
   const perMode         = overview?.perMode || {};
   const isDefaultCapital = !settings?.total_capital || Number(settings.total_capital) === DEFAULT_CAPITAL;
+
+  const kpiSnap = kpiMode !== "all" ? perMode[kpiMode] : undefined;
+  const kpiCapital    = kpiSnap?.capital    ?? overview?.availableCapital;
+  const kpiPnl        = kpiSnap?.realisedPnl ?? overview?.realisedPnl;
+  const kpiPnlTrend   = (kpiPnl || 0) >= 0 ? "up" as const : "down" as const;
+  const kpiPositions  = kpiSnap?.openPositions ?? overview?.openPositions;
+  const kpiWinRate    = kpiSnap?.winRate     ?? overview?.winRate;
+  const kpiRisk       = overview?.openRisk;
+  const kpiStrategies = overview?.activeStrategies;
+  const isPerMode     = kpiMode !== "all";
 
   const accountConnected = accountInfo?.connected && accountInfo.balance != null;
 
@@ -226,93 +237,121 @@ export default function Overview() {
       )}
 
       {/* ── KPI Row (4-col) ──────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
-          <KpiCard
-            label="Available Capital"
-            value={formatCurrency(overview?.availableCapital)}
-            accentColor="blue"
-            icon={<Wallet className="w-4 h-4" />}
-            tooltip={
-              <>
-                Your configured total capital (Settings → Position Sizing → Total Capital) minus capital currently tied up in open trades.
-                <br /><br />
-                <span className="text-primary font-medium">Tip:</span> Set Total Capital to your deposit amount (e.g. $600).
-              </>
-            }
-            detail={
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Allocation Mode</span>
-                <Badge variant="outline">{portfolio?.allocationMode || "N/A"}</Badge>
-              </div>
-            }
-          />
-        </motion.div>
+      <div className="space-y-3">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mr-1">View:</span>
+          {["all", "paper", "demo", "real"].map(m => (
+            <button
+              key={m}
+              onClick={() => setKpiMode(m)}
+              className={cn(
+                "px-2.5 py-1 rounded-md text-xs font-medium uppercase tracking-wider transition-all border",
+                kpiMode === m
+                  ? "bg-primary/10 border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
+            <KpiCard
+              label="Available Capital"
+              value={formatCurrency(kpiCapital)}
+              accentColor="blue"
+              icon={<Wallet className="w-4 h-4" />}
+              tooltip={
+                <>
+                  Your configured total capital (Settings → Position Sizing → Total Capital) minus capital currently tied up in open trades.
+                  <br /><br />
+                  <span className="text-primary font-medium">Tip:</span> Set Total Capital to your deposit amount (e.g. $600).
+                </>
+              }
+              detail={
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Allocation Mode</span>
+                  <Badge variant="outline">{portfolio?.allocationMode || "N/A"}</Badge>
+                </div>
+              }
+            />
+          </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
-          <KpiCard
-            label="Realised P&L"
-            prefix="$"
-            value={formatNumber(overview?.realisedPnl, 2)}
-            trend={pnlTrend}
-            accentColor={pnlTrend === "up" ? "green" : "red"}
-            icon={<TrendingUp className="w-4 h-4" />}
-            tooltip="Total profit and loss from all closed paper or live trades since the platform started. Negative means cumulative losses. This resets if the database is cleared."
-            detail={
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Win Rate</span>
-                <span className="font-mono tabular-nums text-foreground">{formatNumber(overview?.winRate, 1)}%</span>
-              </div>
-            }
-          />
-        </motion.div>
+          <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+            <KpiCard
+              label="Realised P&L"
+              prefix="$"
+              value={formatNumber(kpiPnl, 2)}
+              trend={kpiPnlTrend}
+              accentColor={kpiPnlTrend === "up" ? "green" : "red"}
+              icon={<TrendingUp className="w-4 h-4" />}
+              tooltip="Total profit and loss from all closed paper or live trades since the platform started. Negative means cumulative losses. This resets if the database is cleared."
+              detail={
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Win Rate</span>
+                  <span className="font-mono tabular-nums text-foreground">{formatNumber(kpiWinRate, 1)}%</span>
+                </div>
+              }
+            />
+          </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
-          <KpiCard
-            label="Open Risk"
-            suffix="%"
-            value={formatNumber(overview?.openRisk, 2)}
-            trend={overview?.openRisk && overview.openRisk > 5 ? "down" : "neutral"}
-            accentColor="amber"
-            icon={<ShieldAlert className="w-4 h-4" />}
-            tooltip="Estimated exposure from all currently open positions as a percentage of total capital. Below 5% is comfortable; above 10% is elevated risk. The risk engine will block new trades if limits are breached."
-            detail={
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Open Positions</span>
-                <span className="font-mono tabular-nums text-foreground">{overview?.openPositions || 0}</span>
-              </div>
-            }
-          />
-        </motion.div>
-
-        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-          <KpiCard
-            label="Active Strategies"
-            value={overview?.activeStrategies || 0}
-            accentColor="purple"
-            icon={<Layers className="w-4 h-4" />}
-            tooltip={
-              <>
-                The 4 built-in signal families continuously scanning tick data:
-                <ul className="mt-1.5 space-y-1 list-none">
-                  {STRATEGY_DESCRIPTIONS.map(s => (
-                    <li key={s.name}><span className="text-foreground font-medium">{s.name}</span> — {s.desc}</li>
-                  ))}
-                </ul>
-              </>
-            }
-            detail={
-              <div className="space-y-1.5">
-                {STRATEGY_DESCRIPTIONS.map(s => (
-                  <div key={s.name} className="flex items-center gap-1.5">
-                    <div className="w-1 h-1 rounded-full bg-purple-400 shrink-0" />
-                    <span className="text-muted-foreground truncate">{s.name}</span>
+          <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+            <KpiCard
+              label={isPerMode ? `Open Positions (${kpiMode})` : "Open Risk"}
+              suffix={isPerMode ? "" : "%"}
+              value={isPerMode ? (kpiPositions || 0) : formatNumber(kpiRisk, 2)}
+              trend={!isPerMode && kpiRisk && kpiRisk > 5 ? "down" : "neutral"}
+              accentColor="amber"
+              icon={<ShieldAlert className="w-4 h-4" />}
+              tooltip={isPerMode
+                ? `Number of open positions in ${kpiMode} mode.`
+                : "Estimated exposure from all currently open positions as a percentage of total capital. Below 5% is comfortable; above 10% is elevated risk. The risk engine will block new trades if limits are breached."}
+              detail={
+                isPerMode ? (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Aggregate Risk</span>
+                    <span className="font-mono tabular-nums text-foreground">{formatNumber(kpiRisk, 2)}%</span>
                   </div>
-                ))}
-              </div>
-            }
-          />
-        </motion.div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Open Positions</span>
+                    <span className="font-mono tabular-nums text-foreground">{kpiPositions || 0}</span>
+                  </div>
+                )
+              }
+            />
+          </motion.div>
+
+          <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+            <KpiCard
+              label={isPerMode ? `Total Trades (${kpiMode})` : "Active Strategies"}
+              value={isPerMode ? (kpiSnap?.totalTrades || 0) : (kpiStrategies || 0)}
+              accentColor="purple"
+              icon={<Layers className="w-4 h-4" />}
+              tooltip={
+                <>
+                  The 4 built-in signal families continuously scanning tick data:
+                  <ul className="mt-1.5 space-y-1 list-none">
+                    {STRATEGY_DESCRIPTIONS.map(s => (
+                      <li key={s.name}><span className="text-foreground font-medium">{s.name}</span> — {s.desc}</li>
+                    ))}
+                  </ul>
+                </>
+              }
+              detail={
+                <div className="space-y-1.5">
+                  {STRATEGY_DESCRIPTIONS.map(s => (
+                    <div key={s.name} className="flex items-center gap-1.5">
+                      <div className="w-1 h-1 rounded-full bg-purple-400 shrink-0" />
+                      <span className="text-muted-foreground truncate">{s.name}</span>
+                    </div>
+                  ))}
+                </div>
+              }
+            />
+          </motion.div>
+        </div>
       </div>
 
       {activeModes.length > 0 && (
