@@ -13,8 +13,8 @@ const MAX_EQUITY_DEPLOYED_PCT = 0.80;
 
 const DEFAULT_MAX_CONCURRENT_LIVE = 3;
 const DEFAULT_MAX_CONCURRENT_PAPER = 3;
-const DEFAULT_LIVE_BASE_PCT = 0.15;
-const DEFAULT_PAPER_BASE_PCT = 0.08;
+const DEFAULT_LIVE_BASE_PCT = 0.08;
+const DEFAULT_PAPER_BASE_PCT = 0.16;
 
 export interface BacktestConfig {
   symbol?: string;

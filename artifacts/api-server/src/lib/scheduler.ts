@@ -358,15 +358,15 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
   const optTpWeak = parseFloat(Math.min(Math.max(1.2 + bestPf * 0.25, 1.5), 2.5).toFixed(2));
   const optSl = parseFloat(Math.min(Math.max(0.8, 1.0 / bestPf), 1.5).toFixed(2));
   const optHold = parseFloat(Math.max(48, Math.min(bestHold * 1.3, 168)).toFixed(1));
-  const optEquity = 15;
+  const optEquity = 8;
 
   const nowIso = new Date().toISOString();
   const currentMonthKey = `${new Date().getFullYear()}-${new Date().getMonth() + 1}`;
 
   const aiSettings: Record<string, string> = {
-    ai_equity_pct_per_trade: "15",
-    ai_paper_equity_pct_per_trade: "8",
-    ai_live_equity_pct_per_trade: "15",
+    ai_equity_pct_per_trade: "8",
+    ai_paper_equity_pct_per_trade: "16",
+    ai_live_equity_pct_per_trade: "8",
     ai_tp_multiplier_strong: String(optTpStrong),
     ai_tp_multiplier_medium: String(optTpMed),
     ai_tp_multiplier_weak: String(optTpWeak),
