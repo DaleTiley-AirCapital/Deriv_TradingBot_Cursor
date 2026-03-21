@@ -995,10 +995,12 @@ function ModeSettingsTab({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Clock className="w-4 h-4" />
-              Time Exit
+              Timing & Execution
             </CardTitle>
           </CardHeader>
           <CardContent>
+            <SettingField label="Scan Interval" description={`How often ${modeLabel} mode scans for signals`} value={form[p("scan_interval_seconds")] || form.scan_interval_seconds || "30"} onChange={(v) => update(p("scan_interval_seconds"), v)} suffix="sec" min={5} max={300} step={5} />
+            <SettingField label="Symbol Scan Stagger" description={`Delay between scanning each symbol in ${modeLabel} mode`} value={form[p("scan_stagger_seconds")] || form.scan_stagger_seconds || "10"} onChange={(v) => update(p("scan_stagger_seconds"), v)} suffix="sec" min={1} max={60} step={1} />
             <SettingField
               label="Time Exit Window"
               description="Auto-close positions after this duration"

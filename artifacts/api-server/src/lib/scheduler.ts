@@ -184,13 +184,18 @@ async function scanCycle(): Promise<void> {
     const stateMap: Record<string, string> = {};
     for (const s of states) stateMap[s.key] = s.value;
 
-    const configuredInterval = parseInt(stateMap["scan_interval_seconds"] || "30") * 1000;
+    const activeScanModes = getActiveModes(stateMap);
+    const modeIntervals = activeScanModes.map(m => {
+      const p = m === "paper" ? "paper" : m === "demo" ? "demo" : "real";
+      return parseInt(stateMap[`${p}_scan_interval_seconds`] || stateMap["scan_interval_seconds"] || "30") * 1000;
+    });
+    const configuredInterval = modeIntervals.length > 0 ? Math.min(...modeIntervals) : parseInt(stateMap["scan_interval_seconds"] || "30") * 1000;
     if (configuredInterval !== currentIntervalMs && configuredInterval >= 5000) {
       currentIntervalMs = configuredInterval;
       if (schedulerHandle) {
         clearInterval(schedulerHandle);
         schedulerHandle = setInterval(scanCycle, currentIntervalMs);
-        console.log(`[Scheduler] Scan interval updated to ${currentIntervalMs / 1000}s`);
+        console.log(`[Scheduler] Scan interval updated to ${currentIntervalMs / 1000}s (fastest active mode)`);
       }
     }
 
@@ -226,7 +231,11 @@ async function scanCycle(): Promise<void> {
     const symbols = [...new Set(modeSymbolSets.flat())];
     if (symbols.length === 0) symbols.push(...DEFAULT_SYMBOLS);
 
-    const staggerSeconds = parseInt(stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS));
+    const modeStaggerValues = activeModes.map(m => {
+      const p = m === "paper" ? "paper" : m === "demo" ? "demo" : "real";
+      return parseInt(stateMap[`${p}_scan_stagger_seconds`] || stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS));
+    });
+    const staggerSeconds = modeStaggerValues.length > 0 ? Math.min(...modeStaggerValues) : parseInt(stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS));
     const staggerMs = Math.max(staggerSeconds * 1000, 1000);
 
     if (!staggeredScanActive) {
