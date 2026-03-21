@@ -754,14 +754,15 @@ export async function getDerivClientWithDbToken(): Promise<DerivClient> {
       derivClient = new DerivClient(fallbackToken);
       lastToken = fallbackToken;
     }
-    return derivClient;
-  }
-  if (!derivClient || lastToken !== token) {
+  } else if (!derivClient || lastToken !== token) {
     if (derivClient) {
       derivClient.stopStreaming();
     }
     derivClient = new DerivClient(token);
     lastToken = token;
+  }
+  if (!derivClient.authorized) {
+    await derivClient.connect();
   }
   return derivClient;
 }
@@ -780,6 +781,9 @@ export async function getDerivClientForMode(mode: TradingMode): Promise<DerivCli
       derivClientDemo = new DerivClient(token);
       lastTokenDemo = token;
     }
+    if (!derivClientDemo.authorized) {
+      await derivClientDemo.connect();
+    }
     return derivClientDemo;
   } else {
     if (!derivClientReal || lastTokenReal !== token) {
@@ -788,6 +792,9 @@ export async function getDerivClientForMode(mode: TradingMode): Promise<DerivCli
       }
       derivClientReal = new DerivClient(token);
       lastTokenReal = token;
+    }
+    if (!derivClientReal.authorized) {
+      await derivClientReal.connect();
     }
     return derivClientReal;
   }
