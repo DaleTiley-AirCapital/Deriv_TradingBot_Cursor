@@ -488,12 +488,13 @@ function TradingBanner({ isLive, isPaper }: { isLive: boolean; isPaper: boolean 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const bp = useBreakpoint();
+  const tradingControls = useTradingControls();
 
   const layout = bp === "mobile"
-    ? <MobileLayout location={location}>{children}</MobileLayout>
+    ? <MobileLayout location={location} tradingControls={tradingControls}>{children}</MobileLayout>
     : bp === "tablet"
-      ? <TabletLayout location={location}>{children}</TabletLayout>
-      : <DesktopLayout location={location}>{children}</DesktopLayout>;
+      ? <TabletLayout location={location} tradingControls={tradingControls}>{children}</TabletLayout>
+      : <DesktopLayout location={location} tradingControls={tradingControls}>{children}</DesktopLayout>;
 
   return (
     <>
