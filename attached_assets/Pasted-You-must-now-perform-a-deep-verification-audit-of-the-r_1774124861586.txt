@@ -1,0 +1,339 @@
+You must now perform a deep verification audit of the refactor you just completed.
+
+Do not give a high-level summary.
+Do not say “it should” or “it likely.”
+I need code-level proof.
+
+Your job is to verify the implementation is real, not superficial, and also audit the UI/settings layer because the UI has not been updated and I am concerned the settings may not actually be wired correctly.
+
+Return everything in code-level detail with:
+- exact file names
+- exact function names
+- representative code snippets
+- clear explanation of current behavior
+- clear statement of whether each item is genuinely implemented or only partially implemented
+
+If something is not truly implemented, say so directly.
+
+---
+
+# PART 1 — VERIFY THE CORE ENGINE
+
+Answer these precisely:
+
+## 1. Model separation
+Are the per-family models truly separate models with separate:
+- labels
+- training data
+- training runs
+- saved artifacts
+- inference logic
+
+Or is it still one shared model with different weights/configs?
+
+I want:
+- file names
+- functions
+- how labels are built
+- how family routing happens
+- whether model artifacts are stored separately
+- whether walk-forward runs are separated by family
+
+Return:
+- “TRULY SEPARATE”
+or
+- “SHARED CORE WITH DIFFERENT WEIGHTS”
+or
+- “NOT REALLY SEPARATE”
+
+Show proof.
+
+---
+
+## 2. Regime gating before strategy evaluation
+Show the exact files and functions where regime gating happens BEFORE strategy evaluation.
+
+I want proof that the system no longer runs all families on all symbols every cycle.
+
+Show:
+- where regime is computed
+- where instrument family is computed
+- where allowed strategy families are selected
+- where non-allowed families are blocked before scoring/evaluation
+
+Return:
+- file/module
+- function
+- representative snippet
+- explanation of execution order
+
+---
+
+## 3. Opposing signal blocking
+Show the exact files and functions where a symbol is blocked from taking opposing signals.
+
+I want to know:
+- how the system prevents long + short on same symbol
+- whether this happens before or after ranking
+- whether existing open trades are checked
+- whether pending entries are checked
+
+Return:
+- file/module
+- function
+- representative snippet
+- exact rule used
+
+---
+
+## 4. Correlated family exposure caps
+Show the exact logic for correlated instrument/family exposure caps.
+
+The system must account for correlated families, for example:
+- BOOM200, BOOM300, BOOM500, BOOM1000
+- CRASH200, CRASH300, CRASH500, CRASH1000
+
+I want to know:
+- how correlation groups are defined
+- where family exposure is calculated
+- how caps are enforced
+- whether same-family and cross-family limits differ
+- whether the cap applies pre-entry and during scaling
+
+Return:
+- file/module
+- function
+- representative snippet
+- current cap values
+
+---
+
+## 5. Capital extraction/reset logic
+Show the exact extraction/reset logic in code.
+
+Use this example cycle:
+- base capital = 2000
+- target capital = 3000
+- withdraw = 1000
+- reset active capital = 2000
+
+I want to know:
+- where base capital is stored
+- where target is stored
+- what event triggers extraction
+- whether extraction is simulated, logged, or automatically applied
+- how active capital resets
+- how realized PnL is treated after reset
+- what happens to open trades if target is hit while positions are still open
+
+Return:
+- file/module
+- function
+- representative snippet
+- step-by-step example flow for the above cycle
+
+---
+
+## 6. Peak-profit harvesting logic
+Show the exact peak-profit harvesting logic.
+
+I want to know:
+- where peak unrealized profit is tracked
+- how giveback is measured
+- what thresholds are used
+- whether it partially closes or fully closes
+- whether harvesting overrides TP/SL
+- whether harvesting differs by family or entry stage
+
+Return:
+- file/module
+- function
+- representative snippet
+- exact close condition
+
+---
+
+## 7. AI toggle and deterministic fallback
+Show whether AI can be fully toggled off.
+
+I want to know:
+- exact config/settings key for AI enable/disable
+- exact code path when AI is disabled
+- whether the deterministic engine still functions cleanly without AI
+- whether AI is hard-required anywhere
+- whether trades can still be generated, ranked, allocated, and executed with AI off
+
+Return:
+- file/module
+- function
+- representative snippet
+- current setting name(s)
+
+---
+
+## 8. One full end-to-end flow
+Show one full end-to-end example in real code path order:
+
+data -> regime -> allowed family -> score -> ranking -> allocation -> execution -> harvesting -> extraction
+
+Use a concrete example symbol such as BOOM300 or CRASH500.
+
+I want:
+- exact modules/functions hit in order
+- what data object is passed between stages
+- where score is calculated
+- where allocation is decided
+- where execution happens
+- where harvesting watches the trade
+- where extraction checks occur
+
+Do not summarize vaguely.
+Show the actual path.
+
+---
+
+# PART 2 — VERIFY THE UI AND SETTINGS LAYER
+
+The UI has not been updated and I am concerned the settings may not work correctly or may not actually be wired into the engine.
+
+You must audit the entire settings/UI/config pipeline.
+
+## 9. Settings inventory
+List every setting currently exposed in the UI.
+
+For each setting, return:
+- UI label
+- internal config key
+- default value
+- file where the UI control is defined
+- file where the backend reads it
+- whether it is truly connected to engine behavior
+
+Use a table:
+| UI Setting | Internal Key | Default | UI File | Backend File | Wired Correctly? | Actual Effect |
+
+---
+
+## 10. Unused or misleading settings
+Identify any settings that:
+- appear in the UI but do nothing
+- only update local state but not backend state
+- are saved but never read by the engine
+- are overwritten elsewhere
+- are partially wired only
+
+Be brutally honest.
+
+Use a table:
+| Setting | Problem | Where Broken | Required Fix |
+
+---
+
+## 11. Strategy settings mapping
+For each strategy family:
+- Trend Continuation
+- Mean Reversion
+- Breakout / Expansion
+- Spike / Event
+
+Show:
+- what settings affect it
+- where those settings are read
+- whether changes in UI actually change runtime behavior
+- whether settings are family-level or still tied to old sub-strategy names
+
+I want to confirm the strategy consolidation actually propagated to settings.
+
+---
+
+## 12. Risk and allocation settings mapping
+Show exactly where these are configured and used:
+- score threshold
+- allocation tiers
+- max open trades
+- max equity deployed
+- correlated family caps
+- extraction target/base capital
+- harvesting thresholds
+- AI on/off
+- regime filter settings
+
+Return:
+- UI source
+- backend source
+- runtime usage
+
+---
+
+## 13. Live settings propagation
+Explain exactly how settings changes made in the UI flow into the running engine.
+
+I want to know:
+- whether changes are instant or require restart
+- whether changes update a DB, file, memory store, or env
+- whether scheduler/execution loop reads fresh settings each cycle or caches them
+- whether stale settings can remain active
+
+Return:
+- exact mechanism
+- relevant files/functions
+- known risks
+
+---
+
+## 14. UI gaps after the refactor
+Since the engine was refactored, identify all UI areas that are now out of sync.
+
+Examples might include:
+- old strategy names still exposed
+- missing regime engine controls
+- missing extraction settings
+- missing profit harvesting settings
+- missing family exposure controls
+- missing AI routing visibility
+- missing model-family visibility
+
+Use a table:
+| UI Area | Out-of-Sync Issue | Why It Matters | Required Update |
+
+---
+
+# PART 3 — REQUIRED OUTPUT FORMAT
+
+Return your answer in this exact structure:
+
+## A. Core Engine Verification
+1. Model separation
+2. Regime gating
+3. Opposing signal blocking
+4. Correlated exposure caps
+5. Extraction/reset logic
+6. Peak-profit harvesting
+7. AI toggle / deterministic fallback
+8. End-to-end example
+
+## B. UI and Settings Verification
+9. Settings inventory
+10. Unused/misleading settings
+11. Strategy settings mapping
+12. Risk/allocation settings mapping
+13. Live settings propagation
+14. UI gaps after refactor
+
+## C. Final Truth Table
+Use this table:
+| Component | Status | Fully Real? | File/Function Proof | Problem Remaining | Required Fix |
+
+Where Status must be one of:
+- Implemented
+- Partial
+- Missing
+- Misleading UI only
+
+## D. Immediate Fix Plan
+After the audit, give a short ordered plan:
+1. critical engine fixes
+2. critical UI/settings fixes
+3. validation tests to run
+
+Do not code yet unless I explicitly approve after reviewing the audit.
