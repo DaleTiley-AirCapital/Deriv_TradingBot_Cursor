@@ -113,6 +113,10 @@ router.get("/setup/status", async (_req, res): Promise<void> => {
     const hasEnoughData = symbolCounts.filter(r => r.count >= 100).length >= Math.ceil(SUPPORTED_SYMBOLS.length * 0.5);
     const hasInitialBacktests = backtestCount >= expectedBacktests;
 
+    const setupRow = await db.select().from(platformStateTable)
+      .where(eq(platformStateTable.key, "initial_setup_complete")).limit(1);
+    const initialSetupDone = setupRow.length > 0 && setupRow[0].value === "true";
+
     res.json({
       hasToken,
       totalCandles,
@@ -121,7 +125,8 @@ router.get("/setup/status", async (_req, res): Promise<void> => {
       hasInitialBacktests,
       backtestCount,
       expectedBacktests,
-      setupComplete: hasEnoughData && hasInitialBacktests,
+      initialSetupComplete: initialSetupDone,
+      setupComplete: initialSetupDone && hasEnoughData && hasInitialBacktests,
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });

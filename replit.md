@@ -1,8 +1,8 @@
-# Deriv Quant Research & Execution Platform
+# Deriv Capital Extraction App
 
 ## Overview
 
-A quantitative trading research and execution platform for Deriv synthetic indices (Boom/Crash markets). Built as a pnpm workspace monorepo using TypeScript with a React frontend and Express backend.
+A quantitative trading research and execution platform for Deriv synthetic indices (Boom/Crash markets). Built as a pnpm workspace monorepo using TypeScript with a React frontend and Express backend. The app requires initial setup (data backfill + AI analysis) before use — gated by a setup wizard (`pages/setup.tsx`).
 
 ## Stack
 

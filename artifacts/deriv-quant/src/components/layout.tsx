@@ -192,8 +192,8 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
               <TrendingUp className="w-4 h-4" />
             </div>
             <div>
-              <h1 className="font-semibold text-sm text-foreground leading-none">Deriv Quant</h1>
-              <p className="text-[10px] text-muted-foreground mt-0.5">Research Platform</p>
+              <h1 className="font-semibold text-sm text-foreground leading-none">Deriv Capital</h1>
+              <p className="text-[10px] text-muted-foreground mt-0.5">Extraction App</p>
             </div>
           </div>
         </div>
@@ -281,8 +281,8 @@ function TabletLayout({ children, location, tradingControls }: { children: React
 
         {/* App name */}
         <div className="px-4 flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground leading-none">Deriv Quant</p>
-          <p className="text-[10px] text-muted-foreground mt-0.5">Research Platform</p>
+          <p className="text-sm font-semibold text-foreground leading-none">Deriv Capital</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Extraction App</p>
         </div>
 
         <div className="flex items-center gap-2 mr-3 shrink-0">
@@ -373,7 +373,7 @@ function MobileLayout({ children, location, tradingControls }: { children: React
             <TrendingUp className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground leading-none truncate">Deriv Quant</p>
+            <p className="text-sm font-semibold text-foreground leading-none truncate">Deriv Capital</p>
             <p className="text-[10px] text-muted-foreground mt-0.5 font-mono truncate">{tradingControls.realBalance ? `Real: ${tradingControls.realBalance}` : "Real: —"}</p>
           </div>
         </div>
