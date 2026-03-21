@@ -105,16 +105,18 @@ Each mode has independent:
 
 Signals are generated once; positions are opened independently per active mode. All trades are tagged with their mode.
 
-## Signal & ML Pipeline
+## Signal & ML Pipeline (Regime-First Architecture)
 
 1. **Feature Engineering** (`lib/features.ts`): computes RSI(14), EMA slope/distance, ATR(14), Bollinger Band width/%B, candle body/wick ratios, z-score, rolling skew, consecutive candle count, spike hazard score, regime label from real candle data stored in PostgreSQL
-2. **Probability Model** (`lib/model.ts`): logistic regression via SGD with 100 epochs, gradient-boost-style rule ensemble, per-symbol weight store, expected value estimation
-3. **Strategy Engine** (`lib/strategies.ts`): seven strategies each with their own entry/exit conditions, SL/TP computation (ATR multiples), min score and min EV thresholds
-4. **Composite Scoring** (`lib/scoring.ts`): six-dimension scoring system (0–100 each): Regime Fit, Setup Quality, Trend Alignment, Volatility Condition, Reward/Risk, Probability of Success. Combined into a weighted composite score (0–100). Configurable weights via Settings.
-5. **Portfolio Signal Router** (`lib/signalRouter.ts`): composite score >= 85 threshold (configurable), EV > min threshold, R:R >= min ratio, kill-switch check, daily/weekly loss limit enforcement, 80% open risk cap, per-strategy disable, capital allocation (20-25% per trade), configurable equity % per trade, TP multipliers by composite score band (92+/85-92/<85), SL ratio
-6. **AI Signal Verification** (`lib/openai.ts`): GPT-4o based signal pre-trade verification (agree/disagree/uncertain verdicts), backtest analysis with structured output; uses user's own OpenAI key from encrypted DB settings
-7. **Signal Scheduler** (`lib/scheduler.ts`): configurable scan interval (default 30s, live-updates from settings), position management every 10s (trailing stop updates, time exits), opens positions on approved signals, optional AI verification gate (blocks on disagree, 50% size on uncertain)
-8. **Trade Engine** (`lib/tradeEngine.ts`): position sizing, dynamic TP, trailing stop manager, 3-layer exit logic, Deriv execution integration
+2. **Regime Engine** (`lib/regimeEngine.ts`): 7 regime states (trend_up, trend_down, mean_reversion, compression, breakout_expansion, spike_zone, no_trade). Instrument family classification (boom, crash, volatility, other_synthetic). Strategy permission matrix: regime → allowed families. Macro bias computation (global score modifier).
+3. **Probability Model** (`lib/model.ts`): per-family model routing with 4 weight sets (trend_continuation, mean_reversion, breakout_expansion, spike_event). Per-family rule configs. `scoreFeaturesForFamily()` for family-specific scoring.
+4. **Strategy Engine** (`lib/strategies.ts`): 4 strategy families: Trend Continuation (trend-pullback), Mean Reversion (exhaustion-rebound, liquidity-sweep), Breakout/Expansion (volatility-breakout, volatility-expansion), Spike/Event (spike-hazard). Macro bias is a global score modifier (not a strategy). Regime gates which families run.
+5. **Composite Scoring** (`lib/scoring.ts`): six-dimension scoring system (0–100 each): Regime Fit, Setup Quality, Trend Alignment, Volatility Condition, Reward/Risk, Probability of Success. Regime-aware with family-specific ideal regime/volatility lookup.
+6. **Signal Router** (`lib/signalRouter.ts`): conflict resolution (no opposing trades, same-direction stacking only), multi-asset ranking by score/EV/regime confidence, tiered allocation (90+=25%, 85-89=20%, <85=reject), correlation limits (max 3 same-family), per-mode enabled strategy filtering.
+7. **AI Signal Verification** (`lib/openai.ts`): GPT-4o strategy-family-aware verification (receives family, regime, entry stage, EV, macro bias context). Agree/disagree/uncertain verdicts. Disagree blocks trade, uncertain halves size.
+8. **Signal Scheduler** (`lib/scheduler.ts`): regime-first scan flow: classifies regime → skips no_trade → runs allowed families only. Staggered symbol scanning. Position management every 10s. Monthly re-optimisation cycle (hourly check).
+9. **Trade Engine** (`lib/tradeEngine.ts`): position building (probe→confirmation→momentum entries with escalating score thresholds: 85/88/92), profit harvesting (peak tracking, 30% drawdown-from-peak exit when peak≥3%, accelerated 60% threshold at peak≥8%), dynamic TP, trailing stop, 3-layer time exit, Deriv execution, capital tracking on close.
+10. **Extraction Engine** (`lib/extractionEngine.ts`): capital cycle management (target→withdraw→reset), auto-extraction when target met, per-mode extraction cycles with configurable target %.
 
 ## Deployment
 
@@ -139,18 +141,27 @@ Signals are generated once; positions are opened independently per active mode. 
 
 The platform includes a full swing trade execution engine (`lib/tradeEngine.ts`):
 
-- **Position Sizing** — 8% of equity per trade (real, conservative), 12% (demo, medium), 16% (paper, aggressive testing). Max 3 simultaneous, 80% equity cap. Risk tiers: Paper tests aggressive strategies, Demo validates, Real protects capital
+- **Position Building** — 3-stage entry: probe (0 existing, score≥85, 40% size), confirmation (1 existing, score≥88, 35% size), momentum (2 existing, score≥92, 25% size)
+- **Position Sizing** — 8% of equity per trade (real, conservative), 12% (demo, medium), 16% (paper, aggressive testing). Max 3 simultaneous, 80% equity cap. Risk ladder: Paper=highest risk, Demo=medium, Real=most conservative
 - **Dynamic TP** — calculated at entry using: confidence × ATR × historical average move
-- **Trailing Stop** — SL trails 25% behind the highest point reached (configurable per mode, AI-optimized: Real=20%, Demo=25%)
+- **Trailing Stop** — SL trails 25% behind the highest point reached (configurable per mode)
+- **Profit Harvesting** — peak tracking with drawdown-from-peak exit: 30% drawdown when peak≥3%, accelerated 60% threshold when peak≥8%
 - **3-Layer Exit** — TP hit (Deriv handles), trailing stop triggered, time-based exit (72h with 24h extensions up to 5 days)
+- **Capital Tracking** — realized PnL updates mode capital on close; feeds extraction cycle readiness
 - **Deriv Execution** — buy/sell/close via WebSocket API, SL/TP placement, contract updates
 
-## Strategies
+## Capital Extraction Engine
 
-- `trend-pullback` — trend continuation after mean reversion
-- `exhaustion-rebound` — mean reversion after overstretched move
-- `volatility-breakout` — expansion after Bollinger compression
-- `spike-hazard` — elevated spike probability detection
+- **Extraction Cycles** — target profit % (default 50%), auto-extract when reached, reset capital to cycle start
+- **Per-mode Cycles** — each mode (paper/demo/real) has independent extraction cycle tracking
+- **Auto-extraction** — configurable per mode, checks after every position management cycle
+
+## Strategy Families (4)
+
+- **Trend Continuation** (`trend-pullback`): trend continuation after mean reversion pullback
+- **Mean Reversion** (`exhaustion-rebound`, `liquidity-sweep`): rebound after overstretched move, smart money sweep reversal
+- **Breakout/Expansion** (`volatility-breakout`, `volatility-expansion`): expansion after Bollinger compression
+- **Spike/Event** (`spike-hazard`): elevated spike probability detection for boom/crash instruments
 
 ## Dashboard Pages
 

@@ -4,6 +4,7 @@ import { routeSignals, logSignalDecisions } from "./signalRouter.js";
 import type { ScoringWeights } from "./scoring.js";
 import { openPosition, manageOpenPositions } from "./tradeEngine.js";
 import { verifySignal } from "./openai.js";
+import { classifyRegime, classifyInstrument } from "./regimeEngine.js";
 import { db, platformStateTable, tradesTable, candlesTable, backtestRunsTable, backtestTradesTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { runBacktestSimulation } from "./backtestEngine.js";
@@ -19,6 +20,8 @@ const DEFAULT_SYMBOLS = [
 const DEFAULT_SCAN_INTERVAL_MS = 30_000;
 const DEFAULT_STAGGER_SECONDS = 10;
 const POSITION_MGMT_INTERVAL_MS = 10_000;
+
+const STRATEGY_FAMILIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"] as const;
 
 let schedulerHandle: ReturnType<typeof setInterval> | null = null;
 let positionMgmtHandle: ReturnType<typeof setInterval> | null = null;
@@ -54,6 +57,16 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
   const features = await computeFeatures(symbol);
   if (!features) return;
 
+  const regime = classifyRegime(features);
+
+  if (regime.regime === "no_trade") {
+    return;
+  }
+
+  if (regime.allowedFamilies.length === 0) {
+    return;
+  }
+
   const aiEnabled = stateMap["ai_verification_enabled"] === "true";
 
   const activeModes = getActiveModes(stateMap);
@@ -78,8 +91,7 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
     for (const decision of decisions) {
       if (decision.allowed && aiEnabled) {
         try {
-          const matchingCandidate = allCandidates.find(c => c.candidate.symbol === decision.signal.symbol && c.candidate.strategyName === decision.signal.strategyName);
-          const feats = matchingCandidate ? await computeFeatures(decision.signal.symbol) : null;
+          const feats = await computeFeatures(decision.signal.symbol);
 
           const recentTrades = await db.select().from(tradesTable)
             .where(eq(tradesTable.symbol, decision.signal.symbol))
@@ -107,6 +119,7 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
             confidence: decision.signal.confidence,
             score: decision.signal.score,
             strategyName: decision.signal.strategyName,
+            strategyFamily: (decision.signal as any).strategyFamily || "trend_continuation",
             reason: decision.signal.reason,
             rsi14: feats?.rsi14 ?? 50,
             atr14: feats?.atr14 ?? 0.01,
@@ -115,6 +128,13 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
             zScore: feats?.zScore ?? 0,
             recentCandles: candleDescriptions,
             recentWinLoss,
+            regimeState: (decision.signal as any).regimeState || regime.regime,
+            regimeConfidence: (decision.signal as any).regimeConfidence || regime.confidence,
+            instrumentFamily: classifyInstrument(decision.signal.symbol),
+            macroBiasModifier: (decision.signal as any).macroBiasApplied || regime.macroBiasModifier,
+            compositeScore: decision.signal.compositeScore,
+            entryStage: (decision.signal as any).entryStage || "probe",
+            expectedValue: decision.signal.expectedValue,
           });
 
           if (verdict) {
@@ -186,7 +206,7 @@ async function scanCycle(): Promise<void> {
       if (schedulerHandle) {
         clearInterval(schedulerHandle);
         schedulerHandle = setInterval(scanCycle, currentIntervalMs);
-        console.log(`[Scheduler] Scan interval updated to ${currentIntervalMs / 1000}s (fastest active mode)`);
+        console.log(`[Scheduler] Scan interval updated to ${currentIntervalMs / 1000}s`);
       }
     }
 
@@ -258,7 +278,12 @@ async function positionManagementCycle(): Promise<void> {
 }
 
 const MONTHLY_CHECK_INTERVAL_MS = 60 * 60 * 1000;
-const STRATEGIES_LIST = ["trend-pullback", "exhaustion-rebound", "volatility-breakout", "spike-hazard", "volatility-expansion", "liquidity-sweep", "macro-bias"] as const;
+const STRATEGIES_LIST = [
+  "trend-pullback",
+  "exhaustion-rebound", "liquidity-sweep",
+  "volatility-breakout", "volatility-expansion",
+  "spike-hazard",
+] as const;
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade", "live_equity_pct_per_trade",
   "tp_multiplier_strong", "tp_multiplier_medium", "tp_multiplier_weak",
@@ -358,7 +383,6 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
   const optTpWeak = parseFloat(Math.min(Math.max(1.2 + bestPf * 0.25, 1.5), 2.5).toFixed(2));
   const optSl = parseFloat(Math.min(Math.max(0.8, 1.0 / bestPf), 1.5).toFixed(2));
   const optHold = parseFloat(Math.max(48, Math.min(bestHold * 1.3, 168)).toFixed(1));
-  const optEquity = 8;
 
   const nowIso = new Date().toISOString();
   const currentMonthKey = `${new Date().getFullYear()}-${new Date().getMonth() + 1}`;

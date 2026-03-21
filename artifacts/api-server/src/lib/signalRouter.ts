@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import type { SignalCandidate } from "./strategies.js";
 import type { TradingMode } from "./deriv.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "./deriv.js";
+import { getCorrelatedInstruments, classifyInstrument } from "./regimeEngine.js";
 
 export interface AllocationDecision {
   signal: SignalCandidate;
@@ -40,6 +41,7 @@ interface PortfolioContext {
   minCompositeScore: number;
   minEvThreshold: number;
   minRrRatio: number;
+  openTrades: { symbol: string; side: string; strategyName: string; mode: string }[];
 }
 
 function getModePrefix(mode: TradingMode): string {
@@ -137,40 +139,103 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
     minCompositeScore: parseFloat(stateMap["min_composite_score"] || "85"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.003"),
     minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
+    openTrades: openTrades.map(t => ({
+      symbol: t.symbol,
+      side: t.side,
+      strategyName: t.strategyName,
+      mode: t.mode,
+    })),
   };
 }
 
-function getAllocationPct(compositeScore: number, mode: string): number {
-  const strong = compositeScore >= 92;
-  const medium = compositeScore >= 85 && compositeScore < 92;
+function getAllocationPctByScore(compositeScore: number): { pct: number; tier: string } {
+  if (compositeScore >= 90) return { pct: 0.25, tier: "high" };
+  if (compositeScore >= 85) return { pct: 0.20, tier: "medium" };
+  return { pct: 0, tier: "reject" };
+}
 
-  switch (mode) {
-    case "conservative":
-      if (strong) return 0.25;
-      if (medium) return 0.20;
-      return 0.15;
-    case "aggressive":
-      if (strong) return 0.25;
-      if (medium) return 0.23;
-      return 0.20;
-    case "balanced":
-    default:
-      if (strong) return 0.25;
-      if (medium) return 0.22;
-      return 0.20;
+function checkConflicts(
+  signal: SignalCandidate,
+  openTrades: { symbol: string; side: string; strategyName: string }[],
+  alreadyAllowed: SignalCandidate[],
+): { blocked: boolean; reason: string | null } {
+  const existingOnSymbol = openTrades.filter(t => t.symbol === signal.symbol);
+  const pendingOnSymbol = alreadyAllowed.filter(s => s.symbol === signal.symbol);
+  const allOnSymbol = [...existingOnSymbol, ...pendingOnSymbol.map(s => ({ symbol: s.symbol, side: s.direction, strategyName: s.strategyName }))];
+
+  for (const existing of allOnSymbol) {
+    if (existing.side !== signal.direction) {
+      return { blocked: true, reason: `Opposing direction on ${signal.symbol}: existing ${existing.side} vs new ${signal.direction}` };
+    }
   }
+
+  const sameFamily = allOnSymbol.filter(t => {
+    const family = (signal as any).strategyFamily;
+    return family && t.strategyName.includes(family.replace("_", "-"));
+  });
+  if (sameFamily.length >= 2) {
+    return { blocked: true, reason: `Too many entries from same family on ${signal.symbol}` };
+  }
+
+  return { blocked: false, reason: null };
+}
+
+function checkCorrelationExposure(
+  signal: SignalCandidate,
+  openTrades: { symbol: string; side: string }[],
+  alreadyAllowed: SignalCandidate[],
+): { blocked: boolean; reason: string | null } {
+  const correlated = getCorrelatedInstruments(signal.symbol);
+  const signalFamily = classifyInstrument(signal.symbol);
+
+  const allActive = [
+    ...openTrades.map(t => ({ symbol: t.symbol, side: t.side })),
+    ...alreadyAllowed.map(s => ({ symbol: s.symbol, side: s.direction })),
+  ];
+
+  let familyExposure = 0;
+  for (const active of allActive) {
+    if (correlated.includes(active.symbol) || classifyInstrument(active.symbol) === signalFamily) {
+      familyExposure++;
+    }
+  }
+
+  if (familyExposure >= 3) {
+    return { blocked: true, reason: `Max correlated exposure (${familyExposure} positions in ${signalFamily} family)` };
+  }
+
+  return { blocked: false, reason: null };
+}
+
+function rankCandidates(candidates: SignalCandidate[]): SignalCandidate[] {
+  return [...candidates].sort((a, b) => {
+    const scoreWeight = 0.50;
+    const evWeight = 0.30;
+    const regimeWeight = 0.20;
+
+    const aRank = a.compositeScore * scoreWeight +
+      (a.expectedValue * 10000) * evWeight +
+      ((a as any).regimeConfidence ?? 0.5) * 100 * regimeWeight;
+
+    const bRank = b.compositeScore * scoreWeight +
+      (b.expectedValue * 10000) * evWeight +
+      ((b as any).regimeConfidence ?? 0.5) * 100 * regimeWeight;
+
+    return bRank - aRank;
+  });
 }
 
 export async function routeSignals(candidates: SignalCandidate[], tradingMode: TradingMode): Promise<AllocationDecision[]> {
   const ctx = await getPortfolioContext(tradingMode);
   const decisions: AllocationDecision[] = [];
 
-  const sorted = [...candidates].sort((a, b) => b.compositeScore - a.compositeScore);
+  const ranked = rankCandidates(candidates);
 
   let remainingCapital = ctx.availableCapital;
   let currentOpenCount = ctx.openTradeCount;
+  const allowedSignals: SignalCandidate[] = [];
 
-  for (const signal of sorted) {
+  for (const signal of ranked) {
     let allowed = true;
     let rejectionReason: string | null = null;
     let capitalAllocationPct = 0;
@@ -212,36 +277,61 @@ export async function routeSignals(candidates: SignalCandidate[], tradingMode: T
       rejectionReason = `Expected value too low (${signal.expectedValue.toFixed(4)} < ${ctx.minEvThreshold})`;
     } else if (sl <= 0 || tp <= 0) {
       allowed = false;
-      rejectionReason = `Invalid SL/TP values (SL=${sl.toFixed(2)}, TP=${tp.toFixed(2)}) — cannot compute R:R`;
+      rejectionReason = `Invalid SL/TP values`;
     } else if (rrRatio < ctx.minRrRatio) {
       allowed = false;
       rejectionReason = `Reward/risk too low (${rrRatio.toFixed(2)} < ${ctx.minRrRatio})`;
     } else if (remainingCapital < ctx.totalCapital * 0.05) {
       allowed = false;
       rejectionReason = "Insufficient available capital";
-    } else {
-      capitalAllocationPct = getAllocationPct(signal.compositeScore, ctx.allocationMode);
-      const maxPerTrade = ctx.totalCapital * (ctx.equityPctPerTrade / 100);
-      capitalAmount = Math.min(
-        ctx.totalCapital * capitalAllocationPct,
-        maxPerTrade,
-        remainingCapital
-      );
-      remainingCapital -= capitalAmount;
-      currentOpenCount++;
+    }
 
-      const tpMultiplier = signal.compositeScore >= 92
-        ? ctx.tpMultiplierStrong
-        : signal.compositeScore >= 85
-          ? ctx.tpMultiplierMedium
-          : ctx.tpMultiplierWeak;
-      const baseTp = signal.suggestedTp ?? 0;
-      const baseSl = signal.suggestedSl ?? 0;
-      if (baseTp !== 0) {
-        signal.suggestedTp = baseTp * (tpMultiplier / 2.0);
+    if (allowed) {
+      const conflictCheck = checkConflicts(signal, ctx.openTrades, allowedSignals);
+      if (conflictCheck.blocked) {
+        allowed = false;
+        rejectionReason = conflictCheck.reason;
       }
-      if (baseSl !== 0) {
-        signal.suggestedSl = baseSl * ctx.slRatio;
+    }
+
+    if (allowed) {
+      const corrCheck = checkCorrelationExposure(signal, ctx.openTrades, allowedSignals);
+      if (corrCheck.blocked) {
+        allowed = false;
+        rejectionReason = corrCheck.reason;
+      }
+    }
+
+    if (allowed) {
+      const { pct, tier } = getAllocationPctByScore(signal.compositeScore);
+      if (tier === "reject") {
+        allowed = false;
+        rejectionReason = `Score ${signal.compositeScore} below 85 allocation threshold`;
+      } else {
+        capitalAllocationPct = pct;
+        const maxPerTrade = ctx.totalCapital * (ctx.equityPctPerTrade / 100);
+        capitalAmount = Math.min(
+          ctx.totalCapital * capitalAllocationPct,
+          maxPerTrade,
+          remainingCapital
+        );
+        remainingCapital -= capitalAmount;
+        currentOpenCount++;
+        allowedSignals.push(signal);
+
+        const tpMultiplier = signal.compositeScore >= 92
+          ? ctx.tpMultiplierStrong
+          : signal.compositeScore >= 85
+            ? ctx.tpMultiplierMedium
+            : ctx.tpMultiplierWeak;
+        const baseTp = signal.suggestedTp ?? 0;
+        const baseSl = signal.suggestedSl ?? 0;
+        if (baseTp !== 0) {
+          signal.suggestedTp = baseTp * (tpMultiplier / 2.0);
+        }
+        if (baseSl !== 0) {
+          signal.suggestedSl = baseSl * ctx.slRatio;
+        }
       }
     }
 

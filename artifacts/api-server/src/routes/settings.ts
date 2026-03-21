@@ -33,7 +33,7 @@ function decryptSecret(stored: string): string {
 }
 
 const ALL_SYMBOLS_DEFAULT = "BOOM1000,CRASH1000,BOOM500,CRASH500,BOOM300,CRASH300,BOOM200,CRASH200,R_75,R_100,JD75,STPIDX,RDBEAR";
-const ALL_STRATEGIES_DEFAULT = "trend-pullback,exhaustion-rebound,volatility-breakout,spike-hazard,volatility-expansion,liquidity-sweep,macro-bias";
+const ALL_STRATEGIES_DEFAULT = "trend-pullback,exhaustion-rebound,liquidity-sweep,volatility-breakout,volatility-expansion,spike-hazard";
 
 const SETTING_DEFAULTS: Record<string, string> = {
   max_open_trades: "3",

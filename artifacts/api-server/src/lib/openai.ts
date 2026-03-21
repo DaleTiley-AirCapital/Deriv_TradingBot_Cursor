@@ -61,6 +61,7 @@ export interface SignalContext {
   confidence: number;
   score: number;
   strategyName: string;
+  strategyFamily: string;
   reason: string;
   rsi14: number;
   atr14: number;
@@ -69,6 +70,13 @@ export interface SignalContext {
   zScore: number;
   recentCandles: string;
   recentWinLoss: string;
+  regimeState: string;
+  regimeConfidence: number;
+  instrumentFamily: string;
+  macroBiasModifier: number;
+  compositeScore: number;
+  entryStage: string;
+  expectedValue: number;
 }
 
 export interface AIVerdict {
@@ -80,34 +88,47 @@ export interface AIVerdict {
 export async function verifySignal(ctx: SignalContext): Promise<AIVerdict> {
   const client = await getOpenAIClient();
 
-  const prompt = `You are a quantitative trading AI reviewing a signal on Deriv synthetic indices (Boom/Crash, Volatility). Analyze the following signal and provide your verdict.
+  const prompt = `You are a quantitative trading AI for a LOW-FREQUENCY, HIGH-PROBABILITY capital extraction system on Deriv synthetic indices.
 
-Signal Details:
-- Instrument: ${ctx.symbol}
+This system trades RARELY and holds for HOURS/DAYS. Only approve signals with genuine edge.
+
+CONTEXT:
+- Strategy Family: ${ctx.strategyFamily}
+- Sub-strategy: ${ctx.strategyName}
+- Instrument: ${ctx.symbol} (${ctx.instrumentFamily} family)
 - Direction: ${ctx.direction}
-- Strategy: ${ctx.strategyName}
-- Confidence Score: ${(ctx.confidence * 100).toFixed(1)}%
-- Composite Score: ${ctx.score.toFixed(3)}
-- Reason: ${ctx.reason}
+- Entry Stage: ${ctx.entryStage}
 
-Technical Indicators:
+REGIME:
+- Current Regime: ${ctx.regimeState} (confidence: ${(ctx.regimeConfidence * 100).toFixed(0)}%)
+- Macro Bias Modifier: ${ctx.macroBiasModifier > 0 ? "+" : ""}${(ctx.macroBiasModifier * 100).toFixed(1)}%
+
+SCORES:
+- Composite Score: ${ctx.compositeScore.toFixed(0)}/100
+- Model Score: ${(ctx.score * 100).toFixed(1)}%
+- Confidence: ${(ctx.confidence * 100).toFixed(1)}%
+- Expected Value: ${(ctx.expectedValue * 100).toFixed(3)}%
+
+TECHNICAL INDICATORS:
 - RSI(14): ${ctx.rsi14.toFixed(2)}
 - ATR(14): ${ctx.atr14.toFixed(6)}
 - EMA(20): ${ctx.ema20.toFixed(4)}
-- Bollinger Band Width: ${ctx.bbWidth.toFixed(6)}
+- BB Width: ${ctx.bbWidth.toFixed(6)}
 - Z-Score: ${ctx.zScore.toFixed(3)}
 
-Recent Price Action (last 5 candles):
-${ctx.recentCandles}
+STRATEGY-SPECIFIC EVALUATION:
+${ctx.strategyFamily === "trend_continuation" ? "- Is the trend strong enough to justify a continuation entry?\n- Is pullback depth appropriate (not too deep/shallow)?\n- Does momentum support the trend?" : ""}${ctx.strategyFamily === "mean_reversion" ? "- Is the overstretch genuine (not a trend continuation)?\n- Are reversal signals present (rejection candles, volume)?\n- Is smart money sweep confirmed?" : ""}${ctx.strategyFamily === "breakout_expansion" ? "- Is compression sufficient for a meaningful breakout?\n- Is expansion confirmed (not a false breakout)?\n- Does volume/ATR support the move?" : ""}${ctx.strategyFamily === "spike_event" ? "- Is spike probability statistically elevated?\n- Is the position sizing appropriate for spike risk?\n- Is the hold duration reasonable for spike capture?" : ""}
 
-Recent Win/Loss History for ${ctx.symbol}:
-${ctx.recentWinLoss}
+REASON: ${ctx.reason}
 
-Respond with ONLY valid JSON in this exact format:
+Recent Candles: ${ctx.recentCandles}
+Recent Trades: ${ctx.recentWinLoss}
+
+Respond with ONLY valid JSON:
 {
   "verdict": "agree" | "disagree" | "uncertain",
   "confidenceAdjustment": <number between -20 and +10>,
-  "reasoning": "<1-2 sentence explanation>"
+  "reasoning": "<1-2 sentence strategy-specific explanation>"
 }`;
 
   const response = await client.chat.completions.create({
@@ -162,7 +183,7 @@ export interface BacktestAnalysis {
 export async function analyseBacktest(metrics: BacktestMetrics): Promise<BacktestAnalysis> {
   const client = await getOpenAIClient();
 
-  const prompt = `You are a quantitative finance analyst reviewing a backtest result for a trading strategy on Deriv synthetic indices. Provide a clear, actionable analysis.
+  const prompt = `You are a quantitative finance analyst reviewing a backtest for a LOW-FREQUENCY capital extraction system on Deriv synthetic indices.
 
 Backtest Results:
 - Strategy: ${metrics.strategyName}
@@ -178,7 +199,7 @@ Backtest Results:
 - Expectancy per Trade: $${metrics.expectancy.toFixed(2)}
 - Sharpe Ratio: ${metrics.sharpeRatio.toFixed(2)}
 
-Respond with ONLY valid JSON in this exact format:
+Respond with ONLY valid JSON:
 {
   "summary": "<2-3 sentence overall assessment>",
   "whatWorked": "<1-2 sentences on strengths>",

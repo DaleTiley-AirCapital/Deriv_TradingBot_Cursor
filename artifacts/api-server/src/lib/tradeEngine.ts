@@ -3,6 +3,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { getDerivClientForMode, getDerivClientWithDbToken, getModeCapitalKey, getModeCapitalDefault } from "./deriv.js";
 import type { TradingMode } from "./deriv.js";
 import type { AllocationDecision } from "./signalRouter.js";
+import { evaluateProfitHarvest, determineEntryStage, getEntrySizeMultiplier, checkAndAutoExtract } from "./extractionEngine.js";
 
 const MAX_OPEN_TRADES = 3;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
@@ -223,16 +224,28 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
   );
   const totalDeployed = openTrades.reduce((sum, t) => sum + t.size, 0);
 
+  const tradesOnSymbol = openTrades.filter(t => t.symbol === signal.symbol).length;
+  const entryStage = determineEntryStage(tradesOnSymbol, signal.compositeScore ?? 85);
+  if (!entryStage) {
+    console.log(`[TradeEngine] [${mode.toUpperCase()}] Position building rejected: ${tradesOnSymbol} existing on ${signal.symbol}, score=${signal.compositeScore}`);
+    return null;
+  }
+
   const sizing = calculatePositionSize(equity, openTrades.length, totalDeployed, signal.confidence, modeMaxTrades, modeEquityPct);
   if (!sizing.allowed) {
     console.log(`[TradeEngine] [${mode.toUpperCase()}] Position sizing rejected: ${sizing.reason}`);
     return null;
   }
 
+  const stageMultiplier = getEntrySizeMultiplier(entryStage);
+  sizing.size = sizing.size * stageMultiplier;
+
   if (decision.capitalAmount > 0 && decision.capitalAmount < sizing.size) {
     console.log(`[TradeEngine] [${mode.toUpperCase()}] AI-adjusted size cap: ${sizing.size.toFixed(2)} → ${decision.capitalAmount.toFixed(2)}`);
     sizing.size = decision.capitalAmount;
   }
+
+  console.log(`[TradeEngine] [${mode.toUpperCase()}] Entry stage: ${entryStage} (${tradesOnSymbol} existing) | Size multiplier: ${stageMultiplier}`);
 
   const historicalAvgMovePct = await getHistoricalAvgMove(signal.symbol, signal.strategyName);
 
@@ -430,6 +443,19 @@ export async function manageOpenPositions(): Promise<void> {
           .where(eq(tradesTable.id, trade.id));
       }
 
+      const harvestCheck = evaluateProfitHarvest({
+        entryPrice: trade.entryPrice,
+        currentPrice,
+        peakPrice: newPeak,
+        direction,
+        tradeId: trade.id,
+      });
+
+      if (harvestCheck.shouldHarvest) {
+        await closePosition(trade.id, currentPrice, `profit_harvest: ${harvestCheck.harvestReason}`);
+        continue;
+      }
+
       const slHit = direction === "buy"
         ? currentPrice <= activeSl
         : currentPrice >= activeSl;
@@ -471,6 +497,15 @@ export async function manageOpenPositions(): Promise<void> {
       console.error(`[TradeEngine] Error managing trade #${trade.id}:`, err instanceof Error ? err.message : err);
     }
   }
+
+  const modes: TradingMode[] = ["paper", "demo", "real"];
+  for (const m of modes) {
+    try {
+      await checkAndAutoExtract(m);
+    } catch (err) {
+      console.error(`[TradeEngine] Extraction check error for ${m}:`, err instanceof Error ? err.message : err);
+    }
+  }
 }
 
 async function closePosition(tradeId: number, exitPrice: number, exitReason: string): Promise<void> {
@@ -505,5 +540,13 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
     })
     .where(eq(tradesTable.id, tradeId));
 
-  console.log(`[TradeEngine] Closed trade #${tradeId} (${trade.symbol} ${trade.side} [${tradeMode}]) | Exit: ${exitPrice.toFixed(4)} | P&L: $${pnl.toFixed(2)} | Reason: ${exitReason}`);
+  const capitalKey = getModeCapitalKey(tradeMode);
+  const capitalDefault = getModeCapitalDefault(tradeMode);
+  const currentCapitalRows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, capitalKey));
+  const currentCapital = parseFloat(currentCapitalRows[0]?.value || capitalDefault);
+  const newCapital = currentCapital + pnl;
+  await db.insert(platformStateTable).values({ key: capitalKey, value: String(newCapital) })
+    .onConflictDoUpdate({ target: platformStateTable.key, set: { value: String(newCapital), updatedAt: new Date() } });
+
+  console.log(`[TradeEngine] Closed trade #${tradeId} (${trade.symbol} ${trade.side} [${tradeMode}]) | Exit: ${exitPrice.toFixed(4)} | P&L: $${pnl.toFixed(2)} | Capital: $${currentCapital.toFixed(2)} → $${newCapital.toFixed(2)} | Reason: ${exitReason}`);
 }

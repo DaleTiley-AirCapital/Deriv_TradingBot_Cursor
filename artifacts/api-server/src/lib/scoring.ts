@@ -1,5 +1,6 @@
 import type { FeatureVector } from "./features.js";
 import type { SignalCandidate } from "./strategies.js";
+import type { StrategyFamily } from "./regimeEngine.js";
 
 export interface ScoringDimensions {
   regimeFit: number;
@@ -20,57 +21,68 @@ export interface ScoringWeights {
 }
 
 export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
-  regimeFit: 1 / 6,
-  setupQuality: 1 / 6,
-  trendAlignment: 1 / 6,
-  volatilityCondition: 1 / 6,
-  rewardRisk: 1 / 6,
-  probabilityOfSuccess: 1 / 6,
+  regimeFit: 0.22,
+  setupQuality: 0.20,
+  trendAlignment: 0.15,
+  volatilityCondition: 0.13,
+  rewardRisk: 0.15,
+  probabilityOfSuccess: 0.15,
 };
 
-const STRATEGY_IDEAL_REGIMES: Record<string, string[]> = {
-  "trend-pullback": ["trending_up", "trending_down"],
-  "exhaustion-rebound": ["ranging", "volatile"],
-  "volatility-breakout": ["volatile", "ranging"],
-  "spike-hazard": ["trending_up", "trending_down", "ranging", "volatile"],
-  "volatility-expansion": ["volatile", "ranging"],
-  "liquidity-sweep": ["ranging", "volatile"],
-  "macro-bias": ["trending_up", "trending_down", "ranging", "volatile"],
+const FAMILY_IDEAL_REGIMES: Record<string, string[]> = {
+  "trend_continuation": ["trend_up", "trend_down"],
+  "mean_reversion": ["mean_reversion"],
+  "breakout_expansion": ["compression", "breakout_expansion"],
+  "spike_event": ["spike_zone"],
+  "trend-continuation": ["trend_up", "trend_down"],
+  "trend-pullback": ["trend_up", "trend_down"],
+  "exhaustion-rebound": ["mean_reversion"],
+  "liquidity-sweep": ["mean_reversion"],
+  "mean-reversion": ["mean_reversion"],
+  "volatility-breakout": ["compression", "breakout_expansion"],
+  "volatility-expansion": ["compression", "breakout_expansion"],
+  "breakout-expansion": ["compression", "breakout_expansion"],
+  "spike-hazard": ["spike_zone"],
 };
 
-const STRATEGY_IDEAL_VOLATILITY: Record<string, { min: number; max: number }> = {
+const FAMILY_IDEAL_VOLATILITY: Record<string, { min: number; max: number }> = {
+  "trend_continuation": { min: 0.001, max: 0.004 },
+  "mean_reversion": { min: 0.002, max: 0.006 },
+  "breakout_expansion": { min: 0.003, max: 0.010 },
+  "spike_event": { min: 0.001, max: 0.010 },
+  "trend-continuation": { min: 0.001, max: 0.004 },
   "trend-pullback": { min: 0.001, max: 0.004 },
   "exhaustion-rebound": { min: 0.002, max: 0.006 },
-  "volatility-breakout": { min: 0.003, max: 0.008 },
-  "spike-hazard": { min: 0.001, max: 0.010 },
-  "volatility-expansion": { min: 0.003, max: 0.010 },
   "liquidity-sweep": { min: 0.001, max: 0.005 },
-  "macro-bias": { min: 0.001, max: 0.006 },
+  "mean-reversion": { min: 0.002, max: 0.006 },
+  "volatility-breakout": { min: 0.003, max: 0.008 },
+  "volatility-expansion": { min: 0.003, max: 0.010 },
+  "breakout-expansion": { min: 0.003, max: 0.010 },
+  "spike-hazard": { min: 0.001, max: 0.010 },
 };
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function computeRegimeFit(features: FeatureVector, strategyName: string): number {
-  const idealRegimes = STRATEGY_IDEAL_REGIMES[strategyName] ?? [];
+function computeRegimeFit(features: FeatureVector, candidate: SignalCandidate): number {
+  const regimeLabel = (candidate as any).regimeState || features.regimeLabel;
+  const lookupKeys = [candidate.strategyName, (candidate as any).strategyFamily];
+  let idealRegimes: string[] = [];
+  for (const key of lookupKeys) {
+    if (FAMILY_IDEAL_REGIMES[key]) {
+      idealRegimes = FAMILY_IDEAL_REGIMES[key];
+      break;
+    }
+  }
   if (idealRegimes.length === 0) return 50;
 
-  const isIdeal = idealRegimes.includes(features.regimeLabel);
+  const isIdeal = idealRegimes.includes(regimeLabel);
   if (!isIdeal) return 15;
 
-  let score = 70;
-
-  if (features.regimeLabel === "trending_up" || features.regimeLabel === "trending_down") {
-    const trendStrength = Math.abs(features.emaSlope) / 0.002;
-    score += clamp(trendStrength * 30, 0, 30);
-  } else if (features.regimeLabel === "ranging") {
-    const rangeConfidence = 1 - Math.min(Math.abs(features.emaSlope) / 0.001, 1);
-    score += clamp(rangeConfidence * 30, 0, 30);
-  } else if (features.regimeLabel === "volatile") {
-    const volStrength = Math.min(features.atrRank / 1.5, 1);
-    score += clamp(volStrength * 30, 0, 30);
-  }
+  let score = 75;
+  const regimeConf = (candidate as any).regimeConfidence ?? 0.5;
+  score += clamp(regimeConf * 25, 0, 25);
 
   return clamp(Math.round(score), 0, 100);
 }
@@ -123,8 +135,16 @@ function computeTrendAlignment(features: FeatureVector, direction: "buy" | "sell
   return clamp(Math.round(score), 0, 100);
 }
 
-function computeVolatilityCondition(features: FeatureVector, strategyName: string): number {
-  const ideal = STRATEGY_IDEAL_VOLATILITY[strategyName] ?? { min: 0.001, max: 0.006 };
+function computeVolatilityCondition(features: FeatureVector, candidate: SignalCandidate): number {
+  const lookupKeys = [candidate.strategyName, (candidate as any).strategyFamily];
+  let ideal = { min: 0.001, max: 0.006 };
+  for (const key of lookupKeys) {
+    if (FAMILY_IDEAL_VOLATILITY[key]) {
+      ideal = FAMILY_IDEAL_VOLATILITY[key];
+      break;
+    }
+  }
+
   const midpoint = (ideal.min + ideal.max) / 2;
   const halfRange = (ideal.max - ideal.min) / 2;
 
@@ -179,10 +199,10 @@ export function computeScoringDimensions(
   modelScore: number
 ): ScoringDimensions {
   return {
-    regimeFit: computeRegimeFit(features, candidate.strategyName),
+    regimeFit: computeRegimeFit(features, candidate),
     setupQuality: computeSetupQuality(candidate, modelScore),
     trendAlignment: computeTrendAlignment(features, candidate.direction),
-    volatilityCondition: computeVolatilityCondition(features, candidate.strategyName),
+    volatilityCondition: computeVolatilityCondition(features, candidate),
     rewardRisk: computeRewardRisk(candidate),
     probabilityOfSuccess: computeProbabilityOfSuccess(modelScore),
   };

@@ -85,7 +85,7 @@ router.post("/signals/scan", async (_req, res): Promise<void> => {
       return;
     }
 
-    const decisions = await routeSignals(allCandidates);
+    const decisions = await routeSignals(allCandidates, "paper");
     await logSignalDecisions(decisions);
 
     const allowed = decisions.filter(d => d.allowed);

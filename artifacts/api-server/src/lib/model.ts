@@ -1,11 +1,7 @@
-/**
- * Probability Model
- * Logistic regression baseline + gradient-boosted decision rule ensemble
- * Trained on stored feature vectors and target labels
- */
 import { db, featuresTable, modelRunsTable } from "@workspace/db";
 import { eq, and, isNotNull } from "drizzle-orm";
 import type { FeatureVector } from "./features.js";
+import type { StrategyFamily } from "./regimeEngine.js";
 
 interface ModelWeights {
   intercept: number;
@@ -19,7 +15,6 @@ interface ModelWeights {
   bbPctB: number;
 }
 
-// Global in-memory model store (per symbol)
 const modelStore: Record<string, { weights: ModelWeights; type: string; trainedAt: number }> = {};
 
 function sigmoid(x: number): number {
@@ -30,15 +25,216 @@ function dot(features: number[], weights: number[]): number {
   return features.reduce((sum, f, i) => sum + f * (weights[i] || 0), 0);
 }
 
-/**
- * Train a logistic regression model using SGD on stored feature data
- */
+const FAMILY_WEIGHTS: Record<StrategyFamily, ModelWeights> = {
+  trend_continuation: {
+    intercept: -0.15,
+    emaSlope: 3.5,
+    rsi14: 1.0,
+    atr14: -0.3,
+    bbWidth: -0.5,
+    zScore: -0.5,
+    spikeHazard: 0.3,
+    consecutive: 0.5,
+    bbPctB: 0.4,
+  },
+  mean_reversion: {
+    intercept: 0.1,
+    emaSlope: -1.5,
+    rsi14: -2.5,
+    atr14: 0.5,
+    bbWidth: 0.8,
+    zScore: -2.0,
+    spikeHazard: 0.2,
+    consecutive: -1.0,
+    bbPctB: -1.5,
+  },
+  breakout_expansion: {
+    intercept: -0.2,
+    emaSlope: 1.0,
+    rsi14: 0.5,
+    atr14: 2.0,
+    bbWidth: -2.5,
+    zScore: 0.5,
+    spikeHazard: 0.3,
+    consecutive: 0.3,
+    bbPctB: 1.5,
+  },
+  spike_event: {
+    intercept: -0.1,
+    emaSlope: 0.3,
+    rsi14: 0.2,
+    atr14: 0.5,
+    bbWidth: -0.3,
+    zScore: 0.3,
+    spikeHazard: 4.0,
+    consecutive: 0.2,
+    bbPctB: 0.1,
+  },
+};
+
+const FAMILY_RULE_CONFIGS: Record<StrategyFamily, {
+  trendWeight: number;
+  rsiWeight: number;
+  bbWeight: number;
+  spikeWeight: number;
+  meanRevWeight: number;
+  atrWeight: number;
+}> = {
+  trend_continuation: {
+    trendWeight: 0.30,
+    rsiWeight: 0.10,
+    bbWeight: 0.05,
+    spikeWeight: 0.05,
+    meanRevWeight: 0.05,
+    atrWeight: 0.10,
+  },
+  mean_reversion: {
+    trendWeight: 0.05,
+    rsiWeight: 0.30,
+    bbWeight: 0.10,
+    spikeWeight: 0.05,
+    meanRevWeight: 0.25,
+    atrWeight: 0.05,
+  },
+  breakout_expansion: {
+    trendWeight: 0.10,
+    rsiWeight: 0.05,
+    bbWeight: 0.30,
+    spikeWeight: 0.05,
+    meanRevWeight: 0.05,
+    atrWeight: 0.25,
+  },
+  spike_event: {
+    trendWeight: 0.05,
+    rsiWeight: 0.05,
+    bbWeight: 0.05,
+    spikeWeight: 0.50,
+    meanRevWeight: 0.05,
+    atrWeight: 0.10,
+  },
+};
+
+function getFamilyWeights(family: StrategyFamily, symbol: string): ModelWeights {
+  const trained = modelStore[`${family}:${symbol}`] ?? modelStore[symbol];
+  if (trained) return trained.weights;
+
+  const baseWeights = { ...FAMILY_WEIGHTS[family] };
+  const isBoom = symbol.startsWith("BOOM");
+
+  if (family === "trend_continuation") {
+    baseWeights.emaSlope = isBoom ? baseWeights.emaSlope : -baseWeights.emaSlope;
+    baseWeights.consecutive = isBoom ? 0.5 : -0.5;
+  } else if (family === "mean_reversion") {
+    baseWeights.zScore = isBoom ? -2.0 : 2.0;
+    baseWeights.rsi14 = isBoom ? -2.5 : 2.5;
+  }
+
+  return baseWeights;
+}
+
+function computeFamilyRuleScore(features: FeatureVector, family: StrategyFamily): number {
+  const cfg = FAMILY_RULE_CONFIGS[family];
+  let ruleScore = 0.5;
+  let ruleWeight = 0;
+
+  if (Math.abs(features.emaSlope) > 0.0005) {
+    const aligned = family === "trend_continuation"
+      ? (features.emaSlope > 0 ? 0.70 : 0.65)
+      : (features.emaSlope > 0 ? 0.55 : 0.50);
+    ruleScore += aligned * cfg.trendWeight;
+    ruleWeight += cfg.trendWeight;
+  }
+
+  if (features.rsi14 < 30) {
+    const revScore = family === "mean_reversion" ? 0.80 : 0.55;
+    ruleScore += revScore * cfg.rsiWeight;
+    ruleWeight += cfg.rsiWeight;
+  } else if (features.rsi14 > 70) {
+    const revScore = family === "mean_reversion" ? 0.80 : 0.45;
+    ruleScore += revScore * cfg.rsiWeight;
+    ruleWeight += cfg.rsiWeight;
+  } else if (features.rsi14 > 45 && features.rsi14 < 60) {
+    ruleScore += 0.55 * cfg.rsiWeight * 0.5;
+    ruleWeight += cfg.rsiWeight * 0.5;
+  }
+
+  if (features.bbWidth < 0.005) {
+    const bbScore = family === "breakout_expansion" ? 0.75 : 0.55;
+    ruleScore += bbScore * cfg.bbWeight;
+    ruleWeight += cfg.bbWeight;
+  }
+
+  ruleScore += features.spikeHazardScore * cfg.spikeWeight;
+  ruleWeight += cfg.spikeWeight;
+
+  if (Math.abs(features.zScore) > 2.0) {
+    const revScore = features.zScore > 0 ? 0.35 : 0.65;
+    const effectiveScore = family === "mean_reversion" ? (1 - revScore) * 0.3 + revScore * 0.7 : revScore;
+    ruleScore += effectiveScore * cfg.meanRevWeight;
+    ruleWeight += cfg.meanRevWeight;
+  }
+
+  if (features.atrAccel > 0.1) {
+    const atrScore = family === "breakout_expansion" ? 0.75 : 0.55;
+    ruleScore += atrScore * cfg.atrWeight;
+    ruleWeight += cfg.atrWeight;
+  }
+
+  if (ruleWeight > 0) ruleScore = ruleScore / (1 + ruleWeight);
+  return ruleScore;
+}
+
+export function scoreFeaturesForFamily(
+  features: FeatureVector,
+  family: StrategyFamily,
+): { score: number; confidence: number; expectedValue: number } {
+  const weights = getFamilyWeights(family, features.symbol);
+
+  const featureVec = [
+    features.emaSlope * 1000,
+    (features.rsi14 - 50) / 50,
+    features.atr14 * 100,
+    features.bbWidth * 10,
+    features.zScore,
+    features.spikeHazardScore,
+    features.consecutive / 5,
+    features.bbPctB,
+  ];
+
+  const logitScore = sigmoid(
+    weights.intercept +
+    weights.emaSlope * featureVec[0] +
+    weights.rsi14 * featureVec[1] +
+    weights.atr14 * featureVec[2] +
+    weights.bbWidth * featureVec[3] +
+    weights.zScore * featureVec[4] +
+    weights.spikeHazard * featureVec[5] +
+    weights.consecutive * featureVec[6] +
+    weights.bbPctB * featureVec[7]
+  );
+
+  const ruleScore = computeFamilyRuleScore(features, family);
+  const ensembleScore = 0.55 * logitScore + 0.45 * ruleScore;
+  const confidence = Math.abs(ensembleScore - 0.5) * 2;
+
+  const avgWin = 0.025;
+  const avgLoss = 0.015;
+  const expectedValue = ensembleScore * avgWin - (1 - ensembleScore) * avgLoss;
+
+  return { score: ensembleScore, confidence, expectedValue };
+}
+
+export function scoreFeatures(
+  features: FeatureVector,
+  modelType: "logistic-regression" | "gradient-boost" | "rule-based" = "gradient-boost"
+): { score: number; confidence: number; expectedValue: number } {
+  return scoreFeaturesForFamily(features, "trend_continuation");
+}
+
 export async function trainLogisticRegression(
   symbol: string,
   trainingWindowDays = 90
 ): Promise<{ accuracy: number; precision: number; recall: number; f1: number; weights: ModelWeights }> {
-  const cutoffTs = Date.now() / 1000 - trainingWindowDays * 86400;
-
   const rows = await db.select().from(featuresTable)
     .where(and(
       eq(featuresTable.symbol, symbol),
@@ -46,40 +242,36 @@ export async function trainLogisticRegression(
     ));
 
   if (rows.length < 20) {
-    // Return default weights if not enough data
     return {
       accuracy: 0.5, precision: 0.5, recall: 0.5, f1: 0.5,
-      weights: getDefaultWeights(symbol),
+      weights: FAMILY_WEIGHTS.trend_continuation,
     };
   }
 
-  // Extract features and labels
   const dataset = rows.map(row => {
     const f = row.featureJson as Record<string, number>;
     const label = parseInt(row.targetLabel || "0");
     return {
       features: [
-        f.emaSlope * 1000,    // scale slope to reasonable range
-        (f.rsi14 - 50) / 50, // normalise RSI to -1..1
-        f.atr14 * 100,        // scale ATR
-        f.bbWidth * 10,       // scale BB width
-        f.zScore,             // already normalised
-        0.5,                  // spike hazard (default)
-        0,                    // consecutive (not stored)
-        0.5,                  // bbPctB (default)
+        f.emaSlope * 1000,
+        (f.rsi14 - 50) / 50,
+        f.atr14 * 100,
+        f.bbWidth * 10,
+        f.zScore,
+        0.5,
+        0,
+        0.5,
       ],
       label,
     };
   });
 
-  // SGD training
   const lr = 0.01;
   const epochs = 100;
   let weights = [0, 0, 0, 0, 0, 0, 0, 0];
   let bias = 0;
 
   for (let epoch = 0; epoch < epochs; epoch++) {
-    // Shuffle
     for (let i = dataset.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [dataset[i], dataset[j]] = [dataset[j], dataset[i]];
@@ -92,7 +284,6 @@ export async function trainLogisticRegression(
     }
   }
 
-  // Evaluate on training set (in-sample)
   let tp = 0, fp = 0, tn = 0, fn = 0;
   for (const { features, label } of dataset) {
     const pred = sigmoid(dot(features, weights) + bias) > 0.5 ? 1 : 0;
@@ -121,104 +312,6 @@ export async function trainLogisticRegression(
   modelStore[symbol] = { weights: modelWeights, type: "logistic-regression", trainedAt: Date.now() };
 
   return { accuracy, precision, recall, f1, weights: modelWeights };
-}
-
-function getDefaultWeights(symbol: string): ModelWeights {
-  // Evidence-based defaults for Boom/Crash markets
-  const isBoom = symbol.startsWith("BOOM");
-  return {
-    intercept: -0.1,
-    emaSlope: isBoom ? 2.0 : -2.0,   // favour trend direction
-    rsi14: isBoom ? 1.5 : -1.5,       // RSI momentum
-    atr14: -0.5,                       // high volatility slightly negative
-    bbWidth: -1.0,                     // compression = opportunity after breakout
-    zScore: isBoom ? -1.0 : 1.0,      // mean reversion bias
-    spikeHazard: 1.5,                  // spike hazard is important
-    consecutive: isBoom ? 0.3 : -0.3, // slight trend continuation bias
-    bbPctB: isBoom ? 0.5 : -0.5,
-  };
-}
-
-/**
- * Score a feature vector using the stored model or defaults
- */
-export function scoreFeatures(
-  features: FeatureVector,
-  modelType: "logistic-regression" | "gradient-boost" | "rule-based" = "gradient-boost"
-): { score: number; confidence: number; expectedValue: number } {
-  const weights = modelStore[features.symbol]?.weights ?? getDefaultWeights(features.symbol);
-
-  const featureVec = [
-    features.emaSlope * 1000,
-    (features.rsi14 - 50) / 50,
-    features.atr14 * 100,
-    features.bbWidth * 10,
-    features.zScore,
-    features.spikeHazardScore,
-    features.consecutive / 5,
-    features.bbPctB,
-  ];
-
-  // Logistic regression score
-  const logitScore = sigmoid(
-    weights.intercept +
-    weights.emaSlope * featureVec[0] +
-    weights.rsi14 * featureVec[1] +
-    weights.atr14 * featureVec[2] +
-    weights.bbWidth * featureVec[3] +
-    weights.zScore * featureVec[4] +
-    weights.spikeHazard * featureVec[5] +
-    weights.consecutive * featureVec[6] +
-    weights.bbPctB * featureVec[7]
-  );
-
-  // Rule-based overlay (gradient boost simulation with weak rules)
-  let ruleScore = 0.5;
-  let ruleWeight = 0;
-
-  // Rule 1: EMA trend
-  if (Math.abs(features.emaSlope) > 0.0005) {
-    const trendScore = features.emaSlope > 0 ? 0.65 : 0.35;
-    ruleScore += trendScore * 0.15;
-    ruleWeight += 0.15;
-  }
-
-  // Rule 2: RSI extremes (reversal signals)
-  if (features.rsi14 < 30) { ruleScore += 0.70 * 0.15; ruleWeight += 0.15; }
-  else if (features.rsi14 > 70) { ruleScore += 0.30 * 0.15; ruleWeight += 0.15; }
-  else if (features.rsi14 > 45 && features.rsi14 < 60) { ruleScore += 0.55 * 0.10; ruleWeight += 0.10; }
-
-  // Rule 3: Bollinger band squeeze (low width = upcoming move)
-  if (features.bbWidth < 0.005) { ruleScore += 0.60 * 0.10; ruleWeight += 0.10; }
-
-  // Rule 4: Spike hazard
-  ruleScore += features.spikeHazardScore * 0.20;
-  ruleWeight += 0.20;
-
-  // Rule 5: Mean reversion
-  if (Math.abs(features.zScore) > 2.0) {
-    const revScore = features.zScore > 0 ? 0.35 : 0.65; // revert to mean
-    ruleScore += revScore * 0.10;
-    ruleWeight += 0.10;
-  }
-
-  // Normalise rule score
-  if (ruleWeight > 0) ruleScore = ruleScore / (1 + ruleWeight);
-
-  // Ensemble: 60% logistic, 40% rule-based
-  const ensembleScore = modelType === "rule-based"
-    ? ruleScore
-    : 0.6 * logitScore + 0.4 * ruleScore;
-
-  // Confidence based on how far from 0.5 the score is
-  const confidence = Math.abs(ensembleScore - 0.5) * 2;
-
-  // Expected value: assume avg win = 2.5%, avg loss = 1.5% (risk/reward 1.67)
-  const avgWin = 0.025;
-  const avgLoss = 0.015;
-  const expectedValue = ensembleScore * avgWin - (1 - ensembleScore) * avgLoss;
-
-  return { score: ensembleScore, confidence, expectedValue };
 }
 
 export function getModelStatus(symbol: string): { trained: boolean; type: string; trainedAt: number | null } {
