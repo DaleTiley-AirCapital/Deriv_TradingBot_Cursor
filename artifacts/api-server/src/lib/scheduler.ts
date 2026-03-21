@@ -5,7 +5,7 @@ import { openPosition, manageOpenPositions } from "./tradeEngine.js";
 import { verifySignal } from "./openai.js";
 import { db, platformStateTable, tradesTable, candlesTable, backtestRunsTable, backtestTradesTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
-import { runBacktestSimulation } from "../routes/backtest.js";
+import { runBacktestSimulation } from "./backtestEngine.js";
 
 const DEFAULT_SYMBOLS = [
   "BOOM1000", "CRASH1000", "BOOM500", "CRASH500",
@@ -242,7 +242,17 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
         expectancy: result.expectancy,
         sharpeRatio: result.sharpeRatio,
         configJson: { allocationMode: "balanced", symbol, strategyName: strategy, source: "monthly-reoptimise" },
-        metricsJson: { equityCurve: result.equityCurve },
+        metricsJson: {
+          equityCurve: result.equityCurve,
+          grossProfit: result.grossProfit,
+          grossLoss: result.grossLoss,
+          avgWin: result.avgWin,
+          avgLoss: result.avgLoss,
+          maxDrawdownDuration: result.maxDrawdownDuration,
+          monthlyReturns: result.monthlyReturns,
+          returnBySymbol: result.returnBySymbol,
+          returnByRegime: result.returnByRegime,
+        },
         status: "completed",
       });
 

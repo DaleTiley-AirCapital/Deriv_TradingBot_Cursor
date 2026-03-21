@@ -1,246 +1,67 @@
 import { Router, type IRouter } from "express";
 import { desc, eq, asc } from "drizzle-orm";
 import { db, backtestRunsTable, backtestTradesTable, candlesTable } from "@workspace/db";
-import { computeFeatures } from "../lib/features.js";
-import { runAllStrategies } from "../lib/strategies.js";
 import { analyseBacktest, isOpenAIConfigured } from "../lib/openai.js";
+import {
+  runBacktestSimulation,
+  runFullBacktest,
+  type BacktestConfig,
+  type BacktestResult,
+} from "../lib/backtestEngine.js";
 
 const router: IRouter = Router();
 
-interface TradeRecord {
-  pnl: number;
-  holdingCandles: number;
-  entryTs: Date;
-  exitTs: Date;
-  direction: string;
-  entryPrice: number;
-  exitPrice: number;
-  exitReason: string;
-}
+export { runBacktestSimulation } from "../lib/backtestEngine.js";
 
-export async function runBacktestSimulation(
-  strategyName: string,
-  symbol: string,
-  initialCapital: number,
-  allocationMode: string
-): Promise<{
-  totalReturn: number; netProfit: number; winRate: number; profitFactor: number;
-  maxDrawdown: number; tradeCount: number; avgHoldingHours: number;
-  expectancy: number; sharpeRatio: number; trades: TradeRecord[];
-  equityCurve: { ts: string; equity: number }[];
-}> {
-  const candles = await db.select().from(candlesTable)
-    .where(eq(candlesTable.symbol, symbol))
-    .orderBy(desc(candlesTable.openTs))
-    .limit(600);
-
-  if (candles.length < 60) {
-    throw new Error(
-      `Insufficient candle data for ${symbol}: only ${candles.length} candles available (minimum 60 required). ` +
-      `Start the data stream and wait for historical candles to accumulate before running a backtest.`
-    );
-  }
-
-  candles.reverse();
-
-  const trades: TradeRecord[] = [];
-  let equity = initialCapital;
-  let peak = initialCapital;
-  let maxDrawdown = 0;
-  const equityCurve: { ts: string; equity: number }[] = [
-    { ts: new Date(candles[0].openTs * 1000).toISOString(), equity: initialCapital }
-  ];
-
-  for (let i = 50; i < candles.length - 20; i += 15) {
-    const windowCandles = candles.slice(0, i + 1);
-    const closes = windowCandles.map(c => c.close);
-    const last = windowCandles[windowCandles.length - 1];
-
-    const ema20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
-    const price = last.close;
-    const distFromEma = (price - ema20) / ema20;
-    const changes = closes.slice(-14).map((c, i, arr) => i > 0 ? c - arr[i - 1] : 0).slice(1);
-    const gains = changes.filter(c => c > 0);
-    const losses = changes.filter(c => c < 0).map(Math.abs);
-    const avgGain = gains.length > 0 ? gains.reduce((a, b) => a + b, 0) / 14 : 0;
-    const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b, 0) / 14 : 0.001;
-    const rsi = 100 - 100 / (1 + avgGain / avgLoss);
-
-    let signal = false;
-    let direction = 1;
-    let directionStr = "long";
-
-    switch (strategyName) {
-      case "trend-pullback":
-        signal = Math.abs(distFromEma) < 0.01 && rsi > 40 && rsi < 65;
-        direction = distFromEma >= 0 ? 1 : -1;
-        directionStr = direction === 1 ? "long" : "short";
-        break;
-      case "exhaustion-rebound":
-        signal = rsi < 32 || rsi > 68;
-        direction = rsi < 32 ? 1 : -1;
-        directionStr = direction === 1 ? "long" : "short";
-        break;
-      case "volatility-breakout": {
-        const std = Math.sqrt(closes.slice(-20).reduce((acc, c) => acc + (c - ema20) ** 2, 0) / 20);
-        signal = std / ema20 < 0.005 && Math.abs(distFromEma) > 0.003;
-        direction = distFromEma > 0 ? 1 : -1;
-        directionStr = direction === 1 ? "long" : "short";
-        break;
-      }
-      case "spike-hazard": {
-        const spikeHash = ((i * 2654435761) >>> 0) / 4294967296;
-        const runLength = i - ((() => {
-          for (let k = i - 1; k >= Math.max(0, i - 200); k--) {
-            const c = candles[k];
-            const range = c.high - c.low;
-            const bodyPct = Math.abs(c.close - c.open) / Math.max(range, 0.0001);
-            if (range / c.close > 0.005 && bodyPct > 0.7) return k;
-          }
-          return Math.max(0, i - 200);
-        })());
-        const hazardProxy = 1 / (1 + Math.exp(-(runLength - 100) / 30));
-        signal = hazardProxy > 0.6 && spikeHash < hazardProxy * 0.25;
-        direction = symbol.startsWith("BOOM") ? 1 : -1;
-        directionStr = direction === 1 ? "long" : "short";
-        break;
-      }
-      case "volatility-expansion": {
-        const std = Math.sqrt(closes.slice(-20).reduce((acc, c) => acc + (c - ema20) ** 2, 0) / 20);
-        const bbW = std / ema20;
-        const recentRange = closes.slice(-5);
-        const rangeExpanding = recentRange.length >= 2 &&
-          Math.abs(recentRange[recentRange.length - 1] - recentRange[recentRange.length - 2]) / ema20 > 0.002;
-        signal = bbW < 0.008 && rangeExpanding;
-        direction = distFromEma > 0 ? 1 : -1;
-        directionStr = direction === 1 ? "long" : "short";
-        break;
-      }
-      case "liquidity-sweep": {
-        const recent = candles.slice(Math.max(0, i - 10), i + 1);
-        const recentHighs = recent.map(c => c.high);
-        const recentLows = recent.map(c => c.low);
-        const swingHigh = Math.max(...recentHighs.slice(0, -1));
-        const swingLow = Math.min(...recentLows.slice(0, -1));
-        const lastC = candles[i];
-        const bodyRatio = Math.abs(lastC.close - lastC.open) / Math.max(lastC.high - lastC.low, 0.0001);
-        const sweptHigh = lastC.high > swingHigh && lastC.close < swingHigh && bodyRatio < 0.35;
-        const sweptLow = lastC.low < swingLow && lastC.close > swingLow && bodyRatio < 0.35;
-        signal = sweptHigh || sweptLow;
-        direction = sweptLow ? 1 : -1;
-        directionStr = direction === 1 ? "long" : "short";
-        break;
-      }
-      case "macro-bias": {
-        const candleTs = candles[i].openTs;
-        const candleDate = new Date(candleTs * 1000);
-        const candleHour = candleDate.getUTCHours();
-        const candleDow = candleDate.getUTCDay();
-        const isActive = (candleHour >= 8 && candleHour <= 11) || (candleHour >= 14 && candleHour <= 17);
-        const isWeekday = candleDow >= 1 && candleDow <= 5;
-        const trendOk = symbol.startsWith("BOOM") ? distFromEma > 0 : distFromEma < 0;
-        signal = isActive && isWeekday && trendOk && Math.abs(distFromEma) > 0.001;
-        direction = symbol.startsWith("BOOM") ? 1 : -1;
-        directionStr = direction === 1 ? "long" : "short";
-        break;
-      }
-    }
-
-    if (!signal) continue;
-
-    const recentPrices = closes.slice(-20);
-    const atrPct = recentPrices.length >= 2
-      ? recentPrices.map((c, idx, arr) => idx > 0 ? Math.abs(c - arr[idx - 1]) / arr[idx - 1] : 0).slice(1).reduce((a, b) => a + b, 0) / (recentPrices.length - 1)
-      : 0.005;
-    const slPct = atrPct * 1.5;
-    const tpPct = atrPct * 2.0;
-    const sl = direction === 1 ? price * (1 - slPct) : price * (1 + slPct);
-    const tp = direction === 1 ? price * (1 + tpPct) : price * (1 - tpPct);
-
-    const entryCandle = last;
-    const candleDurationMs = i > 0
-      ? Math.abs(candles[i].openTs - candles[i - 1].openTs) * 1000
-      : 3600000;
-    const maxHoldMs = 120 * 3600000;
-    const maxHoldCandles = Math.ceil(maxHoldMs / Math.max(candleDurationMs, 1000));
-
-    let exitCandle = candles[Math.min(i + maxHoldCandles, candles.length - 1)];
-    let exitPrice = exitCandle.close;
-    let exitReason = "TIME";
-    let holdingCandles = maxHoldCandles;
-
-    for (let j = i + 1; j <= Math.min(i + maxHoldCandles, candles.length - 1); j++) {
-      const c = candles[j];
-      const slHit = direction === 1 ? c.low <= sl : c.high >= sl;
-      const tpHit = direction === 1 ? c.high >= tp : c.low <= tp;
-      if (tpHit) {
-        exitCandle = c;
-        exitPrice = tp;
-        exitReason = "TP";
-        holdingCandles = j - i;
-        break;
-      }
-      if (slHit) {
-        exitCandle = c;
-        exitPrice = sl;
-        exitReason = "SL";
-        holdingCandles = j - i;
-        break;
-      }
-    }
-
-    const sizePct = allocationMode === "aggressive" ? 0.4 : allocationMode === "conservative" ? 0.15 : 0.25;
-    const positionSize = equity * sizePct;
-    const priceDiff = (exitPrice - price) / price * direction;
-    const pnl = positionSize * priceDiff;
-
-    trades.push({
-      pnl,
-      holdingCandles,
-      entryTs: new Date(entryCandle.openTs * 1000),
-      exitTs: new Date(exitCandle.openTs * 1000),
-      direction: directionStr,
-      entryPrice: price,
-      exitPrice,
-      exitReason,
-    });
-
-    equity += pnl;
-    if (equity > peak) peak = equity;
-    const dd = (equity - peak) / peak;
-    if (dd < maxDrawdown) maxDrawdown = dd;
-    equityCurve.push({ ts: new Date(exitCandle.openTs * 1000).toISOString(), equity });
-  }
-
-  if (trades.length === 0) {
-    return {
-      totalReturn: 0, netProfit: 0, winRate: 0, profitFactor: 0,
-      maxDrawdown: 0, tradeCount: 0, avgHoldingHours: 0, expectancy: 0, sharpeRatio: 0,
-      trades: [],
-      equityCurve: [{ ts: new Date(candles[0].openTs * 1000).toISOString(), equity: initialCapital }],
-    };
-  }
-
-  const wins = trades.filter(t => t.pnl > 0);
-  const lossTrades = trades.filter(t => t.pnl <= 0);
-  const winRate = wins.length / trades.length;
-  const grossProfit = wins.reduce((s, t) => s + t.pnl, 0);
-  const grossLoss = Math.abs(lossTrades.reduce((s, t) => s + t.pnl, 0));
-  const netProfit = equity - initialCapital;
-  const avgHoldingHours = trades.reduce((s, t) => s + (t.exitTs.getTime() - t.entryTs.getTime()) / 3600000, 0) / trades.length;
-  const expectancy = netProfit / trades.length;
-  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit;
-  const totalReturn = netProfit / initialCapital;
-
-  const returns = equityCurve.slice(1).map((v, i) => (v.equity - equityCurve[i].equity) / equityCurve[i].equity);
-  const meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
-  const stdReturn = Math.sqrt(returns.reduce((a, b) => a + (b - meanReturn) ** 2, 0) / returns.length);
-  const sharpeRatio = stdReturn > 0 ? (meanReturn / stdReturn) * Math.sqrt(252) : 0;
-
+function buildMetricsJson(result: BacktestResult) {
+  const pm = result.portfolioMetrics;
   return {
-    totalReturn, netProfit, winRate, profitFactor,
-    maxDrawdown, tradeCount: trades.length, avgHoldingHours, expectancy, sharpeRatio,
-    trades, equityCurve,
+    equityCurve: pm.equityCurve,
+    grossProfit: pm.grossProfit,
+    grossLoss: pm.grossLoss,
+    avgWin: pm.avgWin,
+    avgLoss: pm.avgLoss,
+    maxDrawdownDuration: pm.maxDrawdownDuration,
+    monthlyReturns: pm.monthlyReturns,
+    returnBySymbol: pm.returnBySymbol,
+    returnByRegime: pm.returnByRegime,
+    strategyMetrics: result.strategyMetrics,
+    inSample: result.inSample ? {
+      totalReturn: result.inSample.totalReturn,
+      netProfit: result.inSample.netProfit,
+      winRate: result.inSample.winRate,
+      sharpeRatio: result.inSample.sharpeRatio,
+      tradeCount: result.inSample.tradeCount,
+      maxDrawdown: result.inSample.maxDrawdown,
+      profitFactor: result.inSample.profitFactor,
+    } : undefined,
+    outOfSample: result.outOfSample ? {
+      totalReturn: result.outOfSample.totalReturn,
+      netProfit: result.outOfSample.netProfit,
+      winRate: result.outOfSample.winRate,
+      sharpeRatio: result.outOfSample.sharpeRatio,
+      tradeCount: result.outOfSample.tradeCount,
+      maxDrawdown: result.outOfSample.maxDrawdown,
+      profitFactor: result.outOfSample.profitFactor,
+    } : undefined,
+    walkForward: result.walkForward ? {
+      folds: result.walkForward.folds.map(f => ({
+        foldIndex: f.foldIndex,
+        trainStart: f.trainStart,
+        trainEnd: f.trainEnd,
+        testStart: f.testStart,
+        testEnd: f.testEnd,
+        inSampleSharpe: f.inSample.sharpeRatio,
+        outOfSampleSharpe: f.outOfSample.sharpeRatio,
+        inSampleReturn: f.inSample.totalReturn,
+        outOfSampleReturn: f.outOfSample.totalReturn,
+        inSampleTrades: f.inSample.tradeCount,
+        outOfSampleTrades: f.outOfSample.tradeCount,
+      })),
+      aggregateOOSSharpe: result.walkForward.aggregateOOS.sharpeRatio,
+      aggregateOOSReturn: result.walkForward.aggregateOOS.totalReturn,
+      overfittingRatio: result.walkForward.overfittingRatio,
+    } : undefined,
   };
 }
 
@@ -250,57 +71,176 @@ router.post("/backtest/run", async (req, res): Promise<void> => {
     symbol = "BOOM1000",
     initialCapital = 10000,
     allocationMode = "balanced",
+    walkForward,
   } = req.body ?? {};
 
-  const validStrategies = ["trend-pullback", "exhaustion-rebound", "volatility-breakout", "spike-hazard", "volatility-expansion", "liquidity-sweep", "macro-bias"];
+  const validStrategies = [
+    "trend-pullback", "exhaustion-rebound", "volatility-breakout", "spike-hazard",
+    "volatility-expansion", "liquidity-sweep", "macro-bias",
+  ];
   if (!validStrategies.includes(strategyName)) {
     res.status(400).json({ error: `Invalid strategy. Use: ${validStrategies.join(", ")}` });
     return;
   }
 
   try {
-    const result = await runBacktestSimulation(strategyName, symbol, initialCapital, allocationMode);
+    const mode = allocationMode === "aggressive" ? "live" as const : "paper" as const;
+    const basePct = allocationMode === "aggressive" ? 0.25
+      : allocationMode === "conservative" ? 0.10 : 0.15;
+
+    const config: BacktestConfig = {
+      symbol,
+      symbols: [symbol],
+      strategyName,
+      initialCapital,
+      mode,
+      basePct,
+      walkForward: walkForward ? {
+        trainMonths: walkForward.trainMonths ?? 6,
+        testMonths: walkForward.testMonths ?? 2,
+        stepMonths: walkForward.stepMonths ?? 1,
+      } : undefined,
+    };
+
+    const result = await runFullBacktest(config);
+    const pm = result.portfolioMetrics;
 
     const [row] = await db.insert(backtestRunsTable).values({
       strategyName,
       symbol,
       initialCapital,
-      totalReturn: result.totalReturn,
-      netProfit: result.netProfit,
-      winRate: result.winRate,
-      profitFactor: result.profitFactor,
-      maxDrawdown: result.maxDrawdown,
-      tradeCount: result.tradeCount,
-      avgHoldingHours: result.avgHoldingHours,
-      expectancy: result.expectancy,
-      sharpeRatio: result.sharpeRatio,
+      totalReturn: pm.totalReturn,
+      netProfit: pm.netProfit,
+      winRate: pm.winRate,
+      profitFactor: pm.profitFactor,
+      maxDrawdown: pm.maxDrawdown,
+      tradeCount: pm.tradeCount,
+      avgHoldingHours: pm.avgHoldingHours,
+      expectancy: pm.expectancy,
+      sharpeRatio: pm.sharpeRatio,
       configJson: { allocationMode, symbol, strategyName },
-      metricsJson: { equityCurve: result.equityCurve },
+      metricsJson: buildMetricsJson(result),
       status: "completed",
     }).returning();
 
     if (row && result.trades.length > 0) {
-      await db.insert(backtestTradesTable).values(
-        result.trades.map(t => ({
-          backtestRunId: row.id,
-          entryTs: t.entryTs,
-          exitTs: t.exitTs,
-          direction: t.direction,
-          entryPrice: t.entryPrice,
-          exitPrice: t.exitPrice,
-          pnl: t.pnl,
-          exitReason: t.exitReason,
-        }))
-      );
+      const batchSize = 500;
+      for (let i = 0; i < result.trades.length; i += batchSize) {
+        const batch = result.trades.slice(i, i + batchSize);
+        await db.insert(backtestTradesTable).values(
+          batch.map(t => ({
+            backtestRunId: row.id,
+            entryTs: t.entryTs,
+            exitTs: t.exitTs,
+            direction: t.direction,
+            entryPrice: t.entryPrice,
+            exitPrice: t.exitPrice,
+            pnl: t.pnl,
+            exitReason: t.exitReason,
+          }))
+        );
+      }
     }
 
     res.json({
       success: true,
-      message: `Backtest '${strategyName}' on ${symbol} complete. ${result.tradeCount} trades, win rate ${(result.winRate * 100).toFixed(1)}%, net P&L $${result.netProfit.toFixed(2)}. ID: ${row?.id}`,
+      message: `Backtest '${strategyName}' on ${symbol} complete. ${pm.tradeCount} trades, win rate ${(pm.winRate * 100).toFixed(1)}%, net P&L $${pm.netProfit.toFixed(2)}. ID: ${row?.id}`,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     res.status(500).json({ success: false, message: `Backtest failed: ${message}` });
+  }
+});
+
+router.post("/backtest/portfolio", async (req, res): Promise<void> => {
+  const {
+    symbols = [],
+    initialCapital = 10000,
+    mode = "paper",
+    walkForward,
+  } = req.body ?? {};
+
+  if (!Array.isArray(symbols) || symbols.length === 0) {
+    res.status(400).json({ error: "Provide an array of symbols" });
+    return;
+  }
+
+  try {
+    const config: BacktestConfig = {
+      symbols,
+      initialCapital,
+      mode: mode === "live" ? "live" : "paper",
+      walkForward: walkForward ? {
+        trainMonths: walkForward.trainMonths ?? 6,
+        testMonths: walkForward.testMonths ?? 2,
+        stepMonths: walkForward.stepMonths ?? 1,
+      } : undefined,
+    };
+
+    const result = await runFullBacktest(config);
+    const pm = result.portfolioMetrics;
+
+    const [row] = await db.insert(backtestRunsTable).values({
+      strategyName: "portfolio",
+      symbol: symbols.join(","),
+      initialCapital,
+      totalReturn: pm.totalReturn,
+      netProfit: pm.netProfit,
+      winRate: pm.winRate,
+      profitFactor: pm.profitFactor,
+      maxDrawdown: pm.maxDrawdown,
+      tradeCount: pm.tradeCount,
+      avgHoldingHours: pm.avgHoldingHours,
+      expectancy: pm.expectancy,
+      sharpeRatio: pm.sharpeRatio,
+      configJson: { mode, symbols, source: "portfolio-backtest" },
+      metricsJson: buildMetricsJson(result),
+      status: "completed",
+    }).returning();
+
+    if (row && result.trades.length > 0) {
+      const batchSize = 500;
+      for (let i = 0; i < result.trades.length; i += batchSize) {
+        const batch = result.trades.slice(i, i + batchSize);
+        await db.insert(backtestTradesTable).values(
+          batch.map(t => ({
+            backtestRunId: row.id,
+            entryTs: t.entryTs,
+            exitTs: t.exitTs,
+            direction: t.direction,
+            entryPrice: t.entryPrice,
+            exitPrice: t.exitPrice,
+            pnl: t.pnl,
+            exitReason: t.exitReason,
+          }))
+        );
+      }
+    }
+
+    res.json({
+      success: true,
+      id: row?.id,
+      portfolioMetrics: {
+        totalReturn: pm.totalReturn,
+        netProfit: pm.netProfit,
+        winRate: pm.winRate,
+        profitFactor: pm.profitFactor,
+        maxDrawdown: pm.maxDrawdown,
+        tradeCount: pm.tradeCount,
+        sharpeRatio: pm.sharpeRatio,
+      },
+      strategyBreakdown: Object.fromEntries(
+        Object.entries(result.strategyMetrics).map(([k, v]) => [k, {
+          totalReturn: v.totalReturn,
+          winRate: v.winRate,
+          tradeCount: v.tradeCount,
+          sharpeRatio: v.sharpeRatio,
+        }])
+      ),
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    res.status(500).json({ success: false, message: `Portfolio backtest failed: ${message}` });
   }
 });
 
@@ -376,9 +316,7 @@ router.get("/backtest/:id/candles", async (req, res): Promise<void> => {
   if (!run) { res.status(404).json({ error: "Backtest not found" }); return; }
   const candles = await db.select().from(candlesTable)
     .where(eq(candlesTable.symbol, run.symbol))
-    .orderBy(desc(candlesTable.openTs))
-    .limit(600);
-  candles.reverse();
+    .orderBy(asc(candlesTable.openTs));
   res.json(candles.map(c => ({
     ts: new Date(c.openTs * 1000).toISOString(),
     open: c.open,

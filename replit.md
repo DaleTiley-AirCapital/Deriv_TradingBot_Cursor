@@ -21,7 +21,7 @@ A quantitative trading research and execution platform for Deriv synthetic indic
 
 Five core layers:
 1. **Data Collector** — tick ingestion, candle building, spike event detection
-2. **Backtesting Engine** — multi-strategy replay with walk-forward metrics
+2. **Backtesting Engine** (`lib/backtestEngine.ts`) — production-grade candle-by-candle simulation using real strategy code (computeFeatures + runAllStrategies), trailing stop (50% lock-in), 3-layer time exit (72h/+24h/120h), confidence-scaled position sizing, concurrent position limits, portfolio-level shared equity, walk-forward testing, IS/OOS split, comprehensive metrics (gross P&L, drawdown duration, monthly returns, return by symbol/regime)
 3. **Probability Model** — feature engineering + gradient boost scoring
 4. **Strategy Engine** — 4 strategy families (trend pullback, exhaustion rebound, volatility breakout, spike hazard)
 5. **Risk & Capital Manager** — portfolio allocation, daily/weekly limits, kill switch
@@ -64,9 +64,11 @@ artifacts-monorepo/
 - `POST /api/models/train` — train logistic regression on feature vectors
 - `GET /api/models/latest` — model run history with accuracy/F1
 - `POST /api/models/score` — score current features for a symbol
-- `POST /api/backtest/run` — walk-forward backtest on real candle history
+- `POST /api/backtest/run` — single-strategy backtest on full candle history with walk-forward support
+- `POST /api/backtest/portfolio` — portfolio-level multi-symbol/multi-strategy backtest with shared equity
 - `GET /api/backtest/results` — backtest result list with full metrics
-- `GET /api/backtest/:id` — specific backtest detail
+- `GET /api/backtest/:id` — specific backtest detail (includes expanded metricsJson)
+- `GET /api/backtest/:id/candles` — all candles for a backtest's symbol (no 600 limit)
 - `POST /api/backtest/:id/analyse` — AI-powered backtest analysis (OpenAI GPT-4o)
 - `GET /api/signals/latest` — logged signal history (allowed + rejected)
 - `POST /api/signals/scan` — immediately run all 4 strategies on all symbols

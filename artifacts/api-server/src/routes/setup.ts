@@ -3,7 +3,7 @@ import { eq, and, inArray, count } from "drizzle-orm";
 import { db, candlesTable, backtestRunsTable, backtestTradesTable, platformStateTable } from "@workspace/db";
 import { getDerivClientWithDbToken, getDbApiToken, SUPPORTED_SYMBOLS } from "../lib/deriv.js";
 import { checkOpenAiHealth, isOpenAIConfigured } from "../lib/openai.js";
-import { runBacktestSimulation } from "./backtest.js";
+import { runBacktestSimulation } from "../lib/backtestEngine.js";
 
 const router: IRouter = Router();
 
@@ -310,7 +310,17 @@ router.post("/setup/initial-analyse", async (_req, res): Promise<void> => {
           expectancy: result.expectancy,
           sharpeRatio: result.sharpeRatio,
           configJson: { allocationMode: "balanced", symbol, strategyName: strategy, source: "initial-setup" },
-          metricsJson: { equityCurve: result.equityCurve },
+          metricsJson: {
+            equityCurve: result.equityCurve,
+            grossProfit: result.grossProfit,
+            grossLoss: result.grossLoss,
+            avgWin: result.avgWin,
+            avgLoss: result.avgLoss,
+            maxDrawdownDuration: result.maxDrawdownDuration,
+            monthlyReturns: result.monthlyReturns,
+            returnBySymbol: result.returnBySymbol,
+            returnByRegime: result.returnByRegime,
+          },
           status: "completed",
         }).returning();
 
