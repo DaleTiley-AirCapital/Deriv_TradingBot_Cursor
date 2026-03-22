@@ -34,15 +34,6 @@ const FAMILY_IDEAL_REGIMES: Record<string, string[]> = {
   "mean_reversion": ["mean_reversion"],
   "breakout_expansion": ["compression", "breakout_expansion"],
   "spike_event": ["spike_zone"],
-  "trend-continuation": ["trend_up", "trend_down"],
-  "trend-pullback": ["trend_up", "trend_down"],
-  "exhaustion-rebound": ["mean_reversion"],
-  "liquidity-sweep": ["mean_reversion"],
-  "mean-reversion": ["mean_reversion"],
-  "volatility-breakout": ["compression", "breakout_expansion"],
-  "volatility-expansion": ["compression", "breakout_expansion"],
-  "breakout-expansion": ["compression", "breakout_expansion"],
-  "spike-hazard": ["spike_zone"],
 };
 
 const FAMILY_IDEAL_VOLATILITY: Record<string, { min: number; max: number }> = {
@@ -50,15 +41,6 @@ const FAMILY_IDEAL_VOLATILITY: Record<string, { min: number; max: number }> = {
   "mean_reversion": { min: 0.002, max: 0.006 },
   "breakout_expansion": { min: 0.003, max: 0.010 },
   "spike_event": { min: 0.001, max: 0.010 },
-  "trend-continuation": { min: 0.001, max: 0.004 },
-  "trend-pullback": { min: 0.001, max: 0.004 },
-  "exhaustion-rebound": { min: 0.002, max: 0.006 },
-  "liquidity-sweep": { min: 0.001, max: 0.005 },
-  "mean-reversion": { min: 0.002, max: 0.006 },
-  "volatility-breakout": { min: 0.003, max: 0.008 },
-  "volatility-expansion": { min: 0.003, max: 0.010 },
-  "breakout-expansion": { min: 0.003, max: 0.010 },
-  "spike-hazard": { min: 0.001, max: 0.010 },
 };
 
 function clamp(value: number, min: number, max: number): number {

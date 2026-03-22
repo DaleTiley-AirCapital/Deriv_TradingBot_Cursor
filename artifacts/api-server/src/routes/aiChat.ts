@@ -77,7 +77,7 @@ You have access to these capabilities via function calls:
 
 Platform architecture:
 - 3 independent trading modes: Paper (simulated), Demo (Deriv demo account), Real (Deriv real account)
-- 7 strategies: trend-pullback, exhaustion-rebound, volatility-breakout, spike-hazard, volatility-expansion, liquidity-sweep, macro-bias
+- 4 strategy families: trend_continuation, mean_reversion, breakout_expansion, spike_event
 - Composite scoring system (0-100) with 6 weighted dimensions
 - Signal scoring thresholds, scan timing, and kill switch are GLOBAL (same for all modes)
 - TP/SL, trailing stop, position sizing, time exit, risk limits, instruments, and strategies are PER-MODE

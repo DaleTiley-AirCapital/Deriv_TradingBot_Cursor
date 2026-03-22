@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
-import { db } from "@workspace/db";
+import { db, platformStateTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import app from "./app.js";
+import { getDerivClientWithDbToken, getEnabledSymbols, SUPPORTED_SYMBOLS } from "./lib/deriv.js";
 
 const rawPort = process.env["PORT"];
 
@@ -163,7 +165,6 @@ async function initDb(): Promise<void> {
       ('max_weekly_loss_pct', '8'),
       ('max_drawdown_pct',    '15'),
       ('max_open_trades',     '4'),
-      ('streaming',           'false'),
       ('disabled_strategies', '')
     ) AS defaults(key, value)
     WHERE NOT EXISTS (SELECT 1 FROM platform_state LIMIT 1);
@@ -171,10 +172,33 @@ async function initDb(): Promise<void> {
   console.log("[DB] Schema ready.");
 }
 
+async function autoStartStreaming(): Promise<void> {
+  try {
+    const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "streaming"));
+    const explicitlyStopped = rows.length > 0 && rows[0].value === "false";
+    if (explicitlyStopped) {
+      console.log("[AutoStart] Streaming explicitly stopped — skipping auto-start. Use UI to start.");
+      return;
+    }
+    const enabledSymbols = await getEnabledSymbols();
+    const validSymbols = enabledSymbols.filter(s => SUPPORTED_SYMBOLS.includes(s));
+    if (validSymbols.length === 0) {
+      console.log("[AutoStart] No valid symbols to stream");
+      return;
+    }
+    const client = await getDerivClientWithDbToken();
+    await client.startStreaming(validSymbols);
+    console.log(`[AutoStart] Streaming started for ${validSymbols.length} symbols`);
+  } catch (err) {
+    console.warn("[AutoStart] Could not auto-start streaming:", err instanceof Error ? err.message : err);
+  }
+}
+
 initDb()
   .then(() => {
     app.listen(port, () => {
       console.log(`Server listening on port ${port}`);
+      autoStartStreaming();
     });
   })
   .catch((err) => {

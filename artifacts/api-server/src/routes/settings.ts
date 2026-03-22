@@ -32,8 +32,8 @@ function decryptSecret(stored: string): string {
   return decrypted;
 }
 
-const ALL_SYMBOLS_DEFAULT = "BOOM1000,CRASH1000,BOOM500,CRASH500,BOOM300,CRASH300,BOOM200,CRASH200,R_75,R_100,JD75,STPIDX,RDBEAR";
-const ALL_STRATEGIES_DEFAULT = "trend-pullback,exhaustion-rebound,liquidity-sweep,volatility-breakout,volatility-expansion,spike-hazard";
+const ALL_SYMBOLS_DEFAULT = "BOOM1000,CRASH1000,BOOM900,CRASH900,BOOM600,CRASH600,BOOM500,CRASH500,BOOM300,CRASH300,R_10,R_25,R_50,R_75,R_100,RDBULL,RDBEAR,JD10,JD25,JD50,JD75,JD100,stpRNG,STP2,STP3,STP4,STP5,RDBR100,RDBR200";
+const ALL_STRATEGIES_DEFAULT = "trend_continuation,mean_reversion,breakout_expansion,spike_event";
 
 const SETTING_DEFAULTS: Record<string, string> = {
   max_open_trades: "3",
@@ -144,7 +144,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   real_correlated_family_cap: "3",
 };
 
-const API_KEY_KEYS = ["deriv_api_token", "deriv_api_token_demo", "deriv_api_token_real", "openai_api_key"];
+const API_KEY_KEYS = ["deriv_api_token_demo", "deriv_api_token_real", "openai_api_key"];
 
 const ALL_SETTING_KEYS = Object.keys(SETTING_DEFAULTS);
 
@@ -305,8 +305,7 @@ router.get("/settings/api-key-status", async (_req, res): Promise<void> => {
   for (const s of states) stateMap[s.key] = s.value;
 
   res.json({
-    deriv_api_token_set: !!(stateMap["deriv_api_token"] || stateMap["deriv_api_token_demo"] || stateMap["deriv_api_token_real"]),
-    deriv_api_token_demo_set: !!(stateMap["deriv_api_token_demo"] || stateMap["deriv_api_token"]),
+    deriv_api_token_demo_set: !!stateMap["deriv_api_token_demo"],
     deriv_api_token_real_set: !!stateMap["deriv_api_token_real"],
     openai_api_key_set: !!stateMap["openai_api_key"],
   });
@@ -321,8 +320,17 @@ router.get("/settings/openai-health", async (_req, res): Promise<void> => {
   }
 });
 
-const STRATEGIES = ["trend-pullback", "exhaustion-rebound", "volatility-breakout", "spike-hazard", "volatility-expansion", "liquidity-sweep"];
-const DEFAULT_SYMBOLS = ["BOOM1000", "CRASH1000", "BOOM500", "CRASH500", "R_75", "R_100", "JD75", "STPIDX", "RDBEAR"];
+const STRATEGIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"];
+const DEFAULT_SYMBOLS = [
+  "BOOM1000", "CRASH1000", "BOOM900", "CRASH900",
+  "BOOM600", "CRASH600", "BOOM500", "CRASH500",
+  "BOOM300", "CRASH300",
+  "R_10", "R_25", "R_50", "R_75", "R_100",
+  "RDBULL", "RDBEAR",
+  "JD10", "JD25", "JD50", "JD75", "JD100",
+  "stpRNG", "STP2", "STP3", "STP4", "STP5",
+  "RDBR100", "RDBR200",
+];
 
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade",
@@ -384,21 +392,21 @@ async function runBacktestForOptimisation(
     let signal = false;
     let direction = 1;
     switch (strategyName) {
-      case "trend-pullback":
+      case "trend_continuation":
         signal = Math.abs(distFromEma) < 0.01 && rsi > 40 && rsi < 65;
         direction = distFromEma >= 0 ? 1 : -1;
         break;
-      case "exhaustion-rebound":
+      case "mean_reversion":
         signal = rsi < 32 || rsi > 68;
         direction = rsi < 32 ? 1 : -1;
         break;
-      case "volatility-breakout": {
+      case "breakout_expansion": {
         const std = Math.sqrt(closes.slice(-20).reduce((acc, c) => acc + (c - ema20) ** 2, 0) / 20);
         signal = std / ema20 < 0.005 && Math.abs(distFromEma) > 0.003;
         direction = distFromEma > 0 ? 1 : -1;
         break;
       }
-      case "spike-hazard":
+      case "spike_event":
         signal = Math.random() < 0.15;
         direction = symbol.startsWith("BOOM") ? 1 : -1;
         break;

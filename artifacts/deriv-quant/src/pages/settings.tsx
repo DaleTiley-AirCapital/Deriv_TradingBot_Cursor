@@ -313,26 +313,60 @@ function FactoryResetConfirmDialog({ onConfirm, onCancel, resetting }: { onConfi
 const ALL_INSTRUMENTS = [
   { symbol: "BOOM1000", label: "Boom 1000", category: "Boom/Crash" },
   { symbol: "CRASH1000", label: "Crash 1000", category: "Boom/Crash" },
+  { symbol: "BOOM900", label: "Boom 900", category: "Boom/Crash" },
+  { symbol: "CRASH900", label: "Crash 900", category: "Boom/Crash" },
+  { symbol: "BOOM600", label: "Boom 600", category: "Boom/Crash" },
+  { symbol: "CRASH600", label: "Crash 600", category: "Boom/Crash" },
   { symbol: "BOOM500", label: "Boom 500", category: "Boom/Crash" },
   { symbol: "CRASH500", label: "Crash 500", category: "Boom/Crash" },
   { symbol: "BOOM300", label: "Boom 300", category: "Boom/Crash" },
   { symbol: "CRASH300", label: "Crash 300", category: "Boom/Crash" },
-  { symbol: "BOOM200", label: "Boom 200", category: "Boom/Crash" },
-  { symbol: "CRASH200", label: "Crash 200", category: "Boom/Crash" },
+  { symbol: "R_10", label: "Volatility 10", category: "Volatility" },
+  { symbol: "R_25", label: "Volatility 25", category: "Volatility" },
+  { symbol: "R_50", label: "Volatility 50", category: "Volatility" },
   { symbol: "R_75", label: "Volatility 75", category: "Volatility" },
   { symbol: "R_100", label: "Volatility 100", category: "Volatility" },
-  { symbol: "JD75", label: "Jump Diffusion 75", category: "Exotic" },
-  { symbol: "STPIDX", label: "Step Index", category: "Exotic" },
-  { symbol: "RDBEAR", label: "Bear Market", category: "Exotic" },
+  { symbol: "RDBULL", label: "Bull Market", category: "Bull/Bear" },
+  { symbol: "RDBEAR", label: "Bear Market", category: "Bull/Bear" },
+  { symbol: "JD10", label: "Jump 10", category: "Jump" },
+  { symbol: "JD25", label: "Jump 25", category: "Jump" },
+  { symbol: "JD50", label: "Jump 50", category: "Jump" },
+  { symbol: "JD75", label: "Jump 75", category: "Jump" },
+  { symbol: "JD100", label: "Jump 100", category: "Jump" },
+  { symbol: "stpRNG", label: "Step Index", category: "Step" },
+  { symbol: "STP2", label: "Step 200", category: "Step" },
+  { symbol: "STP3", label: "Step 300", category: "Step" },
+  { symbol: "STP4", label: "Step 400", category: "Step" },
+  { symbol: "STP5", label: "Step 500", category: "Step" },
+  { symbol: "RDBR100", label: "Range Break 100", category: "Range Break" },
+  { symbol: "RDBR200", label: "Range Break 200", category: "Range Break" },
 ];
 
-const ALL_STRATEGIES = [
-  { key: "trend-pullback", label: "Trend Pullback", desc: "Enters on pullbacks within established trends" },
-  { key: "exhaustion-rebound", label: "Exhaustion Rebound", desc: "Catches reversals after extreme RSI readings" },
-  { key: "volatility-breakout", label: "Volatility Breakout", desc: "Trades breakouts from low-volatility consolidation" },
-  { key: "spike-hazard", label: "Spike Hazard", desc: "Exploits Boom/Crash spike patterns deterministically" },
-  { key: "volatility-expansion", label: "Volatility Expansion", desc: "Captures explosive moves after compression" },
-  { key: "liquidity-sweep", label: "Liquidity Sweep", desc: "Reversal after stop-hunt sweeps of key levels" },
+const STRATEGY_FAMILIES = [
+  {
+    key: "trend_continuation",
+    label: "Trend Continuation",
+    desc: "Enters on pullbacks within established trends",
+    subStrategies: ["Trend Pullback"],
+  },
+  {
+    key: "mean_reversion",
+    label: "Mean Reversion",
+    desc: "Catches reversals after extreme moves or liquidity sweeps",
+    subStrategies: ["Exhaustion Rebound", "Liquidity Sweep + Reversal"],
+  },
+  {
+    key: "breakout_expansion",
+    label: "Breakout / Expansion",
+    desc: "Trades breakouts and explosive volatility moves",
+    subStrategies: ["Volatility Breakout", "Volatility Expansion Capture"],
+  },
+  {
+    key: "spike_event",
+    label: "Spike / Event",
+    desc: "Exploits Boom/Crash spike patterns deterministically",
+    subStrategies: ["Spike Hazard Capture"],
+  },
 ];
 
 function InstrumentsPicker({ enabledSymbols, onChange }: { enabledSymbols: string; onChange: (v: string) => void }) {
@@ -371,9 +405,22 @@ function InstrumentsPicker({ enabledSymbols, onChange }: { enabledSymbols: strin
   );
 }
 
-function StrategySelector({ enabledStrategies, onChange }: { enabledStrategies: string; onChange: (v: string) => void }) {
+function StrategyFamilySelector({ enabledStrategies, onChange }: { enabledStrategies: string; onChange: (v: string) => void }) {
   const parsed = enabledStrategies.split(",").filter(Boolean);
-  const enabled = new Set(parsed.length > 0 ? parsed : []);
+  const OLD_TO_FAMILY: Record<string, string> = {
+    "trend-pullback": "trend_continuation",
+    "exhaustion-rebound": "mean_reversion",
+    "liquidity-sweep": "mean_reversion",
+    "volatility-breakout": "breakout_expansion",
+    "volatility-expansion": "breakout_expansion",
+    "spike-hazard": "spike_event",
+  };
+  const migrated = new Set<string>();
+  for (const p of parsed) {
+    if (OLD_TO_FAMILY[p]) migrated.add(OLD_TO_FAMILY[p]);
+    else migrated.add(p);
+  }
+  const enabled = migrated.size > 0 ? migrated : new Set(STRATEGY_FAMILIES.map(f => f.key));
   const toggle = (key: string) => {
     const next = new Set(enabled);
     if (next.has(key)) next.delete(key);
@@ -382,26 +429,27 @@ function StrategySelector({ enabledStrategies, onChange }: { enabledStrategies: 
   };
   return (
     <div className="space-y-2">
-      {ALL_STRATEGIES.map(strat => (
+      {STRATEGY_FAMILIES.map(family => (
         <button
-          key={strat.key}
-          onClick={() => toggle(strat.key)}
+          key={family.key}
+          onClick={() => toggle(family.key)}
           className={cn(
             "flex items-start gap-3 w-full p-3 rounded-lg border text-left transition-all",
-            enabled.has(strat.key)
+            enabled.has(family.key)
               ? "bg-primary/5 border-primary/30"
               : "bg-muted/20 border-border hover:border-primary/20"
           )}
         >
           <div className={cn(
             "w-4 h-4 mt-0.5 rounded border-2 flex items-center justify-center shrink-0 transition-colors",
-            enabled.has(strat.key) ? "bg-primary border-primary" : "border-muted-foreground/30"
+            enabled.has(family.key) ? "bg-primary border-primary" : "border-muted-foreground/30"
           )}>
-            {enabled.has(strat.key) && <CheckCircle2 className="w-3 h-3 text-primary-foreground" />}
+            {enabled.has(family.key) && <CheckCircle2 className="w-3 h-3 text-primary-foreground" />}
           </div>
-          <div>
-            <p className={cn("text-sm font-medium", enabled.has(strat.key) ? "text-foreground" : "text-muted-foreground")}>{strat.label}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">{strat.desc}</p>
+          <div className="flex-1 min-w-0">
+            <p className={cn("text-sm font-medium", enabled.has(family.key) ? "text-foreground" : "text-muted-foreground")}>{family.label}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{family.desc}</p>
+            <p className="text-[10px] text-muted-foreground/60 mt-1">Sub-strategies: {family.subStrategies.join(", ")}</p>
           </div>
         </button>
       ))}
@@ -1331,8 +1379,8 @@ function ModeSettingsTab({
             Enable or disable strategies for {modeLabel} mode.
             {mode === "real" && " AI recommends the top-performing strategy/instrument combinations for Real mode."}
           </p>
-          <StrategySelector
-            enabledStrategies={form[p("enabled_strategies")] ?? ALL_STRATEGIES.map(s => s.key).join(",")}
+          <StrategyFamilySelector
+            enabledStrategies={form[p("enabled_strategies")] ?? STRATEGY_FAMILIES.map(f => f.key).join(",")}
             onChange={(v) => update(p("enabled_strategies"), v)}
           />
         </CardContent>
@@ -1760,14 +1808,6 @@ export default function Settings() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <SettingField
-                    label="Deriv API Token (Legacy)"
-                    description={form.deriv_api_token_set === "true" ? "Token is configured" : "Legacy token — use Demo/Real tokens below instead"}
-                    value={form.deriv_api_token || ""}
-                    onChange={(v) => update("deriv_api_token", v)}
-                    type="password"
-                    placeholder={form.deriv_api_token_set === "true" ? "****configured****" : "Enter Deriv API token"}
-                  />
                   <SettingField
                     label="Deriv Demo Token"
                     description={form.deriv_api_token_demo_set === "true" ? "Demo token is configured" : "API token for your Deriv demo account"}

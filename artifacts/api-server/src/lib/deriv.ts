@@ -7,9 +7,14 @@ import { recordTick, validateActiveSymbols, isSymbolValid, markSymbolError, star
 const DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089";
 
 export const SUPPORTED_SYMBOLS = [
-  "BOOM1000", "CRASH1000", "BOOM500", "CRASH500",
-  "BOOM300", "CRASH300", "BOOM200", "CRASH200",
-  "R_75", "R_100", "JD75", "STPIDX", "RDBEAR"
+  "BOOM1000", "CRASH1000", "BOOM900", "CRASH900",
+  "BOOM600", "CRASH600", "BOOM500", "CRASH500",
+  "BOOM300", "CRASH300",
+  "R_10", "R_25", "R_50", "R_75", "R_100",
+  "RDBULL", "RDBEAR",
+  "JD10", "JD25", "JD50", "JD75", "JD100",
+  "stpRNG", "STP2", "STP3", "STP4", "STP5",
+  "RDBR100", "RDBR200",
 ];
 
 export type TradingMode = "paper" | "demo" | "real";

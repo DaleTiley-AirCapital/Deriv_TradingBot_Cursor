@@ -67,7 +67,7 @@ function buildMetricsJson(result: BacktestResult) {
 
 router.post("/backtest/run", async (req, res): Promise<void> => {
   const {
-    strategyName = "trend-pullback",
+    strategyName = "trend_continuation",
     symbol = "BOOM1000",
     initialCapital = 10000,
     allocationMode = "balanced",
@@ -75,8 +75,7 @@ router.post("/backtest/run", async (req, res): Promise<void> => {
   } = req.body ?? {};
 
   const validStrategies = [
-    "trend-pullback", "exhaustion-rebound", "volatility-breakout", "spike-hazard",
-    "volatility-expansion", "liquidity-sweep", "macro-bias",
+    "trend_continuation", "mean_reversion", "breakout_expansion", "spike_event",
   ];
   if (!validStrategies.includes(strategyName)) {
     res.status(400).json({ error: `Invalid strategy. Use: ${validStrategies.join(", ")}` });

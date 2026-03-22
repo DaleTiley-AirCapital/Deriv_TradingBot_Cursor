@@ -113,7 +113,7 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
 
   return {
     symbol: features.symbol,
-    strategyName: "trend-pullback",
+    strategyName: "trend_continuation",
     strategyFamily: "trend_continuation",
     direction,
     score: adjustedScore,
@@ -179,7 +179,7 @@ function meanReversion(features: FeatureVector, regime: RegimeClassification): S
 
   return {
     symbol: features.symbol,
-    strategyName: subStrategy || "mean-reversion",
+    strategyName: "mean_reversion",
     strategyFamily: "mean_reversion",
     direction,
     score: adjustedScore,
@@ -241,7 +241,7 @@ function breakoutExpansion(features: FeatureVector, regime: RegimeClassification
 
   return {
     symbol: features.symbol,
-    strategyName: subStrategy || "breakout-expansion",
+    strategyName: "breakout_expansion",
     strategyFamily: "breakout_expansion",
     direction,
     score: adjustedScore,
@@ -282,7 +282,7 @@ function spikeEvent(features: FeatureVector, regime: RegimeClassification): Sign
 
   return {
     symbol: features.symbol,
-    strategyName: "spike-hazard",
+    strategyName: "spike_event",
     strategyFamily: "spike_event",
     direction,
     score: boostedScore,

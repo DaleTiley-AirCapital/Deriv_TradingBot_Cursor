@@ -16,7 +16,7 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 1.  **Data Collector:** Handles tick ingestion, candle building, and spike event detection.
 2.  **Backtesting Engine:** A production-grade simulator for strategies, including trailing stops, multi-layer time exits, confidence-scaled position sizing, and portfolio-level equity management. Supports walk-forward testing and provides comprehensive metrics.
 3.  **Probability Model:** Focuses on feature engineering and gradient boost scoring.
-4.  **Strategy Engine:** Incorporates four families of strategies (6 sub-strategies): trend pullback, exhaustion rebound, liquidity sweep, volatility breakout, volatility expansion, and spike hazard.
+4.  **Strategy Engine:** Incorporates four strategy families: trend_continuation (trend pullback), mean_reversion (exhaustion rebound, liquidity sweep), breakout_expansion (volatility breakout, volatility expansion), spike_event (spike hazard).
 5.  **Risk & Capital Manager:** Manages portfolio allocation, daily/weekly/max-drawdown limits, correlated family caps, and includes a kill switch mechanism.
 6.  **Symbol Validator:** Validates configured symbols against Deriv active_symbols API at startup, refuses invalid subscriptions, and runs a stale-stream watchdog with auto-resubscription.
 
@@ -45,6 +45,18 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 **Deployment:**
 -   Recommended deployment via Railway, using `railway.toml` and a multi-stage `Dockerfile`.
 -   Legacy Docker Compose deployments are supported for Docker and Synology NAS environments.
+
+**Instrument Catalog (29 symbols):**
+- Boom/Crash: BOOM1000, CRASH1000, BOOM900, CRASH900, BOOM600, CRASH600, BOOM500, CRASH500, BOOM300, CRASH300
+- Volatility: R_10, R_25, R_50, R_75, R_100
+- Bull/Bear: RDBULL, RDBEAR
+- Jump: JD10, JD25, JD50, JD75, JD100
+- Step: stpRNG, STP2, STP3, STP4, STP5
+- Range Break: RDBR100, RDBR200
+
+**API Keys:** deriv_api_token_demo, deriv_api_token_real, openai_api_key (legacy single deriv_api_token removed)
+
+**Auto-streaming:** Server auto-starts tick streaming on boot unless user explicitly stopped it.
 
 ## External Dependencies
 

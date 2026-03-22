@@ -32,17 +32,33 @@ interface ActiveSymbol {
 const SYMBOL_ALIASES: Record<string, string[]> = {
   "BOOM1000": ["BOOM1000", "1HZ1000V", "BOOM1000_"],
   "CRASH1000": ["CRASH1000", "1HZ1000V", "CRASH1000_"],
+  "BOOM900": ["BOOM900", "BOOM900N", "1HZ900V"],
+  "CRASH900": ["CRASH900", "CRASH900N", "1HZ900V"],
+  "BOOM600": ["BOOM600", "BOOM600N", "1HZ600V"],
+  "CRASH600": ["CRASH600", "CRASH600N", "1HZ600V"],
   "BOOM500": ["BOOM500", "1HZ500V", "BOOM500_"],
   "CRASH500": ["CRASH500", "1HZ500V", "CRASH500_"],
   "BOOM300": ["BOOM300", "BOOM300N", "1HZ300V"],
   "CRASH300": ["CRASH300", "CRASH300N", "1HZ300V"],
-  "BOOM200": ["BOOM200", "BOOM200N", "1HZ200V"],
-  "CRASH200": ["CRASH200", "CRASH200N", "1HZ200V"],
+  "R_10": ["R_10", "1HZ10V"],
+  "R_25": ["R_25", "1HZ25V"],
+  "R_50": ["R_50", "1HZ50V"],
   "R_75": ["R_75", "1HZ75V"],
   "R_100": ["R_100", "1HZ100V"],
-  "JD75": ["JD75", "JD_75"],
-  "STPIDX": ["STPIDX", "stpRNG"],
+  "RDBULL": ["RDBULL", "RDBULLV"],
   "RDBEAR": ["RDBEAR", "RDBEARV"],
+  "JD10": ["JD10", "JD_10"],
+  "JD25": ["JD25", "JD_25"],
+  "JD50": ["JD50", "JD_50"],
+  "JD75": ["JD75", "JD_75"],
+  "JD100": ["JD100", "JD_100"],
+  "stpRNG": ["stpRNG", "STPIDX", "STP100"],
+  "STP2": ["STP2", "STP200"],
+  "STP3": ["STP3", "STP300"],
+  "STP4": ["STP4", "STP400"],
+  "STP5": ["STP5", "STP500"],
+  "RDBR100": ["RDBR100", "RANGEBREAK100"],
+  "RDBR200": ["RDBR200", "RANGEBREAK200"],
 };
 
 const symbolHealthStore: Map<string, {
@@ -86,10 +102,14 @@ export function markSymbolError(symbol: string, error: string): void {
 }
 
 function classifyInstrumentFamily(symbol: string): string {
-  if (symbol.startsWith("BOOM")) return "boom";
-  if (symbol.startsWith("CRASH")) return "crash";
-  if (symbol.startsWith("R_")) return "volatility";
-  return "other_synthetic";
+  if (symbol.startsWith("BOOM")) return "Boom/Crash";
+  if (symbol.startsWith("CRASH")) return "Boom/Crash";
+  if (symbol.startsWith("R_")) return "Volatility";
+  if (symbol.startsWith("RDBULL") || symbol.startsWith("RDBEAR")) return "Bull/Bear";
+  if (symbol.startsWith("JD")) return "Jump";
+  if (symbol.startsWith("stpRNG") || symbol.startsWith("STP")) return "Step";
+  if (symbol.startsWith("RDBR")) return "Range Break";
+  return "Other";
 }
 
 export async function validateActiveSymbols(forceRefresh = false): Promise<Map<string, { apiSymbol: string; displayName: string; marketType: string }>> {
@@ -185,7 +205,16 @@ async function getConfiguredSymbols(): Promise<string[]> {
       return rows[0].value.split(",").filter(Boolean);
     }
   } catch {}
-  return ["BOOM1000", "CRASH1000", "BOOM500", "CRASH500", "BOOM300", "CRASH300", "BOOM200", "CRASH200", "R_75", "R_100", "JD75", "STPIDX", "RDBEAR"];
+  return [
+    "BOOM1000", "CRASH1000", "BOOM900", "CRASH900",
+    "BOOM600", "CRASH600", "BOOM500", "CRASH500",
+    "BOOM300", "CRASH300",
+    "R_10", "R_25", "R_50", "R_75", "R_100",
+    "RDBULL", "RDBEAR",
+    "JD10", "JD25", "JD50", "JD75", "JD100",
+    "stpRNG", "STP2", "STP3", "STP4", "STP5",
+    "RDBR100", "RDBR200",
+  ];
 }
 
 export function getValidatedSymbols(): string[] {
@@ -202,9 +231,14 @@ export function getApiSymbol(configured: string): string {
 
 export function getAllSymbolStatuses(): SymbolStatus[] {
   const configuredSymbols = [
-    "BOOM1000", "CRASH1000", "BOOM500", "CRASH500",
-    "BOOM300", "CRASH300", "BOOM200", "CRASH200",
-    "R_75", "R_100", "JD75", "STPIDX", "RDBEAR",
+    "BOOM1000", "CRASH1000", "BOOM900", "CRASH900",
+    "BOOM600", "CRASH600", "BOOM500", "CRASH500",
+    "BOOM300", "CRASH300",
+    "R_10", "R_25", "R_50", "R_75", "R_100",
+    "RDBULL", "RDBEAR",
+    "JD10", "JD25", "JD50", "JD75", "JD100",
+    "stpRNG", "STP2", "STP3", "STP4", "STP5",
+    "RDBR100", "RDBR200",
   ];
 
   const now = Date.now();

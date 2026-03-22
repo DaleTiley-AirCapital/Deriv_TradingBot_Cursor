@@ -58,7 +58,7 @@ router.get("/models/latest", async (_req, res): Promise<void> => {
 });
 
 router.post("/models/score", async (req, res): Promise<void> => {
-  const { symbol = "BOOM1000", strategyName = "trend-pullback" } = req.body ?? {};
+  const { symbol = "BOOM1000", strategyName = "trend_continuation" } = req.body ?? {};
 
   try {
     const features = await computeFeatures(symbol);
@@ -77,7 +77,7 @@ router.post("/models/score", async (req, res): Promise<void> => {
       signalType: strategyName,
       confidence,
       expectedValue,
-      regimeCompatible: features.regimeLabel !== "volatile" || strategyName === "spike-hazard",
+      regimeCompatible: features.regimeLabel !== "volatile" || strategyName === "spike_event",
       suggestedDirection: score > 0.5 ? (isBoom ? "buy" : "sell") : (isBoom ? "sell" : "buy"),
       suggestedSl: features.atr14 > 0 ? -(features.atr14 * 1.5) : null,
       suggestedTp: features.atr14 > 0 ? features.atr14 * 3.0 : null,

@@ -1,0 +1,314 @@
+Implement a UI, settings, and instrument-catalog cleanup pass.
+
+Do not explain only. Make the changes.
+
+## 1. DASHBOARD / TRADES TABS CLEANUP
+
+Current issue:
+There are 4 views:
+- All
+- Paper
+- Demo
+- Real
+
+“All” is not useful and creates noise.
+
+### Required fix
+Remove “All” everywhere it appears in:
+- Dashboard page
+- Trades page
+- any tab switchers / summary cards / filters
+
+Only keep:
+- Paper
+- Demo
+- Real
+
+If any aggregated/global cards depend on “All”, remove or refactor them so they are mode-specific.
+
+### Risk tab cleanup
+Remove “Aggregated Risk” if it is not materially useful and not tied to a specific mode.
+Replace with mode-specific risk only:
+- Paper Risk
+- Demo Risk
+- Real Risk
+
+If a global risk summary is kept, rename it clearly and only keep it if it has real meaning.
+
+---
+
+## 2. DATA STREAM CONTROL DEFAULT
+
+Current issue:
+Data Stream Control should default to Start.
+
+### Required fix
+- Default stream state to started
+- On app/server startup, if data streaming is not explicitly disabled, start stream automatically
+- Reflect actual state in UI
+- Add clear status:
+  - Running
+  - Starting
+  - Stopped
+  - Error
+
+---
+
+## 3. SETTINGS CLEANUP
+
+### API Keys section
+Remove:
+- Deriv API (Legacy)
+
+Keep only:
+- Deriv Demo Token
+- Deriv Real Token
+- OpenAI API Key
+
+Remove legacy backend support too if no longer used.
+
+---
+
+## 4. GLOBAL SETTINGS COPY / UX CLEANUP
+
+The following global settings should remain but be cleaned up for clarity:
+
+### Signal Scoring Thresholds
+These thresholds apply globally across modes unless explicitly overridden.
+
+Keep:
+- Minimum Composite Score
+- Minimum Expected Value
+- Minimum Reward/Risk Ratio
+
+Make labels clean and professional.
+
+### Dimension Weights
+Keep:
+- Regime Fit
+- Setup Quality
+- Trend Alignment
+- Volatility Condition
+- Reward/Risk
+- Probability of Success
+
+Add:
+- validation that weights sum to 100
+- visible total
+- warning if invalid
+
+### Scan Timing
+Keep:
+- Scan Interval
+- Symbol Scan Stagger
+
+Clean wording and ensure they are global only.
+
+---
+
+## 5. INSTRUMENT CATALOG FIX (CRITICAL)
+
+The current scanned instruments are wrong.
+
+Replace the configured instrument set with this catalog:
+
+### Boom / Crash
+- BOOM1000
+- CRASH1000
+- BOOM900
+- CRASH900
+- BOOM600
+- CRASH600
+- BOOM500
+- CRASH500
+- BOOM300
+- CRASH300
+
+Remove:
+- BOOM200
+- CRASH200
+
+### Volatility
+- R_10
+- R_25
+- R_50
+- R_75
+- R_100
+
+### Bull/Bear
+- RDBULL
+- RDBEAR
+
+### Jump
+- JD10
+- JD25
+- JD50
+- JD75
+- JD100
+
+### Step
+- STP100
+- STP200
+- STP300
+- STP400
+- STP500
+
+### Range Break
+- RANGEBREAK100
+- RANGEBREAK200
+
+Important:
+Do not assume my proposed internal codes are correct.
+You must validate every symbol against Deriv active_symbols API and use the actual returned symbol codes.
+If a proposed symbol name differs from Deriv’s actual API symbol, store/display both:
+- Display Name
+- Actual API Symbol
+
+### Required behavior
+- only valid symbols should be subscribable
+- invalid symbols must not appear as active scan options
+- symbol diagnostics must show actual API validity
+
+---
+
+## 6. STRATEGY UI MUST MATCH 4 FAMILY ARCHITECTURE
+
+Current issue:
+UI still shows 6 strategies:
+- Trend Pull Back
+- Exhaustion Rebound
+- Volatility Breakout
+- Spike Hazard
+- Volatility Expansion
+- Liquidity Sweep
+
+This is wrong.
+
+### Required fix
+UI must now show only 4 strategy families:
+
+1. Trend Continuation
+   - internal sub-strategy: Trend Pullback
+
+2. Mean Reversion
+   - internal sub-strategies:
+     - Exhaustion Rebound
+     - Liquidity Sweep + Reversal
+
+3. Breakout / Expansion
+   - internal sub-strategies:
+     - Volatility Breakout
+     - Volatility Expansion Capture
+
+4. Spike / Event
+   - internal sub-strategy:
+     - Spike Hazard Capture
+
+### Required UI behavior
+- top-level toggles/settings should be family-level only
+- optionally show internal sub-strategy mapping as read-only info
+- remove old 6-strategy enable/disable list from the main settings UI
+- replace with 4 family controls
+
+### Required backend behavior
+- enabled strategy settings must align with family names
+- no stale references to old strategy list in UI, API, DB defaults, or router
+- migration/fallback support: if old settings exist, map them into the new family structure
+
+---
+
+## 7. SETTINGS RESTRUCTURE BY FAMILY
+
+For each of the 4 families, create a clean settings block.
+
+### Trend Continuation
+- enabled
+- min score
+- allocation modifier
+- max hold hours
+- allow scale-in
+- notes showing internal logic uses Trend Pullback
+
+### Mean Reversion
+- enabled
+- min score
+- allocation modifier
+- max hold hours
+- allow scale-in
+- notes showing internal logic uses Exhaustion Rebound + Liquidity Sweep
+
+### Breakout / Expansion
+- enabled
+- min score
+- allocation modifier
+- max hold hours
+- allow scale-in
+- notes showing internal logic uses Volatility Breakout + Volatility Expansion
+
+### Spike / Event
+- enabled
+- min score
+- allocation modifier
+- max hold hours
+- allow scale-in
+- notes showing internal logic uses Spike Hazard Capture
+
+---
+
+## 8. DIAGNOSTICS PANEL EXPANSION
+
+The new Diagnostics tab is good but incomplete.
+
+Add columns:
+- Display Name
+- API Symbol
+- Family
+- Valid in active_symbols
+- Enabled for scanning
+- Stream status
+- Last tick timestamp
+- Last tick value
+- Tick count (last 5 min)
+- Error reason
+
+Add filters:
+- family
+- valid/invalid
+- streaming/stale/error
+
+Add actions:
+- revalidate all
+- restart stale streams
+- disable invalid instruments automatically
+
+---
+
+## 9. SETTINGS / UI AUDIT TABLE AFTER CHANGES
+
+After implementation, return this table:
+
+| Area | Problem Fixed | Files Changed | Remaining Risk |
+
+Also return:
+
+### A. Updated instrument catalog
+Show final valid symbol list with:
+- display name
+- API symbol
+- family
+
+### B. Updated strategy family settings
+Show final 4 family settings structure
+
+### C. Removed items
+List exactly what was removed:
+- All tab
+- Aggregated risk
+- Deriv API legacy
+- old 6-strategy UI
+- invalid symbols
+
+### D. Migration handling
+Explain how old saved settings were mapped to the new structure
+
+Do not just describe. Implement the changes.

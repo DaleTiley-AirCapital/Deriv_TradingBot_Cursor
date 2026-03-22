@@ -849,7 +849,7 @@ export async function runFullBacktest(config: BacktestConfig): Promise<BacktestR
     trades,
     config: {
       symbols,
-      strategies: strategies || ["trend-pullback", "exhaustion-rebound", "volatility-breakout", "spike-hazard"],
+      strategies: strategies || ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"],
       initialCapital: config.initialCapital,
       mode: config.mode,
     },

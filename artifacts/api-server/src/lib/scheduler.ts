@@ -13,9 +13,14 @@ import type { TradingMode } from "./deriv.js";
 import type { AllocationDecision } from "./signalRouter.js";
 
 const DEFAULT_SYMBOLS = [
-  "BOOM1000", "CRASH1000", "BOOM500", "CRASH500",
-  "BOOM300", "CRASH300", "BOOM200", "CRASH200",
-  "R_75", "R_100", "JD75", "STPIDX", "RDBEAR"
+  "BOOM1000", "CRASH1000", "BOOM900", "CRASH900",
+  "BOOM600", "CRASH600", "BOOM500", "CRASH500",
+  "BOOM300", "CRASH300",
+  "R_10", "R_25", "R_50", "R_75", "R_100",
+  "RDBULL", "RDBEAR",
+  "JD10", "JD25", "JD50", "JD75", "JD100",
+  "stpRNG", "STP2", "STP3", "STP4", "STP5",
+  "RDBR100", "RDBR200",
 ];
 const DEFAULT_SCAN_INTERVAL_MS = 30_000;
 const DEFAULT_STAGGER_SECONDS = 10;
@@ -279,10 +284,10 @@ async function positionManagementCycle(): Promise<void> {
 
 const MONTHLY_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const STRATEGIES_LIST = [
-  "trend-pullback",
-  "exhaustion-rebound", "liquidity-sweep",
-  "volatility-breakout", "volatility-expansion",
-  "spike-hazard",
+  "trend_continuation",
+  "mean_reversion",
+  "breakout_expansion",
+  "spike_event",
 ] as const;
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade", "live_equity_pct_per_trade",

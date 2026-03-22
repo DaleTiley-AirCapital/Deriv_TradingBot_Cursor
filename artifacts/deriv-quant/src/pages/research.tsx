@@ -29,23 +29,23 @@ import {
 } from "recharts";
 
 const STRATEGY_INFO: Record<string, { label: string; description: string; indicator: string }> = {
-  "trend-pullback": {
-    label: "Trend Pullback",
+  "trend_continuation": {
+    label: "Trend Continuation",
     description: "Identifies a strong prevailing trend, then waits for a short counter-move (pullback) before entering in the trend direction. Works best on Boom/Crash indices during sustained directional runs.",
     indicator: "RSI(14) + EMA(20) confirmation — enters when price is within 1% of EMA and RSI is between 40–65",
   },
-  "exhaustion-rebound": {
-    label: "Exhaustion Rebound",
-    description: "Detects when price has moved too far, too fast — using RSI extremes and momentum divergence — and bets on a mean-reversion snap-back. Suited for Volatility indices and rangy Boom/Crash phases.",
-    indicator: "RSI(14) — enters long when RSI < 32 (oversold) or short when RSI > 68 (overbought)",
+  "mean_reversion": {
+    label: "Mean Reversion",
+    description: "Detects when price has moved too far, too fast — using RSI extremes, momentum divergence, and liquidity sweep setups — and bets on a snap-back. Suited for Volatility indices and rangy Boom/Crash phases.",
+    indicator: "RSI(14) extremes + Z-score + swing breach/reclaim for liquidity sweeps",
   },
-  "volatility-breakout": {
-    label: "Volatility Breakout",
-    description: "Monitors Bollinger Band width compression (low volatility squeezes), then enters the first large expansion candle in the breakout direction. Effective on all synthetic indices during consolidation periods.",
-    indicator: "EMA(20) StdDev — triggers when volatility < 0.5% and price moves > 0.3% from EMA",
+  "breakout_expansion": {
+    label: "Breakout / Expansion",
+    description: "Monitors Bollinger Band width compression (low volatility squeezes), then enters the first large expansion candle in the breakout direction. Also captures volatility expansion moves after compression.",
+    indicator: "BB width + ATR rank expansion + body size confirmation",
   },
-  "spike-hazard": {
-    label: "Spike Hazard",
+  "spike_event": {
+    label: "Spike / Event",
     description: "Estimates the probability of an imminent spike on Boom or Crash indices using tick-rate analysis and inter-spike timing models. Positions are sized conservatively given the high uncertainty of spike timing.",
     indicator: "Probabilistic spike model — fires at ~15% frequency; direction follows symbol type (Boom=long, Crash=short)",
   },
@@ -643,7 +643,7 @@ export default function Research() {
   });
 
   const [form, setForm] = useState({
-    strategyName: "trend-pullback",
+    strategyName: "trend_continuation",
     symbol: "BOOM1000",
     initialCapital: 10000,
     allocationMode: "balanced" as "conservative" | "balanced" | "aggressive"
@@ -682,10 +682,10 @@ export default function Research() {
                     value={form.strategyName}
                     onChange={e => setForm({...form, strategyName: e.target.value})}
                   >
-                    <option value="trend-pullback">Trend Pullback</option>
-                    <option value="exhaustion-rebound">Exhaustion Rebound</option>
-                    <option value="volatility-breakout">Volatility Breakout</option>
-                    <option value="spike-hazard">Spike Hazard</option>
+                    <option value="trend_continuation">Trend Continuation</option>
+                    <option value="mean_reversion">Mean Reversion</option>
+                    <option value="breakout_expansion">Breakout / Expansion</option>
+                    <option value="spike_event">Spike / Event</option>
                   </Select>
                   {STRATEGY_INFO[form.strategyName] && (
                     <p className="text-xs text-muted-foreground leading-relaxed pt-1">
@@ -700,19 +700,47 @@ export default function Research() {
                     value={form.symbol}
                     onChange={e => setForm({...form, symbol: e.target.value})}
                   >
-                    <option value="BOOM1000">BOOM1000 — Boom 1000</option>
-                    <option value="CRASH1000">CRASH1000 — Crash 1000</option>
-                    <option value="BOOM500">BOOM500 — Boom 500</option>
-                    <option value="CRASH500">CRASH500 — Crash 500</option>
-                    <option value="BOOM300">BOOM300 — Boom 300</option>
-                    <option value="CRASH300">CRASH300 — Crash 300</option>
-                    <option value="BOOM200">BOOM200 — Boom 200</option>
-                    <option value="CRASH200">CRASH200 — Crash 200</option>
-                    <option value="R_75">R_75 — Volatility 75</option>
-                    <option value="R_100">R_100 — Volatility 100</option>
-                    <option value="JD75">JD75 — Jump 75</option>
-                    <option value="STPIDX">STPIDX — Step Index</option>
-                    <option value="RDBEAR">RDBEAR — Bear Market</option>
+                    <optgroup label="Boom/Crash">
+                      <option value="BOOM1000">Boom 1000</option>
+                      <option value="CRASH1000">Crash 1000</option>
+                      <option value="BOOM900">Boom 900</option>
+                      <option value="CRASH900">Crash 900</option>
+                      <option value="BOOM600">Boom 600</option>
+                      <option value="CRASH600">Crash 600</option>
+                      <option value="BOOM500">Boom 500</option>
+                      <option value="CRASH500">Crash 500</option>
+                      <option value="BOOM300">Boom 300</option>
+                      <option value="CRASH300">Crash 300</option>
+                    </optgroup>
+                    <optgroup label="Volatility">
+                      <option value="R_10">Volatility 10</option>
+                      <option value="R_25">Volatility 25</option>
+                      <option value="R_50">Volatility 50</option>
+                      <option value="R_75">Volatility 75</option>
+                      <option value="R_100">Volatility 100</option>
+                    </optgroup>
+                    <optgroup label="Bull/Bear">
+                      <option value="RDBULL">Bull Market</option>
+                      <option value="RDBEAR">Bear Market</option>
+                    </optgroup>
+                    <optgroup label="Jump">
+                      <option value="JD10">Jump 10</option>
+                      <option value="JD25">Jump 25</option>
+                      <option value="JD50">Jump 50</option>
+                      <option value="JD75">Jump 75</option>
+                      <option value="JD100">Jump 100</option>
+                    </optgroup>
+                    <optgroup label="Step">
+                      <option value="stpRNG">Step Index</option>
+                      <option value="STP2">Step 200</option>
+                      <option value="STP3">Step 300</option>
+                      <option value="STP4">Step 400</option>
+                      <option value="STP5">Step 500</option>
+                    </optgroup>
+                    <optgroup label="Range Break">
+                      <option value="RDBR100">Range Break 100</option>
+                      <option value="RDBR200">Range Break 200</option>
+                    </optgroup>
                   </Select>
                 </div>
 
