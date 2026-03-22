@@ -44,7 +44,7 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
   const states = await db.select().from(platformStateTable);
   const stateMap: Record<string, string> = {};
   for (const s of states) stateMap[s.key] = s.value;
-  const visibilityThreshold = parseFloat(stateMap["signal_visibility_threshold"] || "50");
+  const visibilityThreshold = parseFloat(stateMap["signal_visibility_threshold"] || "70");
 
   const conditions = [];
 

@@ -215,7 +215,7 @@ export default function Signals() {
 
   const signals = data?.signals ?? [];
   const total = data?.total ?? 0;
-  const visThreshold = data?.visibilityThreshold ?? 50;
+  const visThreshold = data?.visibilityThreshold ?? 70;
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const hasFilters = symbolFilter || familyFilter || modeFilter || statusFilter || aiFilter;
 
