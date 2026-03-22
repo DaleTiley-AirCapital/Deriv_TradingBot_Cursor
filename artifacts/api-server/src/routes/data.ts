@@ -1,9 +1,51 @@
 import { Router, type IRouter } from "express";
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql, and } from "drizzle-orm";
 import { db, ticksTable, candlesTable, spikeEventsTable, platformStateTable } from "@workspace/db";
-import { getDerivClientWithDbToken, SUPPORTED_SYMBOLS, getEnabledSymbols } from "../lib/deriv.js";
+import { getDerivClientWithDbToken, SUPPORTED_SYMBOLS, getEnabledSymbols, getBackfillProgress, isBackfillRunning } from "../lib/deriv.js";
+import { runBackfillWithTracking } from "../index.js";
 
 const router: IRouter = Router();
+
+router.post("/data/backfill/start", async (_req, res): Promise<void> => {
+  if (isBackfillRunning()) {
+    res.status(409).json({ success: false, message: "Backfill is already running." });
+    return;
+  }
+  runBackfillWithTracking().catch(err => {
+    console.error("[Backfill] Trigger failed:", err instanceof Error ? err.message : err);
+  });
+  res.json({ success: true, message: "Backfill started." });
+});
+
+router.get("/data/backfill/progress", async (_req, res): Promise<void> => {
+  res.json(getBackfillProgress());
+});
+
+router.get("/data/backfill/summary", async (_req, res): Promise<void> => {
+  const enabledSymbols = await getEnabledSymbols();
+  const validSymbols = enabledSymbols.filter(s => SUPPORTED_SYMBOLS.includes(s));
+
+  const summaries: Record<string, { ticks: number; candles1m: number; candles5m: number; oldestCandle1m: string | null; oldestCandle5m: string | null }> = {};
+
+  for (const symbol of validSymbols) {
+    const tickCount = await db.select({ count: sql<number>`count(*)` }).from(ticksTable).where(eq(ticksTable.symbol, symbol));
+    const candles1mCount = await db.select({ count: sql<number>`count(*)` }).from(candlesTable).where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")));
+    const candles5mCount = await db.select({ count: sql<number>`count(*)` }).from(candlesTable).where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "5m")));
+
+    const oldest1m = await db.select({ ts: candlesTable.openTs }).from(candlesTable).where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m"))).orderBy(candlesTable.openTs).limit(1);
+    const oldest5m = await db.select({ ts: candlesTable.openTs }).from(candlesTable).where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "5m"))).orderBy(candlesTable.openTs).limit(1);
+
+    summaries[symbol] = {
+      ticks: Number(tickCount[0]?.count || 0),
+      candles1m: Number(candles1mCount[0]?.count || 0),
+      candles5m: Number(candles5mCount[0]?.count || 0),
+      oldestCandle1m: oldest1m.length > 0 ? new Date(oldest1m[0].ts * 1000).toISOString().slice(0, 10) : null,
+      oldestCandle5m: oldest5m.length > 0 ? new Date(oldest5m[0].ts * 1000).toISOString().slice(0, 10) : null,
+    };
+  }
+
+  res.json({ symbols: summaries, backfillRunning: isBackfillRunning() });
+});
 
 router.post("/data/backfill", async (req, res): Promise<void> => {
   const { symbol = "BOOM1000", months = 12 } = req.body ?? {};

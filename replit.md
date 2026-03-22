@@ -62,7 +62,9 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 
 **System Modes:** `idle` (no stream), `scanning` (stream on, no execution modes), `paper`/`demo`/`live` (execution modes active).
 
-**Startup Order (Railway/production):** DB init → Listen on PORT → Start scheduler → AI auto-config → Symbol validation → Tick streaming → Health at /api/healthz
+**Startup Order (Railway/production):** DB init → Listen on PORT → Start scheduler → AI auto-config → Symbol validation → 3-year candle backfill (paginated) → Tick streaming → Health at /api/healthz
+
+**Data Backfill:** On startup, auto-backfills 3 years of 1m and 5m candle history for all 12 symbols via paginated Deriv API calls (5,000 candles per page). Uses `onConflictDoNothing` so re-runs fill gaps without duplicating. Settings > Data tab provides manual trigger, per-symbol progress bars, and stored data summary table. API endpoints: `POST /api/data/backfill/start`, `GET /api/data/backfill/progress`, `GET /api/data/backfill/summary`.
 
 ## External Dependencies
 

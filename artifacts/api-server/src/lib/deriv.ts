@@ -26,6 +26,31 @@ export const V1_DEFAULT_SYMBOLS = [
 
 export type TradingMode = "paper" | "demo" | "real";
 
+export interface BackfillSymbolProgress {
+  symbol: string;
+  phase: string;
+  pct: number;
+  candles: number;
+  ticks: number;
+  oldestDate?: string;
+}
+
+export interface BackfillProgress {
+  running: boolean;
+  startedAt?: number;
+  symbols: Record<string, BackfillSymbolProgress & { status: "pending" | "running" | "done" | "error"; error?: string; finalTicks?: number; finalCandles?: number }>;
+}
+
+const backfillState: BackfillProgress = { running: false, symbols: {} };
+
+export function getBackfillProgress(): BackfillProgress {
+  return backfillState;
+}
+
+export function isBackfillRunning(): boolean {
+  return backfillState.running;
+}
+
 const TIMEFRAMES: Record<string, number> = {
   "1m": 60,
   "5m": 300,
@@ -602,12 +627,31 @@ class DerivClient {
     return this.latestQuotes.get(symbol) ?? null;
   }
 
-  async backfill(symbol: string, tickCount = 5000): Promise<{ ticks: number; candles: number }> {
+  async backfill(
+    symbol: string,
+    tickCount = 5000,
+    onProgress?: (update: BackfillSymbolProgress) => void,
+  ): Promise<{ ticks: number; candles: number }> {
     let storedTicks = 0;
     let storedCandles = 0;
 
     const apiSymbol = getApiSymbol(symbol);
+    const YEARS_TO_BACKFILL = 3;
+    const CANDLES_PER_PAGE = 5000;
+    const now = Math.floor(Date.now() / 1000);
+    const targetStart = now - (YEARS_TO_BACKFILL * 365.25 * 24 * 60 * 60);
 
+    const totalExpected1m = Math.ceil((now - targetStart) / 60);
+    const totalExpected5m = Math.ceil((now - targetStart) / 300);
+    const totalExpectedCandles = totalExpected1m + totalExpected5m;
+
+    const emit = (phase: string, candles: number, oldestDate?: string) => {
+      if (!onProgress) return;
+      const pct = Math.min(100, Math.round((candles / totalExpectedCandles) * 100));
+      onProgress({ symbol, phase, pct, candles, ticks: storedTicks, oldestDate });
+    };
+
+    emit("ticks", 0);
     const history = await this.getTickHistory(apiSymbol, tickCount);
     if (history && history.prices && history.times) {
       const values = history.prices.map((price, i) => ({
@@ -651,10 +695,7 @@ class DerivClient {
       }
     }
 
-    const YEARS_TO_BACKFILL = 3;
-    const CANDLES_PER_PAGE = 5000;
-    const now = Math.floor(Date.now() / 1000);
-    const targetStart = now - (YEARS_TO_BACKFILL * 365.25 * 24 * 60 * 60);
+    let cumulativeCandles = 0;
 
     for (const [tf, granularity] of [["1m", 60], ["5m", 300]] as [string, number][]) {
       let endEpoch = now;
@@ -683,10 +724,16 @@ class DerivClient {
           totalForTf += chunk.length;
         }
 
+        cumulativeCandles += values.length;
         const oldestEpoch = candles[0].epoch;
         if (oldestEpoch >= endEpoch) break;
         endEpoch = oldestEpoch - 1;
         pages++;
+
+        if (pages % 5 === 0) {
+          const oldestDate = new Date(oldestEpoch * 1000).toISOString().slice(0, 10);
+          emit(`candles_${tf}`, cumulativeCandles, oldestDate);
+        }
 
         if (pages % 20 === 0) {
           const oldestDate = new Date(oldestEpoch * 1000).toISOString().slice(0, 10);
@@ -701,6 +748,7 @@ class DerivClient {
       storedCandles += totalForTf;
     }
 
+    emit("done", cumulativeCandles);
     return { ticks: storedTicks, candles: storedCandles };
   }
 

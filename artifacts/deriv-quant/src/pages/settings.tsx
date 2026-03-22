@@ -853,14 +853,242 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
   );
 }
 
-type TabKey = "general" | "paper" | "demo" | "real" | "diagnostics";
+type TabKey = "general" | "data" | "paper" | "demo" | "real" | "diagnostics";
 const TABS: { key: TabKey; label: string; color: string }[] = [
   { key: "general", label: "General", color: "primary" },
+  { key: "data", label: "Data", color: "primary" },
   { key: "paper", label: "Paper Mode", color: "warning" },
   { key: "demo", label: "Demo USD", color: "primary" },
   { key: "real", label: "Real USD", color: "destructive" },
   { key: "diagnostics", label: "Diagnostics", color: "primary" },
 ];
+
+interface BackfillSymbolState {
+  symbol: string;
+  phase: string;
+  pct: number;
+  candles: number;
+  ticks: number;
+  oldestDate?: string;
+  status: "pending" | "running" | "done" | "error";
+  error?: string;
+  finalTicks?: number;
+  finalCandles?: number;
+}
+
+interface BackfillProgressData {
+  running: boolean;
+  startedAt?: number;
+  symbols: Record<string, BackfillSymbolState>;
+}
+
+interface BackfillSummarySymbol {
+  ticks: number;
+  candles1m: number;
+  candles5m: number;
+  oldestCandle1m: string | null;
+  oldestCandle5m: string | null;
+}
+
+interface BackfillSummaryData {
+  symbols: Record<string, BackfillSummarySymbol>;
+  backfillRunning: boolean;
+}
+
+function BackfillPanel() {
+  const [summary, setSummary] = useState<BackfillSummaryData | null>(null);
+  const [progress, setProgress] = useState<BackfillProgressData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [starting, setStarting] = useState(false);
+  const { toast } = useToast();
+  const base = import.meta.env.BASE_URL || "/";
+
+  const fetchSummary = async () => {
+    try {
+      const resp = await fetch(`${base}api/data/backfill/summary`);
+      if (resp.ok) setSummary(await resp.json());
+    } catch { /* ignore */ }
+    setLoading(false);
+  };
+
+  const fetchProgress = async () => {
+    try {
+      const resp = await fetch(`${base}api/data/backfill/progress`);
+      if (resp.ok) {
+        const data: BackfillProgressData = await resp.json();
+        setProgress(data);
+        return data.running;
+      }
+    } catch { /* ignore */ }
+    return false;
+  };
+
+  useEffect(() => {
+    fetchSummary();
+    fetchProgress();
+  }, []);
+
+  useEffect(() => {
+    if (!progress?.running) return;
+    const interval = setInterval(async () => {
+      const stillRunning = await fetchProgress();
+      if (!stillRunning) {
+        clearInterval(interval);
+        fetchSummary();
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [progress?.running]);
+
+  const handleStart = async () => {
+    setStarting(true);
+    try {
+      const resp = await fetch(`${base}api/data/backfill/start`, { method: "POST" });
+      const data = await resp.json();
+      if (resp.ok) {
+        toast({ title: "Backfill started", description: "Fetching 3 years of candle history for all symbols." });
+        await fetchProgress();
+      } else {
+        toast({ title: "Cannot start", description: data.message, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to start backfill.", variant: "destructive" });
+    }
+    setStarting(false);
+  };
+
+  const isRunning = progress?.running ?? false;
+  const symbols = isRunning ? Object.values(progress?.symbols || {}) : [];
+  const doneCount = symbols.filter(s => s.status === "done").length;
+  const totalCount = symbols.length;
+
+  const formatNum = (n: number) => n.toLocaleString();
+
+  return (
+    <div className="space-y-6 mt-6">
+      <Card className="border-border/50 bg-card/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Database className="w-4 h-4" />
+            Historical Data Backfill
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Fetches 3 years of 1-minute and 5-minute candle history for all 12 symbols from the Deriv API. This data powers the ML signal engine's feature calculations.
+          </p>
+
+          {!isRunning && (
+            <button
+              onClick={handleStart}
+              disabled={starting}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground shadow-lg shadow-primary/20 hover:shadow-primary/40 transition-all disabled:opacity-50"
+            >
+              {starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              {starting ? "Starting..." : "Run Backfill"}
+            </button>
+          )}
+
+          {isRunning && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-sm text-emerald-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Backfilling... {doneCount}/{totalCount} symbols complete
+              </div>
+              <div className="space-y-2">
+                {symbols.map(sym => (
+                  <div key={sym.symbol} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-foreground">{sym.symbol}</span>
+                      <span className="text-muted-foreground">
+                        {sym.status === "done" && <span className="text-emerald-400">{formatNum(sym.finalCandles || 0)} candles</span>}
+                        {sym.status === "running" && <span>{sym.pct}% {sym.oldestDate ? `(oldest: ${sym.oldestDate})` : ""}</span>}
+                        {sym.status === "error" && <span className="text-red-400">Error</span>}
+                        {sym.status === "pending" && <span>Waiting...</span>}
+                      </span>
+                    </div>
+                    <div className="h-2 bg-muted/50 rounded-full overflow-hidden">
+                      <motion.div
+                        className={cn(
+                          "h-full rounded-full transition-all",
+                          sym.status === "done" ? "bg-emerald-500" :
+                          sym.status === "error" ? "bg-red-500" :
+                          sym.status === "running" ? "bg-primary" :
+                          "bg-muted"
+                        )}
+                        initial={{ width: 0 }}
+                        animate={{ width: `${sym.status === "done" ? 100 : sym.pct}%` }}
+                        transition={{ duration: 0.3 }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50 bg-card/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <BarChart3 className="w-4 h-4" />
+            Stored Data per Symbol
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading...
+            </div>
+          ) : summary ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border/30 text-muted-foreground text-xs">
+                    <th className="text-left py-2 pr-4">Symbol</th>
+                    <th className="text-right py-2 px-2">Ticks</th>
+                    <th className="text-right py-2 px-2">1m Candles</th>
+                    <th className="text-right py-2 px-2">5m Candles</th>
+                    <th className="text-right py-2 px-2">Oldest 1m</th>
+                    <th className="text-right py-2 pl-2">Oldest 5m</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(summary.symbols).map(([symbol, data]) => {
+                    const has3y1m = data.candles1m >= 1_500_000;
+                    const has3y5m = data.candles5m >= 300_000;
+                    return (
+                      <tr key={symbol} className="border-b border-border/10">
+                        <td className="py-2 pr-4 font-medium">{symbol}</td>
+                        <td className="py-2 px-2 text-right tabular-nums">{formatNum(data.ticks)}</td>
+                        <td className={cn("py-2 px-2 text-right tabular-nums", has3y1m ? "text-emerald-400" : data.candles1m > 0 ? "text-amber-400" : "text-red-400")}>
+                          {formatNum(data.candles1m)}
+                        </td>
+                        <td className={cn("py-2 px-2 text-right tabular-nums", has3y5m ? "text-emerald-400" : data.candles5m > 0 ? "text-amber-400" : "text-red-400")}>
+                          {formatNum(data.candles5m)}
+                        </td>
+                        <td className="py-2 px-2 text-right text-muted-foreground text-xs">{data.oldestCandle1m || "—"}</td>
+                        <td className="py-2 pl-2 text-right text-muted-foreground text-xs">{data.oldestCandle5m || "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <p className="text-xs text-muted-foreground mt-3">
+                <span className="text-emerald-400">Green</span> = 3+ years (1.5M+ 1m / 300K+ 5m) &middot;{" "}
+                <span className="text-amber-400">Amber</span> = partial data &middot;{" "}
+                <span className="text-red-400">Red</span> = no data
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Unable to load data summary.</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 interface SymbolDiag {
   configured: string;
@@ -1913,6 +2141,8 @@ export default function Settings() {
               </Card>
             </div>
           )}
+
+          {activeTab === "data" && <BackfillPanel />}
 
           {activeTab === "paper" && (
             <ModeSettingsTab
