@@ -180,24 +180,31 @@ async function initDb(): Promise<void> {
     );
   `);
 
-  await db.execute(sql`
-    ALTER TABLE trades ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION;
-    ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_stop_pct DOUBLE PRECISION;
-    ALTER TABLE trades ADD COLUMN IF NOT EXISTS peak_price DOUBLE PRECISION;
-    ALTER TABLE trades ADD COLUMN IF NOT EXISTS max_exit_ts TIMESTAMPTZ;
-    ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_reason TEXT;
-    ALTER TABLE trades ADD COLUMN IF NOT EXISTS current_price DOUBLE PRECISION;
-
-    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS composite_score DOUBLE PRECISION;
-    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS scoring_dimensions JSONB;
-    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS mode TEXT;
-    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS regime TEXT;
-    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS regime_confidence DOUBLE PRECISION;
-    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS strategy_family TEXT;
-    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS sub_strategy TEXT;
-    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS allocation_pct DOUBLE PRECISION;
-    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS execution_status TEXT;
-  `);
+  const migrations = [
+    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION",
+    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_stop_pct DOUBLE PRECISION",
+    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS peak_price DOUBLE PRECISION",
+    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS max_exit_ts TIMESTAMPTZ",
+    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_reason TEXT",
+    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS current_price DOUBLE PRECISION",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS composite_score DOUBLE PRECISION",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS scoring_dimensions JSONB",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS mode TEXT",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS regime TEXT",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS regime_confidence DOUBLE PRECISION",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS strategy_family TEXT",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS sub_strategy TEXT",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS allocation_pct DOUBLE PRECISION",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS execution_status TEXT",
+  ];
+  for (const stmt of migrations) {
+    try {
+      await db.execute(sql.raw(stmt));
+    } catch (err) {
+      console.error(`[DB] Migration failed: ${stmt}`, err instanceof Error ? err.message : err);
+    }
+  }
+  console.log(`[DB] Ran ${migrations.length} column migrations.`);
 
   await db.execute(sql`
     INSERT INTO platform_state (key, value)
