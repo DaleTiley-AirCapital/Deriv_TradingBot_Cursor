@@ -1,0 +1,130 @@
+
+
+Deriv_Capital_Extractor
+
+production
+
+
+
+Agent
+
+Filter and search logs
+
+3/22/26, 5:02 PM GMT+2
+
+
+    at Ox.queryWithCache (/app/artifacts/api-server/dist/index.cjs:16:37221)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /app/artifacts/api-server/dist/index.cjs:16:40695
+    at async /app/artifacts/api-server/dist/index.cjs:197:75568
+Error: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+2026-03-22 16:03:41.672 UTC [1123] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:03:41.672 UTC [1123] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+2026-03-22 16:03:41.672 UTC [1098] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:03:41.672 UTC [1098] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+    at async /app/artifacts/api-server/dist/index.cjs:197:62372
+Error: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1 order by "trades"."entry_ts" desc
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+params: open
+    at async /app/artifacts/api-server/dist/index.cjs:16:40695
+    at Ox.queryWithCache (/app/artifacts/api-server/dist/index.cjs:16:37221)
+2026-03-22 16:03:43.355 UTC [1079] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:03:43.355 UTC [1079] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1 order by "trades"."entry_ts" desc
+Error: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1 order by "trades"."entry_ts" desc
+params: open
+    at Ox.queryWithCache (/app/artifacts/api-server/dist/index.cjs:16:37221)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /app/artifacts/api-server/dist/index.cjs:16:40695
+    at async /app/artifacts/api-server/dist/index.cjs:197:62372
+2026-03-22 16:03:44.704 UTC [1122] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:03:44.704 UTC [1122] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1 order by "trades"."entry_ts" desc
+Error: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+params: open
+    at Ox.queryWithCache (/app/artifacts/api-server/dist/index.cjs:16:37221)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /app/artifacts/api-server/dist/index.cjs:16:40695
+    at async /app/artifacts/api-server/dist/index.cjs:197:75568
+2026-03-22 16:03:47.022 UTC [1105] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:03:47.022 UTC [1105] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+Error: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+params: open
+    at Ox.queryWithCache (/app/artifacts/api-server/dist/index.cjs:16:37221)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /app/artifacts/api-server/dist/index.cjs:16:40695
+    at async /app/artifacts/api-server/dist/index.cjs:197:74336
+2026-03-22 16:03:47.167 UTC [1130] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:03:47.167 UTC [1130] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+Error: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+params: open
+    at Ox.queryWithCache (/app/artifacts/api-server/dist/index.cjs:16:37221)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /app/artifacts/api-server/dist/index.cjs:16:40695
+    at async /app/artifacts/api-server/dist/index.cjs:197:75568
+2026-03-22 16:03:48.428 UTC [1126] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:03:48.428 UTC [1126] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+Error: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+params: open
+    at Ox.queryWithCache (/app/artifacts/api-server/dist/index.cjs:16:37221)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /app/artifacts/api-server/dist/index.cjs:16:40695
+    at async /app/artifacts/api-server/dist/index.cjs:197:74336
+2026-03-22 16:03:48.533 UTC [1111] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:03:48.533 UTC [1111] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+[Scan] BOOM1000 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+2026-03-22 16:04:04.611 UTC [83] LOG:  checkpoint starting: time
+[Scan] CRASH1000 | regime=breakout_expansion | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Deriv] SPIKE detected on CRASH600: down by 42.0150 (z=11.36) after 130 ticks
+[Scan] BOOM900 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Deriv] SPIKE detected on R_75: up by 22.2377 (z=4.07) after 70 ticks
+[Scan] CRASH900 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+2026-03-22 16:04:21.974 UTC [83] LOG:  checkpoint complete: wrote 173 buffers (1.1%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=17.343 s, sync=0.007 s, total=17.364 s; sync files=20, longest=0.005 s, average=0.001 s; distance=1598 kB, estimate=15760 kB; lsn=0/6A75AF8, redo lsn=0/6A4F2E0
+[Scan] BOOM600 | regime=mean_reversion | families=[mean_reversion] | candidates=0 | SKIP=no_signals
+[Scan] CRASH600 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Scan] BOOM500 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+Error: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+params: open
+    at Ox.queryWithCache (/app/artifacts/api-server/dist/index.cjs:16:37221)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /app/artifacts/api-server/dist/index.cjs:16:40695
+    at async /app/artifacts/api-server/dist/index.cjs:197:75568
+Error: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+params: open
+    at Ox.queryWithCache (/app/artifacts/api-server/dist/index.cjs:16:37221)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async /app/artifacts/api-server/dist/index.cjs:16:40695
+    at async /app/artifacts/api-server/dist/index.cjs:197:75568
+[Deriv] Connection closed (1006: ). Reconnecting in 5s...
+[Deriv] Connection closed (1006: ). Reconnecting in 5s...
+[Deriv] Connecting to Deriv WebSocket API...
+[Deriv] Connecting to Deriv WebSocket API...
+2026-03-22 16:04:53.898 UTC [1132] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:04:53.898 UTC [1132] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+2026-03-22 16:04:55.251 UTC [1106] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:04:55.251 UTC [1106] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where "trades"."status" = $1
+[Deriv] Connected. Authorizing...
+[Deriv] Connected. Authorizing...
+[Deriv] Authorized successfully.
+[Deriv] Authorized successfully.
+[Deriv] SPIKE detected on BOOM300: up by 6.2450 (z=13.56) after 185 ticks
+[Intel] CRASH500 | regime=compression | families=[breakout_expansion] | candidates=1 | top=breakout_expansion(0.780, EV=0.0162)
+[Scheduler] Stagger scan error for CRASH500: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where ("trades"."status" = $1 and "trades"."mode" = $2)
+params: open,paper
+2026-03-22 16:04:59.694 UTC [1138] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:04:59.694 UTC [1138] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where ("trades"."status" = $1 and "trades"."mode" = $2)
+[Scan] BOOM300 | regime=no_trade | conf=0.50 | SKIP=no_trade_regime
+[Scan] CRASH300 | regime=no_trade | conf=0.50 | SKIP=no_trade_regime
+[Intel] R_75 | regime=compression | families=[breakout_expansion] | candidates=1 | top=breakout_expansion(0.754, EV=0.0152)
+[Scheduler] Stagger scan error for R_75: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where ("trades"."status" = $1 and "trades"."mode" = $2)
+params: open,paper
+[Deriv] SPIKE detected on BOOM900: up by 14.1840 (z=14.57) after 149 ticks
+2026-03-22 16:05:29.710 UTC [1133] ERROR:  column "confidence" does not exist at character 174
+2026-03-22 16:05:29.710 UTC [1133] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where ("trades"."status" = $1 and "trades"."mode" = $2)
+[Scan] R_100 | regime=no_trade | conf=0.50 | SKIP=no_trade_regime
+[Scan] BOOM1000 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Scan] CRASH1000 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Deriv] SPIKE detected on CRASH600: down by 30.8120 (z=9.37) after 124 ticks
+[Intel] BOOM900 | regime=compression | families=[breakout_expansion] | candidates=1 | top=breakout_expansion(0.795, EV=0.0168)
+[Scheduler] Stagger scan error for BOOM900: Failed query: select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where ("trades"."status" = $1 and "trades"."mode" = $2)
+params: open,paper
+[Deriv] SPIKE detected on BOOM900: up by 4.8100 (z=5.02) after 39 ticks
+2026-03-22 16:06:09.729 UTC [1118] STATEMENT:  select "id", "broker_trade_id", "symbol", "strategy_name", "side", "entry_ts", "exit_ts", "entry_price", "exit_price", "sl", "tp", "size", "pnl", "status", "mode", "notes", "confidence", "trailing_stop_pct", "peak_price", "max_exit_ts", "exit_reason", "current_price", "created_at" from "trades" where ("trades"."status" = $1 and "trades"."mode" = $2)

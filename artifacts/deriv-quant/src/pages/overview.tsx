@@ -33,27 +33,15 @@ const FAMILY_LABELS: Record<string, string> = {
 const DEFAULT_CAPITAL = 10000;
 
 export default function Overview() {
-  const { data: overview, isPending: overviewPending } = useGetOverview({ query: { refetchInterval: 5000 } });
-  const { data: portfolio, isPending: portfolioPending } = useGetPortfolioStatus({ query: { refetchInterval: 5000 } });
-  const { data: accountInfo } = useGetAccountInfo({ query: { refetchInterval: 30000 } });
-  const { data: positions } = useGetLivePositions({ query: { refetchInterval: 10000 } });
+  const queryOpts = { refetchInterval: 5000, retry: 2, retryDelay: 1000, staleTime: 10000 };
+  const { data: overview } = useGetOverview({ query: queryOpts });
+  const { data: portfolio } = useGetPortfolioStatus({ query: queryOpts });
+  const { data: accountInfo } = useGetAccountInfo({ query: { refetchInterval: 30000, retry: 2, staleTime: 30000 } });
+  const { data: positions } = useGetLivePositions({ query: { refetchInterval: 10000, retry: 1, staleTime: 10000 } });
   const { data: settings } = useGetSettings({ query: { staleTime: 60000 } });
-  const { data: signalsData } = useGetLatestSignals(undefined, { query: { refetchInterval: 15000 } });
+  const { data: signalsData } = useGetLatestSignals(undefined, { query: { refetchInterval: 15000, retry: 1, staleTime: 15000 } });
   const signals = signalsData?.signals;
   const [kpiMode, setKpiMode] = useState<string>("paper");
-
-  const isFirstLoad = overviewPending && portfolioPending && !overview && !portfolio;
-
-  if (isFirstLoad) {
-    return (
-      <div className="h-full w-full flex items-center justify-center text-muted-foreground">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm">Loading dashboard…</span>
-        </div>
-      </div>
-    );
-  }
 
   const pnlTrend        = (overview?.realisedPnl || 0) >= 0 ? "up" : "down";
   const isLive          = overview?.mode === "live" || overview?.mode === "real";
