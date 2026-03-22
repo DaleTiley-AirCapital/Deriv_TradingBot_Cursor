@@ -74,7 +74,7 @@ export function AiChat() {
       <button
         onClick={() => setOpen(!open)}
         className={cn(
-          "fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-all",
+          "fixed bottom-[84px] md:bottom-6 right-6 z-50 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-all",
           "bg-primary text-primary-foreground hover:scale-105 active:scale-95",
           open && "bg-muted text-foreground"
         )}
@@ -83,7 +83,7 @@ export function AiChat() {
       </button>
 
       {open && (
-        <div className="fixed bottom-24 right-6 z-50 w-[380px] max-h-[520px] rounded-2xl border border-border/60 bg-[#1a2035] shadow-2xl flex flex-col overflow-hidden">
+        <div className="fixed bottom-[156px] md:bottom-24 right-6 z-50 w-[380px] max-h-[520px] rounded-2xl border border-border/60 bg-[#1a2035] shadow-2xl flex flex-col overflow-hidden">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border/30 bg-[#0e1120]">
             <Bot className="w-4 h-4 text-primary" />
             <span className="text-sm font-semibold text-foreground">AI Assistant</span>
