@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { db, ticksTable, candlesTable, spikeEventsTable, platformStateTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { createDecipheriv, scryptSync } from "crypto";
+import { recordTick, validateActiveSymbols, isSymbolValid, markSymbolError, startWatchdog, getAllSymbolStatuses } from "./symbolValidator.js";
 
 const DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089";
 
@@ -309,6 +310,8 @@ class DerivClient {
 
   private async processTick(tick: DerivTick) {
     const { symbol, epoch, quote } = tick;
+
+    recordTick(symbol, quote, epoch);
 
     await db.insert(ticksTable).values({
       symbol,
@@ -650,13 +653,58 @@ class DerivClient {
   async startStreaming(symbols: string[]): Promise<void> {
     this.streaming = true;
     await this.connect();
-    for (const symbol of symbols) {
-      await this.subscribeToTicks(symbol);
+
+    let validatedMap: Map<string, { apiSymbol: string; displayName: string; marketType: string }>;
+    try {
+      validatedMap = await validateActiveSymbols(true);
+    } catch (err) {
+      console.warn("[Deriv] Symbol validation failed, subscribing to all configured symbols:", err instanceof Error ? err.message : err);
+      validatedMap = new Map(symbols.map(s => [s, { apiSymbol: s, displayName: s, marketType: "unknown" }]));
     }
+
+    const validSymbols: string[] = [];
+    const invalidSymbols: string[] = [];
+
+    for (const symbol of symbols) {
+      if (validatedMap.has(symbol)) {
+        validSymbols.push(symbol);
+      } else {
+        invalidSymbols.push(symbol);
+        markSymbolError(symbol, "Not found in Deriv active symbols — excluded from streaming");
+        console.warn(`[Deriv] ⚠ SYMBOL INVALID: ${symbol} — not found in active symbols. Skipping subscription.`);
+      }
+    }
+
+    if (invalidSymbols.length > 0) {
+      console.warn(`[Deriv] ━━━ INVALID SYMBOLS ━━━`);
+      for (const s of invalidSymbols) {
+        console.warn(`[Deriv]   ✗ ${s} — will NOT stream`);
+      }
+      console.warn(`[Deriv] ━━━━━━━━━━━━━━━━━━━━━━━`);
+    }
+
+    for (const symbol of validSymbols) {
+      try {
+        await this.subscribeToTicks(symbol);
+      } catch (err) {
+        markSymbolError(symbol, `Subscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+        console.error(`[Deriv] Failed to subscribe to ${symbol}:`, err instanceof Error ? err.message : err);
+      }
+    }
+
+    const self = this;
+    startWatchdog(async (symbol: string) => {
+      if (self.authorized && self.ws && self.ws.readyState === WebSocket.OPEN) {
+        await self.subscribeToTicks(symbol);
+      }
+    });
+
     await db.insert(platformStateTable).values({ key: "streaming", value: "true" })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "true", updatedAt: new Date() } });
-    await db.insert(platformStateTable).values({ key: "streaming_symbols", value: symbols.join(",") })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: symbols.join(","), updatedAt: new Date() } });
+    await db.insert(platformStateTable).values({ key: "streaming_symbols", value: validSymbols.join(",") })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: validSymbols.join(","), updatedAt: new Date() } });
+    await db.insert(platformStateTable).values({ key: "invalid_symbols", value: invalidSymbols.join(",") })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: invalidSymbols.join(","), updatedAt: new Date() } });
     await db.insert(platformStateTable).values({ key: "last_sync_at", value: new Date().toISOString() })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: new Date().toISOString(), updatedAt: new Date() } });
   }

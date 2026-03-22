@@ -118,6 +118,30 @@ const SETTING_DEFAULTS: Record<string, string> = {
   real_enabled_strategies: ALL_STRATEGIES_DEFAULT,
   ai_recommended_strategies: "",
   ai_recommended_symbols: "",
+  extraction_target_pct: "50",
+  auto_extraction: "false",
+  peak_drawdown_exit_pct: "30",
+  min_peak_profit_pct: "3",
+  large_peak_threshold_pct: "8",
+  correlated_family_cap: "3",
+  paper_extraction_target_pct: "50",
+  paper_auto_extraction: "false",
+  paper_peak_drawdown_exit_pct: "30",
+  paper_min_peak_profit_pct: "3",
+  paper_large_peak_threshold_pct: "8",
+  paper_correlated_family_cap: "3",
+  demo_extraction_target_pct: "50",
+  demo_auto_extraction: "false",
+  demo_peak_drawdown_exit_pct: "30",
+  demo_min_peak_profit_pct: "3",
+  demo_large_peak_threshold_pct: "8",
+  demo_correlated_family_cap: "3",
+  real_extraction_target_pct: "50",
+  real_auto_extraction: "false",
+  real_peak_drawdown_exit_pct: "30",
+  real_min_peak_profit_pct: "3",
+  real_large_peak_threshold_pct: "8",
+  real_correlated_family_cap: "3",
 };
 
 const API_KEY_KEYS = ["deriv_api_token", "deriv_api_token_demo", "deriv_api_token_real", "openai_api_key"];
@@ -297,7 +321,7 @@ router.get("/settings/openai-health", async (_req, res): Promise<void> => {
   }
 });
 
-const STRATEGIES = ["trend-pullback", "exhaustion-rebound", "volatility-breakout", "spike-hazard"];
+const STRATEGIES = ["trend-pullback", "exhaustion-rebound", "volatility-breakout", "spike-hazard", "volatility-expansion", "liquidity-sweep"];
 const DEFAULT_SYMBOLS = ["BOOM1000", "CRASH1000", "BOOM500", "CRASH500", "R_75", "R_100", "JD75", "STPIDX", "RDBEAR"];
 
 const AI_LOCKABLE_KEYS = [

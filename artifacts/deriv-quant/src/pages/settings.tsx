@@ -333,7 +333,6 @@ const ALL_STRATEGIES = [
   { key: "spike-hazard", label: "Spike Hazard", desc: "Exploits Boom/Crash spike patterns deterministically" },
   { key: "volatility-expansion", label: "Volatility Expansion", desc: "Captures explosive moves after compression" },
   { key: "liquidity-sweep", label: "Liquidity Sweep", desc: "Reversal after stop-hunt sweeps of key levels" },
-  { key: "macro-bias", label: "Macro Bias", desc: "Event-driven positioning based on regime analysis" },
 ];
 
 function InstrumentsPicker({ enabledSymbols, onChange }: { enabledSymbols: string; onChange: (v: string) => void }) {
@@ -823,13 +822,184 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
   );
 }
 
-type TabKey = "general" | "paper" | "demo" | "real";
+type TabKey = "general" | "paper" | "demo" | "real" | "diagnostics";
 const TABS: { key: TabKey; label: string; color: string }[] = [
   { key: "general", label: "General", color: "primary" },
   { key: "paper", label: "Paper Mode", color: "warning" },
   { key: "demo", label: "Demo USD", color: "primary" },
   { key: "real", label: "Real USD", color: "destructive" },
+  { key: "diagnostics", label: "Diagnostics", color: "primary" },
 ];
+
+interface SymbolDiag {
+  configured: string;
+  instrumentFamily: string;
+  activeSymbolFound: boolean;
+  apiSymbol: string | null;
+  displayName: string | null;
+  marketType: string | null;
+  streaming: boolean;
+  lastTickTs: number | null;
+  lastTickValue: number | null;
+  tickCount5min: number;
+  stale: boolean;
+  error: string | null;
+}
+
+interface SymbolDiagResponse {
+  summary: { total: number; valid: number; streaming: number; stale: number; errors: number };
+  symbols: SymbolDiag[];
+}
+
+function SymbolDiagnosticsPanel() {
+  const [data, setData] = useState<SymbolDiagResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [revalidating, setRevalidating] = useState(false);
+  const base = import.meta.env.BASE_URL || "/";
+
+  const fetchDiag = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`${base}api/diagnostics/symbols`);
+      if (r.ok) setData(await r.json());
+    } catch {}
+    setLoading(false);
+  };
+
+  const revalidate = async () => {
+    setRevalidating(true);
+    try {
+      const r = await fetch(`${base}api/diagnostics/symbols/revalidate`, { method: "POST" });
+      if (r.ok) {
+        const result = await r.json();
+        setData({ summary: { total: result.symbols.length, valid: result.symbols.filter((s: SymbolDiag) => s.activeSymbolFound).length, streaming: result.symbols.filter((s: SymbolDiag) => s.streaming).length, stale: result.symbols.filter((s: SymbolDiag) => s.stale).length, errors: result.symbols.filter((s: SymbolDiag) => s.error).length }, symbols: result.symbols });
+      }
+    } catch {}
+    setRevalidating(false);
+  };
+
+  useEffect(() => { fetchDiag(); }, []);
+
+  const statusColor = (sym: SymbolDiag) => {
+    if (sym.error && !sym.activeSymbolFound) return "text-red-500";
+    if (sym.stale) return "text-yellow-500";
+    if (sym.streaming) return "text-green-500";
+    return "text-muted-foreground";
+  };
+
+  const statusIcon = (sym: SymbolDiag) => {
+    if (sym.error && !sym.activeSymbolFound) return <XCircle className="w-3.5 h-3.5" />;
+    if (sym.stale) return <AlertTriangle className="w-3.5 h-3.5" />;
+    if (sym.streaming) return <Wifi className="w-3.5 h-3.5" />;
+    return <Clock className="w-3.5 h-3.5" />;
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Wifi className="w-4 h-4" />
+            Symbol Stream Health
+            <div className="ml-auto flex gap-2">
+              <button onClick={fetchDiag} disabled={loading} className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50">
+                {loading ? "Loading..." : "Refresh"}
+              </button>
+              <button onClick={revalidate} disabled={revalidating} className="text-xs px-3 py-1.5 rounded-md border border-primary/30 text-primary hover:bg-primary/10 transition-colors disabled:opacity-50">
+                {revalidating ? "Revalidating..." : "Revalidate All"}
+              </button>
+            </div>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {data && (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+                <div className="p-3 rounded-lg bg-muted/30 border border-border/40 text-center">
+                  <p className="text-xs text-muted-foreground">Total</p>
+                  <p className="text-lg font-bold font-mono">{data.summary.total}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-green-500/5 border border-green-500/20 text-center">
+                  <p className="text-xs text-muted-foreground">Valid</p>
+                  <p className="text-lg font-bold font-mono text-green-500">{data.summary.valid}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-green-500/5 border border-green-500/20 text-center">
+                  <p className="text-xs text-muted-foreground">Streaming</p>
+                  <p className="text-lg font-bold font-mono text-green-500">{data.summary.streaming}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-yellow-500/5 border border-yellow-500/20 text-center">
+                  <p className="text-xs text-muted-foreground">Stale</p>
+                  <p className="text-lg font-bold font-mono text-yellow-500">{data.summary.stale}</p>
+                </div>
+                <div className="p-3 rounded-lg bg-red-500/5 border border-red-500/20 text-center">
+                  <p className="text-xs text-muted-foreground">Errors</p>
+                  <p className="text-lg font-bold font-mono text-red-500">{data.summary.errors}</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border/50">
+                      <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Symbol</th>
+                      <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Family</th>
+                      <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
+                      <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Last Tick</th>
+                      <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Price</th>
+                      <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Ticks/5m</th>
+                      <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.symbols.map(sym => (
+                      <tr key={sym.configured} className="border-b border-border/20 hover:bg-muted/20 transition-colors">
+                        <td className="py-2.5 px-3">
+                          <div>
+                            <span className="font-mono font-medium text-foreground">{sym.configured}</span>
+                            {sym.displayName && <span className="text-xs text-muted-foreground ml-2">{sym.displayName}</span>}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-xs text-muted-foreground capitalize">{sym.instrumentFamily}</td>
+                        <td className="py-2.5 px-3">
+                          <span className={cn("flex items-center gap-1.5 text-xs font-medium", statusColor(sym))}>
+                            {statusIcon(sym)}
+                            {sym.error && !sym.activeSymbolFound ? "Invalid" : sym.stale ? "Stale" : sym.streaming ? "Live" : "Idle"}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-xs font-mono text-muted-foreground">
+                          {sym.lastTickTs ? new Date(sym.lastTickTs).toLocaleTimeString() : "—"}
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-xs font-mono text-foreground">
+                          {sym.lastTickValue != null ? sym.lastTickValue.toFixed(2) : "—"}
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-xs font-mono">
+                          <span className={sym.tickCount5min > 0 ? "text-green-500" : "text-muted-foreground"}>
+                            {sym.tickCount5min}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-xs text-red-400 max-w-[200px] truncate">
+                          {sym.error || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {!data && !loading && (
+            <p className="text-sm text-muted-foreground text-center py-8">No diagnostics data available. Click Refresh to load.</p>
+          )}
+          {loading && !data && (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 function ModeSettingsTab({
   mode,
@@ -1044,6 +1214,87 @@ function ModeSettingsTab({
               aiSuggestion={aiStatus?.aiSuggestions?.[p("time_exit_window_hours")]}
               onOverride={() => handleOverride(p("time_exit_window_hours"), `${modeLabel} Time Exit`)}
               onRevert={aiStatus?.aiSuggestions?.[p("time_exit_window_hours")] !== undefined ? () => handleRevertToAi(p("time_exit_window_hours")) : undefined}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Download className="w-4 h-4" />
+              Capital Extraction
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground mb-3">
+              When capital grows by the target %, extract profits and reset to starting capital for the next cycle.
+            </p>
+            <SettingField
+              label="Extraction Target"
+              description="Extract profits when capital grows by this %"
+              value={form[p("extraction_target_pct")] || "50"}
+              onChange={(v) => update(p("extraction_target_pct"), v)}
+              suffix="%" min={10} max={200} step={5}
+            />
+            <SettingField
+              label="Auto-Extract"
+              description="Automatically extract when target is reached"
+              value={form[p("auto_extraction")] || "false"}
+              onChange={(v) => update(p("auto_extraction"), v)}
+              type="toggle"
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TrendingUp className="w-4 h-4" />
+              Profit Harvesting
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground mb-3">
+              Close winning trades when they pull back too far from their peak profit.
+            </p>
+            <SettingField
+              label="Peak Drawdown Exit"
+              description="Close trade if profit drops this % from its peak"
+              value={form[p("peak_drawdown_exit_pct")] || "30"}
+              onChange={(v) => update(p("peak_drawdown_exit_pct"), v)}
+              suffix="%" min={5} max={80} step={5}
+            />
+            <SettingField
+              label="Min Peak Profit"
+              description="Harvesting only activates after this % profit is reached"
+              value={form[p("min_peak_profit_pct")] || "3"}
+              onChange={(v) => update(p("min_peak_profit_pct"), v)}
+              suffix="%" min={0.5} max={20} step={0.5}
+            />
+            <SettingField
+              label="Large Peak Threshold"
+              description="At this profit level, use a tighter drawdown exit (60% of normal)"
+              value={form[p("large_peak_threshold_pct")] || "8"}
+              onChange={(v) => update(p("large_peak_threshold_pct"), v)}
+              suffix="%" min={2} max={30} step={1}
+            />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="w-4 h-4" />
+              Correlation Controls
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <SettingField
+              label="Correlated Family Cap"
+              description="Max simultaneous trades in the same instrument family (e.g. all Boom symbols)"
+              value={form[p("correlated_family_cap")] || "3"}
+              onChange={(v) => update(p("correlated_family_cap"), v)}
+              min={1} max={6} step={1}
             />
           </CardContent>
         </Card>
@@ -1679,6 +1930,8 @@ export default function Settings() {
               handleRevertToAi={handleRevertToAi}
             />
           )}
+
+          {activeTab === "diagnostics" && <SymbolDiagnosticsPanel />}
         </motion.div>
       </AnimatePresence>
 

@@ -3,7 +3,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { getDerivClientForMode, getDerivClientWithDbToken, getModeCapitalKey, getModeCapitalDefault } from "./deriv.js";
 import type { TradingMode } from "./deriv.js";
 import type { AllocationDecision } from "./signalRouter.js";
-import { evaluateProfitHarvest, determineEntryStage, getEntrySizeMultiplier, checkAndAutoExtract } from "./extractionEngine.js";
+import { evaluateProfitHarvest, determineEntryStage, getEntrySizeMultiplier, checkAndAutoExtract, getHarvestSettings } from "./extractionEngine.js";
 
 const MAX_OPEN_TRADES = 3;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
@@ -443,12 +443,16 @@ export async function manageOpenPositions(): Promise<void> {
           .where(eq(tradesTable.id, trade.id));
       }
 
+      const harvestSettings = await getHarvestSettings(tradeMode);
       const harvestCheck = evaluateProfitHarvest({
         entryPrice: trade.entryPrice,
         currentPrice,
         peakPrice: newPeak,
         direction,
         tradeId: trade.id,
+        peakDrawdownExitPct: harvestSettings.peakDrawdownExitPct,
+        minPeakProfitPct: harvestSettings.minPeakProfitPct,
+        largePeakThresholdPct: harvestSettings.largePeakThresholdPct,
       });
 
       if (harvestCheck.shouldHarvest) {

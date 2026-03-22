@@ -26,6 +26,8 @@ interface PortfolioContext {
   maxDailyLossPct: number;
   maxWeeklyLossPct: number;
   weeklyLossPct: number;
+  maxDrawdownPct: number;
+  currentDrawdownPct: number;
   openTradeCount: number;
   maxOpenTrades: number;
   disabledStrategies: string[];
@@ -41,6 +43,7 @@ interface PortfolioContext {
   minCompositeScore: number;
   minEvThreshold: number;
   minRrRatio: number;
+  correlatedFamilyCap: number;
   openTrades: { symbol: string; side: string; strategyName: string; mode: string }[];
 }
 
@@ -114,6 +117,22 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
 
   const modeAllocation = (stateMap[`${prefix}_allocation_mode`] || stateMap["allocation_mode"] || "balanced") as "conservative" | "balanced" | "aggressive";
 
+  const modeMaxDrawdown = parseFloat(
+    stateMap[`${prefix}_max_drawdown_pct`] ||
+    stateMap["max_drawdown_pct"] ||
+    (mode === "paper" ? "20" : "15")
+  );
+  const startCapitalKey = `${prefix}_extraction_start_capital`;
+  const startCapital = parseFloat(stateMap[startCapitalKey] || stateMap[capitalKey] || capitalDefault);
+  const peakCapital = Math.max(startCapital, totalCapital);
+  const currentDrawdownPct = peakCapital > 0 ? ((peakCapital - totalCapital) / peakCapital) * 100 : 0;
+
+  const correlatedFamilyCap = parseInt(
+    stateMap[`${prefix}_correlated_family_cap`] ||
+    stateMap["correlated_family_cap"] ||
+    "3"
+  );
+
   return {
     totalCapital,
     availableCapital: Math.max(0, totalCapital - openRisk),
@@ -124,6 +143,8 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
     maxDailyLossPct: modeMaxDailyLoss,
     maxWeeklyLossPct: modeMaxWeeklyLoss,
     weeklyLossPct: (weeklyPnl / totalCapital) * 100,
+    maxDrawdownPct: modeMaxDrawdown,
+    currentDrawdownPct,
     openTradeCount: openTrades.length,
     maxOpenTrades: modeMaxTrades,
     disabledStrategies: disabled,
@@ -139,6 +160,7 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
     minCompositeScore: parseFloat(stateMap["min_composite_score"] || "85"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.003"),
     minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
+    correlatedFamilyCap,
     openTrades: openTrades.map(t => ({
       symbol: t.symbol,
       side: t.side,
@@ -184,6 +206,7 @@ function checkCorrelationExposure(
   signal: SignalCandidate,
   openTrades: { symbol: string; side: string }[],
   alreadyAllowed: SignalCandidate[],
+  cap: number = 3,
 ): { blocked: boolean; reason: string | null } {
   const correlated = getCorrelatedInstruments(signal.symbol);
   const signalFamily = classifyInstrument(signal.symbol);
@@ -200,8 +223,8 @@ function checkCorrelationExposure(
     }
   }
 
-  if (familyExposure >= 3) {
-    return { blocked: true, reason: `Max correlated exposure (${familyExposure} positions in ${signalFamily} family)` };
+  if (familyExposure >= cap) {
+    return { blocked: true, reason: `Max correlated exposure (${familyExposure} positions in ${signalFamily} family, cap=${cap})` };
   }
 
   return { blocked: false, reason: null };
@@ -254,6 +277,9 @@ export async function routeSignals(candidates: SignalCandidate[], tradingMode: T
     } else if (ctx.weeklyLossPct <= -ctx.maxWeeklyLossPct) {
       allowed = false;
       rejectionReason = `Weekly loss limit breached (${ctx.weeklyLossPct.toFixed(2)}% / -${ctx.maxWeeklyLossPct}%)`;
+    } else if (ctx.currentDrawdownPct >= ctx.maxDrawdownPct) {
+      allowed = false;
+      rejectionReason = `Max drawdown breached (${ctx.currentDrawdownPct.toFixed(2)}% / ${ctx.maxDrawdownPct}%) — kill switch territory`;
     } else if (ctx.openRiskPct > 80) {
       allowed = false;
       rejectionReason = `Max open risk exceeded (${ctx.openRiskPct.toFixed(1)}% > 80%)`;
@@ -295,7 +321,7 @@ export async function routeSignals(candidates: SignalCandidate[], tradingMode: T
     }
 
     if (allowed) {
-      const corrCheck = checkCorrelationExposure(signal, ctx.openTrades, allowedSignals);
+      const corrCheck = checkCorrelationExposure(signal, ctx.openTrades, allowedSignals, ctx.correlatedFamilyCap);
       if (corrCheck.blocked) {
         allowed = false;
         rejectionReason = corrCheck.reason;

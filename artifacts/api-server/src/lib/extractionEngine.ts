@@ -104,10 +104,14 @@ export function evaluateProfitHarvest(params: {
   direction: "buy" | "sell";
   tradeId: number;
   peakDrawdownExitPct?: number;
+  minPeakProfitPct?: number;
+  largePeakThresholdPct?: number;
 }): PeakTracker {
   const {
     entryPrice, currentPrice, peakPrice, direction, tradeId,
     peakDrawdownExitPct = DEFAULT_PEAK_DRAWDOWN_EXIT_PCT,
+    minPeakProfitPct = 3.0,
+    largePeakThresholdPct = 8.0,
   } = params;
 
   const currentPnlPct = direction === "buy"
@@ -125,12 +129,12 @@ export function evaluateProfitHarvest(params: {
   let shouldHarvest = false;
   let harvestReason: string | null = null;
 
-  if (peakPnlPct >= 3.0 && drawdownFromPeak >= peakDrawdownExitPct) {
+  if (peakPnlPct >= minPeakProfitPct && drawdownFromPeak >= peakDrawdownExitPct) {
     shouldHarvest = true;
     harvestReason = `Peak profit ${peakPnlPct.toFixed(1)}% → drawdown ${drawdownFromPeak.toFixed(1)}% exceeds ${peakDrawdownExitPct}% threshold`;
   }
 
-  if (peakPnlPct >= 8.0 && drawdownFromPeak >= peakDrawdownExitPct * 0.6) {
+  if (peakPnlPct >= largePeakThresholdPct && drawdownFromPeak >= peakDrawdownExitPct * 0.6) {
     shouldHarvest = true;
     harvestReason = `Large peak ${peakPnlPct.toFixed(1)}% with ${drawdownFromPeak.toFixed(1)}% drawdown — harvesting`;
   }
@@ -142,6 +146,23 @@ export function evaluateProfitHarvest(params: {
     drawdownFromPeak,
     shouldHarvest,
     harvestReason,
+  };
+}
+
+export async function getHarvestSettings(mode: TradingMode): Promise<{
+  peakDrawdownExitPct: number;
+  minPeakProfitPct: number;
+  largePeakThresholdPct: number;
+}> {
+  const prefix = mode === "paper" ? "paper" : mode === "demo" ? "demo" : "real";
+  const states = await db.select().from(platformStateTable);
+  const stateMap: Record<string, string> = {};
+  for (const s of states) stateMap[s.key] = s.value;
+
+  return {
+    peakDrawdownExitPct: parseFloat(stateMap[`${prefix}_peak_drawdown_exit_pct`] || stateMap["peak_drawdown_exit_pct"] || String(DEFAULT_PEAK_DRAWDOWN_EXIT_PCT)),
+    minPeakProfitPct: parseFloat(stateMap[`${prefix}_min_peak_profit_pct`] || stateMap["min_peak_profit_pct"] || "3"),
+    largePeakThresholdPct: parseFloat(stateMap[`${prefix}_large_peak_threshold_pct`] || stateMap["large_peak_threshold_pct"] || "8"),
   };
 }
 

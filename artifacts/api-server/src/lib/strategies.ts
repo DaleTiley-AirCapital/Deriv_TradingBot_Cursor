@@ -113,7 +113,7 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
 
   return {
     symbol: features.symbol,
-    strategyName: "trend-continuation",
+    strategyName: "trend-pullback",
     strategyFamily: "trend_continuation",
     direction,
     score: adjustedScore,
