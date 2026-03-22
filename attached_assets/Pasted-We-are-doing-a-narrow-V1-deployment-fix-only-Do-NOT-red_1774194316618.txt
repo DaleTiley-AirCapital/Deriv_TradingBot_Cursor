@@ -1,0 +1,247 @@
+We are doing a narrow V1 deployment fix only.
+
+Do NOT redesign the engine.
+Do NOT touch strategy logic unless required to fix logging.
+Do NOT change the 4-family architecture.
+Do NOT add new features.
+Do NOT expand the symbol universe.
+Do NOT lower the signal review visibility threshold from 75.
+Do NOT work on the Research tab yet.
+Do NOT work on mobile/PWA yet.
+Do NOT work on setup wizard or broader UI cleanup yet.
+
+Focus only on the two critical V1 issues:
+
+1. Dashboard is unstable and keeps reloading / showing the loading screen repeatedly
+2. The system is not logging signals/decisions correctly in production, even though scanning appears active
+
+The likely problem is that the signal/decision service is not actually writing or returning records properly in Railway production.
+
+## CURRENT EXPECTED BEHAVIOR
+
+The system should behave like this:
+
+- Data Stream runs
+- Scanner runs
+- Regime engine classifies symbols
+- Strategy families evaluate
+- Decisions/signals are created
+- Signals/Decision Review page shows meaningful decisions above the visibility threshold
+- If no execution modes are armed, decisions should still be logged with executionStatus like:
+  - blocked
+  - skipped
+  - no execution mode active / intelligence only
+
+The scanner and decision logging must work independently of actual trade placement.
+
+---
+
+# TASK 1 — FIX DASHBOARD RELOAD / LOADING LOOP
+
+Current issue:
+The Overview / Dashboard page is unstable and keeps reloading or getting stuck on "Loading dashboard...".
+
+I need the root cause found and fixed.
+
+Investigate:
+- frontend polling loop
+- repeated data refetch caused by unstable query key or dependency array
+- failing API endpoint causing retry loop
+- backend endpoint returning inconsistent schema
+- mode/status state changes causing rerender thrash
+- hydration/state reset issues
+
+Required outcome:
+- Dashboard loads once
+- Dashboard remains stable
+- No full-screen loading loop every few seconds
+- Live values can refresh without whole-page reset
+
+Return:
+- exact root cause
+- exact file(s)
+- exact component/hook/function
+- exact fix applied
+
+---
+
+# TASK 2 — VERIFY THE SIGNAL / DECISION PIPELINE END TO END
+
+Current issue:
+Signals are not being logged correctly in production.
+It looks like the signal/decision service is not on, not writing, or not returning rows.
+
+You must trace the pipeline from scanner to DB to API to Signals page.
+
+I need proof of each step:
+
+1. scanner cycle runs
+2. candidate signals are generated
+3. decisions are created
+4. decision rows are inserted into DB
+5. API endpoint returns those rows
+6. Signals page renders them
+
+Return exact files/functions for each of these.
+
+---
+
+# TASK 3 — ADD TEMPORARY DEBUG LOGGING TO TRACE DECISION FLOW
+
+In production-safe structured logs, add explicit logs for the decision pipeline:
+
+For each scan cycle, log:
+- timestamp
+- symbol
+- regime
+- allowed families
+- candidate count
+- visible candidate count
+- approved decision count
+- blocked/rejected count
+- whether DB insert was attempted
+- whether DB insert succeeded
+- whether API endpoint returned N rows
+
+This is to isolate where the pipeline breaks in Railway.
+
+Keep logs concise and structured.
+
+---
+
+# TASK 4 — VERIFY SIGNAL DECISIONS ARE STORED EVEN WHEN NO EXECUTION MODE IS ACTIVE
+
+This is critical.
+
+If scanner is active and no mode is armed:
+- decisions should still be logged
+- executionStatus should indicate blocked / intelligence-only / no execution mode active
+- Signals page should still populate if decisions meet the visibility threshold
+
+Audit the current logic and fix if needed.
+
+I want explicit confirmation of:
+- where executionStatus is assigned
+- whether blocked/rejected visible decisions are inserted
+- whether only executed trades are being stored by mistake
+
+If the current code only stores after execution, fix that.
+Store decisions at decision time, not trade time.
+
+---
+
+# TASK 5 — VERIFY THE SIGNALS PAGE API / QUERY
+
+Audit the Signals page specifically.
+
+Check:
+- what endpoint it calls
+- whether the endpoint is returning zero rows
+- whether frontend filtering is accidentally removing all rows
+- whether mode filter defaults exclude valid rows
+- whether visibility threshold logic is being applied incorrectly at query time
+- whether family/mode/status mapping is broken between DB and UI
+
+Fix so the Signals / Decision Review page correctly shows stored decision rows.
+
+---
+
+# TASK 6 — DO NOT CHANGE THE VISIBILITY THRESHOLD
+
+Keep:
+- Signal Review Visibility Threshold = 75
+
+Signals already populate correctly in Replit preview with this threshold.
+So threshold is NOT the fix.
+Do not lower it.
+
+Only verify that:
+- the threshold is applied only to review visibility
+- it is not accidentally preventing storage of valid rows that should be visible
+- approved decisions always appear regardless
+
+---
+
+# TASK 7 — ADD A USEFUL EMPTY STATE TO SIGNALS PAGE
+
+If there are still no decisions after the fixes, the empty state must help diagnose why.
+
+Show:
+- Data Stream status
+- Scanner status
+- Last scan time
+- Last symbol scanned
+- Number of candidates evaluated in last hour
+- Number of visible decision rows stored in last hour
+- Current visibility threshold
+
+This must make it obvious whether:
+- the engine is running but no decisions qualify
+or
+- the pipeline is broken
+
+This is only for diagnosis, not a redesign.
+
+---
+
+# TASK 8 — DO NOT TOUCH UNRELATED ITEMS
+
+In this pass, do NOT change:
+- research logic
+- setup wizard
+- instrument catalog
+- layout polish
+- mobile/PWA
+- capital banner
+- family labels beyond what is necessary for the Signals page to function
+- strategy behavior
+- extraction engine behavior
+
+Stay focused on:
+- dashboard stability
+- signal/decision logging
+- signals page population
+
+---
+
+# REQUIRED OUTPUT
+
+Return exactly this:
+
+## A. Root Cause Analysis
+- Why Dashboard was unstable
+- Why Signals were not being logged/displayed correctly
+
+## B. File-by-File Fixes
+For each changed file:
+- file name
+- function/component changed
+- what was wrong
+- what was fixed
+
+## C. Decision Pipeline Proof
+Show:
+1. scanner entry point
+2. signal generation point
+3. decision creation point
+4. DB insert point
+5. API read point
+6. UI render point
+
+## D. One Real Example
+Show one real example flow in production or simulated production:
+- symbol
+- regime
+- family
+- score
+- decision
+- DB insert success
+- API returned row
+- UI displayed row
+
+## E. What To Verify Next
+Give me 3 specific things to check in Railway / UI after deployment.
+
+Do not give a vague answer.
+Do not do unrelated cleanup.
+Fix these two core V1 issues only.

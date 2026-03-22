@@ -33,16 +33,18 @@ const FAMILY_LABELS: Record<string, string> = {
 const DEFAULT_CAPITAL = 10000;
 
 export default function Overview() {
-  const { data: overview,   isLoading: overviewLoading   } = useGetOverview(        { query: { refetchInterval: 5000 } });
-  const { data: portfolio,  isLoading: portfolioLoading  } = useGetPortfolioStatus( { query: { refetchInterval: 5000 } });
-  const { data: accountInfo }                              = useGetAccountInfo(      { query: { refetchInterval: 30000 } });
-  const { data: positions }                                = useGetLivePositions(    { query: { refetchInterval: 10000 } });
-  const { data: settings }                                 = useGetSettings(         { query: { staleTime: 60000 } });
-  const { data: signalsData }                               = useGetLatestSignals(undefined,    { query: { refetchInterval: 15000 } });
+  const { data: overview, isPending: overviewPending } = useGetOverview({ query: { refetchInterval: 5000 } });
+  const { data: portfolio, isPending: portfolioPending } = useGetPortfolioStatus({ query: { refetchInterval: 5000 } });
+  const { data: accountInfo } = useGetAccountInfo({ query: { refetchInterval: 30000 } });
+  const { data: positions } = useGetLivePositions({ query: { refetchInterval: 10000 } });
+  const { data: settings } = useGetSettings({ query: { staleTime: 60000 } });
+  const { data: signalsData } = useGetLatestSignals(undefined, { query: { refetchInterval: 15000 } });
   const signals = signalsData?.signals;
   const [kpiMode, setKpiMode] = useState<string>("paper");
 
-  if (overviewLoading || portfolioLoading) {
+  const isFirstLoad = overviewPending && portfolioPending && !overview && !portfolio;
+
+  if (isFirstLoad) {
     return (
       <div className="h-full w-full flex items-center justify-center text-muted-foreground">
         <div className="flex flex-col items-center gap-3">

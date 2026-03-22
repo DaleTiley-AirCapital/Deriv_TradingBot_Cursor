@@ -321,8 +321,25 @@ export default function Signals() {
               {isLoading ? (
                 <tr><td colSpan={12} className="text-center py-10 text-muted-foreground">Loading decisions…</td></tr>
               ) : signals.length === 0 ? (
-                <tr><td colSpan={12} className="text-center py-10 text-muted-foreground">
-                  {hasFilters ? "No decisions match filters." : "No decisions logged yet."}
+                <tr><td colSpan={12} className="text-center py-16 text-muted-foreground">
+                  <div className="flex flex-col items-center gap-3">
+                    <ClipboardList className="w-8 h-8 text-muted-foreground/40" />
+                    {hasFilters ? (
+                      <>
+                        <p className="text-sm font-medium">No decisions match your filters</p>
+                        <button onClick={clearFilters} className="text-xs text-primary hover:underline">Clear all filters</button>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium">No signal decisions logged yet</p>
+                        <p className="text-xs text-muted-foreground/70 max-w-md leading-relaxed">
+                          The scanner logs decisions when streaming is active and tick data is flowing.
+                          Go to <a href="/data" className="text-primary hover:underline">Data</a> to start streaming,
+                          then signals with a composite score &ge; {visThreshold} will appear here.
+                        </p>
+                      </>
+                    )}
+                  </div>
                 </td></tr>
               ) : (
                 signals.map((sig) => (

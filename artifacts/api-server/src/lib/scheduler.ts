@@ -120,6 +120,7 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
 
     const effectiveMode = isIntelOnly ? "paper" : mode;
     const decisions = await routeSignals(allCandidates.map(c => c.candidate), effectiveMode);
+    const logMode = isIntelOnly ? undefined : mode;
 
     const finalDecisions: AllocationDecision[] = [];
 
@@ -207,7 +208,7 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
       finalDecisions.push(decision);
     }
 
-    await logSignalDecisions(finalDecisions, effectiveMode);
+    await logSignalDecisions(finalDecisions, logMode);
     totalDecisionsLogged += finalDecisions.length;
 
     if (!isIntelOnly) {
