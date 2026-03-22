@@ -7,7 +7,7 @@ import { ClipboardList, ArrowUpRight, ArrowDownRight, Brain, ChevronDown, Chevro
 import { motion, AnimatePresence } from "framer-motion";
 
 const FAMILIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"] as const;
-const MODES = ["paper", "demo", "real"] as const;
+
 const STATUSES = ["approved", "blocked"] as const;
 const AI_VERDICTS = ["agree", "disagree", "uncertain"] as const;
 
@@ -196,7 +196,6 @@ const PAGE_SIZE = 50;
 export default function Signals() {
   const [symbolFilter, setSymbolFilter] = useState("");
   const [familyFilter, setFamilyFilter] = useState("");
-  const [modeFilter, setModeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [aiFilter, setAiFilter] = useState("");
   const [page, setPage] = useState(0);
@@ -205,11 +204,10 @@ export default function Signals() {
     const p: GetLatestSignalsParams = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
     if (symbolFilter) p.symbol = symbolFilter;
     if (familyFilter) p.family = familyFilter;
-    if (modeFilter) p.mode = modeFilter;
     if (statusFilter) p.status = statusFilter;
     if (aiFilter) p.ai = aiFilter;
     return p;
-  }, [symbolFilter, familyFilter, modeFilter, statusFilter, aiFilter, page]);
+  }, [symbolFilter, familyFilter, statusFilter, aiFilter, page]);
 
   const { data, isLoading } = useGetLatestSignals(params, { query: { refetchInterval: 5000 } });
 
@@ -217,7 +215,7 @@ export default function Signals() {
   const total = data?.total ?? 0;
   const visThreshold = data?.visibilityThreshold ?? 70;
   const totalPages = Math.ceil(total / PAGE_SIZE);
-  const hasFilters = symbolFilter || familyFilter || modeFilter || statusFilter || aiFilter;
+  const hasFilters = symbolFilter || familyFilter || statusFilter || aiFilter;
 
   const symbols = useMemo(() => {
     const s = new Set<string>();
@@ -228,7 +226,6 @@ export default function Signals() {
   function clearFilters() {
     setSymbolFilter("");
     setFamilyFilter("");
-    setModeFilter("");
     setStatusFilter("");
     setAiFilter("");
     setPage(0);
@@ -253,7 +250,6 @@ export default function Signals() {
 
             <FilterSelect value={symbolFilter} onChange={v => { setSymbolFilter(v); setPage(0); }} options={symbols.length > 0 ? symbols : ["BOOM1000","BOOM500","CRASH1000","CRASH500","R_75","R_100"]} placeholder="Symbol" />
             <FilterSelect value={familyFilter} onChange={v => { setFamilyFilter(v); setPage(0); }} options={FAMILIES} placeholder="Family" />
-            <FilterSelect value={modeFilter} onChange={v => { setModeFilter(v); setPage(0); }} options={MODES} placeholder="Mode" />
             <FilterSelect value={statusFilter} onChange={v => { setStatusFilter(v); setPage(0); }} options={STATUSES} placeholder="Status" />
             <FilterSelect value={aiFilter} onChange={v => { setAiFilter(v); setPage(0); }} options={AI_VERDICTS} placeholder="AI" />
 
@@ -311,7 +307,6 @@ export default function Signals() {
                 <th className="text-right">Score</th>
                 <th className="text-right">EV</th>
                 <th>Regime</th>
-                <th>Mode</th>
                 <th className="text-right">Alloc%</th>
                 <th>Status</th>
                 <th>AI</th>
@@ -319,9 +314,9 @@ export default function Signals() {
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={12} className="text-center py-10 text-muted-foreground">Loading decisions…</td></tr>
+                <tr><td colSpan={11} className="text-center py-10 text-muted-foreground">Loading decisions…</td></tr>
               ) : signals.length === 0 ? (
-                <tr><td colSpan={12} className="text-center py-16 text-muted-foreground">
+                <tr><td colSpan={11} className="text-center py-16 text-muted-foreground">
                   <div className="flex flex-col items-center gap-3">
                     <ClipboardList className="w-8 h-8 text-muted-foreground/40" />
                     {hasFilters ? (
@@ -383,19 +378,6 @@ export default function Signals() {
                             <span className="text-[10px] mono-num text-muted-foreground">{(sig.regimeConfidence * 100).toFixed(0)}%</span>
                           )}
                         </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground/50">—</span>
-                      )}
-                    </td>
-                    <td>
-                      {sig.mode ? (
-                        <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider",
-                          sig.mode === "paper" ? "bg-blue-500/12 text-blue-400 border border-blue-500/25" :
-                          sig.mode === "demo" ? "bg-amber-500/12 text-amber-400 border border-amber-500/25" :
-                          "bg-emerald-500/12 text-emerald-400 border border-emerald-500/25"
-                        )}>
-                          {sig.mode}
-                        </span>
                       ) : (
                         <span className="text-xs text-muted-foreground/50">—</span>
                       )}

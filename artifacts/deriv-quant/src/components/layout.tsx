@@ -132,20 +132,21 @@ function ModeToggleButtons({ compact = false, controls }: { compact?: boolean; c
   const { paperActive, demoActive, realActive, isTrading, toggling, stopping, toggleMode, stopTrades } = controls;
 
   const modes = [
-    { mode: "paper" as const, label: "Paper", active: paperActive, color: "warning" },
-    { mode: "demo" as const, label: "Demo", active: demoActive, color: "primary" },
-    { mode: "real" as const, label: "Real", active: realActive, color: "destructive" },
+    { mode: "paper" as const, label: "P", fullLabel: "Paper", active: paperActive, color: "warning" },
+    { mode: "demo" as const, label: "D", fullLabel: "Demo", active: demoActive, color: "primary" },
+    { mode: "real" as const, label: "R", fullLabel: "Real", active: realActive, color: "destructive" },
   ] as const;
 
   return (
-    <div className={cn("flex items-center", compact ? "gap-1" : "gap-1.5")}>
-      {modes.map(({ mode, label, active, color }) => (
+    <div className={cn("flex items-center flex-wrap", compact ? "gap-1" : "gap-1.5")}>
+      {modes.map(({ mode, label, fullLabel, active, color }) => (
         <button
           key={mode}
           onClick={() => toggleMode({ data: { mode: mode as ToggleTradingModeRequestMode, active: !active } })}
           disabled={toggling}
+          title={fullLabel}
           className={cn(
-            "inline-flex items-center gap-1 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all border",
+            "inline-flex items-center gap-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all border whitespace-nowrap",
             compact ? "px-1.5 py-0.5" : "px-2 py-1",
             active
               ? "border-current opacity-100"
@@ -158,14 +159,16 @@ function ModeToggleButtons({ compact = false, controls }: { compact?: boolean; c
           } : undefined}
         >
           {active ? <Square className="w-2.5 h-2.5" fill="currentColor" /> : <Play className="w-2.5 h-2.5" />}
-          {label}
+          <span className="hidden sm:inline">{fullLabel}</span>
+          <span className="sm:hidden">{label}</span>
         </button>
       ))}
       <button
         onClick={() => isTrading ? stopTrades() : undefined}
         disabled={stopping || !isTrading}
+        title="Stop all trading"
         className={cn(
-          "inline-flex items-center gap-1 rounded-md font-bold uppercase tracking-wider transition-all border",
+          "inline-flex items-center gap-0.5 rounded-md font-bold uppercase tracking-wider transition-all border whitespace-nowrap",
           compact ? "px-1.5 py-0.5 text-[9px]" : "px-2 py-1 text-[10px]",
           isTrading
             ? "bg-destructive/15 border-destructive/40 text-destructive hover:bg-destructive/25"
@@ -173,7 +176,7 @@ function ModeToggleButtons({ compact = false, controls }: { compact?: boolean; c
         )}
       >
         <Power className="w-2.5 h-2.5" />
-        Idle
+        <span className="hidden sm:inline">Idle</span>
       </button>
     </div>
   );

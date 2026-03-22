@@ -2,7 +2,7 @@ import WebSocket from "ws";
 import { db, ticksTable, candlesTable, spikeEventsTable, platformStateTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { createDecipheriv, scryptSync } from "crypto";
-import { recordTick, validateActiveSymbols, isSymbolValid, markSymbolError, markSymbolSubscribed, startWatchdog, getAllSymbolStatuses } from "./symbolValidator.js";
+import { recordTick, validateActiveSymbols, isSymbolValid, markSymbolError, markSymbolSubscribed, startWatchdog, getAllSymbolStatuses, getApiSymbol } from "./symbolValidator.js";
 
 const DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089";
 
@@ -604,7 +604,9 @@ class DerivClient {
     let storedTicks = 0;
     let storedCandles = 0;
 
-    const history = await this.getTickHistory(symbol, tickCount);
+    const apiSymbol = getApiSymbol(symbol);
+
+    const history = await this.getTickHistory(apiSymbol, tickCount);
     if (history && history.prices && history.times) {
       const values = history.prices.map((price, i) => ({
         symbol,
@@ -648,7 +650,7 @@ class DerivClient {
     }
 
     for (const [tf, granularity] of [["1m", 60], ["5m", 300]] as [string, number][]) {
-      const candles = await this.getCandleHistory(symbol, granularity, 1000);
+      const candles = await this.getCandleHistory(apiSymbol, granularity, 1000);
       if (candles) {
         const values = candles.map(c => ({
           symbol,

@@ -157,7 +157,7 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
     slRatio: parseFloat(stateMap[`${prefix}_sl_ratio`] || stateMap["sl_ratio"] || "1.0"),
     trailingStopPct: parseFloat(stateMap[`${prefix}_trailing_stop_pct`] || stateMap["trailing_stop_pct"] || "25"),
     timeExitWindowHours: parseFloat(stateMap[`${prefix}_time_exit_window_hours`] || stateMap["time_exit_window_hours"] || "72"),
-    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "85"),
+    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "80"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.003"),
     minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
     correlatedFamilyCap,
@@ -170,9 +170,11 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
   };
 }
 
-function getAllocationPctByScore(compositeScore: number): { pct: number; tier: string } {
-  if (compositeScore >= 90) return { pct: 0.25, tier: "high" };
-  if (compositeScore >= 85) return { pct: 0.20, tier: "medium" };
+function getAllocationPctByScore(compositeScore: number, baseEquityPct: number): { pct: number; tier: string } {
+  const basePct = baseEquityPct / 100;
+  if (compositeScore >= 90) return { pct: basePct + 0.04, tier: "large" };
+  if (compositeScore >= 85) return { pct: basePct + 0.02, tier: "medium" };
+  if (compositeScore >= 80) return { pct: basePct, tier: "base" };
   return { pct: 0, tier: "reject" };
 }
 
@@ -193,7 +195,7 @@ function checkConflicts(
 
   const sameFamily = allOnSymbol.filter(t => {
     const family = (signal as any).strategyFamily;
-    return family && t.strategyName.includes(family.replace("_", "-"));
+    return family && (t.strategyName.includes(family) || t.strategyName.includes(family.replace("_", "-")));
   });
   if (sameFamily.length >= 2) {
     return { blocked: true, reason: `Too many entries from same family on ${signal.symbol}` };
@@ -329,16 +331,14 @@ export async function routeSignals(candidates: SignalCandidate[], tradingMode: T
     }
 
     if (allowed) {
-      const { pct, tier } = getAllocationPctByScore(signal.compositeScore);
+      const { pct, tier } = getAllocationPctByScore(signal.compositeScore, ctx.equityPctPerTrade);
       if (tier === "reject") {
         allowed = false;
-        rejectionReason = `Score ${signal.compositeScore} below 85 allocation threshold`;
+        rejectionReason = `Score ${signal.compositeScore} below 80 allocation threshold`;
       } else {
         capitalAllocationPct = pct;
-        const maxPerTrade = ctx.totalCapital * (ctx.equityPctPerTrade / 100);
         capitalAmount = Math.min(
           ctx.totalCapital * capitalAllocationPct,
-          maxPerTrade,
           remainingCapital
         );
         remainingCapital -= capitalAmount;

@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import app from "./app.js";
 import { getDerivClientWithDbToken, getEnabledSymbols, SUPPORTED_SYMBOLS } from "./lib/deriv.js";
 import { startScheduler } from "./lib/scheduler.js";
+import { validateActiveSymbols } from "./lib/symbolValidator.js";
 
 const rawPort = process.env["PORT"];
 
@@ -243,9 +244,34 @@ async function autoConfigureAI(): Promise<void> {
   }
 }
 
+async function autoBackfill(): Promise<void> {
+  try {
+    const enabledSymbols = await getEnabledSymbols();
+    const validSymbols = enabledSymbols.filter(s => SUPPORTED_SYMBOLS.includes(s));
+    if (validSymbols.length === 0) return;
+
+    const client = await getDerivClientWithDbToken();
+    await client.connect();
+    await validateActiveSymbols(true);
+    console.log(`[Backfill] Starting automatic backfill for ${validSymbols.length} symbols...`);
+    for (const symbol of validSymbols) {
+      try {
+        const result = await client.backfill(symbol, 5000);
+        console.log(`[Backfill] ${symbol}: ${result.ticks} ticks, ${result.candles} candles`);
+      } catch (err) {
+        console.warn(`[Backfill] ${symbol} failed:`, err instanceof Error ? err.message : err);
+      }
+    }
+    console.log("[Backfill] Complete.");
+  } catch (err) {
+    console.warn("[Backfill] Could not run auto-backfill:", err instanceof Error ? err.message : err);
+  }
+}
+
 async function autoStartStreaming(): Promise<void> {
   try {
     await autoConfigureAI();
+    await autoBackfill();
 
     const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "streaming"));
     const explicitlyStopped = rows.length > 0 && rows[0].value === "false";
