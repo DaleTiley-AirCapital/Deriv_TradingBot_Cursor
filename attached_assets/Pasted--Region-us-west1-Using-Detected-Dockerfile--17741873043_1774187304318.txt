@@ -1,0 +1,141 @@
+ 
+[Region: us-west1]
+=========================
+Using Detected Dockerfile
+=========================
+
+context: 60d4-nlKf
+
+internal
+load build definition from Dockerfile
+0ms
+
+internal
+load metadata for docker.io/library/node:24-slim
+896ms
+
+auth
+library/node:pull token for registry-1.docker.io
+0ms
+
+internal
+load .dockerignore
+0ms
+
+internal
+load build context
+0ms
+
+frontend
+FROM docker.io/library/node:24-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
+5ms
+
+app
+RUN apt-get update && apt-get install -y curl --no-install-recommends && rm -rf /var/lib/apt/lists/*
+4s
+Processing triggers for libc-bin (2.36-9+deb12u13) ...
+
+frontend
+RUN npm install -g pnpm
+1s
+npm notice
+
+frontend
+WORKDIR /app
+33ms
+
+frontend
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+21ms
+
+frontend
+COPY tsconfig.base.json tsconfig.json ./
+20ms
+
+frontend
+COPY lib/                        ./lib/
+26ms
+
+frontend
+COPY artifacts/deriv-quant/      ./artifacts/deriv-quant/
+50ms
+
+frontend
+RUN pnpm install --frozen-lockfile
+11s
+Done in 11s using pnpm v10.32.1
+
+app
+RUN npm install -g pnpm
+1s
+npm notice
+
+app
+WORKDIR /app
+80ms
+
+app
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+26ms
+
+app
+COPY tsconfig.base.json tsconfig.json ./
+14ms
+
+app
+COPY lib/                        ./lib/
+23ms
+
+app
+COPY artifacts/api-server/       ./artifacts/api-server/
+19ms
+
+app
+COPY scripts/                    ./scripts/
+14ms
+
+frontend
+RUN pnpm --filter @workspace/deriv-quant run build
+7s
+✓ built in 5.71s
+
+app
+COPY --from=frontend /app/artifacts/deriv-quant/dist ./artifacts/deriv-quant/dist
+26ms
+
+app
+RUN pnpm install --frozen-lockfile
+4s
+Done in 4.6s using pnpm v10.32.1
+
+auth
+sharing credentials for production-us-west2.railway-registry.com
+0ms
+
+importing to docker
+8s
+Build time: 51.58 seconds
+ 
+====================
+Starting Healthcheck
+====================
+Path: /api/healthz
+Retry window: 5m0s
+ 
+Attempt #1 failed with service unavailable. Continuing to retry for 4m49s
+Attempt #2 failed with service unavailable. Continuing to retry for 4m38s
+Attempt #3 failed with service unavailable. Continuing to retry for 4m26s
+Attempt #4 failed with service unavailable. Continuing to retry for 4m12s
+Attempt #5 failed with service unavailable. Continuing to retry for 3m54s
+Attempt #6 failed with service unavailable. Continuing to retry for 3m28s
+Attempt #7 failed with service unavailable. Continuing to retry for 2m48s
+Attempt #8 failed with service unavailable. Continuing to retry for 2m8s
+Attempt #9 failed with service unavailable. Continuing to retry for 1m28s
+Attempt #10 failed with service unavailable. Continuing to retry for 48s
+Attempt #11 failed with service unavailable. Continuing to retry for 8s
+ 
+1/1 replicas never became healthy!
+
+Healthcheck failed!
+You reached the end of the range
+Mar 22, 2026 at 3:52 PM

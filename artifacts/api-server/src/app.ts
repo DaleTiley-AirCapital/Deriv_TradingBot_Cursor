@@ -13,10 +13,22 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const frontendDist = path.resolve(__dirname, "../../deriv-quant/dist/public");
+let currentDir: string;
+try {
+  currentDir = path.dirname(fileURLToPath(import.meta.url));
+} catch {
+  currentDir = __dirname || process.cwd();
+}
 
-if (fs.existsSync(frontendDist)) {
+const candidatePaths = [
+  path.resolve(currentDir, "../../deriv-quant/dist/public"),
+  path.resolve(process.cwd(), "artifacts/deriv-quant/dist/public"),
+];
+
+const frontendDist = candidatePaths.find(p => fs.existsSync(p));
+
+if (frontendDist) {
+  console.log(`[Frontend] Serving static files from ${frontendDist}`);
   app.use(express.static(frontendDist));
   app.get(/.*/, (_req, res) => {
     res.sendFile(path.join(frontendDist, "index.html"));
