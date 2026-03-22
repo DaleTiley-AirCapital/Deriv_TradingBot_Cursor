@@ -1,0 +1,69 @@
+  Strategy families: 4 (trend_continuation, mean_reversion, breakout_expansion, spike_event)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[Scheduler] Starting signal scan every 30s
+[Scheduler] Starting position management every 10s
+[Scheduler] Starting monthly re-optimisation check (hourly)
+[Deriv] Connecting to Deriv WebSocket API...
+[Deriv] Connected. Authorizing...
+[Deriv] Authorized successfully.
+[SymbolValidator] ✓ BOOM1000 → Boom 1000 Index (Derived)
+[SymbolValidator] ✓ CRASH1000 → Crash 1000 Index (Derived)
+[SymbolValidator] ✓ BOOM900 → Boom 900 Index (Derived)
+[SymbolValidator] ✓ CRASH900 → Crash 900 Index (Derived)
+[SymbolValidator] ✓ BOOM600 → Boom 600 Index (Derived)
+[SymbolValidator] ✓ CRASH600 → Crash 600 Index (Derived)
+[SymbolValidator] ✓ BOOM500 → Boom 500 Index (Derived)
+[SymbolValidator] ✓ CRASH500 → Crash 500 Index (Derived)
+[SymbolValidator] ✓ BOOM300 → BOOM300N (alias match: Boom 300 Index)
+[SymbolValidator] ✓ CRASH300 → CRASH300N (alias match: Crash 300 Index)
+[SymbolValidator] ✓ R_75 → Volatility 75 Index (Derived)
+[SymbolValidator] ✓ R_100 → Volatility 100 Index (Derived)
+[SymbolValidator] Validation complete: 12 valid, 0 invalid out of 12 configured
+[Deriv] Subscribing to ticks for BOOM1000...
+[Deriv] Subscribing to ticks for CRASH1000...
+[Scan] R_100 | regime=no_trade | conf=0.60 | SKIP=no_trade_regime
+[Scan] BOOM1000 | regime=mean_reversion | families=[mean_reversion] | candidates=0 | SKIP=no_signals
+[Deriv] Subscribing to ticks for BOOM900...
+[Deriv] Subscribing to ticks for CRASH900...
+[Scheduler] Starting staggered scan: 12 symbols, 10s apart
+[Scan] BOOM1000 | regime=mean_reversion | families=[mean_reversion] | candidates=0 | SKIP=no_signals
+[Deriv] Subscribing to ticks for BOOM600...
+[Deriv] Subscribing to ticks for CRASH600...
+[Deriv] Subscribing to ticks for BOOM500...
+[Deriv] Subscribing to ticks for CRASH500...
+[Deriv] Symbol mapping: BOOM300 → BOOM300N (will subscribe as BOOM300N)
+[Deriv] Subscribing to ticks for BOOM300N...
+[Deriv] Symbol mapping: CRASH300 → CRASH300N (will subscribe as CRASH300N)
+[Deriv] Subscribing to ticks for CRASH300N...
+[Deriv] Subscribing to ticks for R_75...
+[Deriv] Subscribing to ticks for R_100...
+[Scan] CRASH1000 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[AutoStart] Streaming started for 12 symbols
+Stopping Container
+[Scan] CRASH1000 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Intel] BOOM900 | regime=breakout_expansion | families=[breakout_expansion] | candidates=1 | top=breakout_expansion(0.789, EV=0.0166)
+[Scan] BOOM900 | intel | family=breakout_expansion | dir=buy | score=0.789 | EV=0.0166 | composite=74 | reject=No execution mode active — intelligence only | BLOCKED
+[Deriv] Connecting to Deriv WebSocket API...
+[Deriv] Connecting to Deriv WebSocket API...
+[Intel] CRASH900 | regime=compression | families=[breakout_expansion] | candidates=1 | top=breakout_expansion(0.780, EV=0.0162)
+[Scan] CRASH900 | intel | family=breakout_expansion | dir=buy | score=0.780 | EV=0.0162 | composite=74 | reject=No execution mode active — intelligence only | BLOCKED
+[Deriv] Connected. Authorizing...
+[Deriv] Connected. Authorizing...
+[Deriv] Authorized successfully.
+[Deriv] Authorized successfully.
+[Scan] BOOM600 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Scan] CRASH600 | regime=breakout_expansion | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Scan] BOOM500 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+2026-03-22 16:19:05.391 UTC [83] LOG:  checkpoint starting: time
+[Scan] CRASH500 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Intel] BOOM300 | regime=spike_zone | families=[spike_event] | candidates=1 | top=spike_event(0.706, EV=0.0164)
+[Scan] BOOM300 | intel | family=spike_event | dir=buy | score=0.706 | EV=0.0164 | composite=73 | reject=No execution mode active — intelligence only | BLOCKED
+[Deriv] SPIKE detected on BOOM1000: down by 0.0570 (z=4.13) after 86 ticks
+[Scan] CRASH300 | regime=mean_reversion | families=[mean_reversion] | candidates=0 | SKIP=no_signals
+2026-03-22 16:19:32.782 UTC [83] LOG:  checkpoint complete: wrote 273 buffers (1.7%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 1 recycled; write=27.350 s, sync=0.023 s, total=27.391 s; sync files=67, longest=0.006 s, average=0.001 s; distance=2328 kB, estimate=12040 kB; lsn=0/7076EA8, redo lsn=0/702D730
+[Scan] R_75 | regime=no_trade | conf=0.50 | SKIP=no_trade_regime
+[Scan] R_100 | regime=no_trade | conf=0.50 | SKIP=no_trade_regime
+[Scan] BOOM1000 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Scan] CRASH1000 | regime=compression | families=[breakout_expansion] | candidates=0 | SKIP=no_signals
+[Intel] BOOM900 | regime=breakout_expansion | families=[breakout_expansion] | candidates=1 | top=breakout_expansion(0.760, EV=0.0154)
+[Scan] BOOM900 | intel | family=breakout_expansion | dir=buy | score=0.760 | EV=0.0154 | composite=72 | reject=No execution mode active — intelligence only | BLOCKED
