@@ -169,25 +169,27 @@ export async function getHarvestSettings(mode: TradingMode): Promise<{
 export function determineEntryStage(
   openTradesOnSymbol: number,
   compositeScore: number,
+  thresholds?: { probe: number; confirmation: number; momentum: number },
 ): "probe" | "confirmation" | "momentum" | null {
+  const t = thresholds || { probe: 88, confirmation: 91, momentum: 94 };
   if (openTradesOnSymbol === 0) {
-    return compositeScore >= 88 ? "probe" : null;
+    return compositeScore >= t.probe ? "probe" : null;
   }
   if (openTradesOnSymbol === 1) {
-    return compositeScore >= 91 ? "confirmation" : null;
+    return compositeScore >= t.confirmation ? "confirmation" : null;
   }
   if (openTradesOnSymbol === 2) {
-    return compositeScore >= 94 ? "momentum" : null;
+    return compositeScore >= t.momentum ? "momentum" : null;
   }
   return null;
 }
 
-export function getEntrySizeMultiplier(stage: "probe" | "confirmation" | "momentum"): number {
-  switch (stage) {
-    case "probe": return 0.70;
-    case "confirmation": return 0.60;
-    case "momentum": return 0.50;
-  }
+export function getEntrySizeMultiplier(
+  stage: "probe" | "confirmation" | "momentum",
+  multipliers?: { probe: number; confirmation: number; momentum: number },
+): number {
+  const m = multipliers || { probe: 0.70, confirmation: 0.60, momentum: 0.50 };
+  return m[stage];
 }
 
 async function getStateValue(key: string): Promise<string | null> {

@@ -431,31 +431,33 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
   const nowIso = new Date().toISOString();
   const currentMonthKey = `${new Date().getFullYear()}-${new Date().getMonth() + 1}`;
 
-  const aiSettings: Record<string, string> = {
-    ai_equity_pct_per_trade: "8",
-    ai_paper_equity_pct_per_trade: "16",
-    ai_live_equity_pct_per_trade: "8",
-    ai_tp_multiplier_strong: String(optTpStrong),
-    ai_tp_multiplier_medium: String(optTpMed),
-    ai_tp_multiplier_weak: String(optTpWeak),
-    ai_sl_ratio: String(optSl),
-    ai_time_exit_window_hours: String(optHold),
-    ai_settings_locked: "true",
+  const aiSuggestions: Record<string, string> = {
+    ai_suggest_paper_tp_multiplier_strong: String(optTpStrong),
+    ai_suggest_paper_tp_multiplier_medium: String(optTpMed),
+    ai_suggest_paper_tp_multiplier_weak: String(optTpWeak),
+    ai_suggest_paper_sl_ratio: String(optSl),
+    ai_suggest_paper_time_exit_window_hours: String(optHold),
+    ai_suggest_demo_tp_multiplier_strong: String(optTpStrong),
+    ai_suggest_demo_tp_multiplier_medium: String(optTpMed),
+    ai_suggest_demo_tp_multiplier_weak: String(optTpWeak),
+    ai_suggest_demo_sl_ratio: String(optSl),
+    ai_suggest_demo_time_exit_window_hours: String(optHold),
+    ai_suggest_real_tp_multiplier_strong: String(Math.max(optTpStrong * 0.8, 2.0).toFixed(2)),
+    ai_suggest_real_tp_multiplier_medium: String(Math.max(optTpMed * 0.8, 1.5).toFixed(2)),
+    ai_suggest_real_tp_multiplier_weak: String(Math.max(optTpWeak * 0.8, 1.2).toFixed(2)),
+    ai_suggest_real_sl_ratio: String(Math.min(optSl * 1.2, 2.0).toFixed(2)),
+    ai_suggest_real_time_exit_window_hours: String(optHold),
     ai_optimised_at: nowIso,
     last_monthly_optimise_month: currentMonthKey,
     last_monthly_optimise_at: nowIso,
   };
 
-  for (const [key, value] of Object.entries(aiSettings)) {
+  for (const [key, value] of Object.entries(aiSuggestions)) {
     await db.insert(platformStateTable).values({ key, value })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value, updatedAt: new Date() } });
   }
 
-  for (const key of AI_LOCKABLE_KEYS) {
-    await db.delete(platformStateTable).where(eq(platformStateTable.key, `ai_suggestion_${key}`));
-  }
-
-  console.log(`[Scheduler] Monthly re-optimisation complete — ${ran} backtests, settings re-locked.`);
+  console.log(`[Scheduler] Monthly re-optimisation complete — ${ran} backtests, suggestions updated (no settings changed).`);
 }
 
 async function monthlyOptimisationCycle(): Promise<void> {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   useGetSettings,
   useUpdateSettings,
@@ -12,9 +12,86 @@ import type { PlatformSettings, SetTradingModeRequestMode, ToggleTradingModeRequ
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui-elements";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
-import { Shield, TrendingUp, Clock, Crosshair, Save, RotateCcw, CheckCircle2, Key, Eye, EyeOff, AlertTriangle, Zap, Bot, Lock, Unlock, Database, Download, FlaskConical, Sparkles, ChevronRight, XCircle, Wifi, Loader2, Trash2, BarChart3 } from "lucide-react";
+import { Shield, TrendingUp, Clock, Crosshair, Save, RotateCcw, CheckCircle2, Key, Eye, EyeOff, AlertTriangle, Zap, Bot, Lock, Unlock, Database, Download, FlaskConical, Sparkles, ChevronRight, ChevronDown, XCircle, Wifi, Loader2, Trash2, BarChart3, Target, Layers, Activity } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
+
+const V1_DEFAULTS: Record<string, Record<string, string>> = {
+  paper: {
+    capital: "10000", equity_pct_per_trade: "30", max_open_trades: "4", allocation_mode: "aggressive",
+    probe_threshold: "75", confirmation_threshold: "80", momentum_threshold: "85",
+    stage_multiplier_probe: "1.0", stage_multiplier_confirmation: "0.90", stage_multiplier_momentum: "0.80",
+    tp_multiplier_strong: "3.5", tp_multiplier_medium: "2.8", tp_multiplier_weak: "2.0",
+    sl_ratio: "1.0", trailing_stop_pct: "20", time_exit_window_hours: "336",
+    tp_capture_ratio: "0.80", min_sl_atr_multiplier: "3.0",
+    max_daily_loss_pct: "8", max_weekly_loss_pct: "15", max_drawdown_pct: "25",
+    extraction_target_pct: "50", auto_extraction: "false",
+    peak_drawdown_exit_pct: "25", min_peak_profit_pct: "3", large_peak_threshold_pct: "8",
+    correlated_family_cap: "4",
+    trend_continuation_tp_atr_multiplier: "10.0", trend_continuation_sl_atr_multiplier: "4.0",
+    trend_continuation_initial_exit_hours: "168", trend_continuation_extension_hours: "48",
+    trend_continuation_max_exit_hours: "336", trend_continuation_harvest_sensitivity: "0.7",
+    mean_reversion_tp_atr_multiplier: "8.0", mean_reversion_sl_atr_multiplier: "4.0",
+    mean_reversion_initial_exit_hours: "120", mean_reversion_extension_hours: "36",
+    mean_reversion_max_exit_hours: "240", mean_reversion_harvest_sensitivity: "0.9",
+    breakout_expansion_tp_atr_multiplier: "12.0", breakout_expansion_sl_atr_multiplier: "3.0",
+    breakout_expansion_initial_exit_hours: "168", breakout_expansion_extension_hours: "48",
+    breakout_expansion_max_exit_hours: "336", breakout_expansion_harvest_sensitivity: "0.6",
+    spike_event_tp_atr_multiplier: "6.0", spike_event_sl_atr_multiplier: "3.0",
+    spike_event_initial_exit_hours: "72", spike_event_extension_hours: "24",
+    spike_event_max_exit_hours: "168", spike_event_harvest_sensitivity: "1.0",
+  },
+  demo: {
+    capital: "600", equity_pct_per_trade: "20", max_open_trades: "3", allocation_mode: "balanced",
+    probe_threshold: "82", confirmation_threshold: "86", momentum_threshold: "90",
+    stage_multiplier_probe: "0.85", stage_multiplier_confirmation: "0.75", stage_multiplier_momentum: "0.65",
+    tp_multiplier_strong: "3.0", tp_multiplier_medium: "2.5", tp_multiplier_weak: "1.8",
+    sl_ratio: "1.0", trailing_stop_pct: "22", time_exit_window_hours: "168",
+    tp_capture_ratio: "0.70", min_sl_atr_multiplier: "3.5",
+    max_daily_loss_pct: "5", max_weekly_loss_pct: "10", max_drawdown_pct: "18",
+    extraction_target_pct: "50", auto_extraction: "false",
+    peak_drawdown_exit_pct: "30", min_peak_profit_pct: "3", large_peak_threshold_pct: "8",
+    correlated_family_cap: "3",
+    trend_continuation_tp_atr_multiplier: "8.0", trend_continuation_sl_atr_multiplier: "3.0",
+    trend_continuation_initial_exit_hours: "168", trend_continuation_extension_hours: "48",
+    trend_continuation_max_exit_hours: "336", trend_continuation_harvest_sensitivity: "0.8",
+    mean_reversion_tp_atr_multiplier: "6.0", mean_reversion_sl_atr_multiplier: "3.5",
+    mean_reversion_initial_exit_hours: "120", mean_reversion_extension_hours: "36",
+    mean_reversion_max_exit_hours: "240", mean_reversion_harvest_sensitivity: "1.0",
+    breakout_expansion_tp_atr_multiplier: "10.0", breakout_expansion_sl_atr_multiplier: "2.5",
+    breakout_expansion_initial_exit_hours: "168", breakout_expansion_extension_hours: "48",
+    breakout_expansion_max_exit_hours: "336", breakout_expansion_harvest_sensitivity: "0.7",
+    spike_event_tp_atr_multiplier: "5.0", spike_event_sl_atr_multiplier: "2.0",
+    spike_event_initial_exit_hours: "72", spike_event_extension_hours: "24",
+    spike_event_max_exit_hours: "168", spike_event_harvest_sensitivity: "1.1",
+  },
+  real: {
+    capital: "600", equity_pct_per_trade: "15", max_open_trades: "3", allocation_mode: "balanced",
+    probe_threshold: "88", confirmation_threshold: "91", momentum_threshold: "94",
+    stage_multiplier_probe: "0.70", stage_multiplier_confirmation: "0.60", stage_multiplier_momentum: "0.50",
+    tp_multiplier_strong: "2.5", tp_multiplier_medium: "2.0", tp_multiplier_weak: "1.5",
+    sl_ratio: "1.0", trailing_stop_pct: "25", time_exit_window_hours: "168",
+    tp_capture_ratio: "0.60", min_sl_atr_multiplier: "4.0",
+    max_daily_loss_pct: "3", max_weekly_loss_pct: "6", max_drawdown_pct: "12",
+    extraction_target_pct: "50", auto_extraction: "false",
+    peak_drawdown_exit_pct: "30", min_peak_profit_pct: "3", large_peak_threshold_pct: "8",
+    correlated_family_cap: "3",
+    trend_continuation_tp_atr_multiplier: "6.0", trend_continuation_sl_atr_multiplier: "3.5",
+    trend_continuation_initial_exit_hours: "168", trend_continuation_extension_hours: "48",
+    trend_continuation_max_exit_hours: "336", trend_continuation_harvest_sensitivity: "0.8",
+    mean_reversion_tp_atr_multiplier: "4.0", mean_reversion_sl_atr_multiplier: "4.0",
+    mean_reversion_initial_exit_hours: "120", mean_reversion_extension_hours: "36",
+    mean_reversion_max_exit_hours: "240", mean_reversion_harvest_sensitivity: "1.0",
+    breakout_expansion_tp_atr_multiplier: "8.0", breakout_expansion_sl_atr_multiplier: "3.0",
+    breakout_expansion_initial_exit_hours: "168", breakout_expansion_extension_hours: "48",
+    breakout_expansion_max_exit_hours: "336", breakout_expansion_harvest_sensitivity: "0.7",
+    spike_event_tp_atr_multiplier: "4.0", spike_event_sl_atr_multiplier: "2.5",
+    spike_event_initial_exit_hours: "72", spike_event_extension_hours: "24",
+    spike_event_max_exit_hours: "168", spike_event_harvest_sensitivity: "1.2",
+  },
+};
+
+interface AiSuggestions { [key: string]: string }
 
 interface SettingFieldProps {
   label: string;
@@ -28,95 +105,137 @@ interface SettingFieldProps {
   max?: number;
   step?: number;
   placeholder?: string;
-  aiLocked?: boolean;
-  aiValue?: string;
+  locked: boolean;
+  onUnlock: () => void;
   aiSuggestion?: string;
-  onOverride?: () => void;
-  onRevert?: () => void;
+  onApplySuggestion?: () => void;
 }
 
-function AiBadge() {
+function UnlockWarningDialog({ settingLabel, onConfirm, onCancel }: { settingLabel: string; onConfirm: () => void; onCancel: () => void }) {
   return (
-    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
-      <Bot className="w-2.5 h-2.5" />
-      AI SET
-    </span>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-card border border-warning/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl"
+      >
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-12 h-12 rounded-full bg-warning/10 flex items-center justify-center">
+            <AlertTriangle className="w-6 h-6 text-warning" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-foreground">Modify Setting</h3>
+            <p className="text-sm text-muted-foreground">{settingLabel}</p>
+          </div>
+        </div>
+        <div className="space-y-3 mb-6 text-sm text-muted-foreground">
+          <p>These values have been <span className="text-foreground font-semibold">researched in depth and verified</span> through extensive backtesting.</p>
+          <p>By changing this value you are <span className="text-warning font-semibold">increasing risk exponentially</span>. This is not advised unless you have thoroughly researched and understand the impact.</p>
+          <p className="text-xs text-muted-foreground/70">Incorrect settings can lead to rapid account depletion.</p>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onCancel} className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">
+            Keep Locked
+          </button>
+          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 rounded-lg bg-warning/80 text-warning-foreground text-sm font-bold uppercase tracking-wider hover:bg-warning transition-all">
+            Unlock & Edit
+          </button>
+        </div>
+      </motion.div>
+    </div>
   );
 }
 
-function SettingField({ label, description, value, onChange, type = "number", options, suffix, min, max, step, placeholder, aiLocked, aiValue, aiSuggestion, onOverride, onRevert }: SettingFieldProps) {
+function SettingField({ label, description, value, onChange, type = "number", options, suffix, min, max, step, placeholder, locked, onUnlock, aiSuggestion, onApplySuggestion }: SettingFieldProps) {
   const [showPassword, setShowPassword] = useState(false);
+
+  const hasSuggestion = aiSuggestion !== undefined && aiSuggestion !== value;
+  const suggestionHigher = hasSuggestion && parseFloat(aiSuggestion!) > parseFloat(value);
 
   if (type === "toggle") {
     const isOn = value === "true";
     return (
-      <div className="flex items-center justify-between py-4 border-b border-border/30 last:border-0">
+      <div className="flex items-center justify-between py-3 border-b border-border/30 last:border-0">
         <div className="flex-1 pr-4">
           <p className="text-sm font-medium text-foreground">{label}</p>
           <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
         </div>
-        <button
-          onClick={() => onChange(isOn ? "false" : "true")}
-          className={cn(
-            "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
-            isOn ? "bg-destructive" : "bg-muted"
+        <div className="flex items-center gap-2">
+          {locked ? (
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-mono text-muted-foreground">{isOn ? "ON" : "OFF"}</span>
+              <button onClick={onUnlock} className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors" title="Unlock to edit">
+                <Lock className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => onChange(isOn ? "false" : "true")}
+              className={cn("relative inline-flex h-6 w-11 items-center rounded-full transition-colors", isOn ? "bg-destructive" : "bg-muted")}
+            >
+              <span className={cn("inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm", isOn ? "translate-x-6" : "translate-x-1")} />
+            </button>
           )}
-        >
-          <span className={cn(
-            "inline-block h-4 w-4 rounded-full bg-white transition-transform shadow-sm",
-            isOn ? "translate-x-6" : "translate-x-1"
-          )} />
-        </button>
+        </div>
       </div>
     );
   }
 
   if (type === "select" && options) {
     return (
-      <div className="flex items-center justify-between py-4 border-b border-border/30 last:border-0">
-        <div className="flex-1 pr-4">
-          <p className="text-sm font-medium text-foreground">{label}</p>
-          <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+      <div className="py-3 border-b border-border/30 last:border-0">
+        <div className="flex items-center justify-between">
+          <div className="flex-1 pr-4">
+            <p className="text-sm font-medium text-foreground">{label}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {locked ? (
+              <>
+                <span className="text-sm font-mono text-muted-foreground capitalize">{value}</span>
+                <button onClick={onUnlock} className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors" title="Unlock to edit">
+                  <Lock className="w-3.5 h-3.5" />
+                </button>
+              </>
+            ) : (
+              <div className="flex gap-1.5">
+                {options.map((opt) => (
+                  <button key={opt.value} onClick={() => onChange(opt.value)}
+                    className={cn("px-3 py-1.5 rounded-md text-xs font-medium uppercase tracking-wider transition-all border",
+                      value === opt.value ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                    )}
+                  >{opt.label}</button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-        <div className="flex gap-1.5">
-          {options.map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => onChange(opt.value)}
-              className={cn(
-                "px-3 py-1.5 rounded-md text-xs font-medium uppercase tracking-wider transition-all border",
-                value === opt.value
-                  ? "bg-primary/10 border-primary text-primary"
-                  : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
-              )}
-            >
-              {opt.label}
+        {hasSuggestion && onApplySuggestion && (
+          <div className="flex items-center justify-end gap-2 mt-1.5">
+            <span className={cn("text-xs", suggestionHigher ? "text-emerald-500" : "text-amber-500")}>
+              AI suggests: <span className="font-mono font-semibold">{aiSuggestion}</span>
+            </span>
+            <button onClick={onApplySuggestion} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10 transition-colors">
+              Apply
             </button>
-          ))}
-        </div>
+          </div>
+        )}
       </div>
     );
   }
 
   if (type === "password") {
     return (
-      <div className="flex items-center justify-between py-4 border-b border-border/30 last:border-0">
+      <div className="flex items-center justify-between py-3 border-b border-border/30 last:border-0">
         <div className="flex-1 pr-4">
           <p className="text-sm font-medium text-foreground">{label}</p>
           <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
         </div>
         <div className="flex items-center gap-2">
-          <input
-            type={showPassword ? "text" : "password"}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
+          <input type={showPassword ? "text" : "password"} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
             className="w-56 h-9 rounded-md border border-border bg-background/50 px-3 text-sm font-mono text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-colors"
           />
-          <button
-            onClick={() => setShowPassword(!showPassword)}
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
+          <button onClick={() => setShowPassword(!showPassword)} className="text-muted-foreground hover:text-foreground transition-colors">
             {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
           </button>
         </div>
@@ -124,62 +243,41 @@ function SettingField({ label, description, value, onChange, type = "number", op
     );
   }
 
-  if (aiLocked) {
-    return (
-      <div className="flex items-center justify-between py-4 border-b border-border/30 last:border-0">
-        <div className="flex-1 pr-4">
-          <div className="flex items-center gap-2 mb-0.5">
-            <p className="text-sm font-medium text-foreground">{label}</p>
-            <AiBadge />
-          </div>
-          <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-3 h-9 rounded-md border border-emerald-500/30 bg-emerald-500/5">
-            <Lock className="w-3 h-3 text-emerald-500" />
-            <span className="text-sm font-mono text-foreground">{aiValue ?? value}</span>
-            {suffix && <span className="text-xs text-muted-foreground font-mono">{suffix}</span>}
-          </div>
-          <button
-            onClick={onOverride}
-            className="text-xs px-2.5 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors"
-          >
-            Override
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="py-4 border-b border-border/30 last:border-0">
+    <div className="py-3 border-b border-border/30 last:border-0">
       <div className="flex items-center justify-between">
         <div className="flex-1 pr-4">
           <p className="text-sm font-medium text-foreground">{label}</p>
           <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
         </div>
         <div className="flex items-center gap-2">
-          <input
-            type="number"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            min={min}
-            max={max}
-            step={step ?? 0.1}
-            className="w-24 h-9 rounded-md border border-primary/40 bg-background/50 px-3 text-sm font-mono text-right text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-colors"
-          />
-          {suffix && <span className="text-xs text-muted-foreground font-mono w-6">{suffix}</span>}
+          {locked ? (
+            <>
+              <div className="flex items-center gap-1.5 px-3 h-9 rounded-md border border-border/50 bg-muted/20">
+                <span className="text-sm font-mono text-foreground">{value}</span>
+                {suffix && <span className="text-xs text-muted-foreground font-mono">{suffix}</span>}
+              </div>
+              <button onClick={onUnlock} className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors" title="Unlock to edit">
+                <Lock className="w-3.5 h-3.5" />
+              </button>
+            </>
+          ) : (
+            <>
+              <input type="number" value={value} onChange={(e) => onChange(e.target.value)} min={min} max={max} step={step ?? 0.1}
+                className="w-24 h-9 rounded-md border border-primary/40 bg-background/50 px-3 text-sm font-mono text-right text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-colors"
+              />
+              {suffix && <span className="text-xs text-muted-foreground font-mono w-6">{suffix}</span>}
+            </>
+          )}
         </div>
       </div>
-      {onRevert && aiSuggestion !== undefined && (
+      {hasSuggestion && onApplySuggestion && (
         <div className="flex items-center justify-end gap-2 mt-1.5">
-          <span className="text-xs text-muted-foreground">AI suggestion: <span className="font-mono text-emerald-500">{aiSuggestion}</span></span>
-          <button
-            onClick={onRevert}
-            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10 transition-colors"
-          >
-            <RotateCcw className="w-3 h-3" />
-            Revert to AI
+          <span className={cn("text-xs", suggestionHigher ? "text-emerald-500" : "text-amber-500")}>
+            AI suggests: <span className="font-mono font-semibold">{aiSuggestion}</span>
+          </span>
+          <button onClick={onApplySuggestion} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10 transition-colors">
+            Apply
           </button>
         </div>
       )}
@@ -190,19 +288,11 @@ function SettingField({ label, description, value, onChange, type = "number", op
 function LiveModeConfirmDialog({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="bg-card border border-destructive/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl"
-      >
+      <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+        className="bg-card border border-destructive/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center">
-            <AlertTriangle className="w-6 h-6 text-destructive" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-foreground">Switch to LIVE Trading</h3>
-            <p className="text-sm text-muted-foreground">This will use real money</p>
-          </div>
+          <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center"><AlertTriangle className="w-6 h-6 text-destructive" /></div>
+          <div><h3 className="text-lg font-bold text-foreground">Switch to LIVE Trading</h3><p className="text-sm text-muted-foreground">This will use real money</p></div>
         </div>
         <div className="space-y-3 mb-6 text-sm text-muted-foreground">
           <p>You are about to switch to <span className="text-destructive font-bold">LIVE trading mode</span>. This means:</p>
@@ -213,18 +303,8 @@ function LiveModeConfirmDialog({ onConfirm, onCancel }: { onConfirm: () => void;
           </ul>
         </div>
         <div className="flex gap-3">
-          <button
-            onClick={onCancel}
-            className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            className="flex-1 px-4 py-2.5 rounded-lg bg-destructive text-destructive-foreground text-sm font-bold uppercase tracking-wider hover:bg-destructive/90 transition-all shadow-lg shadow-destructive/20"
-          >
-            Confirm LIVE
-          </button>
+          <button onClick={onCancel} className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">Cancel</button>
+          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 rounded-lg bg-destructive text-destructive-foreground text-sm font-bold uppercase tracking-wider hover:bg-destructive/90 transition-all shadow-lg shadow-destructive/20">Confirm LIVE</button>
         </div>
       </motion.div>
     </div>
@@ -234,19 +314,11 @@ function LiveModeConfirmDialog({ onConfirm, onCancel }: { onConfirm: () => void;
 function PaperResetConfirmDialog({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="bg-card border border-warning/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl"
-      >
+      <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+        className="bg-card border border-warning/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-full bg-warning/10 flex items-center justify-center">
-            <Trash2 className="w-6 h-6 text-warning" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-foreground">Reset Paper Trading</h3>
-            <p className="text-sm text-muted-foreground">This cannot be undone</p>
-          </div>
+          <div className="w-12 h-12 rounded-full bg-warning/10 flex items-center justify-center"><Trash2 className="w-6 h-6 text-warning" /></div>
+          <div><h3 className="text-lg font-bold text-foreground">Reset Paper Trading</h3><p className="text-sm text-muted-foreground">This cannot be undone</p></div>
         </div>
         <div className="space-y-3 mb-6 text-sm text-muted-foreground">
           <p>This will permanently:</p>
@@ -258,12 +330,8 @@ function PaperResetConfirmDialog({ onConfirm, onCancel }: { onConfirm: () => voi
           <p className="text-xs">Demo and Real mode data will <span className="font-medium text-foreground">not</span> be affected.</p>
         </div>
         <div className="flex gap-3">
-          <button onClick={onCancel} className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">
-            Cancel
-          </button>
-          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 rounded-lg bg-warning text-warning-foreground text-sm font-bold uppercase tracking-wider hover:bg-warning/90 transition-all">
-            Reset Paper
-          </button>
+          <button onClick={onCancel} className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">Cancel</button>
+          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 rounded-lg bg-warning text-warning-foreground text-sm font-bold uppercase tracking-wider hover:bg-warning/90 transition-all">Reset Paper</button>
         </div>
       </motion.div>
     </div>
@@ -273,19 +341,11 @@ function PaperResetConfirmDialog({ onConfirm, onCancel }: { onConfirm: () => voi
 function FactoryResetConfirmDialog({ onConfirm, onCancel, resetting }: { onConfirm: () => void; onCancel: () => void; resetting: boolean }) {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="bg-card border border-destructive/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl"
-      >
+      <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+        className="bg-card border border-destructive/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center">
-            <Trash2 className="w-6 h-6 text-destructive" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-foreground">Factory Reset</h3>
-            <p className="text-sm text-muted-foreground">This cannot be undone</p>
-          </div>
+          <div className="w-12 h-12 rounded-full bg-destructive/10 flex items-center justify-center"><Trash2 className="w-6 h-6 text-destructive" /></div>
+          <div><h3 className="text-lg font-bold text-foreground">Factory Reset</h3><p className="text-sm text-muted-foreground">This cannot be undone</p></div>
         </div>
         <div className="space-y-3 mb-6 text-sm text-muted-foreground">
           <p>This will permanently delete:</p>
@@ -298,12 +358,8 @@ function FactoryResetConfirmDialog({ onConfirm, onCancel, resetting }: { onConfi
           <p className="text-xs">Your API keys will be <span className="font-medium text-foreground">preserved</span>. After reset, the setup wizard will run again.</p>
         </div>
         <div className="flex gap-3">
-          <button onClick={onCancel} disabled={resetting} className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all disabled:opacity-50">
-            Cancel
-          </button>
-          <button onClick={onConfirm} disabled={resetting} className="flex-1 px-4 py-2.5 rounded-lg bg-destructive text-destructive-foreground text-sm font-bold uppercase tracking-wider hover:bg-destructive/90 transition-all disabled:opacity-50">
-            {resetting ? "Resetting..." : "Factory Reset"}
-          </button>
+          <button onClick={onCancel} disabled={resetting} className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all disabled:opacity-50">Cancel</button>
+          <button onClick={onConfirm} disabled={resetting} className="flex-1 px-4 py-2.5 rounded-lg bg-destructive text-destructive-foreground text-sm font-bold uppercase tracking-wider hover:bg-destructive/90 transition-all disabled:opacity-50">{resetting ? "Resetting..." : "Factory Reset"}</button>
         </div>
       </motion.div>
     </div>
@@ -326,40 +382,15 @@ const ALL_INSTRUMENTS = [
 ];
 
 const STRATEGY_FAMILIES = [
-  {
-    key: "trend_continuation",
-    label: "Trend Continuation",
-    desc: "Enters on pullbacks within established trends",
-    subStrategies: ["Trend Pullback"],
-  },
-  {
-    key: "mean_reversion",
-    label: "Mean Reversion",
-    desc: "Catches reversals after extreme moves or liquidity sweeps",
-    subStrategies: ["Exhaustion Rebound", "Liquidity Sweep + Reversal"],
-  },
-  {
-    key: "breakout_expansion",
-    label: "Breakout / Expansion",
-    desc: "Trades breakouts and explosive volatility moves",
-    subStrategies: ["Volatility Breakout", "Volatility Expansion Capture"],
-  },
-  {
-    key: "spike_event",
-    label: "Spike / Event",
-    desc: "Exploits Boom/Crash spike patterns deterministically",
-    subStrategies: ["Spike Hazard Capture"],
-  },
+  { key: "trend_continuation", label: "Trend Continuation", desc: "Enters on pullbacks within established trends", subStrategies: ["Trend Pullback"] },
+  { key: "mean_reversion", label: "Mean Reversion", desc: "Catches reversals after extreme moves or liquidity sweeps", subStrategies: ["Exhaustion Rebound", "Liquidity Sweep + Reversal"] },
+  { key: "breakout_expansion", label: "Breakout / Expansion", desc: "Trades breakouts and explosive volatility moves", subStrategies: ["Volatility Breakout", "Volatility Expansion Capture"] },
+  { key: "spike_event", label: "Spike / Event", desc: "Exploits Boom/Crash spike patterns deterministically", subStrategies: ["Spike Hazard Capture"] },
 ];
 
 function InstrumentsPicker({ enabledSymbols, onChange }: { enabledSymbols: string; onChange: (v: string) => void }) {
   const enabled = new Set(enabledSymbols ? enabledSymbols.split(",").filter(Boolean) : ALL_INSTRUMENTS.map(i => i.symbol));
-  const toggle = (sym: string) => {
-    const next = new Set(enabled);
-    if (next.has(sym)) next.delete(sym);
-    else next.add(sym);
-    onChange(Array.from(next).join(","));
-  };
+  const toggle = (sym: string) => { const next = new Set(enabled); if (next.has(sym)) next.delete(sym); else next.add(sym); onChange(Array.from(next).join(",")); };
   const categories = [...new Set(ALL_INSTRUMENTS.map(i => i.category))];
   return (
     <div className="space-y-3">
@@ -368,18 +399,10 @@ function InstrumentsPicker({ enabledSymbols, onChange }: { enabledSymbols: strin
           <p className="text-xs font-semibold text-muted-foreground mb-1.5 uppercase tracking-wider">{cat}</p>
           <div className="flex flex-wrap gap-2">
             {ALL_INSTRUMENTS.filter(i => i.category === cat).map(inst => (
-              <button
-                key={inst.symbol}
-                onClick={() => toggle(inst.symbol)}
-                className={cn(
-                  "px-3 py-1.5 rounded-md text-xs font-medium border transition-all",
-                  enabled.has(inst.symbol)
-                    ? "bg-primary/10 border-primary/30 text-primary"
-                    : "bg-muted/30 border-border text-muted-foreground hover:border-primary/20"
-                )}
-              >
-                {inst.label}
-              </button>
+              <button key={inst.symbol} onClick={() => toggle(inst.symbol)}
+                className={cn("px-3 py-1.5 rounded-md text-xs font-medium border transition-all",
+                  enabled.has(inst.symbol) ? "bg-primary/10 border-primary/30 text-primary" : "bg-muted/30 border-border text-muted-foreground hover:border-primary/20"
+                )}>{inst.label}</button>
             ))}
           </div>
         </div>
@@ -390,45 +413,21 @@ function InstrumentsPicker({ enabledSymbols, onChange }: { enabledSymbols: strin
 
 function StrategyFamilySelector({ enabledStrategies, onChange }: { enabledStrategies: string; onChange: (v: string) => void }) {
   const parsed = enabledStrategies.split(",").filter(Boolean);
-  const OLD_TO_FAMILY: Record<string, string> = {
-    "trend-pullback": "trend_continuation",
-    "exhaustion-rebound": "mean_reversion",
-    "liquidity-sweep": "mean_reversion",
-    "volatility-breakout": "breakout_expansion",
-    "volatility-expansion": "breakout_expansion",
-    "spike-hazard": "spike_event",
-  };
+  const OLD_TO_FAMILY: Record<string, string> = { "trend-pullback": "trend_continuation", "exhaustion-rebound": "mean_reversion", "liquidity-sweep": "mean_reversion", "volatility-breakout": "breakout_expansion", "volatility-expansion": "breakout_expansion", "spike-hazard": "spike_event" };
   const migrated = new Set<string>();
-  for (const p of parsed) {
-    if (OLD_TO_FAMILY[p]) migrated.add(OLD_TO_FAMILY[p]);
-    else migrated.add(p);
-  }
+  for (const p of parsed) { if (OLD_TO_FAMILY[p]) migrated.add(OLD_TO_FAMILY[p]); else migrated.add(p); }
   const enabled = migrated.size > 0 ? migrated : new Set(STRATEGY_FAMILIES.map(f => f.key));
-  const toggle = (key: string) => {
-    const next = new Set(enabled);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    onChange(Array.from(next).join(","));
-  };
+  const toggle = (key: string) => { const next = new Set(enabled); if (next.has(key)) next.delete(key); else next.add(key); onChange(Array.from(next).join(",")); };
   return (
     <div className="space-y-2">
       {STRATEGY_FAMILIES.map(family => (
-        <button
-          key={family.key}
-          onClick={() => toggle(family.key)}
-          className={cn(
-            "flex items-start gap-3 w-full p-3 rounded-lg border text-left transition-all",
-            enabled.has(family.key)
-              ? "bg-primary/5 border-primary/30"
-              : "bg-muted/20 border-border hover:border-primary/20"
-          )}
-        >
-          <div className={cn(
-            "w-4 h-4 mt-0.5 rounded border-2 flex items-center justify-center shrink-0 transition-colors",
-            enabled.has(family.key) ? "bg-primary border-primary" : "border-muted-foreground/30"
+        <button key={family.key} onClick={() => toggle(family.key)}
+          className={cn("flex items-start gap-3 w-full p-3 rounded-lg border text-left transition-all",
+            enabled.has(family.key) ? "bg-primary/5 border-primary/30" : "bg-muted/20 border-border hover:border-primary/20"
           )}>
-            {enabled.has(family.key) && <CheckCircle2 className="w-3 h-3 text-primary-foreground" />}
-          </div>
+          <div className={cn("w-4 h-4 mt-0.5 rounded border-2 flex items-center justify-center shrink-0 transition-colors",
+            enabled.has(family.key) ? "bg-primary border-primary" : "border-muted-foreground/30"
+          )}>{enabled.has(family.key) && <CheckCircle2 className="w-3 h-3 text-primary-foreground" />}</div>
           <div className="flex-1 min-w-0">
             <p className={cn("text-sm font-medium", enabled.has(family.key) ? "text-foreground" : "text-muted-foreground")}>{family.label}</p>
             <p className="text-xs text-muted-foreground mt-0.5">{family.desc}</p>
@@ -440,109 +439,51 @@ function StrategyFamilySelector({ enabledStrategies, onChange }: { enabledStrate
   );
 }
 
-const AI_LOCKABLE_KEYS_UI = [
-  "equity_pct_per_trade",
-  "paper_equity_pct_per_trade",
-  "live_equity_pct_per_trade",
-  "tp_multiplier_strong",
-  "tp_multiplier_medium",
-  "tp_multiplier_weak",
-  "sl_ratio",
-  "time_exit_window_hours",
-];
-
-interface AiStatus {
-  locked: boolean;
-  optimisedAt: string | null;
-  aiValues: Record<string, string>;
-  aiSuggestions: Record<string, string>;
-  lockedKeys: string[];
-  overriddenKeys: string[];
-  lastMonthlyOptimise: string | null;
-  nextScheduled: string;
-}
-
-function OverrideConfirmDialog({
-  settingLabel,
-  totalBacktests,
-  monthsOfData,
-  onConfirm,
-  onCancel,
-}: {
-  settingLabel: string;
-  totalBacktests: number;
-  monthsOfData: number;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
+function SectionSaveButton({ sectionKeys, form, saving, onSave }: { sectionKeys: string[]; form: Record<string, string>; saving: boolean; onSave: (keys: string[]) => void }) {
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center">
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="bg-card border border-warning/30 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl"
-      >
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-full bg-warning/10 flex items-center justify-center">
-            <AlertTriangle className="w-6 h-6 text-warning" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-foreground">Override AI Setting</h3>
-            <p className="text-sm text-muted-foreground">{settingLabel}</p>
-          </div>
-        </div>
-        <div className="space-y-3 mb-6 text-sm text-muted-foreground">
-          <p>Changing AI-optimised settings carries increased risk. The AI calculated this value based on <span className="text-foreground font-semibold">{monthsOfData} months</span> of backtesting across <span className="text-foreground font-semibold">{totalBacktests} symbol/strategy combinations</span>.</p>
-          <p>Are you sure you want to override this value?</p>
-        </div>
-        <div className="flex gap-3">
-          <button onClick={onCancel} className="flex-1 px-4 py-2.5 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all">
-            Keep AI Value
-          </button>
-          <button onClick={onConfirm} className="flex-1 px-4 py-2.5 rounded-lg bg-warning/80 text-warning-foreground text-sm font-bold uppercase tracking-wider hover:bg-warning transition-all">
-            Override
-          </button>
-        </div>
-      </motion.div>
+    <div className="pt-3 border-t border-border/30 mt-3">
+      <button onClick={() => onSave(sectionKeys)} disabled={saving}
+        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium shadow-sm hover:shadow-md transition-all disabled:opacity-50">
+        {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+        {saving ? "Saving..." : "Save Section"}
+      </button>
     </div>
   );
 }
 
-interface SetupStatus {
-  hasToken: boolean;
-  totalCandles: number;
-  hasEnoughData: boolean;
-  hasInitialBacktests: boolean;
-  backtestCount: number;
-  expectedBacktests: number;
-  setupComplete: boolean;
+function FamilyProfileSection({ mode, familyKey, familyLabel, form, update, locked, onUnlock, suggestions, onApplySuggestion }: {
+  mode: string; familyKey: string; familyLabel: string; form: Record<string, string>;
+  update: (k: string, v: string) => void; locked: boolean; onUnlock: () => void;
+  suggestions: AiSuggestions; onApplySuggestion: (key: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const p = (key: string) => `${mode}_${familyKey}_${key}`;
+  const defaults = V1_DEFAULTS[mode] || V1_DEFAULTS.real;
+  const d = (key: string) => defaults[`${familyKey}_${key}`] || "0";
+
+  return (
+    <div className="border border-border/30 rounded-lg overflow-hidden">
+      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center justify-between p-3 hover:bg-muted/20 transition-colors text-left">
+        <span className="text-sm font-medium text-foreground">{familyLabel}</span>
+        {expanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+      </button>
+      {expanded && (
+        <div className="px-3 pb-3 space-y-0">
+          <SettingField label="TP ATR Multiplier" description="Take profit distance as multiple of ATR" value={form[p("tp_atr_multiplier")] || d("tp_atr_multiplier")} onChange={(v) => update(p("tp_atr_multiplier"), v)} suffix="x" min={1} max={20} step={0.5} locked={locked} onUnlock={onUnlock} aiSuggestion={suggestions[p("tp_atr_multiplier")]} onApplySuggestion={() => onApplySuggestion(p("tp_atr_multiplier"))} />
+          <SettingField label="SL ATR Multiplier" description="Stop loss distance as multiple of ATR" value={form[p("sl_atr_multiplier")] || d("sl_atr_multiplier")} onChange={(v) => update(p("sl_atr_multiplier"), v)} suffix="x" min={0.5} max={10} step={0.5} locked={locked} onUnlock={onUnlock} aiSuggestion={suggestions[p("sl_atr_multiplier")]} onApplySuggestion={() => onApplySuggestion(p("sl_atr_multiplier"))} />
+          <SettingField label="Initial Exit Hours" description="First time-based exit check after this many hours" value={form[p("initial_exit_hours")] || d("initial_exit_hours")} onChange={(v) => update(p("initial_exit_hours"), v)} suffix="hrs" min={1} max={720} step={1} locked={locked} onUnlock={onUnlock} aiSuggestion={suggestions[p("initial_exit_hours")]} onApplySuggestion={() => onApplySuggestion(p("initial_exit_hours"))} />
+          <SettingField label="Extension Hours" description="If near breakeven at time exit, extend by this many hours" value={form[p("extension_hours")] || d("extension_hours")} onChange={(v) => update(p("extension_hours"), v)} suffix="hrs" min={1} max={168} step={1} locked={locked} onUnlock={onUnlock} aiSuggestion={suggestions[p("extension_hours")]} onApplySuggestion={() => onApplySuggestion(p("extension_hours"))} />
+          <SettingField label="Max Exit Hours" description="Hard maximum hold time" value={form[p("max_exit_hours")] || d("max_exit_hours")} onChange={(v) => update(p("max_exit_hours"), v)} suffix="hrs" min={1} max={720} step={1} locked={locked} onUnlock={onUnlock} aiSuggestion={suggestions[p("max_exit_hours")]} onApplySuggestion={() => onApplySuggestion(p("max_exit_hours"))} />
+          <SettingField label="Harvest Sensitivity" description="Lower = more patient harvesting (0.5-1.5)" value={form[p("harvest_sensitivity")] || d("harvest_sensitivity")} onChange={(v) => update(p("harvest_sensitivity"), v)} suffix="x" min={0.3} max={2} step={0.1} locked={locked} onUnlock={onUnlock} aiSuggestion={suggestions[p("harvest_sensitivity")]} onApplySuggestion={() => onApplySuggestion(p("harvest_sensitivity"))} />
+        </div>
+      )}
+    </div>
+  );
 }
 
-interface SetupProgress {
-  phase: string;
-  message?: string;
-  overallPct?: number;
-  candleTotal?: number;
-  estRemainingSec?: number;
-  btCompleted?: number;
-  btTotal?: number;
-  symbol?: string;
-  symbolIndex?: number;
-  totalSymbols?: number;
-  candlesForSymbol?: number;
-  grandTotal?: number;
-  completed?: number;
-  total?: number;
-  estimatedSecondsRemaining?: number;
-  settings?: Record<string, number>;
-  backtestsCreated?: number;
-}
-
-interface PreflightResult {
-  derivDemo: { ok: boolean; error?: string };
-  derivReal: { ok: boolean; error?: string };
-  openai: { ok: boolean; error?: string };
-}
+interface SetupStatus { hasToken: boolean; totalCandles: number; hasEnoughData: boolean; hasInitialBacktests: boolean; backtestCount: number; expectedBacktests: number; setupComplete: boolean; }
+interface SetupProgress { phase: string; message?: string; overallPct?: number; candleTotal?: number; estRemainingSec?: number; btCompleted?: number; btTotal?: number; symbol?: string; symbolIndex?: number; totalSymbols?: number; candlesForSymbol?: number; grandTotal?: number; completed?: number; total?: number; estimatedSecondsRemaining?: number; settings?: Record<string, number>; backtestsCreated?: number; }
+interface PreflightResult { derivDemo: { ok: boolean; error?: string }; derivReal: { ok: boolean; error?: string }; openai: { ok: boolean; error?: string }; }
 
 function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => void; openAiKeySet: boolean }) {
   const { toast } = useToast();
@@ -555,20 +496,11 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
   const [preflightRunning, setPreflightRunning] = useState(false);
   const base = import.meta.env.BASE_URL || "/";
 
-  const fetchStatus = async () => {
-    try {
-      const r = await fetch(`${base}api/setup/status`);
-      if (r.ok) setStatus(await r.json());
-    } catch { /* ignore */ }
-  };
-
+  const fetchStatus = async () => { try { const r = await fetch(`${base}api/setup/status`); if (r.ok) setStatus(await r.json()); } catch {} };
   useEffect(() => { fetchStatus(); }, []);
 
   const streamPhase = async (url: string): Promise<boolean> => {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
+    const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" } });
     if (!response.body) throw new Error("No response body");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -600,73 +532,40 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
 
   const handleRunPreflight = async () => {
     if (preflightRunning) return;
-    setPreflightRunning(true);
-    setPreflight(null);
-    try {
-      const r = await fetch(`${base}api/setup/preflight`, { method: "POST", headers: { "Content-Type": "application/json" } });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data: PreflightResult = await r.json();
-      setPreflight(data);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Preflight request failed.";
-      setPreflight({ derivDemo: { ok: false, error: msg }, derivReal: { ok: false, error: msg }, openai: { ok: false, error: msg } });
-    } finally {
-      setPreflightRunning(false);
-    }
+    setPreflightRunning(true); setPreflight(null);
+    try { const r = await fetch(`${base}api/setup/preflight`, { method: "POST", headers: { "Content-Type": "application/json" } }); if (!r.ok) throw new Error(`HTTP ${r.status}`); setPreflight(await r.json()); }
+    catch (err) { const msg = err instanceof Error ? err.message : "Preflight request failed."; setPreflight({ derivDemo: { ok: false, error: msg }, derivReal: { ok: false, error: msg }, openai: { ok: false, error: msg } }); }
+    finally { setPreflightRunning(false); }
   };
 
   const handleStartSetup = async () => {
     if (running) return;
     setRunning(true);
-
     try {
-      setCurrentStep("preflight");
-      setPreflightRunning(true);
-      setPreflight(null);
+      setCurrentStep("preflight"); setPreflightRunning(true); setPreflight(null);
       const preflightResp = await fetch(`${base}api/setup/preflight`, { method: "POST", headers: { "Content-Type": "application/json" } });
-      if (!preflightResp.ok) {
-        throw new Error(`Connection check request failed (HTTP ${preflightResp.status}). Please try again.`);
-      }
+      if (!preflightResp.ok) throw new Error(`Connection check request failed (HTTP ${preflightResp.status}).`);
       const preflightData: PreflightResult = await preflightResp.json();
-      setPreflight(preflightData);
-      setPreflightRunning(false);
-
-      const anyDerivOk = preflightData.derivDemo.ok || preflightData.derivReal.ok;
-      if (!anyDerivOk) {
-        throw new Error("No Deriv API connection succeeded. Fix your API keys in Settings and retry.");
-      }
-
+      setPreflight(preflightData); setPreflightRunning(false);
+      if (!preflightData.derivDemo.ok && !preflightData.derivReal.ok) throw new Error("No Deriv API connection succeeded.");
       await new Promise(r => setTimeout(r, 1500));
-
-      setCurrentStep("backfill");
-      setProgress({ phase: "backfill_start", message: "Starting initialisation..." });
+      setCurrentStep("backfill"); setProgress({ phase: "backfill_start", message: "Starting initialisation..." });
       await streamPhase(`${base}api/setup/initialise`);
-
-      setCurrentStep("done");
-      setProgress(null);
-      toast({ title: "Initial Setup Complete", description: "24 months of data downloaded, all strategies backtested, and settings optimised." });
-      fetchStatus();
-      onComplete();
-    } catch (err) {
-      setProgress({ phase: "error", message: err instanceof Error ? err.message : "Setup failed" });
-      setRunning(false);
-      setCurrentStep("idle");
-    }
+      setCurrentStep("done"); setProgress(null);
+      toast({ title: "Initial Setup Complete", description: "Data downloaded and strategies backtested. AI suggestions are ready for review in Settings." });
+      fetchStatus(); onComplete();
+    } catch (err) { setProgress({ phase: "error", message: err instanceof Error ? err.message : "Setup failed" }); setRunning(false); setCurrentStep("idle"); }
   };
 
   if (dismissed || status?.setupComplete) return null;
   if (!status) return null;
-
   const bothKeysConfigured = status.hasToken && openAiKeySet;
-
   const STEP_LABELS = [
     { key: "backfill", icon: Download, label: "Download 24 months of trading history" },
     { key: "analyse", icon: FlaskConical, label: "Run all strategies as backtests" },
-    { key: "done", icon: Sparkles, label: "AI optimises your settings" },
+    { key: "done", icon: Sparkles, label: "AI generates suggestions (never changes settings)" },
   ] as const;
-
   const progressPct = progress?.overallPct ?? (currentStep === "done" ? 100 : 0);
-
   const isRunningPost = running && currentStep !== "preflight";
   const isPreflightPhase = running && currentStep === "preflight";
 
@@ -675,181 +574,152 @@ function InitialSetupWizard({ onComplete, openAiKeySet }: { onComplete: () => vo
       <Card className="border-2 border-primary/40 bg-primary/5">
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between gap-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Database className="w-4 h-4 text-primary" />
-              {currentStep === "done" ? "Initial Setup Complete" : "Initial Setup Required"}
-            </CardTitle>
-            {!running && (
-              <button onClick={() => setDismissed(true)} className="text-muted-foreground hover:text-foreground transition-colors mt-0.5" title="Dismiss">
-                <XCircle className="w-4 h-4" />
-              </button>
-            )}
+            <CardTitle className="flex items-center gap-2 text-base"><Database className="w-4 h-4 text-primary" />{currentStep === "done" ? "Initial Setup Complete" : "Initial Setup Required"}</CardTitle>
+            {!running && <button onClick={() => setDismissed(true)} className="text-muted-foreground hover:text-foreground transition-colors mt-0.5" title="Dismiss"><XCircle className="w-4 h-4" /></button>}
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {!running && currentStep === "idle" && (
             <>
               {!status.hasToken ? (
-                <p className="text-sm text-muted-foreground">
-                  Enter your <span className="text-primary font-medium">Deriv API token</span> in the API Keys section below, then return here to run initial setup.
-                </p>
+                <p className="text-sm text-muted-foreground">Enter your <span className="text-primary font-medium">Deriv API token</span> in the API Keys section below, then return here to run initial setup.</p>
               ) : !openAiKeySet ? (
-                <p className="text-sm text-muted-foreground">
-                  Enter your <span className="text-primary font-medium">OpenAI API key</span> in the API Keys section below. Both keys are required before running initial setup.
-                </p>
+                <p className="text-sm text-muted-foreground">Enter your <span className="text-primary font-medium">OpenAI API key</span> in the API Keys section below. Both keys are required before running initial setup.</p>
               ) : (
                 <>
-                  <p className="text-sm text-muted-foreground">
-                    Before trading, the system needs to download 24 months of price history and run all strategies as backtests across every index. The AI will then recommend your optimal starting settings.
-                  </p>
+                  <p className="text-sm text-muted-foreground">Before trading, the system needs to download 24 months of price history and run all strategies as backtests. The AI will then generate <span className="font-medium text-foreground">suggestions</span> (it will never change your settings automatically).</p>
                   <div className="flex flex-col gap-2 pl-1">
-                    {STEP_LABELS.map(({ key, icon: Icon, label }) => (
-                      <div key={key} className="flex items-center gap-2 text-sm text-muted-foreground">
-                        <Icon className="w-3.5 h-3.5 text-primary/70 shrink-0" />
-                        {label}
-                      </div>
-                    ))}
+                    {STEP_LABELS.map(({ key, icon: Icon, label }) => <div key={key} className="flex items-center gap-2 text-sm text-muted-foreground"><Icon className="w-3.5 h-3.5 text-primary/70 shrink-0" />{label}</div>)}
                   </div>
-                  <div className="flex items-center gap-2 pt-1">
-                    <p className="text-xs text-muted-foreground">
-                      {status.totalCandles > 0
-                        ? `${status.totalCandles.toLocaleString()} candles already stored · ${status.backtestCount} of ${status.expectedBacktests} backtests complete`
-                        : "No historical data yet"}
-                    </p>
-                  </div>
+                  <div className="flex items-center gap-2 pt-1"><p className="text-xs text-muted-foreground">{status.totalCandles > 0 ? `${status.totalCandles.toLocaleString()} candles already stored` : "No historical data yet"}</p></div>
                   {preflight && (
                     <div className="flex flex-col gap-2 p-3 rounded-lg border border-border/50 bg-background/50">
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Connection Check Results</p>
-                      <div className="flex items-center gap-2 text-sm">
-                        {preflight.derivDemo.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
-                        <span className={preflight.derivDemo.ok ? "text-emerald-500 font-medium" : "text-destructive font-medium"}>
-                          Deriv Demo: {preflight.derivDemo.ok ? "Connected" : preflight.derivDemo.error}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        {preflight.derivReal.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
-                        <span className={preflight.derivReal.ok ? "text-emerald-500 font-medium" : "text-destructive font-medium"}>
-                          Deriv Real: {preflight.derivReal.ok ? "Connected" : preflight.derivReal.error}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        {preflight.openai.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
-                        <span className={preflight.openai.ok ? "text-emerald-500 font-medium" : "text-destructive font-medium"}>
-                          OpenAI API: {preflight.openai.ok ? "Connected" : preflight.openai.error}
-                        </span>
-                      </div>
+                      {[{ label: "Deriv Demo", result: preflight.derivDemo }, { label: "Deriv Real", result: preflight.derivReal }, { label: "OpenAI API", result: preflight.openai }].map(({ label, result }) => (
+                        <div key={label} className="flex items-center gap-2 text-sm">
+                          {result.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
+                          <span className={result.ok ? "text-emerald-500 font-medium" : "text-destructive font-medium"}>{label}: {result.ok ? "Connected" : result.error}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
                   <div className="flex items-center gap-3 flex-wrap">
                     {bothKeysConfigured && (
-                      <button
-                        onClick={handleRunPreflight}
-                        disabled={preflightRunning}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all disabled:opacity-50"
-                      >
-                        {preflightRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
-                        {preflightRunning ? "Checking..." : "Check Connections"}
+                      <button onClick={handleRunPreflight} disabled={preflightRunning} className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all disabled:opacity-50">
+                        {preflightRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}{preflightRunning ? "Checking..." : "Check Connections"}
                       </button>
                     )}
-                    <button
-                      onClick={handleStartSetup}
-                      disabled={!bothKeysConfigured}
-                      title={!bothKeysConfigured ? "Both Deriv API token and OpenAI API key must be configured" : undefined}
-                      className={cn(
-                        "flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all",
-                        bothKeysConfigured
-                          ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20 hover:shadow-primary/40"
-                          : "bg-muted text-muted-foreground cursor-not-allowed opacity-60"
-                      )}
-                    >
-                      <Zap className="w-4 h-4" />
-                      Run Initial Setup
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                    <button onClick={handleStartSetup} disabled={!bothKeysConfigured} title={!bothKeysConfigured ? "Both Deriv API token and OpenAI API key must be configured" : undefined}
+                      className={cn("flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all",
+                        bothKeysConfigured ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20 hover:shadow-primary/40" : "bg-muted text-muted-foreground cursor-not-allowed opacity-60"
+                      )}><Zap className="w-4 h-4" />Run Initial Setup<ChevronRight className="w-4 h-4" /></button>
                   </div>
                 </>
               )}
             </>
           )}
-
           {(isPreflightPhase || (running && preflight && currentStep !== "idle")) && !isRunningPost && (
             <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                {preflightRunning ? <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" /> : <Wifi className="w-4 h-4 text-primary shrink-0" />}
-                <span className="text-sm font-medium text-foreground">{preflightRunning ? "Checking API connections..." : "Connection Check"}</span>
-              </div>
+              <div className="flex items-center gap-2">{preflightRunning ? <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" /> : <Wifi className="w-4 h-4 text-primary shrink-0" />}<span className="text-sm font-medium text-foreground">{preflightRunning ? "Checking API connections..." : "Connection Check"}</span></div>
               {preflight && (
                 <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center gap-2 text-sm">
-                    {preflight.derivDemo.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
-                    <span className={preflight.derivDemo.ok ? "text-emerald-500" : "text-destructive"}>Deriv Demo: {preflight.derivDemo.ok ? "Connected" : preflight.derivDemo.error}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm">
-                    {preflight.derivReal.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
-                    <span className={preflight.derivReal.ok ? "text-emerald-500" : "text-destructive"}>Deriv Real: {preflight.derivReal.ok ? "Connected" : preflight.derivReal.error}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm">
-                    {preflight.openai.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
-                    <span className={preflight.openai.ok ? "text-emerald-500" : "text-destructive"}>OpenAI: {preflight.openai.ok ? "Connected" : preflight.openai.error}</span>
-                  </div>
+                  {[{ label: "Deriv Demo", result: preflight.derivDemo }, { label: "Deriv Real", result: preflight.derivReal }, { label: "OpenAI", result: preflight.openai }].map(({ label, result }) => (
+                    <div key={label} className="flex items-center gap-2 text-sm">
+                      {result.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" /> : <XCircle className="w-4 h-4 text-destructive shrink-0" />}
+                      <span className={result.ok ? "text-emerald-500" : "text-destructive"}>{label}: {result.ok ? "Connected" : result.error}</span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
           )}
-
           {isRunningPost && (
             <div className="space-y-4">
               <div className="flex items-center gap-3">
                 {STEP_LABELS.map(({ key, icon: Icon, label }, i) => {
-                  const isDone = currentStep === "done" ||
-                    (key === "backfill" && (currentStep === "analyse" || currentStep === "optimise")) ||
-                    (key === "analyse" && currentStep === "optimise");
+                  const isDone = currentStep === "done" || (key === "backfill" && (currentStep === "analyse" || currentStep === "optimise")) || (key === "analyse" && currentStep === "optimise");
                   const isActive = currentStep === key || (key === "done" && currentStep === "optimise");
                   return (
                     <React.Fragment key={key}>
-                      <div className={cn(
-                        "flex items-center gap-1.5 text-xs font-medium transition-colors",
-                        isDone ? "text-emerald-500" : isActive ? "text-primary" : "text-muted-foreground/40"
-                      )}>
-                        <Icon className="w-3.5 h-3.5 shrink-0" />
-                        <span className="hidden sm:inline">{label.split(" ").slice(0, 3).join(" ")}</span>
+                      <div className={cn("flex items-center gap-1.5 text-xs font-medium transition-colors", isDone ? "text-emerald-500" : isActive ? "text-primary" : "text-muted-foreground/40")}>
+                        <Icon className="w-3.5 h-3.5 shrink-0" /><span className="hidden sm:inline">{label.split(" ").slice(0, 3).join(" ")}</span>
                       </div>
-                      {i < STEP_LABELS.length - 1 && (
-                        <div className={cn("flex-1 h-px", isDone ? "bg-emerald-500/40" : "bg-border/50")} />
-                      )}
+                      {i < STEP_LABELS.length - 1 && <div className={cn("flex-1 h-px", isDone ? "bg-emerald-500/40" : "bg-border/50")} />}
                     </React.Fragment>
                   );
                 })}
               </div>
               <div className="space-y-1.5">
-                <div className="w-full h-2 bg-border/40 rounded-full overflow-hidden">
-                  <motion.div className="h-full bg-primary rounded-full" initial={{ width: "0%" }} animate={{ width: `${progressPct}%` }} transition={{ ease: "easeOut" }} />
-                </div>
-                <p className="text-xs text-muted-foreground min-h-[1.25rem]">
-                  {progress?.message ?? "Working..."}
-                  {(progress?.estRemainingSec ?? progress?.estimatedSecondsRemaining ?? 0) > 5
-                    ? ` · ~${Math.ceil((progress?.estRemainingSec ?? progress?.estimatedSecondsRemaining ?? 0) / 60)} min remaining`
-                    : ""}
-                </p>
+                <div className="w-full h-2 bg-border/40 rounded-full overflow-hidden"><motion.div className="h-full bg-primary rounded-full" initial={{ width: "0%" }} animate={{ width: `${progressPct}%` }} transition={{ ease: "easeOut" }} /></div>
+                <p className="text-xs text-muted-foreground min-h-[1.25rem]">{progress?.message ?? "Working..."}{(progress?.estRemainingSec ?? progress?.estimatedSecondsRemaining ?? 0) > 5 ? ` · ~${Math.ceil((progress?.estRemainingSec ?? progress?.estimatedSecondsRemaining ?? 0) / 60)} min remaining` : ""}</p>
               </div>
-              {progress?.phase === "error" && (
-                <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg p-3">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{progress.message}</span>
-                </div>
-              )}
+              {progress?.phase === "error" && <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg p-3"><AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /><span>{progress.message}</span></div>}
             </div>
           )}
-
           {!running && progress?.phase === "error" && currentStep === "idle" && (
-            <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg p-3">
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{progress.message}</span>
-            </div>
+            <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg p-3"><AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /><span>{progress.message}</span></div>
           )}
         </CardContent>
       </Card>
     </motion.div>
+  );
+}
+
+interface SymbolDiag { configured: string; instrumentFamily: string; activeSymbolFound: boolean; apiSymbol: string | null; displayName: string | null; marketType: string | null; streaming: boolean; lastTickTs: number | null; lastTickValue: number | null; tickCount5min: number; stale: boolean; error: string | null; }
+interface SymbolDiagResponse { summary: { total: number; valid: number; streaming: number; stale: number; errors: number }; symbols: SymbolDiag[]; }
+
+function SymbolDiagnosticsPanel() {
+  const [data, setData] = useState<SymbolDiagResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [revalidating, setRevalidating] = useState(false);
+  const base = import.meta.env.BASE_URL || "/";
+  const fetchDiag = async () => { setLoading(true); try { const r = await fetch(`${base}api/diagnostics/symbols`); if (r.ok) setData(await r.json()); } catch {} setLoading(false); };
+  const revalidate = async () => {
+    setRevalidating(true);
+    try { const r = await fetch(`${base}api/diagnostics/symbols/revalidate`, { method: "POST" }); if (r.ok) { const result = await r.json(); setData({ summary: { total: result.symbols.length, valid: result.symbols.filter((s: SymbolDiag) => s.activeSymbolFound).length, streaming: result.symbols.filter((s: SymbolDiag) => s.streaming).length, stale: result.symbols.filter((s: SymbolDiag) => s.stale).length, errors: result.symbols.filter((s: SymbolDiag) => s.error).length }, symbols: result.symbols }); } } catch {}
+    setRevalidating(false);
+  };
+  useEffect(() => { fetchDiag(); }, []);
+  const statusColor = (sym: SymbolDiag) => { if (sym.error && !sym.activeSymbolFound) return "text-red-500"; if (sym.stale) return "text-yellow-500"; if (sym.streaming) return "text-green-500"; return "text-muted-foreground"; };
+  const statusIcon = (sym: SymbolDiag) => { if (sym.error && !sym.activeSymbolFound) return <XCircle className="w-3.5 h-3.5" />; if (sym.stale) return <AlertTriangle className="w-3.5 h-3.5" />; if (sym.streaming) return <Wifi className="w-3.5 h-3.5" />; return <Clock className="w-3.5 h-3.5" />; };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Activity className="w-4 h-4" />Symbol Stream Health</CardTitle></CardHeader>
+        <CardContent>
+          {loading && !data ? <div className="flex items-center justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div> : data ? (
+            <>
+              <div className="grid grid-cols-5 gap-2 mb-4">
+                {[{ label: "Total", value: data.summary.total, color: "text-foreground" }, { label: "Valid", value: data.summary.valid, color: "text-emerald-500" }, { label: "Streaming", value: data.summary.streaming, color: "text-green-500" }, { label: "Stale", value: data.summary.stale, color: "text-yellow-500" }, { label: "Errors", value: data.summary.errors, color: "text-red-500" }].map(s => (
+                  <div key={s.label} className="text-center p-2 rounded-lg bg-muted/20 border border-border/30"><p className="text-[10px] text-muted-foreground uppercase">{s.label}</p><p className={cn("text-lg font-bold tabular-nums", s.color)}>{s.value}</p></div>
+                ))}
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead><tr className="border-b border-border/50 text-muted-foreground"><th className="text-left py-2 font-medium">Symbol</th><th className="text-left py-2 font-medium">Status</th><th className="text-right py-2 font-medium">Last Tick</th><th className="text-right py-2 font-medium">Price</th><th className="text-right py-2 font-medium">Ticks/5min</th></tr></thead>
+                  <tbody>
+                    {data.symbols.map(sym => (
+                      <tr key={sym.configured} className="border-b border-border/20 hover:bg-muted/10">
+                        <td className="py-2 font-medium text-foreground">{sym.displayName || sym.configured}</td>
+                        <td className="py-2"><span className={cn("flex items-center gap-1", statusColor(sym))}>{statusIcon(sym)}{sym.streaming ? "Live" : sym.stale ? "Stale" : sym.error ? "Error" : "Idle"}</span></td>
+                        <td className="py-2 text-right text-muted-foreground tabular-nums">{sym.lastTickTs ? new Date(sym.lastTickTs).toLocaleTimeString() : "—"}</td>
+                        <td className="py-2 text-right font-mono tabular-nums">{sym.lastTickValue?.toFixed(2) ?? "—"}</td>
+                        <td className="py-2 text-right tabular-nums">{sym.tickCount5min}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button onClick={fetchDiag} className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors">Refresh</button>
+                <button onClick={revalidate} disabled={revalidating} className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50">{revalidating ? "Revalidating..." : "Revalidate All"}</button>
+              </div>
+            </>
+          ) : <p className="text-sm text-muted-foreground">Unable to load diagnostics.</p>}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -862,512 +732,176 @@ const TABS: { key: TabKey; label: string; color: string }[] = [
   { key: "diagnostics", label: "Diagnostics", color: "primary" },
 ];
 
+const MODE_DESCRIPTIONS: Record<string, { title: string; desc: string; target: string; color: string }> = {
+  paper: { title: "Paper Mode — Aggressive Learner", desc: "Enters trades fast, holds long, deploys maximum capital. This is your testing ground for maximum learning and profit potential.", target: "Target: ~120% monthly return", color: "warning" },
+  demo: { title: "Demo Mode — Balanced Performer", desc: "Takes reasonable risks with moderate capital deployment. Shows you what sustainable high-return trading looks like.", target: "Target: ~80% monthly return", color: "primary" },
+  real: { title: "Real Mode — Conservative Fortress", desc: "Selective entries, careful position sizing, strict risk controls. Protects your real capital while still targeting strong returns.", target: "Target: ~50% monthly return", color: "destructive" },
+};
 
-
-interface SymbolDiag {
-  configured: string;
-  instrumentFamily: string;
-  activeSymbolFound: boolean;
-  apiSymbol: string | null;
-  displayName: string | null;
-  marketType: string | null;
-  streaming: boolean;
-  lastTickTs: number | null;
-  lastTickValue: number | null;
-  tickCount5min: number;
-  stale: boolean;
-  error: string | null;
-}
-
-interface SymbolDiagResponse {
-  summary: { total: number; valid: number; streaming: number; stale: number; errors: number };
-  symbols: SymbolDiag[];
-}
-
-function SymbolDiagnosticsPanel() {
-  const [data, setData] = useState<SymbolDiagResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [revalidating, setRevalidating] = useState(false);
-  const base = import.meta.env.BASE_URL || "/";
-
-  const fetchDiag = async () => {
-    setLoading(true);
-    try {
-      const r = await fetch(`${base}api/diagnostics/symbols`);
-      if (r.ok) setData(await r.json());
-    } catch {}
-    setLoading(false);
-  };
-
-  const revalidate = async () => {
-    setRevalidating(true);
-    try {
-      const r = await fetch(`${base}api/diagnostics/symbols/revalidate`, { method: "POST" });
-      if (r.ok) {
-        const result = await r.json();
-        setData({ summary: { total: result.symbols.length, valid: result.symbols.filter((s: SymbolDiag) => s.activeSymbolFound).length, streaming: result.symbols.filter((s: SymbolDiag) => s.streaming).length, stale: result.symbols.filter((s: SymbolDiag) => s.stale).length, errors: result.symbols.filter((s: SymbolDiag) => s.error).length }, symbols: result.symbols });
-      }
-    } catch {}
-    setRevalidating(false);
-  };
-
-  useEffect(() => { fetchDiag(); }, []);
-
-  const statusColor = (sym: SymbolDiag) => {
-    if (sym.error && !sym.activeSymbolFound) return "text-red-500";
-    if (sym.stale) return "text-yellow-500";
-    if (sym.streaming) return "text-green-500";
-    return "text-muted-foreground";
-  };
-
-  const statusIcon = (sym: SymbolDiag) => {
-    if (sym.error && !sym.activeSymbolFound) return <XCircle className="w-3.5 h-3.5" />;
-    if (sym.stale) return <AlertTriangle className="w-3.5 h-3.5" />;
-    if (sym.streaming) return <Wifi className="w-3.5 h-3.5" />;
-    return <Clock className="w-3.5 h-3.5" />;
-  };
-
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Wifi className="w-4 h-4" />
-            Symbol Stream Health
-            <div className="ml-auto flex gap-2">
-              <button onClick={fetchDiag} disabled={loading} className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50">
-                {loading ? "Loading..." : "Refresh"}
-              </button>
-              <button onClick={revalidate} disabled={revalidating} className="text-xs px-3 py-1.5 rounded-md border border-primary/30 text-primary hover:bg-primary/10 transition-colors disabled:opacity-50">
-                {revalidating ? "Revalidating..." : "Revalidate All"}
-              </button>
-            </div>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {data && (
-            <>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
-                <div className="p-3 rounded-lg bg-muted/30 border border-border/40 text-center">
-                  <p className="text-xs text-muted-foreground">Total</p>
-                  <p className="text-lg font-bold font-mono">{data.summary.total}</p>
-                </div>
-                <div className="p-3 rounded-lg bg-green-500/5 border border-green-500/20 text-center">
-                  <p className="text-xs text-muted-foreground">Valid</p>
-                  <p className="text-lg font-bold font-mono text-green-500">{data.summary.valid}</p>
-                </div>
-                <div className="p-3 rounded-lg bg-green-500/5 border border-green-500/20 text-center">
-                  <p className="text-xs text-muted-foreground">Streaming</p>
-                  <p className="text-lg font-bold font-mono text-green-500">{data.summary.streaming}</p>
-                </div>
-                <div className="p-3 rounded-lg bg-yellow-500/5 border border-yellow-500/20 text-center">
-                  <p className="text-xs text-muted-foreground">Stale</p>
-                  <p className="text-lg font-bold font-mono text-yellow-500">{data.summary.stale}</p>
-                </div>
-                <div className="p-3 rounded-lg bg-red-500/5 border border-red-500/20 text-center">
-                  <p className="text-xs text-muted-foreground">Errors</p>
-                  <p className="text-lg font-bold font-mono text-red-500">{data.summary.errors}</p>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border/50">
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Symbol</th>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Family</th>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Last Tick</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Price</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Ticks/5m</th>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Error</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.symbols.map(sym => (
-                      <tr key={sym.configured} className="border-b border-border/20 hover:bg-muted/20 transition-colors">
-                        <td className="py-2.5 px-3">
-                          <div>
-                            <span className="font-mono font-medium text-foreground">{sym.configured}</span>
-                            {sym.displayName && <span className="text-xs text-muted-foreground ml-2">{sym.displayName}</span>}
-                          </div>
-                        </td>
-                        <td className="py-2.5 px-3 text-xs text-muted-foreground capitalize">{sym.instrumentFamily}</td>
-                        <td className="py-2.5 px-3">
-                          <span className={cn("flex items-center gap-1.5 text-xs font-medium", statusColor(sym))}>
-                            {statusIcon(sym)}
-                            {sym.error && !sym.activeSymbolFound ? "Invalid" : sym.stale ? "Stale" : sym.streaming ? "Live" : "Idle"}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-right text-xs font-mono text-muted-foreground">
-                          {sym.lastTickTs ? new Date(sym.lastTickTs).toLocaleTimeString() : "—"}
-                        </td>
-                        <td className="py-2.5 px-3 text-right text-xs font-mono text-foreground">
-                          {sym.lastTickValue != null ? sym.lastTickValue.toFixed(2) : "—"}
-                        </td>
-                        <td className="py-2.5 px-3 text-right text-xs font-mono">
-                          <span className={sym.tickCount5min > 0 ? "text-green-500" : "text-muted-foreground"}>
-                            {sym.tickCount5min}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-xs text-red-400 max-w-[200px] truncate">
-                          {sym.error || "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-          {!data && !loading && (
-            <p className="text-sm text-muted-foreground text-center py-8">No diagnostics data available. Click Refresh to load.</p>
-          )}
-          {loading && !data && (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-6 h-6 animate-spin text-primary" />
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function ModeSettingsTab({
-  mode,
-  form,
-  update,
-  aiStatus,
-  isAiLocked,
-  getAiValue,
-  handleOverride,
-  handleRevertToAi,
-  onPaperReset,
-}: {
-  mode: "paper" | "demo" | "real";
-  form: Record<string, string>;
-  update: (key: string, value: string) => void;
-  aiStatus: AiStatus | null;
-  isAiLocked: (key: string) => boolean;
-  getAiValue: (key: string) => string | undefined;
-  handleOverride: (key: string, label: string) => void;
-  handleRevertToAi: (key: string) => void;
-  onPaperReset?: () => void;
+function ModeSettingsTab({ mode, form, update, suggestions, onApplySuggestion, unlockedSections, onUnlockSection, onSaveSection, saving, onPaperReset }: {
+  mode: "paper" | "demo" | "real"; form: Record<string, string>; update: (key: string, value: string) => void;
+  suggestions: AiSuggestions; onApplySuggestion: (key: string) => void;
+  unlockedSections: Set<string>; onUnlockSection: (section: string) => void;
+  onSaveSection: (keys: string[]) => void; saving: boolean; onPaperReset?: () => void;
 }) {
-  const prefix = mode;
-  const p = (key: string) => `${prefix}_${key}`;
+  const p = (key: string) => `${mode}_${key}`;
   const modeLabel = mode === "paper" ? "Paper" : mode === "demo" ? "Demo" : "Real";
-  const capitalKey = p("capital");
-  const capitalDefault = mode === "paper" ? "10000" : "600";
+  const defaults = V1_DEFAULTS[mode];
+  const d = (key: string) => defaults[key] || "0";
+  const modeInfo = MODE_DESCRIPTIONS[mode];
+
+  const isLocked = (section: string) => !unlockedSections.has(`${mode}_${section}`);
+  const handleUnlock = (section: string) => onUnlockSection(`${mode}_${section}`);
+
+  const suggestionCount = Object.keys(suggestions).filter(k => k.startsWith(`${mode}_`) && suggestions[k] !== form[k]).length;
 
   return (
     <div className="space-y-6">
-      <Card className={cn("border-2", aiStatus?.locked ? "border-emerald-500/30" : "border-border/50")}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Bot className="w-4 h-4 text-emerald-500" />
-            AI Parameter Status
-            {aiStatus?.locked && (
-              <span className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/30">
-                <Lock className="w-3 h-3" />
-                AI ACTIVE
-              </span>
+      <Card className={cn("border-2", `border-${modeInfo.color}/30`)}>
+        <CardContent className="pt-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <h3 className="text-base font-bold text-foreground">{modeInfo.title}</h3>
+              <p className="text-sm text-muted-foreground mt-1">{modeInfo.desc}</p>
+              <p className={cn("text-xs font-semibold mt-2", `text-${modeInfo.color}`)}>{modeInfo.target}</p>
+            </div>
+            {suggestionCount > 0 && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30">
+                <Bot className="w-3.5 h-3.5 text-emerald-500" />
+                <span className="text-xs font-semibold text-emerald-500">{suggestionCount} suggestions</span>
+              </div>
             )}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="p-3 rounded-lg bg-muted/30 border border-border/40">
-              <p className="text-xs text-muted-foreground mb-1">Last Optimised</p>
-              <p className="text-sm font-semibold text-foreground">
-                {aiStatus?.optimisedAt ? new Date(aiStatus.optimisedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—"}
-              </p>
-            </div>
-            <div className="p-3 rounded-lg bg-muted/30 border border-border/40">
-              <p className="text-xs text-muted-foreground mb-1">Next Scheduled</p>
-              <p className="text-sm font-semibold text-foreground">
-                {aiStatus?.nextScheduled ? new Date(aiStatus.nextScheduled).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "1st of next month"}
-              </p>
-            </div>
-            <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20">
-              <p className="text-xs text-muted-foreground mb-1">AI Locked</p>
-              <p className="text-sm font-semibold text-emerald-500">{aiStatus ? Object.keys(aiStatus.aiValues).length : 0} params</p>
-            </div>
-            <div className="p-3 rounded-lg bg-warning/5 border border-warning/20">
-              <p className="text-xs text-muted-foreground mb-1">Overridden</p>
-              <p className="text-sm font-semibold text-warning">{aiStatus?.overriddenKeys?.length ?? 0} params</p>
-            </div>
           </div>
         </CardContent>
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Crosshair className="w-4 h-4" />
-              Position Sizing
-            </CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Crosshair className="w-4 h-4" />Position Sizing</CardTitle></CardHeader>
           <CardContent>
-            <SettingField label={`${modeLabel} Capital`} description={`Starting capital for ${modeLabel} mode`} value={form[capitalKey] || capitalDefault} onChange={(v) => update(capitalKey, v)} suffix="$" min={100} step={100} />
-            <SettingField
-              label="Equity % Per Trade"
-              description={`Percentage of capital risked per trade in ${modeLabel} mode`}
-              value={form[p("equity_pct_per_trade")] || (mode === "paper" ? "13" : "22")}
-              onChange={(v) => update(p("equity_pct_per_trade"), v)}
-              suffix="%"
-              min={0.1}
-              max={25}
-              step={0.5}
-              aiLocked={isAiLocked(p("equity_pct_per_trade"))}
-              aiValue={getAiValue(p("equity_pct_per_trade"))}
-              aiSuggestion={aiStatus?.aiSuggestions?.[p("equity_pct_per_trade")]}
-              onOverride={() => handleOverride(p("equity_pct_per_trade"), `${modeLabel} Equity %`)}
-              onRevert={aiStatus?.aiSuggestions?.[p("equity_pct_per_trade")] !== undefined ? () => handleRevertToAi(p("equity_pct_per_trade")) : undefined}
-            />
-            <SettingField label="Max Simultaneous Trades" description={`Maximum open positions in ${modeLabel} mode`} value={form[p("max_open_trades")] || (mode === "paper" ? "4" : "3")} onChange={(v) => update(p("max_open_trades"), v)} step={1} min={1} max={20} />
-            <SettingField
-              label="Allocation Mode"
-              description="How aggressively capital is deployed"
-              value={form[p("allocation_mode")] || form.allocation_mode || "balanced"}
-              onChange={(v) => update(p("allocation_mode"), v)}
-              type="select"
-              options={[
-                { value: "conservative", label: "Conservative" },
-                { value: "balanced", label: "Balanced" },
-                { value: "aggressive", label: "Aggressive" },
-              ]}
-            />
+            <SettingField label={`${modeLabel} Capital`} description={`Starting capital for ${modeLabel} mode`} value={form[p("capital")] || d("capital")} onChange={(v) => update(p("capital"), v)} suffix="$" min={100} step={100} locked={isLocked("position")} onUnlock={() => handleUnlock("position")} aiSuggestion={suggestions[p("capital")]} onApplySuggestion={() => onApplySuggestion(p("capital"))} />
+            <SettingField label="Equity % Per Trade" description={`Percentage of capital risked per trade`} value={form[p("equity_pct_per_trade")] || d("equity_pct_per_trade")} onChange={(v) => update(p("equity_pct_per_trade"), v)} suffix="%" min={1} max={50} step={1} locked={isLocked("position")} onUnlock={() => handleUnlock("position")} aiSuggestion={suggestions[p("equity_pct_per_trade")]} onApplySuggestion={() => onApplySuggestion(p("equity_pct_per_trade"))} />
+            <SettingField label="Max Simultaneous Trades" description={`Maximum open positions`} value={form[p("max_open_trades")] || d("max_open_trades")} onChange={(v) => update(p("max_open_trades"), v)} step={1} min={1} max={10} locked={isLocked("position")} onUnlock={() => handleUnlock("position")} aiSuggestion={suggestions[p("max_open_trades")]} onApplySuggestion={() => onApplySuggestion(p("max_open_trades"))} />
+            <SettingField label="Allocation Mode" description="How aggressively capital is deployed" value={form[p("allocation_mode")] || d("allocation_mode")} onChange={(v) => update(p("allocation_mode"), v)} type="select" options={[{ value: "conservative", label: "Conservative" }, { value: "balanced", label: "Balanced" }, { value: "aggressive", label: "Aggressive" }]} locked={isLocked("position")} onUnlock={() => handleUnlock("position")} />
+            {!isLocked("position") && <SectionSaveButton sectionKeys={[p("capital"), p("equity_pct_per_trade"), p("max_open_trades"), p("allocation_mode")]} form={form} saving={saving} onSave={onSaveSection} />}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" />
-              Take Profit & Stop Loss
-            </CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><TrendingUp className="w-4 h-4" />Take Profit & Stop Loss</CardTitle></CardHeader>
           <CardContent>
-            <SettingField
-              label="TP Multiplier — Strong"
-              description="For composite >= 92"
-              value={form[p("tp_multiplier_strong")] || form.tp_multiplier_strong || "2.5"}
-              onChange={(v) => update(p("tp_multiplier_strong"), v)}
-              suffix="x" min={0.5} max={10} step={0.1}
-              aiLocked={isAiLocked(p("tp_multiplier_strong"))}
-              aiValue={getAiValue(p("tp_multiplier_strong"))}
-              aiSuggestion={aiStatus?.aiSuggestions?.[p("tp_multiplier_strong")]}
-              onOverride={() => handleOverride(p("tp_multiplier_strong"), `${modeLabel} TP Strong`)}
-              onRevert={aiStatus?.aiSuggestions?.[p("tp_multiplier_strong")] !== undefined ? () => handleRevertToAi(p("tp_multiplier_strong")) : undefined}
-            />
-            <SettingField
-              label="TP Multiplier — Medium"
-              description="For composite 85-92"
-              value={form[p("tp_multiplier_medium")] || form.tp_multiplier_medium || "2.0"}
-              onChange={(v) => update(p("tp_multiplier_medium"), v)}
-              suffix="x" min={0.5} max={10} step={0.1}
-              aiLocked={isAiLocked(p("tp_multiplier_medium"))}
-              aiValue={getAiValue(p("tp_multiplier_medium"))}
-              aiSuggestion={aiStatus?.aiSuggestions?.[p("tp_multiplier_medium")]}
-              onOverride={() => handleOverride(p("tp_multiplier_medium"), `${modeLabel} TP Medium`)}
-              onRevert={aiStatus?.aiSuggestions?.[p("tp_multiplier_medium")] !== undefined ? () => handleRevertToAi(p("tp_multiplier_medium")) : undefined}
-            />
-            <SettingField
-              label="TP Multiplier — Weak"
-              description="For composite < 85"
-              value={form[p("tp_multiplier_weak")] || form.tp_multiplier_weak || "1.5"}
-              onChange={(v) => update(p("tp_multiplier_weak"), v)}
-              suffix="x" min={0.5} max={10} step={0.1}
-              aiLocked={isAiLocked(p("tp_multiplier_weak"))}
-              aiValue={getAiValue(p("tp_multiplier_weak"))}
-              aiSuggestion={aiStatus?.aiSuggestions?.[p("tp_multiplier_weak")]}
-              onOverride={() => handleOverride(p("tp_multiplier_weak"), `${modeLabel} TP Weak`)}
-              onRevert={aiStatus?.aiSuggestions?.[p("tp_multiplier_weak")] !== undefined ? () => handleRevertToAi(p("tp_multiplier_weak")) : undefined}
-            />
-            <SettingField
-              label="Stop Loss Ratio"
-              description="SL distance as ratio of TP distance"
-              value={form[p("sl_ratio")] || form.sl_ratio || "1.0"}
-              onChange={(v) => update(p("sl_ratio"), v)}
-              suffix="x" min={0.1} max={5} step={0.1}
-              aiLocked={isAiLocked(p("sl_ratio"))}
-              aiValue={getAiValue(p("sl_ratio"))}
-              aiSuggestion={aiStatus?.aiSuggestions?.[p("sl_ratio")]}
-              onOverride={() => handleOverride(p("sl_ratio"), `${modeLabel} SL Ratio`)}
-              onRevert={aiStatus?.aiSuggestions?.[p("sl_ratio")] !== undefined ? () => handleRevertToAi(p("sl_ratio")) : undefined}
-            />
-            <SettingField
-              label="Trailing Stop %"
-              description="SL trails this % behind the highest point reached"
-              value={form[p("trailing_stop_pct")] || form.trailing_stop_pct || "25"}
-              onChange={(v) => update(p("trailing_stop_pct"), v)}
-              suffix="%" min={1} max={50} step={1}
-              aiLocked={isAiLocked(p("trailing_stop_pct"))}
-              aiValue={getAiValue(p("trailing_stop_pct"))}
-              aiSuggestion={aiStatus?.aiSuggestions?.[p("trailing_stop_pct")]}
-              onOverride={() => handleOverride(p("trailing_stop_pct"), `${modeLabel} Trailing Stop`)}
-              onRevert={aiStatus?.aiSuggestions?.[p("trailing_stop_pct")] !== undefined ? () => handleRevertToAi(p("trailing_stop_pct")) : undefined}
-            />
+            <SettingField label="TP Multiplier — Strong" description="For high confidence signals (>= 75%)" value={form[p("tp_multiplier_strong")] || d("tp_multiplier_strong")} onChange={(v) => update(p("tp_multiplier_strong"), v)} suffix="x" min={0.5} max={10} step={0.1} locked={isLocked("tpsl")} onUnlock={() => handleUnlock("tpsl")} aiSuggestion={suggestions[p("tp_multiplier_strong")]} onApplySuggestion={() => onApplySuggestion(p("tp_multiplier_strong"))} />
+            <SettingField label="TP Multiplier — Medium" description="For moderate confidence signals (65-75%)" value={form[p("tp_multiplier_medium")] || d("tp_multiplier_medium")} onChange={(v) => update(p("tp_multiplier_medium"), v)} suffix="x" min={0.5} max={10} step={0.1} locked={isLocked("tpsl")} onUnlock={() => handleUnlock("tpsl")} aiSuggestion={suggestions[p("tp_multiplier_medium")]} onApplySuggestion={() => onApplySuggestion(p("tp_multiplier_medium"))} />
+            <SettingField label="TP Multiplier — Weak" description="For lower confidence signals (< 65%)" value={form[p("tp_multiplier_weak")] || d("tp_multiplier_weak")} onChange={(v) => update(p("tp_multiplier_weak"), v)} suffix="x" min={0.5} max={10} step={0.1} locked={isLocked("tpsl")} onUnlock={() => handleUnlock("tpsl")} aiSuggestion={suggestions[p("tp_multiplier_weak")]} onApplySuggestion={() => onApplySuggestion(p("tp_multiplier_weak"))} />
+            <SettingField label="SL Ratio" description="Stop loss distance as ratio of TP distance" value={form[p("sl_ratio")] || d("sl_ratio")} onChange={(v) => update(p("sl_ratio"), v)} suffix="x" min={0.1} max={5} step={0.1} locked={isLocked("tpsl")} onUnlock={() => handleUnlock("tpsl")} aiSuggestion={suggestions[p("sl_ratio")]} onApplySuggestion={() => onApplySuggestion(p("sl_ratio"))} />
+            <SettingField label="TP Capture Ratio" description="TP set at this % of predicted move distance" value={form[p("tp_capture_ratio")] || d("tp_capture_ratio")} onChange={(v) => update(p("tp_capture_ratio"), v)} suffix="x" min={0.3} max={1.0} step={0.05} locked={isLocked("tpsl")} onUnlock={() => handleUnlock("tpsl")} aiSuggestion={suggestions[p("tp_capture_ratio")]} onApplySuggestion={() => onApplySuggestion(p("tp_capture_ratio"))} />
+            <SettingField label="Min SL ATR Multiplier" description="Minimum SL distance to survive market noise" value={form[p("min_sl_atr_multiplier")] || d("min_sl_atr_multiplier")} onChange={(v) => update(p("min_sl_atr_multiplier"), v)} suffix="x" min={1} max={10} step={0.5} locked={isLocked("tpsl")} onUnlock={() => handleUnlock("tpsl")} aiSuggestion={suggestions[p("min_sl_atr_multiplier")]} onApplySuggestion={() => onApplySuggestion(p("min_sl_atr_multiplier"))} />
+            <SettingField label="Trailing Stop %" description="SL trails this % behind the highest point reached" value={form[p("trailing_stop_pct")] || d("trailing_stop_pct")} onChange={(v) => update(p("trailing_stop_pct"), v)} suffix="%" min={1} max={50} step={1} locked={isLocked("tpsl")} onUnlock={() => handleUnlock("tpsl")} aiSuggestion={suggestions[p("trailing_stop_pct")]} onApplySuggestion={() => onApplySuggestion(p("trailing_stop_pct"))} />
+            {!isLocked("tpsl") && <SectionSaveButton sectionKeys={[p("tp_multiplier_strong"), p("tp_multiplier_medium"), p("tp_multiplier_weak"), p("sl_ratio"), p("tp_capture_ratio"), p("min_sl_atr_multiplier"), p("trailing_stop_pct")]} form={form} saving={saving} onSave={onSaveSection} />}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Shield className="w-4 h-4" />
-              Risk Controls
-            </CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Target className="w-4 h-4" />Entry Thresholds</CardTitle></CardHeader>
           <CardContent>
-            <SettingField label="Max Daily Loss" description={`Trading halts for the day in ${modeLabel} mode`} value={form[p("max_daily_loss_pct")] || (mode === "paper" ? "5" : "3")} onChange={(v) => update(p("max_daily_loss_pct"), v)} suffix="%" min={0.5} max={25} step={0.5} />
-            <SettingField label="Max Weekly Loss" description={`Trading halts for the week in ${modeLabel} mode`} value={form[p("max_weekly_loss_pct")] || (mode === "paper" ? "12" : "8")} onChange={(v) => update(p("max_weekly_loss_pct"), v)} suffix="%" min={1} max={50} step={0.5} />
-            <SettingField label="Max Drawdown" description={`Kill switch triggers at this drawdown`} value={form[p("max_drawdown_pct")] || (mode === "paper" ? "20" : "15")} onChange={(v) => update(p("max_drawdown_pct"), v)} suffix="%" min={1} max={50} step={1} />
+            <p className="text-xs text-muted-foreground mb-3">Minimum composite scores required to enter each position building stage.</p>
+            <SettingField label="Probe Threshold" description="Score needed to open first trade on a symbol" value={form[p("probe_threshold")] || d("probe_threshold")} onChange={(v) => update(p("probe_threshold"), v)} min={50} max={100} step={1} locked={isLocked("entry")} onUnlock={() => handleUnlock("entry")} aiSuggestion={suggestions[p("probe_threshold")]} onApplySuggestion={() => onApplySuggestion(p("probe_threshold"))} />
+            <SettingField label="Confirmation Threshold" description="Score needed to add 2nd position on same symbol" value={form[p("confirmation_threshold")] || d("confirmation_threshold")} onChange={(v) => update(p("confirmation_threshold"), v)} min={50} max={100} step={1} locked={isLocked("entry")} onUnlock={() => handleUnlock("entry")} aiSuggestion={suggestions[p("confirmation_threshold")]} onApplySuggestion={() => onApplySuggestion(p("confirmation_threshold"))} />
+            <SettingField label="Momentum Threshold" description="Score needed to add 3rd position on same symbol" value={form[p("momentum_threshold")] || d("momentum_threshold")} onChange={(v) => update(p("momentum_threshold"), v)} min={50} max={100} step={1} locked={isLocked("entry")} onUnlock={() => handleUnlock("entry")} aiSuggestion={suggestions[p("momentum_threshold")]} onApplySuggestion={() => onApplySuggestion(p("momentum_threshold"))} />
+            {!isLocked("entry") && <SectionSaveButton sectionKeys={[p("probe_threshold"), p("confirmation_threshold"), p("momentum_threshold")]} form={form} saving={saving} onSave={onSaveSection} />}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Clock className="w-4 h-4" />
-              Timing & Execution
-            </CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Layers className="w-4 h-4" />Stage Multipliers</CardTitle></CardHeader>
           <CardContent>
-            <SettingField
-              label="Time Exit Window"
-              description="Auto-close positions after this duration"
-              value={form[p("time_exit_window_hours")] || form.time_exit_window_hours || "72"}
-              onChange={(v) => update(p("time_exit_window_hours"), v)}
-              suffix="hrs" min={1} max={120} step={0.5}
-              aiLocked={isAiLocked(p("time_exit_window_hours"))}
-              aiValue={getAiValue(p("time_exit_window_hours"))}
-              aiSuggestion={aiStatus?.aiSuggestions?.[p("time_exit_window_hours")]}
-              onOverride={() => handleOverride(p("time_exit_window_hours"), `${modeLabel} Time Exit`)}
-              onRevert={aiStatus?.aiSuggestions?.[p("time_exit_window_hours")] !== undefined ? () => handleRevertToAi(p("time_exit_window_hours")) : undefined}
-            />
+            <p className="text-xs text-muted-foreground mb-3">Position size multiplier for each entry stage. Higher = bigger position.</p>
+            <SettingField label="Probe Multiplier" description="Size factor for 1st position" value={form[p("stage_multiplier_probe")] || d("stage_multiplier_probe")} onChange={(v) => update(p("stage_multiplier_probe"), v)} suffix="x" min={0.1} max={2} step={0.05} locked={isLocked("stage")} onUnlock={() => handleUnlock("stage")} aiSuggestion={suggestions[p("stage_multiplier_probe")]} onApplySuggestion={() => onApplySuggestion(p("stage_multiplier_probe"))} />
+            <SettingField label="Confirmation Multiplier" description="Size factor for 2nd position" value={form[p("stage_multiplier_confirmation")] || d("stage_multiplier_confirmation")} onChange={(v) => update(p("stage_multiplier_confirmation"), v)} suffix="x" min={0.1} max={2} step={0.05} locked={isLocked("stage")} onUnlock={() => handleUnlock("stage")} aiSuggestion={suggestions[p("stage_multiplier_confirmation")]} onApplySuggestion={() => onApplySuggestion(p("stage_multiplier_confirmation"))} />
+            <SettingField label="Momentum Multiplier" description="Size factor for 3rd position" value={form[p("stage_multiplier_momentum")] || d("stage_multiplier_momentum")} onChange={(v) => update(p("stage_multiplier_momentum"), v)} suffix="x" min={0.1} max={2} step={0.05} locked={isLocked("stage")} onUnlock={() => handleUnlock("stage")} aiSuggestion={suggestions[p("stage_multiplier_momentum")]} onApplySuggestion={() => onApplySuggestion(p("stage_multiplier_momentum"))} />
+            {!isLocked("stage") && <SectionSaveButton sectionKeys={[p("stage_multiplier_probe"), p("stage_multiplier_confirmation"), p("stage_multiplier_momentum")]} form={form} saving={saving} onSave={onSaveSection} />}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Download className="w-4 h-4" />
-              Capital Extraction
-            </CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />Risk Controls</CardTitle></CardHeader>
           <CardContent>
-            <p className="text-xs text-muted-foreground mb-3">
-              When capital grows by the target %, extract profits and reset to starting capital for the next cycle.
-            </p>
-            <SettingField
-              label="Extraction Target"
-              description="Extract profits when capital grows by this %"
-              value={form[p("extraction_target_pct")] || "50"}
-              onChange={(v) => update(p("extraction_target_pct"), v)}
-              suffix="%" min={10} max={200} step={5}
-            />
-            <SettingField
-              label="Auto-Extract"
-              description="Automatically extract when target is reached"
-              value={form[p("auto_extraction")] || "false"}
-              onChange={(v) => update(p("auto_extraction"), v)}
-              type="toggle"
-            />
+            <SettingField label="Max Daily Loss" description={`Trading halts for the day`} value={form[p("max_daily_loss_pct")] || d("max_daily_loss_pct")} onChange={(v) => update(p("max_daily_loss_pct"), v)} suffix="%" min={0.5} max={25} step={0.5} locked={isLocked("risk")} onUnlock={() => handleUnlock("risk")} aiSuggestion={suggestions[p("max_daily_loss_pct")]} onApplySuggestion={() => onApplySuggestion(p("max_daily_loss_pct"))} />
+            <SettingField label="Max Weekly Loss" description={`Trading halts for the week`} value={form[p("max_weekly_loss_pct")] || d("max_weekly_loss_pct")} onChange={(v) => update(p("max_weekly_loss_pct"), v)} suffix="%" min={1} max={50} step={0.5} locked={isLocked("risk")} onUnlock={() => handleUnlock("risk")} aiSuggestion={suggestions[p("max_weekly_loss_pct")]} onApplySuggestion={() => onApplySuggestion(p("max_weekly_loss_pct"))} />
+            <SettingField label="Max Drawdown" description={`Kill switch triggers at this drawdown`} value={form[p("max_drawdown_pct")] || d("max_drawdown_pct")} onChange={(v) => update(p("max_drawdown_pct"), v)} suffix="%" min={1} max={50} step={1} locked={isLocked("risk")} onUnlock={() => handleUnlock("risk")} aiSuggestion={suggestions[p("max_drawdown_pct")]} onApplySuggestion={() => onApplySuggestion(p("max_drawdown_pct"))} />
+            {!isLocked("risk") && <SectionSaveButton sectionKeys={[p("max_daily_loss_pct"), p("max_weekly_loss_pct"), p("max_drawdown_pct")]} form={form} saving={saving} onSave={onSaveSection} />}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" />
-              Profit Harvesting
-            </CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Clock className="w-4 h-4" />Timing & Execution</CardTitle></CardHeader>
           <CardContent>
-            <p className="text-xs text-muted-foreground mb-3">
-              Close winning trades when they pull back too far from their peak profit.
-            </p>
-            <SettingField
-              label="Peak Drawdown Exit"
-              description="Close trade if profit drops this % from its peak"
-              value={form[p("peak_drawdown_exit_pct")] || "30"}
-              onChange={(v) => update(p("peak_drawdown_exit_pct"), v)}
-              suffix="%" min={5} max={80} step={5}
-            />
-            <SettingField
-              label="Min Peak Profit"
-              description="Harvesting only activates after this % profit is reached"
-              value={form[p("min_peak_profit_pct")] || "3"}
-              onChange={(v) => update(p("min_peak_profit_pct"), v)}
-              suffix="%" min={0.5} max={20} step={0.5}
-            />
-            <SettingField
-              label="Large Peak Threshold"
-              description="At this profit level, use a tighter drawdown exit (60% of normal)"
-              value={form[p("large_peak_threshold_pct")] || "8"}
-              onChange={(v) => update(p("large_peak_threshold_pct"), v)}
-              suffix="%" min={2} max={30} step={1}
-            />
+            <SettingField label="Time Exit Window" description="Fallback auto-close window" value={form[p("time_exit_window_hours")] || d("time_exit_window_hours")} onChange={(v) => update(p("time_exit_window_hours"), v)} suffix="hrs" min={1} max={720} step={1} locked={isLocked("timing")} onUnlock={() => handleUnlock("timing")} aiSuggestion={suggestions[p("time_exit_window_hours")]} onApplySuggestion={() => onApplySuggestion(p("time_exit_window_hours"))} />
+            {!isLocked("timing") && <SectionSaveButton sectionKeys={[p("time_exit_window_hours")]} form={form} saving={saving} onSave={onSaveSection} />}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Shield className="w-4 h-4" />
-              Correlation Controls
-            </CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Download className="w-4 h-4" />Capital Extraction</CardTitle></CardHeader>
           <CardContent>
-            <SettingField
-              label="Correlated Family Cap"
-              description="Max simultaneous trades in the same instrument family (e.g. all Boom symbols)"
-              value={form[p("correlated_family_cap")] || "3"}
-              onChange={(v) => update(p("correlated_family_cap"), v)}
-              min={1} max={6} step={1}
-            />
+            <p className="text-xs text-muted-foreground mb-3">When capital grows by the target %, extract profits and reset to starting capital.</p>
+            <SettingField label="Extraction Target" description="Extract profits when capital grows by this %" value={form[p("extraction_target_pct")] || d("extraction_target_pct")} onChange={(v) => update(p("extraction_target_pct"), v)} suffix="%" min={10} max={200} step={5} locked={isLocked("extraction")} onUnlock={() => handleUnlock("extraction")} aiSuggestion={suggestions[p("extraction_target_pct")]} onApplySuggestion={() => onApplySuggestion(p("extraction_target_pct"))} />
+            <SettingField label="Auto-Extract" description="Automatically extract when target is reached" value={form[p("auto_extraction")] || d("auto_extraction")} onChange={(v) => update(p("auto_extraction"), v)} type="toggle" locked={isLocked("extraction")} onUnlock={() => handleUnlock("extraction")} />
+            {!isLocked("extraction") && <SectionSaveButton sectionKeys={[p("extraction_target_pct"), p("auto_extraction")]} form={form} saving={saving} onSave={onSaveSection} />}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><TrendingUp className="w-4 h-4" />Profit Harvesting</CardTitle></CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground mb-3">Close winning trades when they pull back too far from their peak profit.</p>
+            <SettingField label="Peak Drawdown Exit" description="Close trade if profit drops this % from its peak" value={form[p("peak_drawdown_exit_pct")] || d("peak_drawdown_exit_pct")} onChange={(v) => update(p("peak_drawdown_exit_pct"), v)} suffix="%" min={5} max={80} step={5} locked={isLocked("harvest")} onUnlock={() => handleUnlock("harvest")} aiSuggestion={suggestions[p("peak_drawdown_exit_pct")]} onApplySuggestion={() => onApplySuggestion(p("peak_drawdown_exit_pct"))} />
+            <SettingField label="Min Peak Profit" description="Harvesting only activates after this % profit" value={form[p("min_peak_profit_pct")] || d("min_peak_profit_pct")} onChange={(v) => update(p("min_peak_profit_pct"), v)} suffix="%" min={0.5} max={20} step={0.5} locked={isLocked("harvest")} onUnlock={() => handleUnlock("harvest")} aiSuggestion={suggestions[p("min_peak_profit_pct")]} onApplySuggestion={() => onApplySuggestion(p("min_peak_profit_pct"))} />
+            <SettingField label="Large Peak Threshold" description="At this profit level, use a tighter drawdown exit (60% of normal)" value={form[p("large_peak_threshold_pct")] || d("large_peak_threshold_pct")} onChange={(v) => update(p("large_peak_threshold_pct"), v)} suffix="%" min={2} max={30} step={1} locked={isLocked("harvest")} onUnlock={() => handleUnlock("harvest")} aiSuggestion={suggestions[p("large_peak_threshold_pct")]} onApplySuggestion={() => onApplySuggestion(p("large_peak_threshold_pct"))} />
+            {!isLocked("harvest") && <SectionSaveButton sectionKeys={[p("peak_drawdown_exit_pct"), p("min_peak_profit_pct"), p("large_peak_threshold_pct")]} form={form} saving={saving} onSave={onSaveSection} />}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />Correlation Controls</CardTitle></CardHeader>
+          <CardContent>
+            <SettingField label="Correlated Family Cap" description="Max simultaneous trades in the same instrument family" value={form[p("correlated_family_cap")] || d("correlated_family_cap")} onChange={(v) => update(p("correlated_family_cap"), v)} min={1} max={6} step={1} locked={isLocked("correlation")} onUnlock={() => handleUnlock("correlation")} aiSuggestion={suggestions[p("correlated_family_cap")]} onApplySuggestion={() => onApplySuggestion(p("correlated_family_cap"))} />
+            {!isLocked("correlation") && <SectionSaveButton sectionKeys={[p("correlated_family_cap")]} form={form} saving={saving} onSave={onSaveSection} />}
           </CardContent>
         </Card>
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Crosshair className="w-4 h-4" />
-            Instruments
-          </CardTitle>
-        </CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="w-4 h-4" />Strategy Family Profiles</CardTitle></CardHeader>
         <CardContent>
-          <p className="text-xs text-muted-foreground mb-3">Select which synthetic indices {modeLabel} mode will scan and trade.</p>
-          <InstrumentsPicker
-            enabledSymbols={form[p("enabled_symbols")] || form.enabled_symbols || ""}
-            onChange={(v) => update(p("enabled_symbols"), v)}
-          />
+          <p className="text-xs text-muted-foreground mb-3">Per-family execution parameters: TP/SL distances, hold times, and harvest sensitivity.</p>
+          <div className="space-y-2">
+            {STRATEGY_FAMILIES.map(fam => (
+              <FamilyProfileSection key={fam.key} mode={mode} familyKey={fam.key} familyLabel={fam.label} form={form} update={update} locked={isLocked("family")} onUnlock={() => handleUnlock("family")} suggestions={suggestions} onApplySuggestion={onApplySuggestion} />
+            ))}
+          </div>
+          {!isLocked("family") && (
+            <SectionSaveButton
+              sectionKeys={STRATEGY_FAMILIES.flatMap(fam => ["tp_atr_multiplier", "sl_atr_multiplier", "initial_exit_hours", "extension_hours", "max_exit_hours", "harvest_sensitivity"].map(k => `${mode}_${fam.key}_${k}`))}
+              form={form} saving={saving} onSave={onSaveSection}
+            />
+          )}
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <BarChart3 className="w-4 h-4" />
-            Strategies
-            {mode === "real" && form.ai_recommended_strategies && (
-              <span className="ml-auto text-xs text-emerald-500 font-medium">AI recommended</span>
-            )}
-          </CardTitle>
-        </CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-2"><Crosshair className="w-4 h-4" />Instruments</CardTitle></CardHeader>
         <CardContent>
-          <p className="text-xs text-muted-foreground mb-3">
-            Enable or disable strategies for {modeLabel} mode.
-            {mode === "real" && " AI recommends the top-performing strategy/instrument combinations for Real mode."}
-          </p>
-          <StrategyFamilySelector
-            enabledStrategies={form[p("enabled_strategies")] ?? STRATEGY_FAMILIES.map(f => f.key).join(",")}
-            onChange={(v) => update(p("enabled_strategies"), v)}
-          />
+          <p className="text-xs text-muted-foreground mb-3">Select which synthetic indices {modeLabel} mode will scan and trade.</p>
+          <InstrumentsPicker enabledSymbols={form[p("enabled_symbols")] || form.enabled_symbols || ""} onChange={(v) => update(p("enabled_symbols"), v)} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="w-4 h-4" />Strategies</CardTitle></CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground mb-3">Enable or disable strategies for {modeLabel} mode.</p>
+          <StrategyFamilySelector enabledStrategies={form[p("enabled_strategies")] ?? STRATEGY_FAMILIES.map(f => f.key).join(",")} onChange={(v) => update(p("enabled_strategies"), v)} />
         </CardContent>
       </Card>
 
@@ -1379,12 +913,8 @@ function ModeSettingsTab({
                 <p className="text-sm font-medium text-foreground">Reset Paper Trading</p>
                 <p className="text-xs text-muted-foreground mt-0.5">Delete all paper trades and reset capital to configured starting amount</p>
               </div>
-              <button
-                onClick={onPaperReset}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-warning/50 text-warning text-sm font-medium hover:bg-warning/10 transition-all"
-              >
-                <Trash2 className="w-4 h-4" />
-                Reset Paper
+              <button onClick={onPaperReset} className="flex items-center gap-2 px-4 py-2 rounded-lg border border-warning/50 text-warning text-sm font-medium hover:bg-warning/10 transition-all">
+                <Trash2 className="w-4 h-4" />Reset Paper
               </button>
             </div>
           </CardContent>
@@ -1401,7 +931,6 @@ export default function Settings() {
   const { data: accountInfo } = useGetAccountInfo({ query: { refetchInterval: 30000 } });
 
   const [form, setForm] = useState<Record<string, string>>({});
-  const [hasChanges, setHasChanges] = useState(false);
   const [showLiveConfirm, setShowLiveConfirm] = useState(false);
   const [showPaperReset, setShowPaperReset] = useState(false);
   const [showFactoryReset, setShowFactoryReset] = useState(false);
@@ -1409,21 +938,23 @@ export default function Settings() {
   const [aiHealth, setAiHealth] = useState<{ configured: boolean; working: boolean; error?: string } | null>(null);
   const [aiHealthLoading, setAiHealthLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>("general");
+  const [saving, setSaving] = useState(false);
 
-  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
-  const [overrideKey, setOverrideKey] = useState<string | null>(null);
-  const [overrideLabel, setOverrideLabel] = useState<string>("");
+  const [suggestions, setSuggestions] = useState<AiSuggestions>({});
+  const [unlockedSections, setUnlockedSections] = useState<Set<string>>(new Set());
+  const [unlockTarget, setUnlockTarget] = useState<string | null>(null);
 
-  const fetchAiStatus = async () => {
+  const base = import.meta.env.BASE_URL || "/";
+
+  const fetchSuggestions = useCallback(async () => {
     try {
-      const base = import.meta.env.BASE_URL || "/";
       const resp = await fetch(`${base}api/settings/ai-status`);
       if (resp.ok) {
         const data = await resp.json();
-        setAiStatus(data);
+        setSuggestions(data.aiSuggestions || {});
       }
-    } catch { /* ignore */ }
-  };
+    } catch {}
+  }, [base]);
 
   useEffect(() => {
     if (settings) {
@@ -1432,90 +963,77 @@ export default function Settings() {
         if (v != null) mapped[k] = String(v);
       }
       setForm(mapped);
-      setHasChanges(false);
     }
   }, [settings]);
 
-  useEffect(() => { fetchAiStatus(); }, []);
+  useEffect(() => { fetchSuggestions(); }, [fetchSuggestions]);
 
-  const handleRevertToAi = async (key: string) => {
+  const handleUnlockSection = (section: string) => {
+    setUnlockTarget(section);
+  };
+
+  const confirmUnlock = () => {
+    if (unlockTarget) {
+      setUnlockedSections(prev => new Set([...prev, unlockTarget]));
+      setUnlockTarget(null);
+    }
+  };
+
+  const handleApplySuggestion = async (key: string) => {
     try {
-      const base = import.meta.env.BASE_URL || "/";
-      await fetch(`${base}api/settings/ai-revert`, {
+      const resp = await fetch(`${base}api/settings/ai-apply-suggestion`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key }),
       });
-      await fetchAiStatus();
-      queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
-      toast({ title: "Reverted to AI suggestion", description: `${key.replace(/_/g, " ")} restored.` });
+      if (resp.ok) {
+        const data = await resp.json();
+        setForm(prev => ({ ...prev, [key]: data.value }));
+        toast({ title: "Suggestion applied", description: `${key.replace(/_/g, " ")} updated to ${data.value}` });
+        queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
+        fetchSuggestions();
+      }
     } catch {
-      toast({ title: "Revert failed", variant: "destructive" });
+      toast({ title: "Failed to apply suggestion", variant: "destructive" });
     }
   };
 
-  const isAiLocked = (key: string): boolean => {
-    if (!aiStatus?.locked) return false;
-    if (aiStatus.aiValues[key] !== undefined) return true;
-    const base = key.replace(/^(paper|demo|real)_/, "");
-    if (base !== key && aiStatus.aiValues[base] !== undefined) return true;
-    return false;
-  };
-
-  const getAiValue = (key: string): string | undefined => {
-    if (aiStatus?.aiValues[key] !== undefined) return aiStatus.aiValues[key];
-    const base = key.replace(/^(paper|demo|real)_/, "");
-    if (base !== key) return aiStatus?.aiValues[base];
-    return undefined;
-  };
-
-  const handleOverride = (key: string, label: string) => {
-    setOverrideKey(key);
-    setOverrideLabel(label);
-  };
-
-  const confirmOverride = async () => {
-    if (!overrideKey) return;
-    const key = overrideKey;
-    setOverrideKey(null);
+  const handleSaveSection = async (keys: string[]) => {
+    setSaving(true);
     try {
-      const base = import.meta.env.BASE_URL || "/";
-      await fetch(`${base}api/settings/ai-override`, {
+      const payload: Record<string, string> = {};
+      for (const key of keys) {
+        if (form[key] !== undefined) payload[key] = form[key];
+      }
+      const resp = await fetch(`${base}api/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
+        body: JSON.stringify(payload),
       });
-      await fetchAiStatus();
-      toast({ title: "Override applied", description: `You can now edit ${overrideLabel}.` });
+      if (resp.ok) {
+        queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
+        toast({ title: "Section saved", description: `${keys.length} setting${keys.length > 1 ? "s" : ""} updated.` });
+      } else {
+        toast({ title: "Save failed", variant: "destructive" });
+      }
     } catch {
-      toast({ title: "Override failed", variant: "destructive" });
+      toast({ title: "Save failed", variant: "destructive" });
     }
+    setSaving(false);
   };
 
-  const { mutate: save, isPending: saving } = useUpdateSettings({
+  const update = (key: string, value: string) => {
+    setForm(prev => ({ ...prev, [key]: value }));
+  };
+
+  const { mutate: save, isPending: globalSaving } = useUpdateSettings({
     mutation: {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
         queryClient.invalidateQueries({ queryKey: getGetAccountInfoQueryKey() });
-        setHasChanges(false);
-        toast({ title: "Settings saved", description: "Changes will take effect on the next scheduler cycle." });
+        toast({ title: "Settings saved" });
       },
-      onError: () => {
-        toast({ title: "Save failed", description: "Could not save settings. Please try again.", variant: "destructive" });
-      },
-    },
-  });
-
-  const { mutate: setMode } = useSetTradingMode({
-    mutation: {
-      onSuccess: (data) => {
-        queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
-        const resp = data as ActionResponse;
-        toast({ title: "Mode changed", description: resp.message || "Trading mode updated." });
-      },
-      onError: () => {
-        toast({ title: "Mode change failed", variant: "destructive" });
-      },
+      onError: () => { toast({ title: "Save failed", variant: "destructive" }); },
     },
   });
 
@@ -1526,38 +1044,12 @@ export default function Settings() {
         const resp = data as ActionResponse;
         toast({ title: "Mode toggled", description: resp.message || "Trading mode updated." });
       },
-      onError: () => {
-        toast({ title: "Toggle failed", variant: "destructive" });
-      },
+      onError: () => { toast({ title: "Toggle failed", variant: "destructive" }); },
     },
   });
 
-  const update = (key: string, value: string) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
-    setHasChanges(true);
-  };
-
-  const handleSave = () => {
-    const payload: PlatformSettings = { ...form };
-    save({ data: payload });
-  };
-
-  const handleReset = () => {
-    if (settings) {
-      const mapped: Record<string, string> = {};
-      for (const [k, v] of Object.entries(settings)) {
-        if (v != null) mapped[k] = String(v);
-      }
-      setForm(mapped);
-      setHasChanges(false);
-    }
-  };
-
   const handleToggleMode = (mode: "paper" | "demo" | "real", currentlyActive: boolean) => {
-    if (mode === "real" && !currentlyActive) {
-      setShowLiveConfirm(true);
-      return;
-    }
+    if (mode === "real" && !currentlyActive) { setShowLiveConfirm(true); return; }
     toggleMode({ data: { mode: mode as ToggleTradingModeRequestMode, active: !currentlyActive } });
   };
 
@@ -1569,38 +1061,22 @@ export default function Settings() {
   const handlePaperReset = async () => {
     setShowPaperReset(false);
     try {
-      const base = import.meta.env.BASE_URL || "/";
       const resp = await fetch(`${base}api/settings/paper-reset`, { method: "POST", headers: { "Content-Type": "application/json" } });
       const data = await resp.json();
-      if (data.success) {
-        toast({ title: "Paper Reset Complete", description: data.message });
-        queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
-      } else {
-        toast({ title: "Reset failed", description: data.message, variant: "destructive" });
-      }
-    } catch {
-      toast({ title: "Reset failed", variant: "destructive" });
-    }
+      if (data.success) { toast({ title: "Paper Reset Complete", description: data.message }); queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() }); }
+      else { toast({ title: "Reset failed", description: data.message, variant: "destructive" }); }
+    } catch { toast({ title: "Reset failed", variant: "destructive" }); }
   };
 
   const handleFactoryReset = async () => {
     setFactoryResetting(true);
     try {
-      const base = import.meta.env.BASE_URL || "/";
       const resp = await fetch(`${base}api/setup/reset`, { method: "POST", headers: { "Content-Type": "application/json" } });
       const data = await resp.json();
-      if (data.success) {
-        toast({ title: "Factory Reset Complete", description: "Redirecting to setup wizard..." });
-        setTimeout(() => { window.location.reload(); }, 1500);
-      } else {
-        toast({ title: "Reset failed", description: data.message, variant: "destructive" });
-      }
-    } catch {
-      toast({ title: "Reset failed", variant: "destructive" });
-    } finally {
-      setFactoryResetting(false);
-      setShowFactoryReset(false);
-    }
+      if (data.success) { toast({ title: "Factory Reset Complete", description: "Redirecting to setup wizard..." }); setTimeout(() => { window.location.reload(); }, 1500); }
+      else { toast({ title: "Reset failed", description: data.message, variant: "destructive" }); }
+    } catch { toast({ title: "Reset failed", variant: "destructive" }); }
+    finally { setFactoryResetting(false); setShowFactoryReset(false); }
   };
 
   const paperActive = form.paper_mode_active === "true";
@@ -1608,11 +1084,7 @@ export default function Settings() {
   const realActive = form.real_mode_active === "true";
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-      </div>
-    );
+    return <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" /></div>;
   }
 
   return (
@@ -1621,48 +1093,12 @@ export default function Settings() {
         {showLiveConfirm && <LiveModeConfirmDialog onConfirm={confirmRealToggle} onCancel={() => setShowLiveConfirm(false)} />}
         {showPaperReset && <PaperResetConfirmDialog onConfirm={handlePaperReset} onCancel={() => setShowPaperReset(false)} />}
         {showFactoryReset && <FactoryResetConfirmDialog onConfirm={handleFactoryReset} onCancel={() => setShowFactoryReset(false)} resetting={factoryResetting} />}
-        {overrideKey && (
-          <OverrideConfirmDialog settingLabel={overrideLabel} totalBacktests={52} monthsOfData={24} onConfirm={confirmOverride} onCancel={() => setOverrideKey(null)} />
-        )}
+        {unlockTarget && <UnlockWarningDialog settingLabel={unlockTarget.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase())} onConfirm={confirmUnlock} onCancel={() => setUnlockTarget(null)} />}
       </AnimatePresence>
 
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="page-title">Settings</h1>
-          <p className="page-subtitle">Configure trading parameters, API keys, and risk controls</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {hasChanges && (
-            <motion.button
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              onClick={handleReset}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all"
-            >
-              <RotateCcw className="w-4 h-4" />
-              Discard
-            </motion.button>
-          )}
-          <button
-            onClick={handleSave}
-            disabled={!hasChanges || saving}
-            className={cn(
-              "flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium transition-all",
-              hasChanges
-                ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20 hover:shadow-primary/40"
-                : "bg-muted text-muted-foreground cursor-not-allowed"
-            )}
-          >
-            {saving ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current" />
-            ) : hasChanges ? (
-              <Save className="w-4 h-4" />
-            ) : (
-              <CheckCircle2 className="w-4 h-4" />
-            )}
-            {saving ? "Saving..." : hasChanges ? "Save Changes" : "Saved"}
-          </button>
-        </div>
+      <div>
+        <h1 className="page-title">Settings</h1>
+        <p className="page-subtitle">Configure trading parameters, API keys, and risk controls</p>
       </div>
 
       <div className="flex border-b border-border/50 gap-0">
@@ -1673,92 +1109,42 @@ export default function Settings() {
           if (tab.key === "demo" && demoActive) indicator = "primary";
           if (tab.key === "real" && realActive) indicator = "destructive";
           return (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={cn(
-                "relative px-5 py-3 text-sm font-medium transition-colors",
-                isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground"
-              )}
-            >
+            <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+              className={cn("relative px-5 py-3 text-sm font-medium transition-colors", isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground")}>
               <div className="flex items-center gap-2">
-                {indicator && (
-                  <div
-                    className="w-2 h-2 rounded-full animate-pulse"
-                    style={{ backgroundColor: `hsl(var(--${indicator}))` }}
-                  />
-                )}
+                {indicator && <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: `hsl(var(--${indicator}))` }} />}
                 {tab.label}
               </div>
-              {isActive && (
-                <motion.div
-                  layoutId="settings-tab-indicator"
-                  className="absolute bottom-0 left-0 right-0 h-0.5"
-                  style={{ backgroundColor: `hsl(var(--${tab.color}))` }}
-                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                />
-              )}
+              {isActive && <motion.div layoutId="settings-tab-indicator" className="absolute bottom-0 left-0 right-0 h-0.5" style={{ backgroundColor: `hsl(var(--${tab.color}))` }} transition={{ type: "spring", stiffness: 400, damping: 30 }} />}
             </button>
           );
         })}
       </div>
 
       <AnimatePresence mode="wait">
-        <motion.div
-          key={activeTab}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.15 }}
-        >
+        <motion.div key={activeTab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.15 }}>
           {activeTab === "general" && (
             <div className="space-y-6">
               <AnimatePresence>
-                <InitialSetupWizard
-                  openAiKeySet={form.openai_api_key_set === "true"}
-                  onComplete={() => {
-                    queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
-                    fetchAiStatus();
-                  }}
-                />
+                <InitialSetupWizard openAiKeySet={form.openai_api_key_set === "true"} onComplete={() => { queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() }); fetchSuggestions(); }} />
               </AnimatePresence>
 
-              <Card className={cn(
-                "border-2",
-                realActive ? "border-destructive/30" :
-                (paperActive || demoActive) ? "border-warning/30" : "border-border/50"
-              )}>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Zap className="w-4 h-4" />
-                    Trading Modes
-                  </CardTitle>
-                </CardHeader>
+              <Card className={cn("border-2", realActive ? "border-destructive/30" : (paperActive || demoActive) ? "border-warning/30" : "border-border/50")}>
+                <CardHeader><CardTitle className="flex items-center gap-2"><Zap className="w-4 h-4" />Trading Modes</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
                   <p className="text-xs text-muted-foreground">Enable any combination of modes. Each runs independently with its own capital, positions, and risk limits.</p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     {([
-                      { key: "paper" as const, label: "Paper", desc: "Simulated trades", active: paperActive, color: "warning" },
-                      { key: "demo" as const, label: "Demo", desc: "Deriv demo account", active: demoActive, color: "primary" },
-                      { key: "real" as const, label: "Real", desc: "Deriv real account", active: realActive, color: "destructive" },
+                      { key: "paper" as const, label: "Paper", desc: "Aggressive learner · ~120%/mo", active: paperActive, color: "warning" },
+                      { key: "demo" as const, label: "Demo", desc: "Balanced performer · ~80%/mo", active: demoActive, color: "primary" },
+                      { key: "real" as const, label: "Real", desc: "Conservative fortress · ~50%/mo", active: realActive, color: "destructive" },
                     ]).map(({ key, label, desc, active, color }) => (
-                      <button
-                        key={key}
-                        onClick={() => handleToggleMode(key, active)}
-                        className={cn(
-                          "flex flex-col items-start gap-1 p-4 rounded-xl border-2 text-left transition-all",
-                          active ? "" : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
-                        )}
-                        style={active ? {
-                          backgroundColor: `hsl(var(--${color}) / 0.1)`,
-                          borderColor: `hsl(var(--${color}))`,
-                          color: `hsl(var(--${color}))`,
-                        } : undefined}
+                      <button key={key} onClick={() => handleToggleMode(key, active)}
+                        className={cn("flex flex-col items-start gap-1 p-4 rounded-xl border-2 text-left transition-all", active ? "" : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground")}
+                        style={active ? { backgroundColor: `hsl(var(--${color}) / 0.1)`, borderColor: `hsl(var(--${color}))`, color: `hsl(var(--${color}))` } : undefined}
                       >
                         <div className="flex items-center gap-2">
-                          <div className={cn("w-2.5 h-2.5 rounded-full", active ? "animate-pulse" : "bg-muted-foreground/30")}
-                            style={active ? { backgroundColor: `hsl(var(--${color}))` } : undefined}
-                          />
+                          <div className={cn("w-2.5 h-2.5 rounded-full", active ? "animate-pulse" : "bg-muted-foreground/30")} style={active ? { backgroundColor: `hsl(var(--${color}))` } : undefined} />
                           <span className="text-sm font-bold uppercase tracking-wider">{label}</span>
                         </div>
                         <span className="text-xs opacity-70">{desc}</span>
@@ -1776,9 +1162,7 @@ export default function Settings() {
                     <div className="p-3 bg-primary/5 border border-primary/20 rounded-lg">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-muted-foreground">Deriv Account Balance</span>
-                        <span className="font-mono font-bold text-foreground">
-                          {accountInfo.currency} {accountInfo.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
+                        <span className="font-mono font-bold text-foreground">{accountInfo.currency} {accountInfo.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </div>
                     </div>
                   )}
@@ -1786,174 +1170,81 @@ export default function Settings() {
               </Card>
 
               <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Key className="w-4 h-4" />
-                    API Keys
-                  </CardTitle>
-                </CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2"><Key className="w-4 h-4" />API Keys</CardTitle></CardHeader>
                 <CardContent>
-                  <SettingField
-                    label="Deriv Demo Token"
-                    description={form.deriv_api_token_demo_set === "true" ? "Demo token is configured" : "API token for your Deriv demo account"}
-                    value={form.deriv_api_token_demo || ""}
-                    onChange={(v) => update("deriv_api_token_demo", v)}
-                    type="password"
-                    placeholder={form.deriv_api_token_demo_set === "true" ? "****configured****" : "Enter Deriv demo API token"}
-                  />
-                  <SettingField
-                    label="Deriv Real Token"
-                    description={form.deriv_api_token_real_set === "true" ? "Real token is configured" : "API token for your Deriv real account"}
-                    value={form.deriv_api_token_real || ""}
-                    onChange={(v) => update("deriv_api_token_real", v)}
-                    type="password"
-                    placeholder={form.deriv_api_token_real_set === "true" ? "****configured****" : "Enter Deriv real API token"}
-                  />
-                  <SettingField
-                    label="OpenAI API Key"
-                    description={form.openai_api_key_set === "true" ? "Key is configured" : "Required for AI signal verification"}
-                    value={form.openai_api_key || ""}
-                    onChange={(v) => update("openai_api_key", v)}
-                    type="password"
-                    placeholder={form.openai_api_key_set === "true" ? "****configured****" : "Enter OpenAI API key (sk-...)"}
-                  />
-                  <SettingField
-                    label="AI Signal Verification"
-                    description={form.openai_api_key_set === "true" ? "AI will review signals before trades" : "Requires OpenAI API key above"}
-                    value={form.ai_verification_enabled || "false"}
-                    onChange={(v) => update("ai_verification_enabled", v)}
-                    type="toggle"
-                  />
+                  <SettingField label="Deriv Demo Token" description={form.deriv_api_token_demo_set === "true" ? "Demo token is configured" : "API token for your Deriv demo account"} value={form.deriv_api_token_demo || ""} onChange={(v) => update("deriv_api_token_demo", v)} type="password" placeholder={form.deriv_api_token_demo_set === "true" ? "****configured****" : "Enter Deriv demo API token"} locked={false} onUnlock={() => {}} />
+                  <SettingField label="Deriv Real Token" description={form.deriv_api_token_real_set === "true" ? "Real token is configured" : "API token for your Deriv real account"} value={form.deriv_api_token_real || ""} onChange={(v) => update("deriv_api_token_real", v)} type="password" placeholder={form.deriv_api_token_real_set === "true" ? "****configured****" : "Enter Deriv real API token"} locked={false} onUnlock={() => {}} />
+                  <SettingField label="OpenAI API Key" description={form.openai_api_key_set === "true" ? "Key is configured" : "Required for AI signal verification"} value={form.openai_api_key || ""} onChange={(v) => update("openai_api_key", v)} type="password" placeholder={form.openai_api_key_set === "true" ? "****configured****" : "Enter OpenAI API key (sk-...)"} locked={false} onUnlock={() => {}} />
+                  <SettingField label="AI Signal Verification" description={form.openai_api_key_set === "true" ? "AI will review signals before trades" : "Requires OpenAI API key above"} value={form.ai_verification_enabled || "false"} onChange={(v) => update("ai_verification_enabled", v)} type="toggle" locked={false} onUnlock={() => {}} />
                   {form.openai_api_key_set === "true" && (
                     <div className="flex items-center gap-3 mt-3 pt-3 border-t border-border/30">
-                      <button
-                        onClick={async () => {
-                          setAiHealthLoading(true);
-                          try {
-                            const base = import.meta.env.BASE_URL || "/";
-                            const resp = await fetch(`${base}api/settings/openai-health`);
-                            const data = await resp.json();
-                            setAiHealth(data);
-                          } catch {
-                            setAiHealth({ configured: false, working: false, error: "Request failed" });
-                          } finally {
-                            setAiHealthLoading(false);
-                          }
-                        }}
-                        disabled={aiHealthLoading}
-                        className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50"
-                      >
+                      <button onClick={async () => { setAiHealthLoading(true); try { const resp = await fetch(`${base}api/settings/openai-health`); setAiHealth(await resp.json()); } catch { setAiHealth({ configured: false, working: false, error: "Request failed" }); } finally { setAiHealthLoading(false); } }} disabled={aiHealthLoading} className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted transition-colors disabled:opacity-50">
                         {aiHealthLoading ? "Testing..." : "Test Connection"}
                       </button>
-                      {aiHealth && (
-                        <span className={cn("text-xs font-medium", aiHealth.working ? "text-green-600" : "text-red-500")}>
-                          {aiHealth.working ? "Connected and working" : aiHealth.error || "Connection failed"}
-                        </span>
-                      )}
+                      {aiHealth && <span className={cn("text-xs font-medium", aiHealth.working ? "text-green-600" : "text-red-500")}>{aiHealth.working ? "Connected and working" : aiHealth.error || "Connection failed"}</span>}
                     </div>
                   )}
+                  <div className="pt-3 border-t border-border/30 mt-3">
+                    <button onClick={() => { const payload: PlatformSettings = { ...form }; save({ data: payload }); }} disabled={globalSaving}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium shadow-sm hover:shadow-md transition-all disabled:opacity-50">
+                      {globalSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}{globalSaving ? "Saving..." : "Save API Keys"}
+                    </button>
+                  </div>
                 </CardContent>
               </Card>
 
               <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Crosshair className="w-4 h-4 text-primary" />
-                    Signal Scoring Thresholds
-                  </CardTitle>
-                </CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2"><Crosshair className="w-4 h-4 text-primary" />Signal Scoring Thresholds</CardTitle></CardHeader>
                 <CardContent>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    These thresholds apply uniformly across all trading modes. Signals must pass all thresholds to be traded.
-                  </p>
-                  <SettingField label="Minimum Composite Score" description="Signals must score at least this high (0–100)" value={form.min_composite_score || "85"} onChange={(v) => update("min_composite_score", v)} min={50} max={100} step={1} />
-                  <SettingField label="Minimum Expected Value" description="Minimum expected value required" value={form.min_ev_threshold || "0.003"} onChange={(v) => update("min_ev_threshold", v)} min={0} max={0.1} step={0.001} />
-                  <SettingField label="Minimum Reward/Risk Ratio" description="Minimum TP/SL ratio" value={form.min_rr_ratio || "1.5"} onChange={(v) => update("min_rr_ratio", v)} suffix="x" min={0.5} max={5} step={0.1} />
+                  <p className="text-xs text-muted-foreground mb-3">These thresholds apply uniformly across all trading modes. Signals must pass all thresholds to be traded.</p>
+                  <SettingField label="Minimum Composite Score" description="Signals must score at least this high (0-100)" value={form.min_composite_score || "80"} onChange={(v) => update("min_composite_score", v)} min={50} max={100} step={1} locked={!unlockedSections.has("scoring")} onUnlock={() => handleUnlockSection("scoring")} aiSuggestion={suggestions.min_composite_score} onApplySuggestion={() => handleApplySuggestion("min_composite_score")} />
+                  <SettingField label="Minimum Expected Value" description="Minimum expected value required" value={form.min_ev_threshold || "0.003"} onChange={(v) => update("min_ev_threshold", v)} min={0} max={0.1} step={0.001} locked={!unlockedSections.has("scoring")} onUnlock={() => handleUnlockSection("scoring")} aiSuggestion={suggestions.min_ev_threshold} onApplySuggestion={() => handleApplySuggestion("min_ev_threshold")} />
+                  <SettingField label="Minimum Reward/Risk Ratio" description="Minimum TP/SL ratio" value={form.min_rr_ratio || "3.0"} onChange={(v) => update("min_rr_ratio", v)} suffix="x" min={0.5} max={5} step={0.1} locked={!unlockedSections.has("scoring")} onUnlock={() => handleUnlockSection("scoring")} aiSuggestion={suggestions.min_rr_ratio} onApplySuggestion={() => handleApplySuggestion("min_rr_ratio")} />
                   <div className="border-t border-border/30 my-4" />
                   <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">Dimension Weights (%)</p>
-                  <SettingField label="Regime Fit" description="How well the market regime matches" value={form.scoring_weight_regime_fit || "16.67"} onChange={(v) => update("scoring_weight_regime_fit", v)} suffix="%" min={0} max={100} step={1} />
-                  <SettingField label="Setup Quality" description="How cleanly entry conditions are met" value={form.scoring_weight_setup_quality || "16.67"} onChange={(v) => update("scoring_weight_setup_quality", v)} suffix="%" min={0} max={100} step={1} />
-                  <SettingField label="Trend Alignment" description="Higher-timeframe trend support" value={form.scoring_weight_trend_alignment || "16.67"} onChange={(v) => update("scoring_weight_trend_alignment", v)} suffix="%" min={0} max={100} step={1} />
-                  <SettingField label="Volatility Condition" description="Volatility in ideal range" value={form.scoring_weight_volatility_condition || "16.67"} onChange={(v) => update("scoring_weight_volatility_condition", v)} suffix="%" min={0} max={100} step={1} />
-                  <SettingField label="Reward/Risk" description="R:R normalized score" value={form.scoring_weight_reward_risk || "16.67"} onChange={(v) => update("scoring_weight_reward_risk", v)} suffix="%" min={0} max={100} step={1} />
-                  <SettingField label="Probability of Success" description="Estimated probability of profit" value={form.scoring_weight_probability_of_success || "16.67"} onChange={(v) => update("scoring_weight_probability_of_success", v)} suffix="%" min={0} max={100} step={1} />
+                  {[
+                    { key: "scoring_weight_regime_fit", label: "Regime Fit", desc: "How well the market regime matches" },
+                    { key: "scoring_weight_setup_quality", label: "Setup Quality", desc: "How cleanly entry conditions are met" },
+                    { key: "scoring_weight_trend_alignment", label: "Trend Alignment", desc: "Higher-timeframe trend support" },
+                    { key: "scoring_weight_volatility_condition", label: "Volatility Condition", desc: "Volatility in ideal range" },
+                    { key: "scoring_weight_reward_risk", label: "Reward/Risk", desc: "R:R normalized score" },
+                    { key: "scoring_weight_probability_of_success", label: "Probability of Success", desc: "Estimated probability of profit" },
+                  ].map(w => (
+                    <SettingField key={w.key} label={w.label} description={w.desc} value={form[w.key] || "16.67"} onChange={(v) => update(w.key, v)} suffix="%" min={0} max={100} step={1} locked={!unlockedSections.has("scoring")} onUnlock={() => handleUnlockSection("scoring")} aiSuggestion={suggestions[w.key]} onApplySuggestion={() => handleApplySuggestion(w.key)} />
+                  ))}
+                  {unlockedSections.has("scoring") && <SectionSaveButton sectionKeys={["min_composite_score", "min_ev_threshold", "min_rr_ratio", "scoring_weight_regime_fit", "scoring_weight_setup_quality", "scoring_weight_trend_alignment", "scoring_weight_volatility_condition", "scoring_weight_reward_risk", "scoring_weight_probability_of_success"]} form={form} saving={saving} onSave={handleSaveSection} />}
                 </CardContent>
               </Card>
 
               <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Clock className="w-4 h-4" />
-                    Scan Timing
-                  </CardTitle>
-                </CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2"><Clock className="w-4 h-4" />Scan Timing</CardTitle></CardHeader>
                 <CardContent>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    Global scan timing — applies to all modes. Time exit is configured per-mode in each mode's tab.
-                  </p>
-                  <SettingField label="Scan Interval" description="How often the system scans for new signals" value={form.scan_interval_seconds || "30"} onChange={(v) => update("scan_interval_seconds", v)} suffix="sec" min={5} max={300} step={5} />
-                  <SettingField label="Symbol Scan Stagger" description="Delay between scanning each symbol" value={form.scan_stagger_seconds || "10"} onChange={(v) => update("scan_stagger_seconds", v)} suffix="sec" min={1} max={60} step={1} />
+                  <p className="text-xs text-muted-foreground mb-3">Global scan timing — applies to all modes.</p>
+                  <SettingField label="Scan Interval" description="How often the system scans for new signals" value={form.scan_interval_seconds || "30"} onChange={(v) => update("scan_interval_seconds", v)} suffix="sec" min={5} max={300} step={5} locked={!unlockedSections.has("scan")} onUnlock={() => handleUnlockSection("scan")} />
+                  <SettingField label="Symbol Scan Stagger" description="Delay between scanning each symbol" value={form.scan_stagger_seconds || "10"} onChange={(v) => update("scan_stagger_seconds", v)} suffix="sec" min={1} max={60} step={1} locked={!unlockedSections.has("scan")} onUnlock={() => handleUnlockSection("scan")} />
+                  {unlockedSections.has("scan") && <SectionSaveButton sectionKeys={["scan_interval_seconds", "scan_stagger_seconds"]} form={form} saving={saving} onSave={handleSaveSection} />}
                 </CardContent>
               </Card>
 
               <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Shield className="w-4 h-4" />
-                    Global Controls
-                  </CardTitle>
-                </CardHeader>
+                <CardHeader><CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />Global Controls</CardTitle></CardHeader>
                 <CardContent>
-                  <SettingField
-                    label="Kill Switch"
-                    description="Emergency stop — halts all trading across all modes"
-                    value={form.kill_switch || "false"}
-                    onChange={(v) => update("kill_switch", v)}
-                    type="toggle"
-                  />
+                  <SettingField label="Kill Switch" description="Emergency stop — halts all trading across all modes" value={form.kill_switch || "false"} onChange={(v) => { update("kill_switch", v); const payload: PlatformSettings = { ...form, kill_switch: v }; save({ data: payload }); }} type="toggle" locked={false} onUnlock={() => {}} />
                 </CardContent>
               </Card>
             </div>
           )}
 
           {activeTab === "paper" && (
-            <ModeSettingsTab
-              mode="paper"
-              form={form}
-              update={update}
-              aiStatus={aiStatus}
-              isAiLocked={isAiLocked}
-              getAiValue={getAiValue}
-              handleOverride={handleOverride}
-              handleRevertToAi={handleRevertToAi}
-              onPaperReset={() => setShowPaperReset(true)}
-            />
+            <ModeSettingsTab mode="paper" form={form} update={update} suggestions={suggestions} onApplySuggestion={handleApplySuggestion} unlockedSections={unlockedSections} onUnlockSection={handleUnlockSection} onSaveSection={handleSaveSection} saving={saving} onPaperReset={() => setShowPaperReset(true)} />
           )}
 
           {activeTab === "demo" && (
-            <ModeSettingsTab
-              mode="demo"
-              form={form}
-              update={update}
-              aiStatus={aiStatus}
-              isAiLocked={isAiLocked}
-              getAiValue={getAiValue}
-              handleOverride={handleOverride}
-              handleRevertToAi={handleRevertToAi}
-            />
+            <ModeSettingsTab mode="demo" form={form} update={update} suggestions={suggestions} onApplySuggestion={handleApplySuggestion} unlockedSections={unlockedSections} onUnlockSection={handleUnlockSection} onSaveSection={handleSaveSection} saving={saving} />
           )}
 
           {activeTab === "real" && (
-            <ModeSettingsTab
-              mode="real"
-              form={form}
-              update={update}
-              aiStatus={aiStatus}
-              isAiLocked={isAiLocked}
-              getAiValue={getAiValue}
-              handleOverride={handleOverride}
-              handleRevertToAi={handleRevertToAi}
-            />
+            <ModeSettingsTab mode="real" form={form} update={update} suggestions={suggestions} onApplySuggestion={handleApplySuggestion} unlockedSections={unlockedSections} onUnlockSection={handleUnlockSection} onSaveSection={handleSaveSection} saving={saving} />
           )}
 
           {activeTab === "diagnostics" && <SymbolDiagnosticsPanel />}
@@ -1966,10 +1257,7 @@ export default function Settings() {
             <h3 className="text-sm font-semibold text-destructive">Factory Reset</h3>
             <p className="text-xs text-muted-foreground mt-1">Clear all data, backtests, and settings. API keys are preserved. Re-runs the setup wizard from scratch.</p>
           </div>
-          <button
-            onClick={() => setShowFactoryReset(true)}
-            className="px-4 py-2 rounded-lg border border-destructive/30 text-sm font-medium text-destructive hover:bg-destructive hover:text-destructive-foreground transition-all"
-          >
+          <button onClick={() => setShowFactoryReset(true)} className="px-4 py-2 rounded-lg border border-destructive/30 text-sm font-medium text-destructive hover:bg-destructive hover:text-destructive-foreground transition-all">
             Factory Reset
           </button>
         </div>

@@ -114,15 +114,24 @@ export function calculateDynamicTP(params: {
   historicalAvgMovePct?: number;
   tpMultiplier?: number;
   family?: StrategyFamily;
+  tpCaptureRatio?: number;
+  familyProfileOverride?: { tpAtrMultiplier: number };
 }): number {
-  const { entryPrice, direction, confidence, atrPct, tpMultiplier = 2.0, family } = params;
+  const { entryPrice, direction, confidence, atrPct, historicalAvgMovePct = 0, tpMultiplier = 2.0, family, tpCaptureRatio = 0.70, familyProfileOverride } = params;
 
-  const familyProfile = family ? FAMILY_HOLD_PROFILE[family] : null;
+  const familyProfile = familyProfileOverride || (family ? FAMILY_HOLD_PROFILE[family] : null);
   const effectiveMultiplier = familyProfile ? familyProfile.tpAtrMultiplier : tpMultiplier;
 
-  const tpPct = atrPct * effectiveMultiplier * confidence;
+  let predictedMovePct = atrPct * effectiveMultiplier * confidence;
+
+  if (historicalAvgMovePct > 0) {
+    const historicalEstimate = historicalAvgMovePct * confidence;
+    predictedMovePct = Math.max(predictedMovePct, historicalEstimate);
+  }
+
+  const tpPct = predictedMovePct * tpCaptureRatio;
   const minTPPct = atrPct * 2.5;
-  const maxTPPct = atrPct * 12.0;
+  const maxTPPct = atrPct * 15.0;
   const clampedPct = Math.max(minTPPct, Math.min(maxTPPct, tpPct));
 
   if (direction === "buy") {
@@ -138,11 +147,14 @@ export function calculateInitialSL(params: {
   atrPct: number;
   slRatio?: number;
   family?: StrategyFamily;
+  minSlAtrMultiplier?: number;
+  familyProfileOverride?: { slAtrMultiplier: number };
 }): number {
-  const { entryPrice, direction, atrPct, slRatio = 1.0, family } = params;
-  const familyProfile = family ? FAMILY_HOLD_PROFILE[family] : null;
+  const { entryPrice, direction, atrPct, slRatio = 1.0, family, minSlAtrMultiplier = 3.0, familyProfileOverride } = params;
+  const familyProfile = familyProfileOverride || (family ? FAMILY_HOLD_PROFILE[family] : null);
   const baseMultiplier = familyProfile ? familyProfile.slAtrMultiplier : 2.5;
-  const slPct = atrPct * baseMultiplier * slRatio;
+  const effectiveMultiplier = Math.max(baseMultiplier, minSlAtrMultiplier);
+  const slPct = atrPct * effectiveMultiplier * slRatio;
   if (direction === "buy") {
     return entryPrice * (1 - slPct);
   } else {
@@ -291,8 +303,14 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
   );
   const totalDeployed = openTrades.reduce((sum, t) => sum + t.size, 0);
 
+  const probeThreshold = parseFloat(stateMap[`${prefix}_probe_threshold`] || (mode === "paper" ? "75" : mode === "demo" ? "82" : "88"));
+  const confirmationThreshold = parseFloat(stateMap[`${prefix}_confirmation_threshold`] || (mode === "paper" ? "80" : mode === "demo" ? "86" : "91"));
+  const momentumThreshold = parseFloat(stateMap[`${prefix}_momentum_threshold`] || (mode === "paper" ? "85" : mode === "demo" ? "90" : "94"));
+
   const tradesOnSymbol = openTrades.filter(t => t.symbol === signal.symbol).length;
-  const entryStage = determineEntryStage(tradesOnSymbol, signal.compositeScore ?? 85);
+  const entryStage = determineEntryStage(tradesOnSymbol, signal.compositeScore ?? 85, {
+    probe: probeThreshold, confirmation: confirmationThreshold, momentum: momentumThreshold,
+  });
   if (!entryStage) {
     console.log(`[TradeEngine] [${mode.toUpperCase()}] Position building rejected: ${tradesOnSymbol} existing on ${signal.symbol}, score=${signal.compositeScore}`);
     return null;
@@ -304,7 +322,13 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
     return null;
   }
 
-  const stageMultiplier = getEntrySizeMultiplier(entryStage);
+  const stageMultProbe = parseFloat(stateMap[`${prefix}_stage_multiplier_probe`] || (mode === "paper" ? "1.0" : mode === "demo" ? "0.85" : "0.70"));
+  const stageMultConfirmation = parseFloat(stateMap[`${prefix}_stage_multiplier_confirmation`] || (mode === "paper" ? "0.90" : mode === "demo" ? "0.75" : "0.60"));
+  const stageMultMomentum = parseFloat(stateMap[`${prefix}_stage_multiplier_momentum`] || (mode === "paper" ? "0.80" : mode === "demo" ? "0.65" : "0.50"));
+
+  const stageMultiplier = getEntrySizeMultiplier(entryStage, {
+    probe: stageMultProbe, confirmation: stageMultConfirmation, momentum: stageMultMomentum,
+  });
   sizing.size = sizing.size * stageMultiplier;
   sizing.size = Math.max(sizing.size, equity * 0.05);
 
@@ -354,7 +378,19 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
   const timeExitHours = parseFloat(stateMap[`${prefix}_time_exit_window_hours`] || stateMap["time_exit_window_hours"] || String(INITIAL_EXIT_HOURS));
 
   const family: StrategyFamily = signal.strategyFamily || resolveFamilyFromStrategy(signal.strategyName);
-  const familyProfile = FAMILY_HOLD_PROFILE[family];
+  const familyDefaults = FAMILY_HOLD_PROFILE[family];
+
+  const modeFamilyProfile = {
+    tpAtrMultiplier: parseFloat(stateMap[`${prefix}_${family}_tp_atr_multiplier`] || String(familyDefaults.tpAtrMultiplier)),
+    slAtrMultiplier: parseFloat(stateMap[`${prefix}_${family}_sl_atr_multiplier`] || String(familyDefaults.slAtrMultiplier)),
+    initialExitHours: parseFloat(stateMap[`${prefix}_${family}_initial_exit_hours`] || String(familyDefaults.initialExitHours)),
+    extensionHours: parseFloat(stateMap[`${prefix}_${family}_extension_hours`] || String(familyDefaults.extensionHours)),
+    maxExitHours: parseFloat(stateMap[`${prefix}_${family}_max_exit_hours`] || String(familyDefaults.maxExitHours)),
+    harvestSensitivity: parseFloat(stateMap[`${prefix}_${family}_harvest_sensitivity`] || String(familyDefaults.harvestSensitivity)),
+  };
+
+  const tpCaptureRatio = parseFloat(stateMap[`${prefix}_tp_capture_ratio`] || (mode === "paper" ? "0.80" : mode === "demo" ? "0.70" : "0.60"));
+  const minSlAtrMultiplier = parseFloat(stateMap[`${prefix}_min_sl_atr_multiplier`] || (mode === "paper" ? "3.0" : mode === "demo" ? "3.5" : "4.0"));
 
   const tpMultiplier = signal.confidence >= 0.75 ? tpMultiplierStrong
     : signal.confidence >= 0.65 ? tpMultiplierMedium
@@ -368,6 +404,8 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
     historicalAvgMovePct,
     tpMultiplier,
     family,
+    tpCaptureRatio,
+    familyProfileOverride: { tpAtrMultiplier: modeFamilyProfile.tpAtrMultiplier },
   });
 
   const sl = calculateInitialSL({
@@ -376,10 +414,12 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
     atrPct,
     slRatio,
     family,
+    minSlAtrMultiplier,
+    familyProfileOverride: { slAtrMultiplier: modeFamilyProfile.slAtrMultiplier },
   });
 
   const entryTs = new Date();
-  const effectiveTimeExit = Math.max(familyProfile.initialExitHours, timeExitHours);
+  const effectiveTimeExit = Math.max(modeFamilyProfile.initialExitHours, timeExitHours);
   const maxExitTs = new Date(entryTs.getTime() + effectiveTimeExit * 60 * 60 * 1000);
 
   if ((mode === "demo" || mode === "real") && client) {
@@ -519,7 +559,11 @@ export async function manageOpenPositions(): Promise<void> {
 
       const harvestSettings = await getHarvestSettings(tradeMode);
       const harvestFamily = resolveFamilyFromStrategy(trade.strategyName);
-      const harvestSensitivity = FAMILY_HOLD_PROFILE[harvestFamily].harvestSensitivity;
+      const harvestPrefix = tradeMode === "paper" ? "paper" : tradeMode === "demo" ? "demo" : "real";
+      const statesForHarvest = await db.select().from(platformStateTable);
+      const stateMapForHarvest: Record<string, string> = {};
+      for (const s of statesForHarvest) stateMapForHarvest[s.key] = s.value;
+      const harvestSensitivity = parseFloat(stateMapForHarvest[`${harvestPrefix}_${harvestFamily}_harvest_sensitivity`] || String(FAMILY_HOLD_PROFILE[harvestFamily].harvestSensitivity));
       const harvestCheck = evaluateProfitHarvest({
         entryPrice: trade.entryPrice,
         currentPrice,
@@ -556,15 +600,18 @@ export async function manageOpenPositions(): Promise<void> {
 
       if (trade.maxExitTs) {
         const tradeFamily = resolveFamilyFromStrategy(trade.strategyName);
-        const tradeFamilyProfile = FAMILY_HOLD_PROFILE[tradeFamily];
+        const tradeFamilyDefaults = FAMILY_HOLD_PROFILE[tradeFamily];
+        const tfInitialExitHours = parseFloat(stateMapForHarvest[`${harvestPrefix}_${tradeFamily}_initial_exit_hours`] || String(tradeFamilyDefaults.initialExitHours));
+        const tfExtensionHours = parseFloat(stateMapForHarvest[`${harvestPrefix}_${tradeFamily}_extension_hours`] || String(tradeFamilyDefaults.extensionHours));
+        const tfMaxExitHours = parseFloat(stateMapForHarvest[`${harvestPrefix}_${tradeFamily}_max_exit_hours`] || String(tradeFamilyDefaults.maxExitHours));
 
         const timeCheck = checkTimeExit({
           entryTs: trade.entryTs,
           maxExitTs: trade.maxExitTs,
           currentPnl: floatingPnl,
-          initialExitHours: tradeFamilyProfile.initialExitHours,
-          extensionHours: tradeFamilyProfile.extensionHours,
-          maxExitHours: tradeFamilyProfile.maxExitHours,
+          initialExitHours: tfInitialExitHours,
+          extensionHours: tfExtensionHours,
+          maxExitHours: tfMaxExitHours,
         });
 
         if (timeCheck.shouldExit) {

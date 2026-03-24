@@ -36,112 +36,187 @@ const ALL_SYMBOLS_DEFAULT = "BOOM1000,CRASH1000,BOOM900,CRASH900,BOOM600,CRASH60
 const ALL_STRATEGIES_DEFAULT = "trend_continuation,mean_reversion,breakout_expansion,spike_event";
 
 const SETTING_DEFAULTS: Record<string, string> = {
-  max_open_trades: "3",
-  equity_pct_per_trade: "22",
-  tp_multiplier_strong: "3.0",
-  tp_multiplier_medium: "2.5",
-  tp_multiplier_weak: "2.0",
-  sl_ratio: "1.0",
-  trailing_stop_pct: "25",
-  time_exit_window_hours: "72",
-  max_daily_loss_pct: "3",
-  max_weekly_loss_pct: "8",
-  max_drawdown_pct: "15",
   kill_switch: "false",
-  allocation_mode: "balanced",
-  total_capital: "600",
   scan_interval_seconds: "30",
   scan_stagger_seconds: "10",
-  paper_equity_pct_per_trade: "16",
-  live_equity_pct_per_trade: "8",
-  paper_max_open_trades: "3",
-  live_max_open_trades: "3",
   ai_verification_enabled: "false",
   enabled_symbols: ALL_SYMBOLS_DEFAULT,
-  paper_max_daily_loss_pct: "5",
-  live_max_daily_loss_pct: "3",
-  paper_max_weekly_loss_pct: "12",
-  live_max_weekly_loss_pct: "8",
-  paper_max_drawdown_pct: "20",
-  live_max_drawdown_pct: "15",
-  min_composite_score: "85",
+  min_composite_score: "80",
   min_ev_threshold: "0.003",
-  min_rr_ratio: "1.5",
+  min_rr_ratio: "3.0",
   scoring_weight_regime_fit: "16.67",
   scoring_weight_setup_quality: "16.67",
   scoring_weight_trend_alignment: "16.67",
   scoring_weight_volatility_condition: "16.67",
   scoring_weight_reward_risk: "16.67",
   scoring_weight_probability_of_success: "16.67",
-  paper_capital: "600",
-  demo_capital: "600",
-  real_capital: "600",
-  demo_equity_pct_per_trade: "12",
-  real_equity_pct_per_trade: "8",
-  demo_max_open_trades: "3",
-  real_max_open_trades: "3",
-  demo_max_daily_loss_pct: "3",
-  real_max_daily_loss_pct: "3",
-  demo_max_weekly_loss_pct: "8",
-  real_max_weekly_loss_pct: "8",
-  demo_max_drawdown_pct: "15",
-  real_max_drawdown_pct: "15",
-  paper_mode_active: "false",
-  demo_mode_active: "false",
-  real_mode_active: "false",
-  paper_tp_multiplier_strong: "3.0",
-  paper_tp_multiplier_medium: "2.5",
-  paper_tp_multiplier_weak: "2.0",
-  paper_sl_ratio: "1.0",
-  paper_trailing_stop_pct: "25",
-  paper_time_exit_window_hours: "72",
-  paper_allocation_mode: "balanced",
-  paper_enabled_symbols: ALL_SYMBOLS_DEFAULT,
-  paper_enabled_strategies: ALL_STRATEGIES_DEFAULT,
-  demo_tp_multiplier_strong: "3.0",
-  demo_tp_multiplier_medium: "2.5",
-  demo_tp_multiplier_weak: "2.0",
-  demo_sl_ratio: "1.0",
-  demo_trailing_stop_pct: "25",
-  demo_time_exit_window_hours: "72",
-  demo_allocation_mode: "balanced",
-  demo_enabled_symbols: ALL_SYMBOLS_DEFAULT,
-  demo_enabled_strategies: ALL_STRATEGIES_DEFAULT,
-  real_tp_multiplier_strong: "3.5",
-  real_tp_multiplier_medium: "3.0",
-  real_tp_multiplier_weak: "2.5",
-  real_sl_ratio: "1.0",
-  real_trailing_stop_pct: "20",
-  real_time_exit_window_hours: "96",
-  real_allocation_mode: "balanced",
-  real_enabled_symbols: ALL_SYMBOLS_DEFAULT,
-  real_enabled_strategies: ALL_STRATEGIES_DEFAULT,
   ai_recommended_strategies: "",
   ai_recommended_symbols: "",
-  extraction_target_pct: "50",
-  auto_extraction: "false",
-  peak_drawdown_exit_pct: "30",
-  min_peak_profit_pct: "3",
-  large_peak_threshold_pct: "8",
-  correlated_family_cap: "3",
+
+  paper_mode_active: "false",
+  paper_capital: "10000",
+  paper_equity_pct_per_trade: "30",
+  paper_max_open_trades: "4",
+  paper_allocation_mode: "aggressive",
+  paper_probe_threshold: "75",
+  paper_confirmation_threshold: "80",
+  paper_momentum_threshold: "85",
+  paper_stage_multiplier_probe: "1.0",
+  paper_stage_multiplier_confirmation: "0.90",
+  paper_stage_multiplier_momentum: "0.80",
+  paper_tp_multiplier_strong: "3.5",
+  paper_tp_multiplier_medium: "2.8",
+  paper_tp_multiplier_weak: "2.0",
+  paper_sl_ratio: "1.0",
+  paper_trailing_stop_pct: "20",
+  paper_time_exit_window_hours: "336",
+  paper_tp_capture_ratio: "0.80",
+  paper_min_sl_atr_multiplier: "3.0",
+  paper_max_daily_loss_pct: "8",
+  paper_max_weekly_loss_pct: "15",
+  paper_max_drawdown_pct: "25",
   paper_extraction_target_pct: "50",
   paper_auto_extraction: "false",
-  paper_peak_drawdown_exit_pct: "30",
+  paper_peak_drawdown_exit_pct: "25",
   paper_min_peak_profit_pct: "3",
   paper_large_peak_threshold_pct: "8",
-  paper_correlated_family_cap: "3",
+  paper_correlated_family_cap: "4",
+  paper_enabled_symbols: ALL_SYMBOLS_DEFAULT,
+  paper_enabled_strategies: ALL_STRATEGIES_DEFAULT,
+  paper_trend_continuation_tp_atr_multiplier: "10.0",
+  paper_trend_continuation_sl_atr_multiplier: "4.0",
+  paper_trend_continuation_initial_exit_hours: "168",
+  paper_trend_continuation_extension_hours: "48",
+  paper_trend_continuation_max_exit_hours: "336",
+  paper_trend_continuation_harvest_sensitivity: "0.7",
+  paper_mean_reversion_tp_atr_multiplier: "8.0",
+  paper_mean_reversion_sl_atr_multiplier: "4.0",
+  paper_mean_reversion_initial_exit_hours: "120",
+  paper_mean_reversion_extension_hours: "36",
+  paper_mean_reversion_max_exit_hours: "240",
+  paper_mean_reversion_harvest_sensitivity: "0.9",
+  paper_breakout_expansion_tp_atr_multiplier: "12.0",
+  paper_breakout_expansion_sl_atr_multiplier: "3.0",
+  paper_breakout_expansion_initial_exit_hours: "168",
+  paper_breakout_expansion_extension_hours: "48",
+  paper_breakout_expansion_max_exit_hours: "336",
+  paper_breakout_expansion_harvest_sensitivity: "0.6",
+  paper_spike_event_tp_atr_multiplier: "6.0",
+  paper_spike_event_sl_atr_multiplier: "3.0",
+  paper_spike_event_initial_exit_hours: "72",
+  paper_spike_event_extension_hours: "24",
+  paper_spike_event_max_exit_hours: "168",
+  paper_spike_event_harvest_sensitivity: "1.0",
+
+  demo_mode_active: "false",
+  demo_capital: "600",
+  demo_equity_pct_per_trade: "20",
+  demo_max_open_trades: "3",
+  demo_allocation_mode: "balanced",
+  demo_probe_threshold: "82",
+  demo_confirmation_threshold: "86",
+  demo_momentum_threshold: "90",
+  demo_stage_multiplier_probe: "0.85",
+  demo_stage_multiplier_confirmation: "0.75",
+  demo_stage_multiplier_momentum: "0.65",
+  demo_tp_multiplier_strong: "3.0",
+  demo_tp_multiplier_medium: "2.5",
+  demo_tp_multiplier_weak: "1.8",
+  demo_sl_ratio: "1.0",
+  demo_trailing_stop_pct: "22",
+  demo_time_exit_window_hours: "168",
+  demo_tp_capture_ratio: "0.70",
+  demo_min_sl_atr_multiplier: "3.5",
+  demo_max_daily_loss_pct: "5",
+  demo_max_weekly_loss_pct: "10",
+  demo_max_drawdown_pct: "18",
   demo_extraction_target_pct: "50",
   demo_auto_extraction: "false",
   demo_peak_drawdown_exit_pct: "30",
   demo_min_peak_profit_pct: "3",
   demo_large_peak_threshold_pct: "8",
   demo_correlated_family_cap: "3",
+  demo_enabled_symbols: ALL_SYMBOLS_DEFAULT,
+  demo_enabled_strategies: ALL_STRATEGIES_DEFAULT,
+  demo_trend_continuation_tp_atr_multiplier: "8.0",
+  demo_trend_continuation_sl_atr_multiplier: "3.0",
+  demo_trend_continuation_initial_exit_hours: "168",
+  demo_trend_continuation_extension_hours: "48",
+  demo_trend_continuation_max_exit_hours: "336",
+  demo_trend_continuation_harvest_sensitivity: "0.8",
+  demo_mean_reversion_tp_atr_multiplier: "6.0",
+  demo_mean_reversion_sl_atr_multiplier: "3.5",
+  demo_mean_reversion_initial_exit_hours: "120",
+  demo_mean_reversion_extension_hours: "36",
+  demo_mean_reversion_max_exit_hours: "240",
+  demo_mean_reversion_harvest_sensitivity: "1.0",
+  demo_breakout_expansion_tp_atr_multiplier: "10.0",
+  demo_breakout_expansion_sl_atr_multiplier: "2.5",
+  demo_breakout_expansion_initial_exit_hours: "168",
+  demo_breakout_expansion_extension_hours: "48",
+  demo_breakout_expansion_max_exit_hours: "336",
+  demo_breakout_expansion_harvest_sensitivity: "0.7",
+  demo_spike_event_tp_atr_multiplier: "5.0",
+  demo_spike_event_sl_atr_multiplier: "2.0",
+  demo_spike_event_initial_exit_hours: "72",
+  demo_spike_event_extension_hours: "24",
+  demo_spike_event_max_exit_hours: "168",
+  demo_spike_event_harvest_sensitivity: "1.1",
+
+  real_mode_active: "false",
+  real_capital: "600",
+  real_equity_pct_per_trade: "15",
+  real_max_open_trades: "3",
+  real_allocation_mode: "balanced",
+  real_probe_threshold: "88",
+  real_confirmation_threshold: "91",
+  real_momentum_threshold: "94",
+  real_stage_multiplier_probe: "0.70",
+  real_stage_multiplier_confirmation: "0.60",
+  real_stage_multiplier_momentum: "0.50",
+  real_tp_multiplier_strong: "2.5",
+  real_tp_multiplier_medium: "2.0",
+  real_tp_multiplier_weak: "1.5",
+  real_sl_ratio: "1.0",
+  real_trailing_stop_pct: "25",
+  real_time_exit_window_hours: "168",
+  real_tp_capture_ratio: "0.60",
+  real_min_sl_atr_multiplier: "4.0",
+  real_max_daily_loss_pct: "3",
+  real_max_weekly_loss_pct: "6",
+  real_max_drawdown_pct: "12",
   real_extraction_target_pct: "50",
   real_auto_extraction: "false",
   real_peak_drawdown_exit_pct: "30",
   real_min_peak_profit_pct: "3",
   real_large_peak_threshold_pct: "8",
   real_correlated_family_cap: "3",
+  real_enabled_symbols: ALL_SYMBOLS_DEFAULT,
+  real_enabled_strategies: ALL_STRATEGIES_DEFAULT,
+  real_trend_continuation_tp_atr_multiplier: "6.0",
+  real_trend_continuation_sl_atr_multiplier: "3.5",
+  real_trend_continuation_initial_exit_hours: "168",
+  real_trend_continuation_extension_hours: "48",
+  real_trend_continuation_max_exit_hours: "336",
+  real_trend_continuation_harvest_sensitivity: "0.8",
+  real_mean_reversion_tp_atr_multiplier: "4.0",
+  real_mean_reversion_sl_atr_multiplier: "4.0",
+  real_mean_reversion_initial_exit_hours: "120",
+  real_mean_reversion_extension_hours: "36",
+  real_mean_reversion_max_exit_hours: "240",
+  real_mean_reversion_harvest_sensitivity: "1.0",
+  real_breakout_expansion_tp_atr_multiplier: "8.0",
+  real_breakout_expansion_sl_atr_multiplier: "3.0",
+  real_breakout_expansion_initial_exit_hours: "168",
+  real_breakout_expansion_extension_hours: "48",
+  real_breakout_expansion_max_exit_hours: "336",
+  real_breakout_expansion_harvest_sensitivity: "0.7",
+  real_spike_event_tp_atr_multiplier: "4.0",
+  real_spike_event_sl_atr_multiplier: "2.5",
+  real_spike_event_initial_exit_hours: "72",
+  real_spike_event_extension_hours: "24",
+  real_spike_event_max_exit_hours: "168",
+  real_spike_event_harvest_sensitivity: "1.2",
 };
 
 const API_KEY_KEYS = ["deriv_api_token_demo", "deriv_api_token_real", "openai_api_key"];
@@ -328,23 +403,6 @@ const DEFAULT_SYMBOLS = [
   "R_75", "R_100",
 ];
 
-const AI_LOCKABLE_KEYS = [
-  "equity_pct_per_trade",
-  "paper_equity_pct_per_trade",
-  "live_equity_pct_per_trade",
-  "tp_multiplier_strong",
-  "tp_multiplier_medium",
-  "tp_multiplier_weak",
-  "sl_ratio",
-  "trailing_stop_pct",
-  "time_exit_window_hours",
-  "paper_tp_multiplier_strong", "paper_tp_multiplier_medium", "paper_tp_multiplier_weak",
-  "paper_sl_ratio", "paper_trailing_stop_pct", "paper_time_exit_window_hours",
-  "demo_tp_multiplier_strong", "demo_tp_multiplier_medium", "demo_tp_multiplier_weak",
-  "demo_sl_ratio", "demo_trailing_stop_pct", "demo_equity_pct_per_trade", "demo_time_exit_window_hours",
-  "real_tp_multiplier_strong", "real_tp_multiplier_medium", "real_tp_multiplier_weak",
-  "real_sl_ratio", "real_trailing_stop_pct", "real_equity_pct_per_trade", "real_time_exit_window_hours",
-];
 
 async function runBacktestForOptimisation(
   strategyName: string,
@@ -476,77 +534,25 @@ async function runBacktestForOptimisation(
   return { totalReturn, winRate, profitFactor, maxDrawdown, avgHoldingHours, sharpeRatio, tradeCount: trades.length };
 }
 
-router.post("/settings/ai-override", async (req, res): Promise<void> => {
+router.post("/settings/ai-apply-suggestion", async (req, res): Promise<void> => {
   const { key } = req.body as { key?: string };
-  if (!key || !AI_LOCKABLE_KEYS.includes(key)) {
-    res.status(400).json({ success: false, message: "Invalid key" });
+  if (!key) {
+    res.status(400).json({ success: false, message: "Key is required" });
     return;
   }
 
-  const aiKey = `ai_${key}`;
-  const suggestionKey = `ai_suggestion_${key}`;
-
-  const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, aiKey));
-  if (rows.length > 0) {
-    await db
-      .insert(platformStateTable)
-      .values({ key: suggestionKey, value: rows[0].value })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: rows[0].value, updatedAt: new Date() } });
-    await db.delete(platformStateTable).where(eq(platformStateTable.key, aiKey));
-  }
-
-  const states = await db.select().from(platformStateTable);
-  const remaining = states.some(s => s.key.startsWith("ai_") && !s.key.startsWith("ai_settings_") && !s.key.startsWith("ai_optimised") && !s.key.startsWith("ai_suggestion_"));
-  if (!remaining) {
-    await db
-      .insert(platformStateTable)
-      .values({ key: "ai_settings_locked", value: "false" })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "false", updatedAt: new Date() } });
-  }
-
-  res.json({ success: true, message: `Override applied for ${key}` });
-});
-
-router.post("/settings/ai-revert", async (req, res): Promise<void> => {
-  const { key } = req.body as { key?: string };
-  if (!key || !AI_LOCKABLE_KEYS.includes(key)) {
-    res.status(400).json({ success: false, message: "Invalid key" });
-    return;
-  }
-
-  const aiKey = `ai_${key}`;
-  const suggestionKey = `ai_suggestion_${key}`;
-
-  const suggestionRows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, suggestionKey));
-  if (suggestionRows.length === 0) {
+  const suggestionKey = `ai_suggest_${key}`;
+  const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, suggestionKey));
+  if (rows.length === 0) {
     res.status(404).json({ success: false, message: "No AI suggestion found for this key" });
     return;
   }
 
-  const suggestedValue = suggestionRows[0].value;
-
-  await db
-    .insert(platformStateTable)
-    .values({ key: aiKey, value: suggestedValue })
+  const suggestedValue = rows[0].value;
+  await db.insert(platformStateTable).values({ key, value: suggestedValue })
     .onConflictDoUpdate({ target: platformStateTable.key, set: { value: suggestedValue, updatedAt: new Date() } });
 
-  await db
-    .insert(platformStateTable)
-    .values({ key, value: suggestedValue })
-    .onConflictDoUpdate({ target: platformStateTable.key, set: { value: suggestedValue, updatedAt: new Date() } });
-
-  await db.delete(platformStateTable).where(eq(platformStateTable.key, suggestionKey));
-
-  const states = await db.select().from(platformStateTable);
-  const anyLocked = states.some(s => s.key.startsWith("ai_") && !s.key.startsWith("ai_settings_") && !s.key.startsWith("ai_optimised") && !s.key.startsWith("ai_suggestion_"));
-  if (anyLocked) {
-    await db
-      .insert(platformStateTable)
-      .values({ key: "ai_settings_locked", value: "true" })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "true", updatedAt: new Date() } });
-  }
-
-  res.json({ success: true, message: `Reverted ${key} to AI suggestion (${suggestedValue})`, value: suggestedValue });
+  res.json({ success: true, message: `Applied AI suggestion for ${key}: ${suggestedValue}`, value: suggestedValue });
 });
 
 router.get("/settings/ai-status", async (_req, res): Promise<void> => {
@@ -554,16 +560,14 @@ router.get("/settings/ai-status", async (_req, res): Promise<void> => {
   const stateMap: Record<string, string> = {};
   for (const s of states) stateMap[s.key] = s.value;
 
-  const locked = stateMap["ai_settings_locked"] === "true";
   const optimisedAt = stateMap["ai_optimised_at"] || null;
 
-  const aiValues: Record<string, string> = {};
   const aiSuggestions: Record<string, string> = {};
-  for (const key of AI_LOCKABLE_KEYS) {
-    const aiKey = `ai_${key}`;
-    const suggestionKey = `ai_suggestion_${key}`;
-    if (stateMap[aiKey] !== undefined) aiValues[key] = stateMap[aiKey];
-    if (stateMap[suggestionKey] !== undefined) aiSuggestions[key] = stateMap[suggestionKey];
+  for (const [k, v] of Object.entries(stateMap)) {
+    if (k.startsWith("ai_suggest_")) {
+      const settingKey = k.replace("ai_suggest_", "");
+      aiSuggestions[settingKey] = v;
+    }
   }
 
   const lastMonthlyOptimise = stateMap["last_monthly_optimise_month"] || null;
@@ -574,12 +578,12 @@ router.get("/settings/ai-status", async (_req, res): Promise<void> => {
   })();
 
   res.json({
-    locked,
+    locked: false,
     optimisedAt,
-    aiValues,
+    aiValues: {},
     aiSuggestions,
-    lockedKeys: locked ? Object.keys(aiValues) : [],
-    overriddenKeys: Object.keys(aiSuggestions),
+    lockedKeys: [],
+    overriddenKeys: [],
     lastMonthlyOptimise,
     nextScheduled,
   });
