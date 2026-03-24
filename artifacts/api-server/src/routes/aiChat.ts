@@ -66,6 +66,8 @@ const WRITABLE_SETTINGS = [
   "paper_mode_active", "demo_mode_active", "real_mode_active",
   ...MODE_PREFIXES.flatMap(m => PER_MODE_KEYS.map(k => `${m}_${k}`)),
   ...MODE_PREFIXES.flatMap(m => FAMILIES.flatMap(f => PER_FAMILY_KEYS.map(k => `${m}_${f}_${k}`))),
+  ...MODE_PREFIXES.map(m => `${m}_enabled_symbols`),
+  ...MODE_PREFIXES.map(m => `${m}_enabled_strategies`),
 ];
 
 const SYSTEM_PROMPT = `You are the AI assistant for a Deriv Capital Extraction trading platform. You help users understand settings, review AI suggestions, and learn about strategies.

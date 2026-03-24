@@ -416,10 +416,11 @@ const STRATEGY_FAMILIES = [
   { key: "spike_event", label: "Spike / Event", desc: "Exploits Boom/Crash spike patterns deterministically", subStrategies: ["Spike Hazard Capture"] },
 ];
 
-function InstrumentsPicker({ enabledSymbols, onChange }: { enabledSymbols: string; onChange: (v: string) => void }) {
+function InstrumentsPicker({ enabledSymbols, onChange, aiSuggestion, onApplySuggestion }: { enabledSymbols: string; onChange: (v: string) => void; aiSuggestion?: string; onApplySuggestion?: () => void }) {
   const enabled = new Set(enabledSymbols ? enabledSymbols.split(",").filter(Boolean) : ALL_INSTRUMENTS.map(i => i.symbol));
   const toggle = (sym: string) => { const next = new Set(enabled); if (next.has(sym)) next.delete(sym); else next.add(sym); onChange(Array.from(next).join(",")); };
   const categories = [...new Set(ALL_INSTRUMENTS.map(i => i.category))];
+  const hasSuggestion = aiSuggestion !== undefined && aiSuggestion !== enabledSymbols;
   return (
     <div className="space-y-3">
       {categories.map(cat => (
@@ -435,17 +436,26 @@ function InstrumentsPicker({ enabledSymbols, onChange }: { enabledSymbols: strin
           </div>
         </div>
       ))}
+      {hasSuggestion && (
+        <div data-ai-suggestion className="flex items-center justify-end gap-2 mt-1.5">
+          <span className="text-xs text-emerald-500">AI suggests different instrument selection</span>
+          {onApplySuggestion && (
+            <button onClick={onApplySuggestion} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10 transition-colors">Apply</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function StrategyFamilySelector({ enabledStrategies, onChange }: { enabledStrategies: string; onChange: (v: string) => void }) {
+function StrategyFamilySelector({ enabledStrategies, onChange, aiSuggestion, onApplySuggestion }: { enabledStrategies: string; onChange: (v: string) => void; aiSuggestion?: string; onApplySuggestion?: () => void }) {
   const parsed = enabledStrategies.split(",").filter(Boolean);
   const OLD_TO_FAMILY: Record<string, string> = { "trend-pullback": "trend_continuation", "exhaustion-rebound": "mean_reversion", "liquidity-sweep": "mean_reversion", "volatility-breakout": "breakout_expansion", "volatility-expansion": "breakout_expansion", "spike-hazard": "spike_event" };
   const migrated = new Set<string>();
   for (const p of parsed) { if (OLD_TO_FAMILY[p]) migrated.add(OLD_TO_FAMILY[p]); else migrated.add(p); }
   const enabled = migrated.size > 0 ? migrated : new Set(STRATEGY_FAMILIES.map(f => f.key));
   const toggle = (key: string) => { const next = new Set(enabled); if (next.has(key)) next.delete(key); else next.add(key); onChange(Array.from(next).join(",")); };
+  const hasSuggestion = aiSuggestion !== undefined && aiSuggestion !== enabledStrategies;
   return (
     <div className="space-y-2">
       {STRATEGY_FAMILIES.map(family => (
@@ -463,6 +473,14 @@ function StrategyFamilySelector({ enabledStrategies, onChange }: { enabledStrate
           </div>
         </button>
       ))}
+      {hasSuggestion && (
+        <div data-ai-suggestion className="flex items-center justify-end gap-2 mt-1.5">
+          <span className="text-xs text-emerald-500">AI suggests different strategy selection</span>
+          {onApplySuggestion && (
+            <button onClick={onApplySuggestion} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10 transition-colors">Apply</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -818,8 +836,13 @@ function SuggestionSummaryCard({ mode, form, suggestions, aiMeta }: { mode: "pap
             <p className="text-xs text-muted-foreground">Unlock fields and look for green/amber badges to review individual suggestions.</p>
             <button
               onClick={() => {
-                const el = document.querySelector("[data-ai-suggestion]");
-                if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+                const els = document.querySelectorAll("[data-ai-suggestion]");
+                els.forEach(el => {
+                  el.classList.add("ring-2", "ring-emerald-500/50", "rounded-md", "bg-emerald-500/5");
+                  setTimeout(() => el.classList.remove("ring-2", "ring-emerald-500/50", "rounded-md", "bg-emerald-500/5"), 3000);
+                });
+                const first = els[0];
+                if (first) first.scrollIntoView({ behavior: "smooth", block: "center" });
               }}
               className="ml-3 shrink-0 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10 font-medium transition-colors"
             >
@@ -991,7 +1014,7 @@ function ModeSettingsTab({ mode, form, update, suggestions, onApplySuggestion, u
             </div>
           ) : (
             <>
-              <InstrumentsPicker enabledSymbols={form[p("enabled_symbols")] || form.enabled_symbols || ""} onChange={(v) => update(p("enabled_symbols"), v)} />
+              <InstrumentsPicker enabledSymbols={form[p("enabled_symbols")] || form.enabled_symbols || ""} onChange={(v) => update(p("enabled_symbols"), v)} aiSuggestion={suggestions[p("enabled_symbols")]} onApplySuggestion={() => onApplySuggestion(p("enabled_symbols"))} />
               <SectionSaveButton sectionKeys={[p("enabled_symbols")]} form={form} saving={saving} onSave={onSaveSection} />
             </>
           )}
@@ -1011,7 +1034,7 @@ function ModeSettingsTab({ mode, form, update, suggestions, onApplySuggestion, u
             </div>
           ) : (
             <>
-              <StrategyFamilySelector enabledStrategies={form[p("enabled_strategies")] ?? STRATEGY_FAMILIES.map(f => f.key).join(",")} onChange={(v) => update(p("enabled_strategies"), v)} />
+              <StrategyFamilySelector enabledStrategies={form[p("enabled_strategies")] ?? STRATEGY_FAMILIES.map(f => f.key).join(",")} onChange={(v) => update(p("enabled_strategies"), v)} aiSuggestion={suggestions[p("enabled_strategies")]} onApplySuggestion={() => onApplySuggestion(p("enabled_strategies"))} />
               <SectionSaveButton sectionKeys={[p("enabled_strategies")]} form={form} saving={saving} onSave={onSaveSection} />
             </>
           )}
