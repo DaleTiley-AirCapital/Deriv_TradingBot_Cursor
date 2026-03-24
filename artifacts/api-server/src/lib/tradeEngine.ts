@@ -306,6 +306,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
 
   const stageMultiplier = getEntrySizeMultiplier(entryStage);
   sizing.size = sizing.size * stageMultiplier;
+  sizing.size = Math.max(sizing.size, equity * 0.05);
 
   if (decision.capitalAmount > 0 && decision.capitalAmount < sizing.size) {
     console.log(`[TradeEngine] [${mode.toUpperCase()}] AI-adjusted size cap: ${sizing.size.toFixed(2)} → ${decision.capitalAmount.toFixed(2)}`);
