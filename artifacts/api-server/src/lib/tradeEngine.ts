@@ -525,7 +525,7 @@ export async function manageOpenPositions(): Promise<void> {
         peakPrice: newPeak,
         direction,
         tradeId: trade.id,
-        peakDrawdownExitPct: harvestSettings.peakDrawdownExitPct * harvestSensitivity,
+        peakDrawdownExitPct: harvestSettings.peakDrawdownExitPct / harvestSensitivity,
         minPeakProfitPct: harvestSettings.minPeakProfitPct / harvestSensitivity,
         largePeakThresholdPct: harvestSettings.largePeakThresholdPct / harvestSensitivity,
       });
