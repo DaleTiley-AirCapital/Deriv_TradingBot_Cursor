@@ -58,6 +58,15 @@ export const FAMILY_HOLD_PROFILE: Record<StrategyFamily, {
   },
 };
 
+function resolveFamilyFromStrategy(strategyName: string): StrategyFamily {
+  if (strategyName in FAMILY_HOLD_PROFILE) return strategyName as StrategyFamily;
+  if (strategyName.includes("trend")) return "trend_continuation";
+  if (strategyName.includes("mean") || strategyName.includes("reversion")) return "mean_reversion";
+  if (strategyName.includes("breakout")) return "breakout_expansion";
+  if (strategyName.includes("spike")) return "spike_event";
+  return "trend_continuation";
+}
+
 interface PositionSizing {
   size: number;
   allowed: boolean;
@@ -508,9 +517,7 @@ export async function manageOpenPositions(): Promise<void> {
       }
 
       const harvestSettings = await getHarvestSettings(tradeMode);
-      const harvestFamily = (trade.strategyName as StrategyFamily) in FAMILY_HOLD_PROFILE
-        ? trade.strategyName as StrategyFamily
-        : "trend_continuation" as StrategyFamily;
+      const harvestFamily = resolveFamilyFromStrategy(trade.strategyName);
       const harvestSensitivity = FAMILY_HOLD_PROFILE[harvestFamily].harvestSensitivity;
       const harvestCheck = evaluateProfitHarvest({
         entryPrice: trade.entryPrice,
@@ -547,9 +554,7 @@ export async function manageOpenPositions(): Promise<void> {
       }
 
       if (trade.maxExitTs) {
-        const tradeFamily = (trade.strategyName as StrategyFamily) in FAMILY_HOLD_PROFILE
-          ? trade.strategyName as StrategyFamily
-          : "trend_continuation" as StrategyFamily;
+        const tradeFamily = resolveFamilyFromStrategy(trade.strategyName);
         const tradeFamilyProfile = FAMILY_HOLD_PROFILE[tradeFamily];
 
         const timeCheck = checkTimeExit({
