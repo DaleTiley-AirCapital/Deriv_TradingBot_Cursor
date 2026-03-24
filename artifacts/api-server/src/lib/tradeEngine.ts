@@ -506,6 +506,10 @@ export async function manageOpenPositions(): Promise<void> {
     // no fallback client available
   }
 
+  const cachedStates = await db.select().from(platformStateTable);
+  const cachedStateMap: Record<string, string> = {};
+  for (const s of cachedStates) cachedStateMap[s.key] = s.value;
+
   for (const trade of openTrades) {
     try {
       const tradeMode = trade.mode as TradingMode;
@@ -560,10 +564,7 @@ export async function manageOpenPositions(): Promise<void> {
       const harvestSettings = await getHarvestSettings(tradeMode);
       const harvestFamily = resolveFamilyFromStrategy(trade.strategyName);
       const harvestPrefix = tradeMode === "paper" ? "paper" : tradeMode === "demo" ? "demo" : "real";
-      const statesForHarvest = await db.select().from(platformStateTable);
-      const stateMapForHarvest: Record<string, string> = {};
-      for (const s of statesForHarvest) stateMapForHarvest[s.key] = s.value;
-      const harvestSensitivity = parseFloat(stateMapForHarvest[`${harvestPrefix}_${harvestFamily}_harvest_sensitivity`] || String(FAMILY_HOLD_PROFILE[harvestFamily].harvestSensitivity));
+      const harvestSensitivity = parseFloat(cachedStateMap[`${harvestPrefix}_${harvestFamily}_harvest_sensitivity`] || String(FAMILY_HOLD_PROFILE[harvestFamily].harvestSensitivity));
       const harvestCheck = evaluateProfitHarvest({
         entryPrice: trade.entryPrice,
         currentPrice,
