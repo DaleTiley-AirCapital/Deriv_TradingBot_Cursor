@@ -1006,11 +1006,19 @@ function ModeSettingsTab({ mode, form, update, suggestions, onApplySuggestion, u
         <CardContent>
           <p className="text-xs text-muted-foreground mb-3">Select which synthetic indices {modeLabel} mode will scan and trade.</p>
           {isLocked("instruments") ? (
-            <div className="flex items-center justify-between p-3 rounded-lg border border-border/30 bg-muted/10">
-              <span className="text-sm text-muted-foreground">{(form[p("enabled_symbols")] || form.enabled_symbols || "").split(",").filter(Boolean).length} instruments enabled</span>
-              <button onClick={() => handleUnlock("instruments")} className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors" title="Unlock to edit">
-                <Lock className="w-3.5 h-3.5" />
-              </button>
+            <div>
+              <div className="flex items-center justify-between p-3 rounded-lg border border-border/30 bg-muted/10">
+                <span className="text-sm text-muted-foreground">{(form[p("enabled_symbols")] || form.enabled_symbols || "").split(",").filter(Boolean).length} instruments enabled</span>
+                <button onClick={() => handleUnlock("instruments")} className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors" title="Unlock to edit">
+                  <Lock className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {suggestions[p("enabled_symbols")] && suggestions[p("enabled_symbols")] !== (form[p("enabled_symbols")] || form.enabled_symbols || "") && (
+                <div data-ai-suggestion className="flex items-center justify-end gap-2 mt-1.5">
+                  <span className="text-xs text-emerald-500">AI suggests different instrument selection</span>
+                  <button onClick={() => handleUnlock("instruments")} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10 transition-colors">Unlock to Apply</button>
+                </div>
+              )}
             </div>
           ) : (
             <>
@@ -1026,11 +1034,19 @@ function ModeSettingsTab({ mode, form, update, suggestions, onApplySuggestion, u
         <CardContent>
           <p className="text-xs text-muted-foreground mb-3">Enable or disable strategies for {modeLabel} mode.</p>
           {isLocked("strategies") ? (
-            <div className="flex items-center justify-between p-3 rounded-lg border border-border/30 bg-muted/10">
-              <span className="text-sm text-muted-foreground">{(form[p("enabled_strategies")] ?? STRATEGY_FAMILIES.map(f => f.key).join(",")).split(",").filter(Boolean).length} strategy families enabled</span>
-              <button onClick={() => handleUnlock("strategies")} className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors" title="Unlock to edit">
-                <Lock className="w-3.5 h-3.5" />
-              </button>
+            <div>
+              <div className="flex items-center justify-between p-3 rounded-lg border border-border/30 bg-muted/10">
+                <span className="text-sm text-muted-foreground">{(form[p("enabled_strategies")] ?? STRATEGY_FAMILIES.map(f => f.key).join(",")).split(",").filter(Boolean).length} strategy families enabled</span>
+                <button onClick={() => handleUnlock("strategies")} className="p-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/50 transition-colors" title="Unlock to edit">
+                  <Lock className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {suggestions[p("enabled_strategies")] && suggestions[p("enabled_strategies")] !== (form[p("enabled_strategies")] ?? STRATEGY_FAMILIES.map(f => f.key).join(",")) && (
+                <div data-ai-suggestion className="flex items-center justify-end gap-2 mt-1.5">
+                  <span className="text-xs text-emerald-500">AI suggests different strategy selection</span>
+                  <button onClick={() => handleUnlock("strategies")} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/10 transition-colors">Unlock to Apply</button>
+                </div>
+              )}
             </div>
           ) : (
             <>

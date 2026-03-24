@@ -573,6 +573,22 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
         suggestions[`${mode}_${family}_harvest_sensitivity`] = String(Math.max(curHarvSens * 0.9, 0.5).toFixed(2));
       }
     }
+
+    const disableFamilies: string[] = [];
+    for (const family of STRATEGY_FAMILIES) {
+      const ft = modeTrades.filter(t => t.strategyName === family);
+      if (ft.length >= 5) {
+        const fwr = ft.filter(t => (t.pnl ?? 0) > 0).length / ft.length;
+        if (fwr < 0.2) disableFamilies.push(family);
+      }
+    }
+    if (disableFamilies.length > 0 && disableFamilies.length < STRATEGY_FAMILIES.length) {
+      const currentEnabled = stateMap[`${mode}_enabled_strategies`] || STRATEGY_FAMILIES.join(",");
+      const remaining = currentEnabled.split(",").filter(f => !disableFamilies.includes(f));
+      if (remaining.length > 0) {
+        suggestions[`${mode}_enabled_strategies`] = remaining.join(",");
+      }
+    }
   }
 
   const currentMinScore = parseFloat(stateMap["min_composite_score"] || "80");
