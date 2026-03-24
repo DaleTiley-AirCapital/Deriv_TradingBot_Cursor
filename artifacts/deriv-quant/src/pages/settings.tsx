@@ -448,7 +448,7 @@ function StrategyFamilySelector({ enabledStrategies, onChange }: { enabledStrate
   );
 }
 
-function SectionSaveButton({ sectionKeys, form, saving, onSave }: { sectionKeys: string[]; form: Record<string, string>; saving: boolean; onSave: (keys: string[]) => void }) {
+function SectionSaveButton({ sectionKeys, form, saving, onSave }: { sectionKeys: string[]; form: Record<string, string>; saving: boolean; onSave: (keys: string[], overrides?: Record<string, string>) => void }) {
   return (
     <div className="pt-3 border-t border-border/30 mt-3">
       <button onClick={() => onSave(sectionKeys)} disabled={saving}
@@ -751,7 +751,7 @@ function ModeSettingsTab({ mode, form, update, suggestions, onApplySuggestion, u
   mode: "paper" | "demo" | "real"; form: Record<string, string>; update: (key: string, value: string) => void;
   suggestions: AiSuggestions; onApplySuggestion: (key: string) => void;
   unlockedSections: Set<string>; onUnlockSection: (section: string) => void;
-  onSaveSection: (keys: string[]) => void; saving: boolean; onPaperReset?: () => void;
+  onSaveSection: (keys: string[], overrides?: Record<string, string>) => void; saving: boolean; onPaperReset?: () => void;
 }) {
   const p = (key: string) => `${mode}_${key}`;
   const modeLabel = mode === "paper" ? "Paper" : mode === "demo" ? "Demo" : "Real";
@@ -1031,12 +1031,13 @@ export default function Settings() {
     }
   };
 
-  const handleSaveSection = async (keys: string[]) => {
+  const handleSaveSection = async (keys: string[], overrides?: Record<string, string>) => {
     setSaving(true);
     try {
       const payload: Record<string, string> = {};
       for (const key of keys) {
-        if (form[key] !== undefined) payload[key] = form[key];
+        if (overrides && key in overrides) { payload[key] = overrides[key]; }
+        else if (form[key] !== undefined) { payload[key] = form[key]; }
       }
       const resp = await fetch(`${base}api/settings`, {
         method: "POST",
@@ -1248,7 +1249,7 @@ export default function Settings() {
               <Card>
                 <CardHeader><CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />Global Controls</CardTitle></CardHeader>
                 <CardContent>
-                  <SettingField label="Kill Switch" description="Emergency stop — halts all trading across all modes" value={form.kill_switch || "false"} onChange={(v) => { update("kill_switch", v); handleSaveSection(["kill_switch"]); }} type="toggle" locked={!unlockedSections.has("killswitch")} onUnlock={() => handleUnlockSection("killswitch")} />
+                  <SettingField label="Kill Switch" description="Emergency stop — halts all trading across all modes" value={form.kill_switch || "false"} onChange={(v) => { update("kill_switch", v); handleSaveSection(["kill_switch"], { kill_switch: v }); }} type="toggle" locked={!unlockedSections.has("killswitch")} onUnlock={() => handleUnlockSection("killswitch")} />
                 </CardContent>
               </Card>
             </div>
