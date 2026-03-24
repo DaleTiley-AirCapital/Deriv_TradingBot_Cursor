@@ -7,7 +7,7 @@ import { evaluateProfitHarvest, determineEntryStage, getEntrySizeMultiplier, che
 
 const MAX_OPEN_TRADES = 3;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
-const POSITION_SIZE_MIN_PCT = 0.20;
+const POSITION_SIZE_MIN_PCT = 0.05;
 const POSITION_SIZE_MAX_PCT = 0.25;
 const DEFAULT_TRAILING_STOP_PCT = 0.25;
 const INITIAL_EXIT_HOURS = 168;
@@ -352,8 +352,8 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
   const trailingStopPct = parseFloat(stateMap[`${prefix}_trailing_stop_pct`] || stateMap["trailing_stop_pct"] || "25") / 100;
   const timeExitHours = parseFloat(stateMap[`${prefix}_time_exit_window_hours`] || stateMap["time_exit_window_hours"] || String(INITIAL_EXIT_HOURS));
 
-  const family = ((signal as any).strategyFamily || "trend_continuation") as StrategyFamily;
-  const familyProfile = FAMILY_HOLD_PROFILE[family] || FAMILY_HOLD_PROFILE.trend_continuation;
+  const family: StrategyFamily = signal.strategyFamily || resolveFamilyFromStrategy(signal.strategyName);
+  const familyProfile = FAMILY_HOLD_PROFILE[family];
 
   const tpMultiplier = signal.confidence >= 0.75 ? tpMultiplierStrong
     : signal.confidence >= 0.65 ? tpMultiplierMedium
