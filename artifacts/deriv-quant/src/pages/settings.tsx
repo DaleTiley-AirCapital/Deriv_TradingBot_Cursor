@@ -1,14 +1,12 @@
 import React, { useEffect, useState, useCallback } from "react";
 import {
   useGetSettings,
-  useUpdateSettings,
   getGetSettingsQueryKey,
   useGetAccountInfo,
-  useSetTradingMode,
   useToggleTradingMode,
   getGetAccountInfoQueryKey,
 } from "@workspace/api-client-react";
-import type { PlatformSettings, SetTradingModeRequestMode, ToggleTradingModeRequestMode, ActionResponse } from "@workspace/api-client-react";
+import type { ToggleTradingModeRequestMode, ActionResponse } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui-elements";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -1061,17 +1059,6 @@ export default function Settings() {
     setForm(prev => ({ ...prev, [key]: value }));
   };
 
-  const { mutate: save, isPending: globalSaving } = useUpdateSettings({
-    mutation: {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
-        queryClient.invalidateQueries({ queryKey: getGetAccountInfoQueryKey() });
-        toast({ title: "Settings saved" });
-      },
-      onError: () => { toast({ title: "Save failed", variant: "destructive" }); },
-    },
-  });
-
   const { mutate: toggleMode } = useToggleTradingMode({
     mutation: {
       onSuccess: (data) => {
@@ -1220,12 +1207,7 @@ export default function Settings() {
                     </div>
                   )}
                   {unlockedSections.has("apikeys") && (
-                    <div className="pt-3 border-t border-border/30 mt-3">
-                      <button onClick={() => { const payload: PlatformSettings = { ...form }; save({ data: payload }); }} disabled={globalSaving}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-medium shadow-sm hover:shadow-md transition-all disabled:opacity-50">
-                        {globalSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}{globalSaving ? "Saving..." : "Save API Keys"}
-                      </button>
-                    </div>
+                    <SectionSaveButton sectionKeys={["deriv_api_token_demo", "deriv_api_token_real", "openai_api_key", "ai_verification_enabled"]} form={form} saving={saving} onSave={handleSaveSection} />
                   )}
                 </CardContent>
               </Card>
@@ -1266,7 +1248,7 @@ export default function Settings() {
               <Card>
                 <CardHeader><CardTitle className="flex items-center gap-2"><Shield className="w-4 h-4" />Global Controls</CardTitle></CardHeader>
                 <CardContent>
-                  <SettingField label="Kill Switch" description="Emergency stop — halts all trading across all modes" value={form.kill_switch || "false"} onChange={(v) => { update("kill_switch", v); const payload: PlatformSettings = { ...form, kill_switch: v }; save({ data: payload }); }} type="toggle" locked={false} onUnlock={() => {}} />
+                  <SettingField label="Kill Switch" description="Emergency stop — halts all trading across all modes" value={form.kill_switch || "false"} onChange={(v) => { update("kill_switch", v); handleSaveSection(["kill_switch"]); }} type="toggle" locked={!unlockedSections.has("killswitch")} onUnlock={() => handleUnlockSection("killswitch")} />
                 </CardContent>
               </Card>
             </div>
