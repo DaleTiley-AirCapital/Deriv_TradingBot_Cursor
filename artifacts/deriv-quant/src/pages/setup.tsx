@@ -11,28 +11,30 @@ const api = (path: string) => `${BASE}api${path}`;
 
 type Step = "welcome" | "apikeys" | "testing" | "initialise" | "complete";
 
-async function consumeSSE(
-  url: string,
+async function pollProgress(
   onEvent: (evt: Record<string, unknown>) => void,
   signal?: AbortSignal,
-) {
-  const res = await fetch(url, { method: "POST", signal });
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("No stream");
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
-      try {
-        onEvent(JSON.parse(line.slice(6)));
-      } catch {}
+): Promise<void> {
+  let since = 0;
+  while (!signal?.aborted) {
+    try {
+      const res = await fetch(api(`/setup/progress?since=${since}`), { signal });
+      if (!res.ok) throw new Error(`Progress poll failed: ${res.status}`);
+      const data = await res.json();
+      const events = data.events as Array<Record<string, unknown>>;
+      for (const evt of events) {
+        onEvent(evt);
+      }
+      since = data.totalEvents as number;
+      if (!data.running && since > 0) return;
+      if (!data.running && data.error) {
+        onEvent({ phase: "error", message: data.error });
+        return;
+      }
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
     }
+    await new Promise(r => setTimeout(r, 1500));
   }
 }
 
@@ -179,7 +181,14 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     completedRef.current = false;
 
     try {
-      await consumeSSE(api("/setup/initialise"), (evt) => {
+      const startRes = await fetch(api("/setup/initialise"), { method: "POST" });
+      const startData = await startRes.json();
+      if (!startData.started && !startData.message?.includes("already running")) {
+        setError(startData.message || "Failed to start setup");
+        return;
+      }
+
+      await pollProgress((evt) => {
         const phase = evt.phase as string;
         const pct = (evt.overallPct as number) || 0;
 
@@ -268,7 +277,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 ...prev[sym],
                 status: "retrying",
                 retryAttempt: evt.attempt as number || 0,
-                retryMax: evt.maxAttempts as number || MAX_CONSECUTIVE_ERRORS,
+                retryMax: evt.maxAttempts as number || 5,
                 error: evt.error as string || "Retrying...",
                 errorCode: evt.errorCode as string || "RETRYING",
               },
@@ -436,16 +445,11 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
       }, abortRef.current.signal);
 
       if (!completedRef.current) {
-        setError("Connection to server lost during setup. Click 'Retry Setup' to reconnect — data already downloaded is preserved.");
+        setError("Setup process ended without completing. Click 'Retry Setup' to check progress or restart.");
       }
     } catch (err) {
       if ((err as Error).name !== "AbortError") {
-        const msg = err instanceof Error ? err.message : "Initialisation failed";
-        if (msg === "Load failed" || msg === "Failed to fetch" || msg === "NetworkError when attempting to fetch resource.") {
-          setError("Network connection lost. The server may still be downloading data. Click 'Retry Setup' to reconnect.");
-        } else {
-          setError(msg);
-        }
+        setError(err instanceof Error ? err.message : "Initialisation failed");
       }
     }
   }, [queryClient]);

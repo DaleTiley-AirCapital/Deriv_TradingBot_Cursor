@@ -8,6 +8,25 @@ import { getApiSymbol, validateActiveSymbols } from "../lib/symbolValidator.js";
 
 const router: IRouter = Router();
 
+interface SetupProgress {
+  running: boolean;
+  events: Array<Record<string, unknown>>;
+  lastEventIndex: number;
+  startedAt: number;
+  completedAt: number | null;
+  error: string | null;
+}
+
+let setupProgress: SetupProgress = {
+  running: false,
+  events: [],
+  lastEventIndex: 0,
+  startedAt: 0,
+  completedAt: null,
+  error: null,
+};
+
+const MAX_PROGRESS_EVENTS = 2000;
 const STRATEGIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"] as const;
 const GRANULARITY_1M = 60;
 const GRANULARITY_5M = 300;
@@ -167,25 +186,53 @@ async function queryOldestAvailableEpoch(
   }
 }
 
+router.get("/setup/progress", (_req, res): void => {
+  const since = parseInt(String(_req.query.since) || "0", 10);
+  const newEvents = setupProgress.events.slice(since);
+  res.json({
+    running: setupProgress.running,
+    events: newEvents,
+    totalEvents: setupProgress.events.length,
+    since,
+    completedAt: setupProgress.completedAt,
+    error: setupProgress.error,
+  });
+});
+
 router.post("/setup/initialise", async (_req, res): Promise<void> => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  res.flushHeaders();
+  if (setupProgress.running) {
+    res.json({ started: false, message: "Setup is already running.", totalEvents: setupProgress.events.length });
+    return;
+  }
 
-  const send = (data: object) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-    if (typeof (res as any).flush === "function") (res as any).flush();
+  setupProgress = {
+    running: true,
+    events: [],
+    lastEventIndex: 0,
+    startedAt: Date.now(),
+    completedAt: null,
+    error: null,
   };
-  const globalStart = Date.now();
 
-  const heartbeat = setInterval(() => {
-    try {
-      res.write(`: heartbeat ${Date.now()}\n\n`);
-      if (typeof (res as any).flush === "function") (res as any).flush();
-    } catch {}
-  }, 10_000);
+  res.json({ started: true, message: "Setup started." });
+
+  const send = (data: Record<string, unknown>) => {
+    if (setupProgress.events.length >= MAX_PROGRESS_EVENTS) {
+      setupProgress.events.splice(0, 500);
+    }
+    setupProgress.events.push(data);
+  };
+
+  runSetupInBackground(send).catch(err => {
+    console.error("[Setup] Background setup crashed:", err);
+    setupProgress.error = err instanceof Error ? err.message : String(err);
+    setupProgress.running = false;
+    setupProgress.completedAt = Date.now();
+  });
+});
+
+async function runSetupInBackground(send: (data: Record<string, unknown>) => void): Promise<void> {
+  const globalStart = Date.now();
 
   try {
     const nowEpoch = Math.floor(Date.now() / 1000);
@@ -481,8 +528,8 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
         failedSymbols: failedSymbols.map(f => ({ symbol: f.symbol, error: f.error, timeframe: f.timeframe })),
         message: `Setup failed: all ${V1_DEFAULT_SYMBOLS.length} symbols failed to download. Check your Deriv API connection and try again.`,
       });
-      clearInterval(heartbeat);
-      res.end();
+      setupProgress.running = false;
+      setupProgress.completedAt = Date.now();
       return;
     }
 
@@ -822,7 +869,8 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
       const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
       console.error("[Setup] Streaming failed:", errMsg);
       send({ phase: "error", stage: "streaming", message: `Streaming failed: ${errMsg}. Setup incomplete — please try again.` });
-      res.end();
+      setupProgress.running = false;
+      setupProgress.completedAt = Date.now();
       return;
     }
 
@@ -848,15 +896,16 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
       message: `Step 6 of 6: Complete — ${candleTotal.toLocaleString()} candles, ${btCompleted} backtests, settings optimised, streaming live (${totalSec}s)`,
     });
 
-    res.write("data: [DONE]\n\n");
-    clearInterval(heartbeat);
-    res.end();
+    setupProgress.running = false;
+    setupProgress.completedAt = Date.now();
+    console.log(`[Setup] Setup complete in ${totalSec}s`);
   } catch (err) {
-    clearInterval(heartbeat);
     send({ phase: "error", message: err instanceof Error ? err.message : "Initialisation failed" });
-    res.end();
+    setupProgress.error = err instanceof Error ? err.message : "Initialisation failed";
+    setupProgress.running = false;
+    setupProgress.completedAt = Date.now();
   }
-});
+}
 
 router.post("/setup/reset", async (_req, res): Promise<void> => {
   try {
