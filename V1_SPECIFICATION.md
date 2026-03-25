@@ -136,11 +136,10 @@ The setup wizard is a multi-step guided process that runs on first launch (befor
 
 **Step 4 — Initialisation** (SSE stream with 6 phases):
 
-1. **Probing Phase**: Before downloading any data, the system probes each of the 12 symbols individually to determine connectivity and available history range. For each symbol, it queries the Deriv API to find the oldest available candle epoch. This produces per-symbol expected record counts shown in the UI before any downloading begins.
+1. **Probing Phase**: Instant — no API calls. All 12 probe_result events are emitted immediately using a fixed 1-year expected record count (525,600 per symbol × 1m + 105,120 × 5m = 630,720 total). The initialise endpoint first DELETEs all data tables (candles, backtests, trades, signals, ticks, spikes, features, model_runs) to ensure a clean state, then emits all probe results in a single synchronous loop. This eliminates the previous bottleneck of 36 sequential API calls during probing.
 
-2. **Backfill Phase**: Downloads 1-minute and 5-minute candle history for all connected symbols. Uses paginated API calls (5,000 candles per page) working backwards from the current time. Features intelligent resume and per-symbol progress tracking with:
-   - **Resume support**: Pre-checks existing DB data per symbol/timeframe before downloading. Symbols with ≥95% coverage are skipped entirely. Partial data starts from the gap edge (oldest existing timestamp - 1) instead of re-downloading from now.
-   - Individual progress percentages based on expected vs fetched records (including existing data in progress calculation)
+2. **Backfill Phase**: Downloads 1-minute and 5-minute candle history for all 12 V1 symbols. Uses paginated API calls (5,000 candles per page) working backwards from the current time. Uses INSERT ... ON CONFLICT DO NOTHING for deduplication (no pre-query needed). Features per-symbol progress tracking with:
+   - Individual progress percentages based on expected vs fetched records
    - Real-time status updates on every page (waiting, downloading, retrying, done, error)
    - Automatic WebSocket reconnection on connection loss (up to 5 consecutive retries per symbol)
    - Rate limiting (150ms delay between API calls) to avoid throttling

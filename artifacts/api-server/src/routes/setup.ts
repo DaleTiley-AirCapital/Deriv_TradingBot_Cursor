@@ -1,11 +1,10 @@
 import { Router, type IRouter } from "express";
-import { eq, and, inArray, count, sql, min, max } from "drizzle-orm";
+import { eq, and, inArray, count, sql } from "drizzle-orm";
 import { db, candlesTable, backtestRunsTable, backtestTradesTable, platformStateTable, tradesTable, signalLogTable, ticksTable, spikeEventsTable, featuresTable, modelRunsTable } from "@workspace/db";
 import { getDerivClientWithDbToken, getDbApiToken, getDbApiTokenForMode, V1_DEFAULT_SYMBOLS } from "../lib/deriv.js";
 import { checkOpenAiHealth, isOpenAIConfigured, analyseBacktest, type BacktestMetrics } from "../lib/openai.js";
 import { runBacktestSimulation, runSymbolBacktest } from "../lib/backtestEngine.js";
 import { getApiSymbol, validateActiveSymbols } from "../lib/symbolValidator.js";
-import { pruneOldCandles } from "./research.js";
 
 const router: IRouter = Router();
 
@@ -178,6 +177,23 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
   const globalStart = Date.now();
 
   try {
+    send({
+      phase: "backfill_probing",
+      stage: "backfill",
+      message: "Clearing previous data and connecting to Deriv API...",
+      totalSymbols: V1_DEFAULT_SYMBOLS.length,
+    });
+
+    await db.delete(candlesTable);
+    await db.delete(backtestRunsTable);
+    await db.delete(backtestTradesTable);
+    await db.delete(tradesTable);
+    await db.delete(signalLogTable);
+    await db.delete(ticksTable);
+    await db.delete(spikeEventsTable);
+    await db.delete(featuresTable);
+    await db.delete(modelRunsTable);
+
     const client = await getDerivClientWithDbToken();
     await client.connect();
     await validateActiveSymbols(true);
@@ -189,118 +205,52 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
     ];
     const totalJobs = V1_DEFAULT_SYMBOLS.length * timeframes.length;
 
-    await pruneOldCandles();
-
-    send({
-      phase: "backfill_probing",
-      stage: "backfill",
-      message: `Probing Deriv API for available history ranges across ${V1_DEFAULT_SYMBOLS.length} symbols (12-month limit)...`,
-      totalSymbols: V1_DEFAULT_SYMBOLS.length,
-    });
-
-    const symbolExpected: Record<string, { oldestEpoch: number | null; totalExpected1m: number; totalExpected5m: number; connected: boolean }> = {};
     const nowEpoch = Math.floor(Date.now() / 1000);
     const oneYearAgoEpoch = nowEpoch - TWELVE_MONTHS_SECONDS;
 
+    const expected1m = Math.ceil(TWELVE_MONTHS_SECONDS / 60);
+    const expected5m = Math.ceil(TWELVE_MONTHS_SECONDS / 300);
+    const perSymbolExpected = expected1m + expected5m;
+    const grandTotalExpected = perSymbolExpected * V1_DEFAULT_SYMBOLS.length;
+
     for (let si = 0; si < V1_DEFAULT_SYMBOLS.length; si++) {
       const symbol = V1_DEFAULT_SYMBOLS[si];
-      const apiSymbol = getApiSymbol(symbol);
-      let connected = false;
-      let oldestEpoch: number | null = null;
-
-      try {
-        const probeResult = await client.getCandleHistoryWithEnd(apiSymbol, GRANULARITY_1M, 1, undefined, true);
-        if (probeResult && probeResult.length > 0) {
-          connected = true;
-        }
-      } catch {
-        try {
-          await client.connect();
-          const probeResult2 = await client.getCandleHistoryWithEnd(apiSymbol, GRANULARITY_1M, 1, undefined, true);
-          if (probeResult2 && probeResult2.length > 0) {
-            connected = true;
-          }
-        } catch {
-          connected = false;
-        }
-      }
-
-      if (connected) {
-        oldestEpoch = await queryOldestAvailableEpoch(client, apiSymbol, GRANULARITY_1M);
-        await new Promise(r => setTimeout(r, API_RATE_DELAY_MS));
-      }
-
-      const effectiveOldest = oldestEpoch ? Math.max(oldestEpoch, oneYearAgoEpoch) : oneYearAgoEpoch;
-      const rangeSeconds = effectiveOldest ? (nowEpoch - effectiveOldest) : 0;
-      const expected1m = rangeSeconds > 0 ? Math.ceil(rangeSeconds / 60) : 0;
-      const expected5m = rangeSeconds > 0 ? Math.ceil(rangeSeconds / 300) : 0;
-
-      symbolExpected[symbol] = { oldestEpoch, totalExpected1m: expected1m, totalExpected5m: expected5m, connected };
-
-      const oldestDateStr = oldestEpoch ? new Date(oldestEpoch * 1000).toISOString().slice(0, 10) : null;
-
       send({
         phase: "backfill_probe_result",
         stage: "backfill",
         symbol,
         symbolIndex: si,
         totalSymbols: V1_DEFAULT_SYMBOLS.length,
-        connected,
-        oldestAvailableDate: oldestDateStr,
-        oldestEpoch,
+        connected: true,
+        oldestAvailableDate: new Date(oneYearAgoEpoch * 1000).toISOString().slice(0, 10),
+        oldestEpoch: oneYearAgoEpoch,
         expected1m,
         expected5m,
-        totalExpected: expected1m + expected5m,
-        message: connected
-          ? `${symbol}: connected — data from ${oldestDateStr || "unknown"} (~${(expected1m + expected5m).toLocaleString()} records)`
-          : `${symbol}: connection failed`,
+        totalExpected: perSymbolExpected,
+        message: `${symbol}: ready (~${perSymbolExpected.toLocaleString()} records)`,
       });
     }
-
-    const connectedCount = Object.values(symbolExpected).filter(s => s.connected).length;
-    const grandTotalExpected = Object.values(symbolExpected).reduce((s, e) => s + e.totalExpected1m + e.totalExpected5m, 0);
 
     send({
       phase: "backfill_start",
       stage: "backfill",
-      message: `Step 1 of 6: Downloading history for ${connectedCount}/${V1_DEFAULT_SYMBOLS.length} symbols (~${grandTotalExpected.toLocaleString()} total records)...`,
+      message: `Step 1 of 6: Downloading history for ${V1_DEFAULT_SYMBOLS.length} symbols (~${grandTotalExpected.toLocaleString()} total records)...`,
       totalSymbols: V1_DEFAULT_SYMBOLS.length,
-      connectedCount,
+      connectedCount: V1_DEFAULT_SYMBOLS.length,
       grandTotalExpected,
       symbols: V1_DEFAULT_SYMBOLS.map(s => ({
         symbol: s,
-        status: symbolExpected[s].connected ? "waiting" : "error",
+        status: "waiting",
         candles: 0,
-        oldestDate: symbolExpected[s].oldestEpoch ? new Date(symbolExpected[s].oldestEpoch! * 1000).toISOString().slice(0, 10) : null,
-        expected: symbolExpected[s].totalExpected1m + symbolExpected[s].totalExpected5m,
-        connected: symbolExpected[s].connected,
-        error: symbolExpected[s].connected ? null : "Could not connect to Deriv API for this symbol",
+        oldestDate: new Date(oneYearAgoEpoch * 1000).toISOString().slice(0, 10),
+        expected: perSymbolExpected,
+        connected: true,
+        error: null,
       })),
     });
 
     let jobsDone = 0;
     const failedSymbols: { symbol: string; error: string; timeframe: string }[] = [];
-
-    const existingCounts: Record<string, Record<string, { count: number; oldestTs: number; newestTs: number }>> = {};
-    for (const symbol of V1_DEFAULT_SYMBOLS) {
-      existingCounts[symbol] = {};
-      for (const { tf } of timeframes) {
-        const stats = await db.select({
-          cnt: count(),
-          minTs: min(candlesTable.openTs),
-          maxTs: max(candlesTable.openTs),
-        }).from(candlesTable).where(and(
-          eq(candlesTable.symbol, symbol),
-          eq(candlesTable.timeframe, tf),
-        ));
-        const row = stats[0];
-        existingCounts[symbol][tf] = {
-          count: Number(row?.cnt ?? 0),
-          oldestTs: Number(row?.minTs ?? 0),
-          newestTs: Number(row?.maxTs ?? 0),
-        };
-      }
-    }
 
     for (let si = 0; si < V1_DEFAULT_SYMBOLS.length; si++) {
       const symbol = V1_DEFAULT_SYMBOLS[si];
@@ -308,74 +258,22 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
       let symbolTotalInserted = 0;
       let symbolFailed = false;
 
-      const existingForSymbol = (existingCounts[symbol]["1m"]?.count ?? 0) + (existingCounts[symbol]["5m"]?.count ?? 0);
-
-      if (!symbolExpected[symbol].connected) {
-        send({
-          phase: "backfill_symbol_error", stage: "backfill", symbol,
-          symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
-          status: "error", timeframe: "1m",
-          errorCode: "CONNECTION_FAILED",
-          error: `Cannot connect to Deriv API for ${symbol} (API name: ${apiSymbol}). The symbol may be temporarily unavailable.`,
-          message: `${symbol}: skipped — connection failed`,
-        });
-        failedSymbols.push({ symbol, error: "CONNECTION_FAILED", timeframe: "1m" });
-        jobsDone += timeframes.length;
-        continue;
-      }
-
-      const symbolTotalExpected = symbolExpected[symbol].totalExpected1m + symbolExpected[symbol].totalExpected5m;
-
-      const coveragePct = symbolTotalExpected > 0 ? Math.round((existingForSymbol / symbolTotalExpected) * 100) : 0;
-      if (coveragePct >= 95) {
-        symbolTotalInserted = existingForSymbol;
-        candleTotal += existingForSymbol;
-        jobsDone += timeframes.length;
-        send({
-          phase: "backfill_symbol_done", stage: "backfill", symbol,
-          symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
-          candlesForSymbol: existingForSymbol, candleTotal,
-          overallPct: Math.round((jobsDone / totalJobs) * 40),
-          symbolPct: 100,
-          totalExpected: symbolTotalExpected,
-          status: "done",
-          message: `${symbol} already has ${existingForSymbol.toLocaleString()} candles (${coveragePct}% coverage) — skipped`,
-        });
-        continue;
-      }
-
       send({
         phase: "backfill_symbol_start", stage: "backfill", symbol,
         symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
-        status: "downloading", symbolPct: coveragePct,
+        status: "downloading", symbolPct: 0,
         apiSymbol,
-        totalExpected: symbolTotalExpected,
-        existingCandles: existingForSymbol,
-        message: existingForSymbol > 0
-          ? `Resuming ${symbol} (${si + 1}/${V1_DEFAULT_SYMBOLS.length}) — ${existingForSymbol.toLocaleString()} existing, ~${(symbolTotalExpected - existingForSymbol).toLocaleString()} remaining...`
-          : `Starting ${symbol} (${si + 1}/${V1_DEFAULT_SYMBOLS.length}) — ~${symbolTotalExpected.toLocaleString()} records expected...`,
+        totalExpected: perSymbolExpected,
+        message: `Starting ${symbol} (${si + 1}/${V1_DEFAULT_SYMBOLS.length}) — ~${perSymbolExpected.toLocaleString()} records expected...`,
       });
 
-      symbolTotalInserted = existingForSymbol;
-      candleTotal += existingForSymbol;
-
       for (const { tf, granularity } of timeframes) {
-        const existing = existingCounts[symbol][tf];
-        let endEpoch = existing.oldestTs > oneYearAgoEpoch ? existing.oldestTs - 1 : Math.floor(Date.now() / 1000);
-        if (existing.count === 0) {
-          endEpoch = Math.floor(Date.now() / 1000);
-        }
-
+        let endEpoch = Math.floor(Date.now() / 1000);
         let tfInserted = 0;
         let oldestDateStr: string | null = null;
         let page = 0;
         let consecutiveErrors = 0;
-        const tfExpected = tf === "1m" ? symbolExpected[symbol].totalExpected1m : symbolExpected[symbol].totalExpected5m;
-
-        if (existing.count > 0 && tfExpected > 0 && (existing.count / tfExpected) >= 0.95) {
-          jobsDone++;
-          continue;
-        }
+        const tfExpected = tf === "1m" ? expected1m : expected5m;
 
         while (true) {
           page++;
@@ -469,21 +367,13 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
           const filteredByDate = sorted.filter(c => c.epoch >= oneYearAgoEpoch);
           if (filteredByDate.length === 0) break;
 
-          const existingTs = await db.select({ openTs: candlesTable.openTs })
-            .from(candlesTable)
-            .where(and(
-              eq(candlesTable.symbol, symbol),
-              eq(candlesTable.timeframe, tf),
-              inArray(candlesTable.openTs, filteredByDate.map(c => c.epoch))
-            ));
-          const existingSet = new Set(existingTs.map(r => r.openTs));
-          const newRows = filteredByDate.filter(c => !existingSet.has(c.epoch)).map(c => ({
+          const newRows = filteredByDate.map(c => ({
             symbol, timeframe: tf, openTs: c.epoch, closeTs: c.epoch + granularity,
             open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), tickCount: 0,
           }));
           if (newRows.length > 0) {
             for (let chunk = 0; chunk < newRows.length; chunk += 1000) {
-              await db.insert(candlesTable).values(newRows.slice(chunk, chunk + 1000));
+              await db.insert(candlesTable).values(newRows.slice(chunk, chunk + 1000)).onConflictDoNothing();
             }
             tfInserted += newRows.length;
             symbolTotalInserted += newRows.length;
@@ -497,11 +387,11 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
           if (newEnd >= endEpoch || newEnd < oneYearAgoEpoch) break;
           endEpoch = newEnd;
 
-          const symbolPct = symbolTotalExpected > 0
-            ? Math.min(Math.round((symbolTotalInserted / symbolTotalExpected) * 100), 99)
+          const symbolPct = perSymbolExpected > 0
+            ? Math.min(Math.round((symbolTotalInserted / perSymbolExpected) * 100), 99)
             : Math.min(Math.round((page / Math.max(page + 20, 50)) * 100), 99);
 
-          const jobFrac = (jobsDone + (symbolTotalInserted / Math.max(symbolTotalExpected, 1))) / totalJobs;
+          const jobFrac = (jobsDone + (symbolTotalInserted / Math.max(perSymbolExpected, 1))) / totalJobs;
           const overallPct = Math.max(Math.round(jobFrac * 40), 1);
           send({
             phase: "backfill_progress", stage: "backfill", symbol,
@@ -512,11 +402,11 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
             oldestDate: oldestDateStr,
             overallPct,
             symbolPct,
-            totalExpected: symbolTotalExpected,
+            totalExpected: perSymbolExpected,
             tfExpected,
             tfFetched: tfInserted,
             page,
-            message: `${symbol} ${tf}: ${tfInserted.toLocaleString()} new candles (oldest: ${oldestDateStr})`,
+            message: `${symbol} ${tf}: ${tfInserted.toLocaleString()} candles (oldest: ${oldestDateStr})`,
           });
 
           await new Promise(r => setTimeout(r, API_RATE_DELAY_MS));
@@ -543,7 +433,7 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
         symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
         candlesForSymbol: symbolTotalInserted, candleTotal,
         overallPct, symbolPct: 100,
-        totalExpected: symbolExpected[symbol].totalExpected1m + symbolExpected[symbol].totalExpected5m,
+        totalExpected: perSymbolExpected,
         status: "done",
         message: `${symbol} done — ${symbolTotalInserted.toLocaleString()} candles`,
       });
