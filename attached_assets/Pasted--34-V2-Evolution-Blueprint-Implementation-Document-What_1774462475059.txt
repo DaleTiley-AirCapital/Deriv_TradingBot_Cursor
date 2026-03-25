@@ -1,0 +1,52 @@
+#34 - V2 Evolution Blueprint — Implementation Document
+
+What & Why
+
+Create a comprehensive implementation document (V2_EVOLUTION_BLUEPRINT.md) that details how the system will evolve beyond V1 — covering dynamic strategy calibration, rolling monthly backtests, data archival, AI-driven anomaly detection, AI chat per backtest, and adaptive market response. This is a planning document only — no code changes to any existing strategies, signals, scoring, trade engine, or scheduler logic.
+
+The user's core concern: markets are dynamic, brokers adapt, other bots find the same signals. Static hardcoded thresholds (RSI < 32, EMA slope > 0.0003, etc.) will degrade over time. The system must evolve to detect degradation and pivot — but V1 code must remain untouched for now.
+
+Done looks like
+
+A single markdown document (V2_EVOLUTION_BLUEPRINT.md) in the project root
+Document contains:
+Full inventory of every hardcoded strategy threshold across all 4 families (Trend Continuation, Mean Reversion, Breakout Expansion, Spike Event) with their current values and what each controls
+Rolling monthly backtest design — 1 backtest per symbol per month, all 4 strategies in a single pass, only logging strategies that produced tradable moments, sliding window (drop oldest month, add newest)
+Data archival strategy — active window size (configurable 6-12 months), what happens to old data (archive vs delete), storage growth projections, how re-download works if needed
+Dynamic threshold calibration plan — how the system could automatically detect when a threshold stops being effective and suggest new values based on recent data (e.g., if RSI < 32 produced 65% win rate 6 months ago but only 40% now, suggest adjusting to RSI < 28)
+Strategy degradation detection — monitoring win rate trends per strategy per symbol over time, automatic alerts when a strategy's effectiveness drops below a threshold
+AI per-backtest chat design — how to wire OpenAI into each backtest result so users can ask questions about specific trades, patterns, entry/exit conditions
+Emerging pattern detection — how AI could analyze backtest results to identify new tradable patterns not covered by current strategies
+Competitive adaptation — how the system stays ahead when other bots find the same signals (varying entry timing, position sizing, exit strategies)
+Research page data requirements — what data views the Research page needs (per-symbol data status, date ranges, candle counts, backtest history, strategy effectiveness trends)
+Document is structured with clear sections, implementation priorities (Phase 1, 2, 3), estimated effort, and dependencies
+NO code is written or changed — this is purely a design/planning document
+Out of scope
+
+Any code changes to strategies.ts, signalRouter.ts, scoring.ts, tradeEngine.ts, extractionEngine.ts, scheduler.ts, or any other backend logic
+Actually implementing any of the described features
+Changing the V1 backtest structure or data storage
+UI changes of any kind
+Tasks
+
+Audit all hardcoded thresholds — Read every strategy family in strategies.ts and catalog every magic number with its purpose, current value, and what changing it would affect.
+Design rolling backtest architecture — Document how monthly per-symbol backtests would work: data windowing, strategy execution, result storage, comparison with previous months.
+Design data lifecycle — Document active window, archival process, storage management, and safe re-download.
+Design dynamic calibration system — Document how the system would monitor threshold effectiveness and suggest recalibration.
+Design AI per-backtest chat — Document the chat interface, context injection (backtest trades, candles, metrics), and useful prompt patterns.
+Design strategy evolution framework — Document degradation detection, emerging pattern identification, and competitive adaptation.
+Compile into single V2_EVOLUTION_BLUEPRINT.md with phased implementation plan.
+Relevant files
+
+artifacts/api-server/src/lib/strategies.ts
+artifacts/api-server/src/lib/scoring.ts
+artifacts/api-server/src/lib/backtestEngine.ts
+artifacts/api-server/src/lib/scheduler.ts
+artifacts/api-server/src/lib/signalRouter.ts
+artifacts/api-server/src/lib/tradeEngine.ts
+artifacts/api-server/src/lib/features.ts
+lib/db/src/schema/backtestRuns.ts
+lib/db/src/schema/backtestTrades.ts
+lib/db/src/schema/candles.ts
+V1_SPECIFICATION.md
+Dependencies
