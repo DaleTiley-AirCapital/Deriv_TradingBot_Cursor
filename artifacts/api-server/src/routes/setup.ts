@@ -12,7 +12,7 @@ const STRATEGIES = ["trend_continuation", "mean_reversion", "breakout_expansion"
 const GRANULARITY_1M = 60;
 const GRANULARITY_5M = 300;
 const MAX_BATCH = 5000;
-const MAX_CONSECUTIVE_ERRORS = 3;
+const MAX_CONSECUTIVE_ERRORS = 5;
 const DEFAULT_CAPITAL = 600;
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade", "live_equity_pct_per_trade",
@@ -201,8 +201,8 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
             consecutiveErrors = 0;
           } catch (err) {
             consecutiveErrors++;
+            const errMsg = err instanceof Error ? err.message : String(err);
             if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-              const errMsg = err instanceof Error ? err.message : String(err);
               send({
                 phase: "backfill_symbol_error", stage: "backfill", symbol,
                 symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
@@ -213,7 +213,21 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
               symbolFailed = true;
               break;
             }
-            await new Promise(r => setTimeout(r, 2000));
+            if (errMsg.includes("not connected") || errMsg.includes("timed out") || errMsg.includes("WebSocket")) {
+              send({
+                phase: "backfill_progress", stage: "backfill", symbol,
+                symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+                message: `${symbol} ${tf}: connection lost, reconnecting (attempt ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS})...`,
+              });
+              await new Promise(r => setTimeout(r, 3000));
+              try {
+                await client.connect();
+              } catch {
+                await new Promise(r => setTimeout(r, 5000));
+              }
+            } else {
+              await new Promise(r => setTimeout(r, 2000));
+            }
             continue;
           }
           if (candles === null || candles === undefined) {
@@ -230,6 +244,11 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
               break;
             }
             await new Promise(r => setTimeout(r, 2000));
+            try {
+              await client.connect();
+            } catch {
+              await new Promise(r => setTimeout(r, 3000));
+            }
             continue;
           }
           if (candles.length === 0) break;
