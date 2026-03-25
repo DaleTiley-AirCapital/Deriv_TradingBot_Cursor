@@ -702,7 +702,21 @@ At startup, all configured symbols are validated against the Deriv active_symbol
 
 ---
 
-## 15. Glossary
+## 15. Future Vision
+
+V1 establishes the foundation. The platform is designed to evolve in several directions:
+
+- **Expanded instrument catalog**: Adding R_10, R_25, R_50, RDBULL, RDBEAR, Jump indices (JD10-JD100), Step indices (stpRNG, STP2-5), and Range Break indices (RDBR100, RDBR200) as new strategy families and regime classifiers are validated for each instrument type.
+- **Advanced ML models**: Replacing logistic regression with gradient-boosted models and eventually neural networks, trained on the growing database of labelled trade outcomes.
+- **Walk-forward optimisation**: Automated rolling-window backtests that continuously recalibrate strategy parameters against recent market behaviour.
+- **Multi-timeframe analysis**: Incorporating 5-minute, 15-minute, and hourly candle features alongside the current 1-minute data for higher-confidence regime classification.
+- **Correlation-aware portfolio management**: Dynamic cross-instrument correlation matrices that adjust position sizing and exposure caps based on measured real-time correlations rather than static family groupings.
+- **Mobile monitoring**: A companion mobile interface for monitoring trades, reviewing AI suggestions, and triggering the kill switch remotely.
+- **Performance attribution**: Detailed reporting that breaks down returns by strategy family, regime, instrument, time of day, and market condition to identify the highest-value edges.
+
+---
+
+## 16. Glossary
 
 | Term | Meaning |
 |------|---------|
