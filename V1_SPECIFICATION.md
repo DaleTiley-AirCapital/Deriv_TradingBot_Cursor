@@ -45,6 +45,27 @@ R_75 (Volatility 75 Index), R_100 (Volatility 100 Index)
 
 Continuous random-walk instruments with defined volatility levels. No directional bias. The number represents the percentage volatility.
 
+### Deriv API Symbol Mapping
+
+The system maps configured symbol names to their Deriv API equivalents using a multi-strategy lookup:
+
+| Configured Name | Primary Aliases |
+|----------------|----------------|
+| BOOM1000 | BOOM1000, 1HZ1000V, BOOM1000_ |
+| CRASH1000 | CRASH1000, 1HZ1000V, CRASH1000_ |
+| BOOM900 | BOOM900, BOOM900N, 1HZ900V |
+| CRASH900 | CRASH900, CRASH900N, 1HZ900V |
+| BOOM600 | BOOM600, BOOM600N, 1HZ600V |
+| CRASH600 | CRASH600, CRASH600N, 1HZ600V |
+| BOOM500 | BOOM500, 1HZ500V, BOOM500_ |
+| CRASH500 | CRASH500, 1HZ500V, CRASH500_ |
+| BOOM300 | BOOM300, BOOM300N, 1HZ300V |
+| CRASH300 | CRASH300, CRASH300N, 1HZ300V |
+| R_75 | R_75, 1HZ75V |
+| R_100 | R_100, 1HZ100V |
+
+Symbol validation runs against the Deriv `active_symbols` API. If the primary name isn't found, aliases are tried. If no alias matches, a fuzzy substring match is attempted. Invalid symbols are refused.
+
 ### Future Instrument Catalog
 Planned for future versions: R_10, R_25, R_50, RDBULL, RDBEAR, JD10-JD100, stpRNG, STP2-5, RDBR100, RDBR200.
 
@@ -92,13 +113,48 @@ Trades are only placed when Paper, Demo, or Real mode is explicitly enabled. Eac
 ### Startup Sequence (Production)
 
 1. Database schema initialisation and column migrations
-2. Listen on PORT (required for health checks)
-3. Start scheduler (signal scan every 30s, position management every 10s)
-4. AI auto-configuration (enable AI verification if OpenAI key present)
-5. Symbol validation against Deriv active_symbols API
-6. 3-year candle backfill (paginated, 5000 candles per page, all 12 symbols)
-7. Tick streaming begins
+2. Data tables truncated for clean state (API keys preserved)
+3. V1 default settings seeded into platform_state
+4. Listen on PORT (required for health checks)
+5. Start scheduler (signal scan every 30s, position management every 10s)
+6. AI auto-configuration (enable AI verification if OpenAI key present)
+7. If initial setup is complete: auto-start tick streaming for enabled symbols
 8. Health endpoint available at /api/healthz
+
+### Setup Wizard Flow
+
+The setup wizard is a multi-step guided process that runs on first launch (before `initial_setup_complete` is set to `true` in platform_state). It must complete before any trading or streaming begins.
+
+**Step 1 — Welcome**: Introduction to the platform and what the wizard will do.
+
+**Step 2 — API Keys**: User enters Deriv API tokens (Demo and/or Real) and optionally an OpenAI API key. At least one Deriv token is required. Keys are encrypted and stored in platform_state.
+
+**Step 3 — Connection Testing**: The system tests each provided API key against the live Deriv WebSocket API and OpenAI API. If no Deriv connection succeeds, the user is returned to step 2 to fix their tokens.
+
+**Step 4 — Initialisation** (SSE stream with 6 phases):
+
+1. **Probing Phase**: Before downloading any data, the system probes each of the 12 symbols individually to determine connectivity and available history range. For each symbol, it queries the Deriv API to find the oldest available candle epoch. This produces per-symbol expected record counts shown in the UI before any downloading begins.
+
+2. **Backfill Phase**: Downloads 1-minute and 5-minute candle history for all connected symbols. Uses paginated API calls (5,000 candles per page) working backwards from the current time. Features per-symbol progress tracking with:
+   - Individual progress percentages based on expected vs fetched records
+   - Real-time status updates (waiting, downloading, retrying, done, error)
+   - Automatic WebSocket reconnection on connection loss (up to 5 consecutive retries per symbol)
+   - Rate limiting (150ms delay between API calls) to avoid throttling
+   - Partial failure handling: if a symbol fails, remaining symbols continue
+
+3. **Backtest Phase**: Runs backtests for every combination of symbol × strategy family (up to 48 combinations). Each backtest simulates trades using the downloaded candle data and records win rate, profit factor, Sharpe ratio, trade count, and average holding hours.
+
+4. **AI Review Phase** (optional, requires OpenAI key): GPT-4o analyses backtest results per symbol — identifies the best strategy and summarises performance patterns. Produces per-symbol text summaries and suggestion lists displayed in the UI. Does not directly write `ai_suggest_` keys (that happens in the optimisation phase).
+
+5. **Optimisation Phase**: Computes optimised trading parameters from backtest aggregates (TP multipliers, SL ratio, equity sizing, time exits, trailing stops) and writes them as `ai_suggest_` prefixed keys in the platform_state table. Also records AI-recommended strategies and symbols. All values are suggestions only — none override user settings.
+
+6. **Streaming Phase**: Starts live tick streaming for all 12 V1 default symbols (not limited to symbols that succeeded during backfill). Streaming is required for the system to begin receiving market data.
+
+**Step 5 — Complete**: Summary of results including total candles downloaded, backtest results per symbol, AI insights, and any failed symbols with error details.
+
+**Partial Failure Handling**: The wizard aborts only if all 12 symbols fail to download. If at least one symbol succeeds, the wizard proceeds through backtesting, AI review, optimisation, and streaming. Failed symbols are clearly shown with error codes (CONNECTION_FAILED, WS_DISCONNECTED, REQUEST_TIMEOUT, RATE_LIMITED, NULL_RESPONSE, API_ERROR). The `/setup/status` endpoint separately tracks whether 50%+ of symbols have sufficient data (100+ candles) for the `hasEnoughData` flag used by the dashboard.
+
+**Reset**: A factory reset option in Settings clears all data (preserving API keys) and returns the system to the setup wizard state.
 
 ---
 
@@ -689,12 +745,14 @@ API keys are stored encrypted in the database (not as environment variables):
 
 ### Data Backfill
 
-On startup, the system automatically backfills 3 years of candle history for all 12 instruments:
-- 1-minute and 5-minute timeframes
-- Paginated Deriv API calls (5,000 candles per page)
+The setup wizard handles initial data backfill for all 12 instruments:
+- Probing phase queries each symbol's oldest available data from the Deriv API
+- 1-minute and 5-minute timeframes downloaded in paginated API calls (5,000 candles per page)
 - Uses conflict-safe inserts so re-runs fill gaps without duplicating
-- Manual trigger available in Settings > Data tab
-- Per-symbol progress tracking with visual progress bars
+- Per-symbol progress tracking with real-time status updates and individual progress bars
+- Automatic WebSocket reconnection with up to 5 retry attempts per symbol
+- Rate-limited API calls (150ms between requests) to avoid throttling
+- Partial failure resilience: individual symbol failures do not block the remaining symbols
 
 ### Symbol Validation
 
