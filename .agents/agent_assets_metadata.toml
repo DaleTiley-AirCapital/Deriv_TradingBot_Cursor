@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "AC93u-HbH15MQo3dRPW2L"
+uri = "file://V1_SPECIFICATION.pdf"
+type = "pdf"
+title = "V1 System Specification — Deriv Capital Extraction App"
