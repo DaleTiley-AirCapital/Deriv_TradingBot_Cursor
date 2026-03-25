@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, and, inArray, count } from "drizzle-orm";
+import { eq, and, inArray, count, sql, min, max } from "drizzle-orm";
 import { db, candlesTable, backtestRunsTable, backtestTradesTable, platformStateTable, tradesTable, signalLogTable, ticksTable, spikeEventsTable, featuresTable, modelRunsTable } from "@workspace/db";
 import { getDerivClientWithDbToken, getDbApiToken, getDbApiTokenForMode, V1_DEFAULT_SYMBOLS } from "../lib/deriv.js";
 import { checkOpenAiHealth, isOpenAIConfigured, analyseBacktest, type BacktestMetrics } from "../lib/openai.js";
@@ -281,11 +281,34 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
     let jobsDone = 0;
     const failedSymbols: { symbol: string; error: string; timeframe: string }[] = [];
 
+    const existingCounts: Record<string, Record<string, { count: number; oldestTs: number; newestTs: number }>> = {};
+    for (const symbol of V1_DEFAULT_SYMBOLS) {
+      existingCounts[symbol] = {};
+      for (const { tf } of timeframes) {
+        const stats = await db.select({
+          cnt: count(),
+          minTs: min(candlesTable.openTs),
+          maxTs: max(candlesTable.openTs),
+        }).from(candlesTable).where(and(
+          eq(candlesTable.symbol, symbol),
+          eq(candlesTable.timeframe, tf),
+        ));
+        const row = stats[0];
+        existingCounts[symbol][tf] = {
+          count: Number(row?.cnt ?? 0),
+          oldestTs: Number(row?.minTs ?? 0),
+          newestTs: Number(row?.maxTs ?? 0),
+        };
+      }
+    }
+
     for (let si = 0; si < V1_DEFAULT_SYMBOLS.length; si++) {
       const symbol = V1_DEFAULT_SYMBOLS[si];
       const apiSymbol = getApiSymbol(symbol);
       let symbolTotalInserted = 0;
       let symbolFailed = false;
+
+      const existingForSymbol = (existingCounts[symbol]["1m"]?.count ?? 0) + (existingCounts[symbol]["5m"]?.count ?? 0);
 
       if (!symbolExpected[symbol].connected) {
         send({
@@ -303,22 +326,56 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
 
       const symbolTotalExpected = symbolExpected[symbol].totalExpected1m + symbolExpected[symbol].totalExpected5m;
 
+      const coveragePct = symbolTotalExpected > 0 ? Math.round((existingForSymbol / symbolTotalExpected) * 100) : 0;
+      if (coveragePct >= 95) {
+        symbolTotalInserted = existingForSymbol;
+        candleTotal += existingForSymbol;
+        jobsDone += timeframes.length;
+        send({
+          phase: "backfill_symbol_done", stage: "backfill", symbol,
+          symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+          candlesForSymbol: existingForSymbol, candleTotal,
+          overallPct: Math.round((jobsDone / totalJobs) * 40),
+          symbolPct: 100,
+          totalExpected: symbolTotalExpected,
+          status: "done",
+          message: `${symbol} already has ${existingForSymbol.toLocaleString()} candles (${coveragePct}% coverage) — skipped`,
+        });
+        continue;
+      }
+
       send({
         phase: "backfill_symbol_start", stage: "backfill", symbol,
         symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
-        status: "downloading", symbolPct: 0,
+        status: "downloading", symbolPct: coveragePct,
         apiSymbol,
         totalExpected: symbolTotalExpected,
-        message: `Starting ${symbol} (${si + 1}/${V1_DEFAULT_SYMBOLS.length}) — ~${symbolTotalExpected.toLocaleString()} records expected...`,
+        existingCandles: existingForSymbol,
+        message: existingForSymbol > 0
+          ? `Resuming ${symbol} (${si + 1}/${V1_DEFAULT_SYMBOLS.length}) — ${existingForSymbol.toLocaleString()} existing, ~${(symbolTotalExpected - existingForSymbol).toLocaleString()} remaining...`
+          : `Starting ${symbol} (${si + 1}/${V1_DEFAULT_SYMBOLS.length}) — ~${symbolTotalExpected.toLocaleString()} records expected...`,
       });
 
+      symbolTotalInserted = existingForSymbol;
+      candleTotal += existingForSymbol;
+
       for (const { tf, granularity } of timeframes) {
-        let endEpoch = Math.floor(Date.now() / 1000);
+        const existing = existingCounts[symbol][tf];
+        let endEpoch = existing.oldestTs > oneYearAgoEpoch ? existing.oldestTs - 1 : Math.floor(Date.now() / 1000);
+        if (existing.count === 0) {
+          endEpoch = Math.floor(Date.now() / 1000);
+        }
+
         let tfInserted = 0;
         let oldestDateStr: string | null = null;
         let page = 0;
         let consecutiveErrors = 0;
         const tfExpected = tf === "1m" ? symbolExpected[symbol].totalExpected1m : symbolExpected[symbol].totalExpected5m;
+
+        if (existing.count > 0 && tfExpected > 0 && (existing.count / tfExpected) >= 0.95) {
+          jobsDone++;
+          continue;
+        }
 
         while (true) {
           page++;
@@ -440,29 +497,27 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
           if (newEnd >= endEpoch || newEnd < oneYearAgoEpoch) break;
           endEpoch = newEnd;
 
-          const symbolPct = tfExpected > 0
+          const symbolPct = symbolTotalExpected > 0
             ? Math.min(Math.round((symbolTotalInserted / symbolTotalExpected) * 100), 99)
             : Math.min(Math.round((page / Math.max(page + 20, 50)) * 100), 99);
 
-          if (page % 2 === 0) {
-            const jobFrac = (jobsDone + (symbolTotalInserted / Math.max(symbolTotalExpected, 1))) / totalJobs;
-            const overallPct = Math.max(Math.round(jobFrac * 40), 1);
-            send({
-              phase: "backfill_progress", stage: "backfill", symbol,
-              symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
-              timeframe: tf,
-              candlesForSymbol: symbolTotalInserted,
-              candleTotal,
-              oldestDate: oldestDateStr,
-              overallPct,
-              symbolPct,
-              totalExpected: symbolTotalExpected,
-              tfExpected,
-              tfFetched: tfInserted,
-              page,
-              message: `${symbol} ${tf}: ${tfInserted.toLocaleString()} candles (oldest: ${oldestDateStr})`,
-            });
-          }
+          const jobFrac = (jobsDone + (symbolTotalInserted / Math.max(symbolTotalExpected, 1))) / totalJobs;
+          const overallPct = Math.max(Math.round(jobFrac * 40), 1);
+          send({
+            phase: "backfill_progress", stage: "backfill", symbol,
+            symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+            timeframe: tf,
+            candlesForSymbol: symbolTotalInserted,
+            candleTotal,
+            oldestDate: oldestDateStr,
+            overallPct,
+            symbolPct,
+            totalExpected: symbolTotalExpected,
+            tfExpected,
+            tfFetched: tfInserted,
+            page,
+            message: `${symbol} ${tf}: ${tfInserted.toLocaleString()} new candles (oldest: ${oldestDateStr})`,
+          });
 
           await new Promise(r => setTimeout(r, API_RATE_DELAY_MS));
         }

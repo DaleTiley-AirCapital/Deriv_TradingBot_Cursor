@@ -138,9 +138,10 @@ The setup wizard is a multi-step guided process that runs on first launch (befor
 
 1. **Probing Phase**: Before downloading any data, the system probes each of the 12 symbols individually to determine connectivity and available history range. For each symbol, it queries the Deriv API to find the oldest available candle epoch. This produces per-symbol expected record counts shown in the UI before any downloading begins.
 
-2. **Backfill Phase**: Downloads 1-minute and 5-minute candle history for all connected symbols. Uses paginated API calls (5,000 candles per page) working backwards from the current time. Features per-symbol progress tracking with:
-   - Individual progress percentages based on expected vs fetched records
-   - Real-time status updates (waiting, downloading, retrying, done, error)
+2. **Backfill Phase**: Downloads 1-minute and 5-minute candle history for all connected symbols. Uses paginated API calls (5,000 candles per page) working backwards from the current time. Features intelligent resume and per-symbol progress tracking with:
+   - **Resume support**: Pre-checks existing DB data per symbol/timeframe before downloading. Symbols with ≥95% coverage are skipped entirely. Partial data starts from the gap edge (oldest existing timestamp - 1) instead of re-downloading from now.
+   - Individual progress percentages based on expected vs fetched records (including existing data in progress calculation)
+   - Real-time status updates on every page (waiting, downloading, retrying, done, error)
    - Automatic WebSocket reconnection on connection loss (up to 5 consecutive retries per symbol)
    - Rate limiting (150ms delay between API calls) to avoid throttling
    - Partial failure handling: if a symbol fails, remaining symbols continue
