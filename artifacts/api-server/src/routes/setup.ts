@@ -172,46 +172,28 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
 
-  const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const send = (data: object) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (typeof (res as any).flush === "function") (res as any).flush();
+  };
   const globalStart = Date.now();
 
   try {
-    send({
-      phase: "backfill_probing",
-      stage: "backfill",
-      message: "Clearing previous data and connecting to Deriv API...",
-      totalSymbols: V1_DEFAULT_SYMBOLS.length,
-    });
-
-    await db.delete(candlesTable);
-    await db.delete(backtestRunsTable);
-    await db.delete(backtestTradesTable);
-    await db.delete(tradesTable);
-    await db.delete(signalLogTable);
-    await db.delete(ticksTable);
-    await db.delete(spikeEventsTable);
-    await db.delete(featuresTable);
-    await db.delete(modelRunsTable);
-
-    const client = await getDerivClientWithDbToken();
-    await client.connect();
-    await validateActiveSymbols(true);
-
-    let candleTotal = 0;
-    const timeframes: { tf: string; granularity: number }[] = [
-      { tf: "1m", granularity: GRANULARITY_1M },
-      { tf: "5m", granularity: GRANULARITY_5M },
-    ];
-    const totalJobs = V1_DEFAULT_SYMBOLS.length * timeframes.length;
-
     const nowEpoch = Math.floor(Date.now() / 1000);
     const oneYearAgoEpoch = nowEpoch - TWELVE_MONTHS_SECONDS;
-
     const expected1m = Math.ceil(TWELVE_MONTHS_SECONDS / 60);
     const expected5m = Math.ceil(TWELVE_MONTHS_SECONDS / 300);
     const perSymbolExpected = expected1m + expected5m;
     const grandTotalExpected = perSymbolExpected * V1_DEFAULT_SYMBOLS.length;
+
+    send({
+      phase: "backfill_probing",
+      stage: "backfill",
+      message: "Preparing symbols and connecting to Deriv API...",
+      totalSymbols: V1_DEFAULT_SYMBOLS.length,
+    });
 
     for (let si = 0; si < V1_DEFAULT_SYMBOLS.length; si++) {
       const symbol = V1_DEFAULT_SYMBOLS[si];
@@ -234,6 +216,42 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
     send({
       phase: "backfill_start",
       stage: "backfill",
+      message: `Clearing old data and connecting to Deriv...`,
+      totalSymbols: V1_DEFAULT_SYMBOLS.length,
+      connectedCount: V1_DEFAULT_SYMBOLS.length,
+      grandTotalExpected,
+      symbols: V1_DEFAULT_SYMBOLS.map(s => ({
+        symbol: s,
+        status: "waiting",
+        candles: 0,
+        oldestDate: new Date(oneYearAgoEpoch * 1000).toISOString().slice(0, 10),
+        expected: perSymbolExpected,
+        connected: true,
+        error: null,
+      })),
+    });
+
+    console.log("[Setup] Deleting old data tables...");
+    await db.delete(candlesTable);
+    await db.delete(backtestRunsTable);
+    await db.delete(backtestTradesTable);
+    await db.delete(tradesTable);
+    await db.delete(signalLogTable);
+    await db.delete(ticksTable);
+    await db.delete(spikeEventsTable);
+    await db.delete(featuresTable);
+    await db.delete(modelRunsTable);
+    console.log("[Setup] Tables cleared. Connecting to Deriv WS...");
+
+    const client = await getDerivClientWithDbToken();
+    await client.connect();
+    console.log("[Setup] Deriv WS connected. Validating symbols...");
+    await validateActiveSymbols(true);
+    console.log("[Setup] Symbol validation complete. Starting backfill...");
+
+    send({
+      phase: "backfill_start",
+      stage: "backfill",
       message: `Step 1 of 6: Downloading history for ${V1_DEFAULT_SYMBOLS.length} symbols (~${grandTotalExpected.toLocaleString()} total records)...`,
       totalSymbols: V1_DEFAULT_SYMBOLS.length,
       connectedCount: V1_DEFAULT_SYMBOLS.length,
@@ -248,6 +266,13 @@ router.post("/setup/initialise", async (_req, res): Promise<void> => {
         error: null,
       })),
     });
+
+    let candleTotal = 0;
+    const timeframes: { tf: string; granularity: number }[] = [
+      { tf: "1m", granularity: GRANULARITY_1M },
+      { tf: "5m", granularity: GRANULARITY_5M },
+    ];
+    const totalJobs = V1_DEFAULT_SYMBOLS.length * timeframes.length;
 
     let jobsDone = 0;
     const failedSymbols: { symbol: string; error: string; timeframe: string }[] = [];

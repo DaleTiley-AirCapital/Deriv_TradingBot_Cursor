@@ -136,7 +136,7 @@ The setup wizard is a multi-step guided process that runs on first launch (befor
 
 **Step 4 — Initialisation** (SSE stream with 6 phases):
 
-1. **Probing Phase**: Instant — no API calls. All 12 probe_result events are emitted immediately using a fixed 1-year expected record count (525,600 per symbol × 1m + 105,120 × 5m = 630,720 total). The initialise endpoint first DELETEs all data tables (candles, backtests, trades, signals, ticks, spikes, features, model_runs) to ensure a clean state, then emits all probe results in a single synchronous loop. This eliminates the previous bottleneck of 36 sequential API calls during probing.
+1. **Probing Phase**: Instant — no API calls. SSE headers are flushed immediately via `res.flushHeaders()`. All 12 probe_result events are emitted FIRST (before any database operations or Deriv WS connections) using a fixed 1-year expected record count (525,600 per symbol × 1m + 105,120 × 5m = 630,720 total). After probe results are sent, the endpoint DELETEs all data tables and connects to Deriv WS. This ensures the UI shows immediate progress regardless of backend connection speed.
 
 2. **Backfill Phase**: Downloads 1-minute and 5-minute candle history for all 12 V1 symbols. Uses paginated API calls (5,000 candles per page) working backwards from the current time. Uses INSERT ... ON CONFLICT DO NOTHING for deduplication (no pre-query needed). Features per-symbol progress tracking with:
    - Individual progress percentages based on expected vs fetched records
