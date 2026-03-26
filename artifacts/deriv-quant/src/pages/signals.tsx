@@ -3,7 +3,7 @@ import { useGetLatestSignals } from "@workspace/api-client-react";
 import type { ScoringDimensions, GetLatestSignalsParams, SignalLog } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, Badge } from "@/components/ui-elements";
 import { formatNumber, cn } from "@/lib/utils";
-import { ClipboardList, ArrowUpRight, ArrowDownRight, Brain, ChevronDown, ChevronUp, Filter, X, ChevronLeft, ChevronRight, Download, ShieldAlert, Target, TrendingUp, BarChart3 } from "lucide-react";
+import { ClipboardList, ArrowUpRight, ArrowDownRight, Brain, ChevronDown, ChevronUp, Filter, X, ChevronLeft, ChevronRight, Download, ShieldAlert, Target, BarChart3 } from "lucide-react";
 import { downloadCSV, downloadJSON } from "@/lib/export";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -132,24 +132,28 @@ function BlockingCondition({ reason }: { reason: string }) {
     { test: /intelligence only/i, gate: "Mode", extract: () => "No execution mode active" },
   ];
 
+  let gateName: string | null = null;
+  let gateDetail: string | null = null;
+
   for (const p of patterns) {
     const match = reason.match(p.test);
     if (match) {
-      return (
-        <div className="p-2 rounded-md bg-red-500/8 border border-red-500/20 space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-semibold text-red-400/80">Blocking Gate</span>
-            <span className="text-[11px] font-semibold text-red-400">{p.gate}</span>
-          </div>
-          <p className="text-[10px] text-red-400/70">{p.extract(match)}</p>
-        </div>
-      );
+      gateName = p.gate;
+      gateDetail = p.extract(match);
+      break;
     }
   }
 
   return (
-    <div className="p-2 rounded-md bg-red-500/8 border border-red-500/20">
-      <p className="text-[11px] text-red-400 leading-relaxed">{reason}</p>
+    <div className="p-2 rounded-md bg-red-500/8 border border-red-500/20 space-y-1">
+      {gateName && (
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-semibold text-red-400/80">Blocking Gate</span>
+          <span className="text-[11px] font-semibold text-red-400">{gateName}</span>
+        </div>
+      )}
+      {gateDetail && <p className="text-[10px] text-red-400/70">{gateDetail}</p>}
+      <p className="text-[10px] text-red-400/60 leading-relaxed">{reason}</p>
     </div>
   );
 }
