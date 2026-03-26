@@ -76,9 +76,12 @@ export interface SignalContext {
   macroBiasModifier?: number;
   compositeScore: number;
   expectedValue: number;
-  suggestedTp?: number;
-  suggestedSl?: number;
-  rrRatio?: number;
+  swingHigh?: number;
+  swingLow?: number;
+  fibRetraceLevels?: number[];
+  fibExtensionLevels?: number[];
+  fibExtensionLevelsDown?: number[];
+  latestClose?: number;
 }
 
 export interface AIVerdict {
@@ -110,10 +113,16 @@ SCORES:
 - Confidence: ${(ctx.confidence * 100).toFixed(1)}%
 - Expected Value: ${(ctx.expectedValue * 100).toFixed(3)}%
 
-RISK/REWARD:
-- Suggested TP: ${ctx.suggestedTp?.toFixed(4) ?? "N/A"}
-- Suggested SL: ${ctx.suggestedSl?.toFixed(4) ?? "N/A"}
-- Reward/Risk Ratio: ${ctx.rrRatio?.toFixed(2) ?? "N/A"}
+TRADE MANAGEMENT (V2 Dynamic S/R + Fibonacci):
+- Latest Close: ${ctx.latestClose?.toFixed(4) ?? "N/A"}
+- Swing High: ${ctx.swingHigh?.toFixed(4) ?? "N/A"}
+- Swing Low: ${ctx.swingLow?.toFixed(4) ?? "N/A"}
+- Fib Retrace Levels: ${ctx.fibRetraceLevels?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
+- Fib Extensions (up): ${ctx.fibExtensionLevels?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
+- Fib Extensions (down): ${ctx.fibExtensionLevelsDown?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
+- TP/SL: Computed dynamically at execution from S/R + Fibonacci confluence zones
+- Trailing: 30% peak-profit drawdown stop (activates only in-profit)
+- Time Exits: 72h profitable close / 168h hard cap
 
 TECHNICAL INDICATORS:
 - RSI(14): ${ctx.rsi14.toFixed(2)}

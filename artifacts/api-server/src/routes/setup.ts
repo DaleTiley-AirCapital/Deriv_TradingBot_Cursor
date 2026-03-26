@@ -37,13 +37,10 @@ const API_RATE_DELAY_MS = 150;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
 const MIN_SYMBOLS_FOR_PROCEED = 8;
 const AI_LOCKABLE_KEYS = [
-  "equity_pct_per_trade", "paper_equity_pct_per_trade", "live_equity_pct_per_trade",
-  "tp_multiplier_strong", "tp_multiplier_medium", "tp_multiplier_weak",
-  "sl_ratio", "trailing_stop_pct", "time_exit_window_hours",
-  "demo_tp_multiplier_strong", "demo_tp_multiplier_medium", "demo_tp_multiplier_weak",
-  "demo_sl_ratio", "demo_trailing_stop_pct", "demo_equity_pct_per_trade", "demo_time_exit_window_hours",
-  "real_tp_multiplier_strong", "real_tp_multiplier_medium", "real_tp_multiplier_weak",
-  "real_sl_ratio", "real_trailing_stop_pct", "real_equity_pct_per_trade", "real_time_exit_window_hours",
+  "equity_pct_per_trade", "paper_equity_pct_per_trade",
+  "demo_equity_pct_per_trade",
+  "real_equity_pct_per_trade",
+  "min_composite_score", "min_rr_ratio", "min_ev_threshold",
 ];
 
 router.post("/setup/preflight", async (_req, res): Promise<void> => {
@@ -781,54 +778,10 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
     const optHold = parseFloat(Math.max(48, Math.min(bestAvgHold * 1.3, 168)).toFixed(1));
     const optEquity = parseFloat(Math.min(Math.max(8, 12), 16).toFixed(2));
 
-    function computeModeSettings(combos: typeof comboResults, prefix: string) {
-      const settings: Record<string, string> = {};
-      if (combos.length === 0) return settings;
-      let tpS = 0, tpM = 0, tpW = 0, sl = 0, eq = 0, hold = 0, n = 0;
-      for (const c of combos) {
-        const agg = strategyAgg[c.strategy];
-        if (!agg || agg.count === 0) continue;
-        const cnt = Math.max(agg.count, 1);
-        const avgTp = agg.tpSum / cnt;
-        tpS += Math.min(avgTp * 1.2, 4.0);
-        tpM += avgTp;
-        tpW += Math.max(avgTp * 0.85, 1.5);
-        sl += agg.slSum / cnt;
-        hold += Math.max(agg.holdSum / cnt, 48);
-        n++;
-      }
-      if (n === 0) return settings;
-      const trailPct = prefix === "real" ? 20 : 25;
-      const modeEquity = prefix === "real" ? 8 : (prefix === "demo" ? 12 : 16);
-      settings[`${prefix}_tp_multiplier_strong`] = parseFloat((tpS / n).toFixed(2)).toString();
-      settings[`${prefix}_tp_multiplier_medium`] = parseFloat((tpM / n).toFixed(2)).toString();
-      settings[`${prefix}_tp_multiplier_weak`] = parseFloat((tpW / n).toFixed(2)).toString();
-      settings[`${prefix}_sl_ratio`] = parseFloat((sl / n).toFixed(2)).toString();
-      settings[`${prefix}_trailing_stop_pct`] = String(trailPct);
-      settings[`${prefix}_equity_pct_per_trade`] = modeEquity.toFixed(2);
-      settings[`${prefix}_time_exit_window_hours`] = parseFloat((hold / n).toFixed(1)).toString();
-      return settings;
-    }
-
-    const demoTop = sortedCombos.slice(0, Math.min(8, sortedCombos.length));
-    const realTop = sortedCombos.slice(0, Math.min(4, sortedCombos.length));
-    const demoModeSettings = computeModeSettings(demoTop, "demo");
-    const realModeSettings = computeModeSettings(realTop, "real");
-
     const aiSuggestions: Record<string, string> = {};
-    aiSuggestions["paper_tp_multiplier_strong"] = String(optTpStrong);
-    aiSuggestions["paper_tp_multiplier_medium"] = String(optTpMed);
-    aiSuggestions["paper_tp_multiplier_weak"] = String(optTpWeak);
-    aiSuggestions["paper_sl_ratio"] = String(optSl);
-    aiSuggestions["paper_time_exit_window_hours"] = String(optHold);
     aiSuggestions["paper_equity_pct_per_trade"] = String(optEquity);
-
-    for (const [key, value] of Object.entries(demoModeSettings)) {
-      aiSuggestions[key] = value;
-    }
-    for (const [key, value] of Object.entries(realModeSettings)) {
-      aiSuggestions[key] = value;
-    }
+    aiSuggestions["demo_equity_pct_per_trade"] = String(Math.max(optEquity * 0.7, 8));
+    aiSuggestions["real_equity_pct_per_trade"] = String(Math.max(optEquity * 0.5, 5));
 
     if (realStrategies.length > 0) {
       aiSuggestions["real_enabled_strategies"] = realStrategies.join(",");

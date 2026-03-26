@@ -306,7 +306,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         properties: {
           suggestions: {
             type: "object",
-            description: "Key-value pairs of suggested settings. Keys should match actual setting names (e.g. paper_equity_pct_per_trade, demo_sl_ratio, min_composite_score)",
+            description: "Key-value pairs of suggested settings. Keys should match actual setting names (e.g. paper_equity_pct_per_trade, min_composite_score, min_rr_ratio)",
             additionalProperties: { type: "string" },
           },
           reasoning: {
