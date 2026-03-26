@@ -175,7 +175,7 @@ export function calculateSRFibSL(params: {
           break;
         }
       }
-      sl = bestSl * 0.998;
+      sl = bestSl * 1.002;
     }
 
     const maxSlDistance = (equity * 0.10) / positionSize;
@@ -528,13 +528,6 @@ export async function manageOpenPositions(): Promise<void> {
         continue;
       }
 
-      if (floatingPnl < 0 && trade.entryTs) {
-        const hoursOpen = (Date.now() - trade.entryTs.getTime()) / (1000 * 60 * 60);
-        if (hoursOpen >= TIME_EXIT_PROFIT_HOURS && floatingPnl > 0) {
-          await closePosition(trade.id, currentPrice, "first_profit_after_72h");
-          continue;
-        }
-      }
     } catch (err) {
       console.error(`[TradeEngine] Error managing trade #${trade.id}:`, err instanceof Error ? err.message : err);
     }

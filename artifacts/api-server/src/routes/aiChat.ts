@@ -42,19 +42,9 @@ const MODE_PREFIXES = ["paper", "demo", "real"];
 const FAMILIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"];
 const PER_MODE_KEYS = [
   "capital", "equity_pct_per_trade", "max_open_trades", "allocation_mode",
-  "tp_multiplier_strong", "tp_multiplier_medium", "tp_multiplier_weak",
-  "sl_ratio", "trailing_stop_pct", "time_exit_window_hours",
-  "tp_capture_ratio", "min_sl_atr_multiplier",
   "max_daily_loss_pct", "max_weekly_loss_pct", "max_drawdown_pct",
-  "probe_threshold", "confirmation_threshold", "momentum_threshold",
-  "stage_multiplier_probe", "stage_multiplier_confirmation", "stage_multiplier_momentum",
-  "peak_drawdown_exit_pct", "min_peak_profit_pct", "large_peak_threshold_pct",
   "extraction_target_pct", "auto_extraction",
   "correlated_family_cap",
-];
-const PER_FAMILY_KEYS = [
-  "tp_atr_multiplier", "sl_atr_multiplier", "initial_exit_hours",
-  "extension_hours", "max_exit_hours", "harvest_sensitivity",
 ];
 const WRITABLE_SETTINGS = [
   "min_composite_score", "min_ev_threshold", "min_rr_ratio",
@@ -65,15 +55,14 @@ const WRITABLE_SETTINGS = [
   "ai_verification_enabled", "kill_switch",
   "paper_mode_active", "demo_mode_active", "real_mode_active",
   ...MODE_PREFIXES.flatMap(m => PER_MODE_KEYS.map(k => `${m}_${k}`)),
-  ...MODE_PREFIXES.flatMap(m => FAMILIES.flatMap(f => PER_FAMILY_KEYS.map(k => `${m}_${f}_${k}`))),
   ...MODE_PREFIXES.map(m => `${m}_enabled_symbols`),
   ...MODE_PREFIXES.map(m => `${m}_enabled_strategies`),
 ];
 
-const SYSTEM_KNOWLEDGE = `# Deriv Capital Extraction Platform — Complete Knowledge Base
+const SYSTEM_KNOWLEDGE = `# Deriv Capital Extraction Platform V2 — Complete Knowledge Base
 
 ## 1. Platform Overview
-This is the **Deriv Capital Extraction App** — a fully automated trading system for Deriv synthetic indices. It replaces "Forex Royals" bots with a systematic, ML-driven approach. The core philosophy is CAPITAL EXTRACTION: grow a trading account, extract profits when targets are hit, then reset and repeat.
+This is the **Deriv Capital Extraction App V2** — a fully automated trading system for Deriv synthetic indices. The core philosophy is CAPITAL EXTRACTION: large capital, long hold, maximum profit. Grow an account, extract profits at target, reset and repeat.
 
 ### Supported Instruments (12 total)
 - **Boom indices**: BOOM1000, BOOM900, BOOM600, BOOM300, BOOM500 — price spikes upward periodically
@@ -92,205 +81,136 @@ Each mode has its own capital, settings, and trades. They run simultaneously and
 Each family is a distinct trading approach, activated only when its matching market regime is detected.
 
 ### 2.1 Trend Continuation
-- **When it fires**: Market has a clear directional trend (EMA slope > 0.0003 for uptrend, < -0.0003 for downtrend) AND price has pulled back near the EMA AND RSI is neutral (38-65)
-- **Ideal regime**: trend_up or trend_down
-- **How it works**: Enters in the direction of the trend during a pullback. Like buying the dip in an uptrend.
-- **Hold profile**: TP = 6x ATR, SL = 2.5x ATR, initial hold 168 hours (7 days), max 336 hours (14 days)
+- **When**: EMA slope > 0.0003 (up) or < -0.0003 (down), price pulled back near EMA, RSI 38-65
+- **Regime**: trend_up or trend_down
 - **Best for**: R_75, R_100 during trending periods
 
 ### 2.2 Mean Reversion
-- **When it fires**: Price is overstretched (z-score > 1.8 or < -1.8) AND RSI is extreme (>68 or <32) AND there are 3+ consecutive adverse candles. Also triggers on liquidity sweep setups.
-- **Ideal regime**: mean_reversion
-- **How it works**: Bets that an overextended price will snap back to its average. Two sub-strategies: "exhaustion-rebound" (extreme RSI + consecutive moves) and "liquidity-sweep" (price sweeps past a swing point then reclaims it).
-- **Hold profile**: TP = 4x ATR, SL = 3x ATR, initial hold 120 hours (5 days), max 240 hours (10 days)
+- **When**: z-score > 1.8 or < -1.8, RSI extreme (>68 or <32), 3+ adverse candles OR liquidity sweep
+- **Regime**: mean_reversion
 - **Best for**: Boom/Crash indices that overshoot
 
 ### 2.3 Breakout Expansion
-- **When it fires**: Bollinger Bands are squeezed (width < 0.006) AND ATR is expanding AND price is at the upper/lower band. Also triggers on volatility expansion after compression.
-- **Ideal regime**: compression or breakout_expansion
-- **How it works**: Catches the explosive move that follows a period of low volatility compression. Like a coiled spring releasing.
-- **Hold profile**: TP = 8x ATR, SL = 2x ATR, initial hold 168 hours (7 days), max 336 hours (14 days)
+- **When**: BB squeeze (width < 0.006), ATR expanding, price at BB edge
+- **Regime**: compression or breakout_expansion
 - **Best for**: All instruments during consolidation → expansion transitions
 
 ### 2.4 Spike Event
-- **When it fires**: Spike hazard score > 0.70 on Boom or Crash indices only
-- **Ideal regime**: spike_zone
-- **How it works**: Predicts when a Boom spike (upward) or Crash spike (downward) is imminent based on tick patterns. Buys Boom, sells Crash.
-- **Hold profile**: TP = 4x ATR, SL = 1.5x ATR, initial hold 72 hours (3 days), max 168 hours (7 days)
+- **When**: Spike hazard score > 0.70 on Boom or Crash indices only
+- **Regime**: spike_zone
 - **Best for**: BOOM and CRASH indices exclusively
 
-## 3. Signal Pipeline — How Trades are Born
-Every signal goes through this exact sequence:
+## 3. V2 Trade Management — S/R + Fibonacci TP/SL
+In V2, TP and SL are computed dynamically at trade execution using Support/Resistance levels and Fibonacci confluence — NOT fixed ATR multipliers.
 
-1. **Tick Streaming** → Live price ticks arrive from Deriv WebSocket
-2. **Feature Extraction** → 20+ technical features computed (EMA slope, RSI, z-score, ATR, Bollinger Bands, spike hazard, etc.)
-3. **Regime Classification** → Market classified into: trend_up, trend_down, mean_reversion, compression, breakout_expansion, spike_zone, or no_trade
-4. **Strategy Evaluation** → Only strategies matching the current regime are run (e.g., trend_continuation only runs in trend_up/trend_down)
-5. **ML Scoring** → Each family has its own logistic regression model that scores the feature vector (0-1)
+### Take-Profit (TP) Computation
+1. Collect resistance levels (buy) or support levels (sell) from: swing high/low, Fibonacci extension levels (1.272, 1.618, 2.0, 2.618), BB upper/lower
+2. Cluster nearby levels (within 0.5% of each other) — 2+ confluent levels form a strong target
+3. Pick the strongest cluster as TP target, with 0.2% buffer inside
+4. Minimum TP = 3 × ATR from entry; fallback TP = 6 × ATR if no S/R levels found
+
+### Stop-Loss (SL) Computation
+1. Collect support levels (buy) or resistance levels (sell) from: swing high/low, Fibonacci retracement levels, BB lower/upper
+2. Cluster nearby levels — 2+ confluent levels form strong support/resistance
+3. Pick the nearest strong cluster, with 0.2% buffer outside
+4. Fallback SL = 2.5 × ATR if no S/R levels found
+5. Safety floor: SL ≤ 10% equity risk per position (max loss = equity × 10% / positionSize)
+
+### Trailing Stop — 30% Peak-Profit Drawdown
+- Activates only when the trade is in profit
+- Tracks peak unrealised profit percentage
+- Triggers exit when profit drops 30% from peak (e.g., peak 10% → exit at 7%)
+- This replaces V1's price-based trailing stop
+
+### Time Exits
+- **72 hours**: If profitable after 72h, close and take profit
+- **168 hours**: Hard cap — all trades closed regardless of PnL
+- No extensions, no per-family timing
+
+## 4. Signal Pipeline — How Trades are Born
+1. **Tick Streaming** → Live price ticks from Deriv WebSocket
+2. **Feature Extraction** → 20+ technical features (EMA, RSI, z-score, ATR, BB, spike hazard, swing H/L, Fibonacci levels)
+3. **Regime Classification** → Cached hourly: trend_up, trend_down, mean_reversion, compression, breakout_expansion, spike_zone, or no_trade
+4. **Strategy Evaluation** → Only matching strategies run per regime
+5. **ML Scoring** → Logistic regression model per family scores features (0-1)
 6. **Composite Scoring** → 6-dimension weighted score (0-100):
-   - **Regime Fit** (default 22%): How well does the current regime match the strategy's ideal?
-   - **Setup Quality** (20%): Model score strength + expected value
-   - **Trend Alignment** (15%): EMA slope alignment with trade direction
-   - **Volatility Condition** (13%): Is ATR in the strategy's ideal range?
-   - **Reward/Risk** (15%): TP distance vs SL distance ratio
-   - **Probability of Success** (15%): Win probability estimate
-7. **Filtering** → Must pass: composite score ≥ min_composite_score (default 80), expected value ≥ min_ev_threshold, R:R ≥ min_rr_ratio
-8. **AI Verification** (optional) → OpenAI reviews the signal and can adjust confidence
-9. **Portfolio Allocation** → Risk checks: daily/weekly loss limits, max drawdown, max open trades, correlated exposure cap, position conflicts
-10. **Position Sizing** → Size = equity × equity_pct_per_trade × confidence factor × stage multiplier
-11. **Execution** → Trade opened with calculated TP/SL/trailing stop
+   - Regime Fit (22%), Setup Quality (20%), Trend Alignment (15%), Volatility Condition (13%), Reward/Risk (15%), Probability of Success (15%)
+7. **Filtering** → composite score ≥ min_composite_score, EV ≥ min_ev_threshold, R:R ≥ min_rr_ratio (estimated from S/R levels)
+8. **AI Verification** (optional) → OpenAI reviews signal
+9. **Portfolio Allocation** → Risk checks: daily/weekly loss limits, max drawdown, max open trades, correlated exposure cap
+10. **Position Sizing** → equity × equity_pct_per_trade × confidence factor (one entry per symbol)
+11. **Execution** → S/R+Fib TP/SL computed, trade opened
 
-## 4. Position Sizing Formula (Worked Example)
-Given: $10,000 equity, 22% equity per trade, confidence 0.85, probe stage (multiplier 1.0)
-
-1. Base percent = 22% / 100 = 0.22
-2. Confidence-adjusted = 0.22 × (0.8 + 0.4 × 0.85) = 0.22 × 1.14 = 0.2508
-3. Raw size = $10,000 × 0.2508 = $2,508
-4. Stage multiplier (probe = 1.0): $2,508 × 1.0 = $2,508
-5. Clamped to min 5% ($500) and max remaining capacity (80% equity minus deployed)
-
-For confirmation stage (multiplier 0.60): $2,508 × 0.60 = $1,505
-For momentum stage (multiplier 0.50): $2,508 × 0.50 = $1,254
-
-## 5. Trade Lifecycle
-1. **Entry** → Signal passes all filters → position opened at spot price
-2. **Position Building** → Up to 3 entries on same symbol at different stages:
-   - **Probe**: First entry. Score must exceed probe_threshold (Paper: 75, Demo: 82, Real: 88)
-   - **Confirmation**: Second entry. Score must exceed confirmation_threshold (Paper: 80, Demo: 86, Real: 91)
-   - **Momentum**: Third entry. Score must exceed momentum_threshold (Paper: 85, Demo: 90, Real: 94)
-3. **Monitoring** → Every 10 seconds: update current price, check TP/SL/trailing stop
-4. **Trailing Stop** → Once price moves favourably, SL ratchets up. Trail = trailing_stop_pct (default 25%) behind peak price.
-5. **Profit Harvest** → If peak profit ≥ min_peak_profit_pct AND drawdown from peak ≥ peak_drawdown_exit_pct → close trade and harvest. Large peaks (≥ large_peak_threshold_pct) use a tighter 60% drawdown trigger.
-6. **Time Exit** → After initial_exit_hours: profitable → close. Small loss → extend by extension_hours (once). Large loss → close. Hard maximum at max_exit_hours.
-7. **Close** → Trade closed, PnL recorded, capital updated.
+## 5. Position Sizing (V2)
+- One position per symbol (no probe/confirmation/momentum stages)
+- Size = equity × equity_pct_per_trade × (0.8 + 0.4 × confidence) × allocation_mode multiplier
+- Clamped to min 5% equity and max remaining capacity
 
 ## 6. Capital Extraction Cycle
-1. Start with base capital (e.g., $1,000 for Paper)
+1. Start with base capital
 2. Trade until capital grows by extraction_target_pct (default 50%)
-3. When target reached: if auto_extraction is on, automatically extract profits back to base capital. If off, prompt user.
-4. Capital resets to starting amount. Extraction cycle increments. Extracted amount tracked as total_extracted.
-5. This prevents compound risk — you always trade with the same base, extracting profits regularly.
+3. Extract profits (auto or manual), reset to base capital
+4. Prevents compound risk
 
-## 7. Settings Glossary — Plain-Language Descriptions
+## 7. Settings Glossary — V2 Settings
 
-### Global Settings (apply to all modes)
+### Global Settings
 | Setting | What it means | Default |
 |---------|--------------|---------|
-| min_composite_score | Minimum quality score (0-100) a signal needs to be traded. Higher = fewer but better trades. | 80 |
-| min_ev_threshold | Minimum expected value. How much profit per dollar risked the model expects. | 0.003 |
-| min_rr_ratio | Minimum reward-to-risk ratio. TP distance ÷ SL distance. | 1.5 |
-| scoring_weight_regime_fit | How much "regime match" matters in the composite score (0-1). | 0.22 |
-| scoring_weight_setup_quality | How much "setup quality" matters (0-1). | 0.20 |
-| scoring_weight_trend_alignment | How much "trend alignment" matters (0-1). | 0.15 |
-| scoring_weight_volatility_condition | How much "volatility condition" matters (0-1). | 0.13 |
-| scoring_weight_reward_risk | How much "reward/risk" matters (0-1). | 0.15 |
-| scoring_weight_probability_of_success | How much "win probability" matters (0-1). | 0.15 |
-| scan_interval_seconds | How often (seconds) the system scans for new signals. | 30 |
-| ai_verification_enabled | Whether OpenAI reviews each signal before trading. | true |
-| kill_switch | Emergency stop — blocks ALL new trades immediately. | false |
+| min_composite_score | Minimum quality score (0-100) for trading | 80 |
+| min_ev_threshold | Minimum expected value | 0.003 |
+| min_rr_ratio | Minimum reward-to-risk ratio (from S/R levels) | 1.5 |
+| scoring_weight_* | Six dimension weights for composite scoring | See §4 |
+| scan_interval_seconds | Scan frequency | 30 |
+| ai_verification_enabled | AI reviews signals before trading | true |
+| kill_switch | Emergency halt — blocks all new trades | false |
 
 ### Per-Mode Settings (prefixed with paper_, demo_, or real_)
 | Setting | What it means |
 |---------|--------------|
-| capital | Starting/current capital for this mode |
-| equity_pct_per_trade | Percentage of equity to risk per trade (e.g., 22 = 22%) |
-| max_open_trades | Maximum simultaneous open positions |
-| allocation_mode | "conservative" (0.7x size), "balanced" (1.0x), or "aggressive" (1.3x) |
-| tp_multiplier_strong / medium / weak | Take-profit ATR multipliers by confidence tier |
-| sl_ratio | Stop-loss adjustment ratio (1.0 = use family default) |
-| trailing_stop_pct | Trail percentage behind peak price (25 = 25%) |
-| time_exit_window_hours | Base time before time-exit logic kicks in |
-| tp_capture_ratio | What fraction of the predicted move to target (0.70 = 70%) |
-| min_sl_atr_multiplier | Minimum SL distance in ATR multiples (wider = safer) |
-| max_daily_loss_pct | Max daily loss before halting (% of capital) |
+| capital | Starting/current capital |
+| equity_pct_per_trade | Percentage of equity per trade |
+| max_open_trades | Max simultaneous positions |
+| allocation_mode | "conservative" (0.7x), "balanced" (1.0x), or "aggressive" (1.3x) |
+| max_daily_loss_pct | Max daily loss before halting |
 | max_weekly_loss_pct | Max weekly loss before halting |
-| max_drawdown_pct | Max drawdown from peak before kill-switch territory |
-| probe_threshold | Min composite score for first entry on a symbol |
-| confirmation_threshold | Min composite score for second entry |
-| momentum_threshold | Min composite score for third entry |
-| stage_multiplier_probe / confirmation / momentum | Position size multiplier for each entry stage |
-| peak_drawdown_exit_pct | How much drawdown from peak profit triggers harvest (%) |
-| min_peak_profit_pct | Minimum peak profit before harvest can trigger (%) |
-| large_peak_threshold_pct | What counts as a "large" peak for early harvest (%) |
-| extraction_target_pct | How much profit to accumulate before extracting (%) |
-| auto_extraction | "true"/"false" — automatically extract when target hit |
-| correlated_family_cap | Max positions in correlated instruments (e.g., all Boom indices) |
-| enabled_symbols | Comma-separated list of symbols this mode can trade |
-| enabled_strategies | Comma-separated list of strategy families this mode can use |
-
-### Per-Family Settings (prefixed with {mode}_{family}_)
-| Setting | What it means |
-|---------|--------------|
-| tp_atr_multiplier | Take-profit distance in ATR multiples for this family |
-| sl_atr_multiplier | Stop-loss distance in ATR multiples |
-| initial_exit_hours | Hours before time-exit logic starts checking |
-| extension_hours | Additional hours to give a small-loss trade |
-| max_exit_hours | Absolute maximum hours a trade can stay open |
-| harvest_sensitivity | Multiplier for harvest aggressiveness (lower = more patient) |
+| max_drawdown_pct | Max drawdown from peak |
+| extraction_target_pct | Profit % before extraction |
+| auto_extraction | Auto-extract when target hit |
+| correlated_family_cap | Max positions in correlated instruments |
+| enabled_symbols | Comma-separated tradeable symbols |
+| enabled_strategies | Comma-separated enabled strategy families |
 
 ## 8. Market Regime Definitions
 | Regime | What's happening | Allowed strategies |
 |--------|-----------------|-------------------|
-| trend_up | Clear upward trend, EMA slope positive | trend_continuation |
-| trend_down | Clear downward trend, EMA slope negative | trend_continuation |
-| mean_reversion | Price overstretched, RSI extreme | mean_reversion |
-| compression | Low volatility squeeze, BB narrow | breakout_expansion |
-| breakout_expansion | Volatility expanding after compression | breakout_expansion |
+| trend_up | Clear upward trend | trend_continuation |
+| trend_down | Clear downward trend | trend_continuation |
+| mean_reversion | Price overstretched | mean_reversion |
+| compression | Low volatility squeeze | breakout_expansion |
+| breakout_expansion | Volatility expanding | breakout_expansion |
 | spike_zone | Boom/Crash spike imminent | spike_event |
-| no_trade | Conflicting or unclear signals | NONE — system waits |
+| no_trade | Unclear signals | NONE — system waits |
 
-## 9. Technical Glossary
-| Term | Plain-language meaning |
-|------|----------------------|
-| **ATR** | Average True Range — measures how much the price typically moves. Higher = more volatile. |
-| **R:R (Reward/Risk)** | How much you stand to gain vs lose. R:R of 3 means you gain $3 for every $1 risked. |
-| **Composite Score** | Overall signal quality (0-100). Combines 6 factors. Must exceed min_composite_score to trade. |
-| **Regime** | The current market "mood" — trending, reverting, compressing, or spiking. |
-| **EMA** | Exponential Moving Average — a smoothed price trend line. Its slope shows direction. |
-| **RSI** | Relative Strength Index (0-100). Below 30 = oversold, above 70 = overbought. |
-| **z-Score** | How many standard deviations price is from its mean. ±2 = very stretched. |
-| **Bollinger Bands** | Volatility bands around price. Narrow = squeeze. Wide = expansion. |
-| **BB Width** | Width of Bollinger Bands. Below 0.006 = squeeze (breakout likely). |
-| **%B** | Where price sits within Bollinger Bands. >0.85 = near top, <0.15 = near bottom. |
-| **Spike Hazard Score** | Probability (0-1) that a Boom/Crash spike is imminent. >0.70 triggers spike_event. |
-| **Trailing Stop** | A stop-loss that moves in your favour as price improves. Locks in profits. |
-| **Profit Harvest** | Closing a profitable trade when it's drawn down significantly from its peak. |
-| **Capital Extraction** | Taking profits out of the trading account when the target is reached, then resetting. |
-| **Expected Value (EV)** | Average profit per dollar risked if you took this trade 1000 times. |
-| **Probe/Confirmation/Momentum** | Three stages of building a position on the same symbol, requiring progressively higher scores. |
-
-## 10. Recent System Changes (Changelog)
-- **v1.0 — Current**: Full V1 system with 4-family ML engine, composite scoring, 3 independent modes
-- AI converted from controller to suggestion-only advisor (never auto-changes settings)
-- Weekly AI analysis covers ALL adjustable settings + regime distribution
-- Monthly optimization writes suggestions only (ai_suggest_ keys)
-- Settings page: field-level locking, unlock with risk warning, section saves
-- AI suggestion badges on all settings with "Review Suggestions" button
-- Kill switch locked by default with override save pattern
-- Per-family hold profiles (TP/SL ATR multipliers, time exits, harvest sensitivity) per mode
-- Position building: probe → confirmation → momentum with configurable thresholds and size multipliers
-- Capital extraction cycle with configurable target and auto-extraction option
-- Correlated instrument exposure cap prevents overconcentration in one family
-
-## 11. AI Advisor Rules
+## 9. AI Advisor Rules
 1. You are an ADVISOR, not a controller. You NEVER directly change settings.
-2. You can READ current settings and pending AI suggestions.
-3. You can WRITE new AI suggestions (ai_suggest_ keys) for the user to review and apply manually.
-4. You can ANALYSE recent trade performance data to give data-backed advice.
-5. Always explain WHY you're suggesting a change — reference actual performance data when available.
-6. For Real mode, be MOST conservative. For Paper, MOST aggressive.
-7. Never suggest lowering composite score below 80.
+2. You can READ settings and pending AI suggestions.
+3. You can WRITE suggestions (ai_suggest_ keys) for user to review and apply.
+4. You can ANALYSE trade performance data for advice.
+5. Always explain WHY — reference actual data.
+6. Real mode = most conservative. Paper = most aggressive.
+7. Never suggest composite score below 80.
 8. Always favour FEWER, LARGER, HIGHER-QUALITY trades.
-9. Write suggestions using write_suggestions tool, then tell the user to check Settings to review and apply.
 
-## 12. Core Trading Philosophy
-- HIGH CAPITAL PER TRADE: Deploy 15-25% equity per position
-- HIGHEST-VALUE SIGNALS ONLY: Composite score ≥ 80+
-- HOLD FOR LONGER PERIODS: Time exit windows of 72-168+ hours
-- WIDE TAKE PROFITS: TP multipliers of 2.5x-4.0x ATR
-- TIGHT TRAILING STOPS: Trail 20-25% behind peak price
-- FEW SIMULTANEOUS POSITIONS: Max 2-4 open trades
-- EXTRACT PROFITS REGULARLY: Don't let compound risk grow unchecked`;
+## 10. Core Trading Philosophy
+- LARGE CAPITAL PER TRADE: Deploy 15-25% equity per position
+- HIGHEST-QUALITY SIGNALS ONLY: Composite score ≥ 80+
+- LONG HOLD: 72h profit exit, 168h hard cap
+- DYNAMIC TP/SL: S/R + Fibonacci confluence, not fixed ATR multiples
+- 30% PEAK-PROFIT TRAILING: Lock in gains from peak unrealised profit
+- FEW POSITIONS: Max 2-4 open trades
+- EXTRACT PROFITS REGULARLY: Don't let compound risk grow`;
+
 
 
 async function buildDynamicContext(): Promise<string> {
@@ -307,9 +227,8 @@ async function buildDynamicContext(): Promise<string> {
     const eqPct = settings[`${mode}_equity_pct_per_trade`] || "N/A";
     const maxTrades = settings[`${mode}_max_open_trades`] || "N/A";
     const allocation = settings[`${mode}_allocation_mode`] || "balanced";
-    const probeThresh = settings[`${mode}_probe_threshold`] || "N/A";
     const extractTarget = settings[`${mode}_extraction_target_pct`] || "50";
-    return `${mode.toUpperCase()}: ${active ? "ACTIVE" : "INACTIVE"} | Capital: $${capital} | Equity/trade: ${eqPct}% | Max trades: ${maxTrades} | Allocation: ${allocation} | Probe threshold: ${probeThresh} | Extraction target: ${extractTarget}%`;
+    return `${mode.toUpperCase()}: ${active ? "ACTIVE" : "INACTIVE"} | Capital: $${capital} | Equity/trade: ${eqPct}% | Max trades: ${maxTrades} | Allocation: ${allocation} | Extraction target: ${extractTarget}%`;
   }).join("\n");
 
   const aiSuggestions: string[] = [];
