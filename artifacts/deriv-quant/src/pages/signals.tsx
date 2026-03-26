@@ -3,14 +3,14 @@ import { useGetLatestSignals } from "@workspace/api-client-react";
 import type { ScoringDimensions, GetLatestSignalsParams } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, Badge } from "@/components/ui-elements";
 import { formatNumber, cn } from "@/lib/utils";
-import { ClipboardList, ArrowUpRight, ArrowDownRight, Brain, ChevronDown, ChevronUp, Filter, X, ChevronLeft, ChevronRight, Download } from "lucide-react";
+import { ClipboardList, ArrowUpRight, ArrowDownRight, Brain, ChevronDown, ChevronUp, Filter, X, ChevronLeft, ChevronRight, Download, ShieldAlert, Target, TrendingUp, BarChart3 } from "lucide-react";
 import { downloadCSV, downloadJSON } from "@/lib/export";
 import { motion, AnimatePresence } from "framer-motion";
 
 const FAMILIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"] as const;
 
 const STATUSES = ["approved", "blocked"] as const;
-const AI_VERDICTS = ["agree", "disagree", "uncertain"] as const;
+const AI_VERDICTS = ["agree", "disagree", "uncertain", "skipped"] as const;
 
 const FAMILY_LABELS: Record<string, string> = {
   trend_continuation: "Trend",
@@ -27,14 +27,13 @@ const FAMILY_COLORS: Record<string, string> = {
 };
 
 function AIVerdictBadge({ verdict, reasoning }: { verdict: string | null | undefined; reasoning: string | null | undefined }) {
-  const [expanded, setExpanded] = useState(false);
-
   if (!verdict) return <span className="text-xs text-muted-foreground/50">—</span>;
 
   const styles: Record<string, string> = {
     agree: "bg-emerald-500/12 text-emerald-400 border-emerald-500/25",
     disagree: "bg-red-500/12 text-red-400 border-red-500/25",
     uncertain: "bg-amber-500/12 text-amber-400 border-amber-500/25",
+    skipped: "bg-slate-500/12 text-slate-400 border-slate-500/25",
     error: "bg-gray-500/12 text-gray-400 border-gray-500/25",
   };
 
@@ -42,34 +41,26 @@ function AIVerdictBadge({ verdict, reasoning }: { verdict: string | null | undef
     agree: "Agree",
     disagree: "Disagree",
     uncertain: "Uncertain",
+    skipped: "Skipped",
     error: "Error",
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <button
-        onClick={() => setExpanded(!expanded)}
+    <div className="flex flex-col gap-1">
+      <span
         className={cn(
-          "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold border tracking-wide cursor-pointer transition-opacity hover:opacity-80",
+          "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold border tracking-wide",
           styles[verdict] || "bg-gray-500/12 text-gray-400 border-gray-500/25"
         )}
       >
         <Brain className="w-3 h-3" />
         {labels[verdict] || verdict}
-        {reasoning && (expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
-      </button>
-      <AnimatePresence>
-        {expanded && reasoning && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="text-xs text-muted-foreground italic max-w-[220px] leading-relaxed"
-          >
-            {reasoning}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      </span>
+      {reasoning && verdict !== "skipped" && (
+        <span className="text-[10px] text-muted-foreground leading-snug line-clamp-2">
+          {reasoning}
+        </span>
+      )}
     </div>
   );
 }
@@ -123,52 +114,104 @@ function DimensionBar({ label, value }: { label: string; value: number }) {
   );
 }
 
-function DimensionsBreakdown({ dimensions }: { dimensions: ScoringDimensions | null | undefined }) {
-  const [expanded, setExpanded] = useState(false);
-
-  if (!dimensions) return null;
+function SignalDetailPanel({ sig }: { sig: any }) {
+  const tp = sig.suggestedTp != null ? Math.abs(sig.suggestedTp) : null;
+  const sl = sig.suggestedSl != null ? Math.abs(sig.suggestedSl) : null;
+  const rr = sl && sl > 0 && tp ? (tp / sl) : null;
 
   return (
-    <div>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="text-[10px] text-primary/70 hover:text-primary transition-colors flex items-center gap-0.5"
-      >
-        {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-        {expanded ? "Hide" : "Details"}
-      </button>
-      <AnimatePresence>
-        {expanded && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="mt-1.5 space-y-1 min-w-[200px]"
-          >
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-card/50 border-t border-border/30">
+      <div className="space-y-3">
+        <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+          <BarChart3 className="w-3.5 h-3.5 text-primary" />
+          Scoring Breakdown
+        </h4>
+        {sig.scoringDimensions ? (
+          <div className="space-y-1.5">
             {(Object.keys(DIMENSION_LABELS) as (keyof ScoringDimensions)[]).map((key) => (
-              <DimensionBar key={key} label={DIMENSION_LABELS[key]} value={dimensions[key]} />
+              <DimensionBar key={key} label={DIMENSION_LABELS[key]} value={sig.scoringDimensions[key]} />
             ))}
-          </motion.div>
+          </div>
+        ) : (
+          <p className="text-[10px] text-muted-foreground">No dimension data</p>
         )}
-      </AnimatePresence>
+
+        <div className="pt-2 border-t border-border/20 space-y-1">
+          <DetailRow label="Composite" value={sig.compositeScore != null ? Math.round(sig.compositeScore).toString() : "—"} />
+          <DetailRow label="Raw Score" value={formatNumber(sig.score, 3)} />
+          <DetailRow label="Expected Value" value={formatNumber(sig.expectedValue, 4)} highlight={sig.expectedValue > 0 ? "green" : "red"} />
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+          <Target className="w-3.5 h-3.5 text-primary" />
+          Trade Parameters
+        </h4>
+        <div className="space-y-1">
+          <DetailRow label="Direction" value={sig.direction?.toUpperCase() ?? "—"} />
+          <DetailRow label="Strategy" value={sig.strategyName ?? "—"} />
+          <DetailRow label="Family" value={FAMILY_LABELS[sig.strategyFamily] ?? sig.strategyFamily ?? "—"} />
+          <DetailRow label="Take Profit" value={tp != null ? formatNumber(tp, 4) : "—"} highlight="green" />
+          <DetailRow label="Stop Loss" value={sl != null ? formatNumber(sl, 4) : "—"} highlight="red" />
+          <DetailRow label="R:R Ratio" value={rr != null ? `${rr.toFixed(2)}:1` : "—"} />
+          <DetailRow label="Allocation" value={sig.allocationPct != null ? `${sig.allocationPct.toFixed(1)}%` : "—"} />
+          <DetailRow label="Mode" value={sig.mode ?? "—"} />
+        </div>
+
+        {sig.regime && (
+          <div className="pt-2 border-t border-border/20 space-y-1">
+            <DetailRow label="Regime" value={sig.regime} />
+            <DetailRow label="Confidence" value={sig.regimeConfidence != null ? `${(sig.regimeConfidence * 100).toFixed(0)}%` : "—"} />
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+          <ShieldAlert className="w-3.5 h-3.5 text-primary" />
+          Decision & AI
+        </h4>
+
+        <div className="space-y-1">
+          <DetailRow label="Status" value={sig.allowedFlag ? "Approved" : "Blocked"} highlight={sig.allowedFlag ? "green" : "red"} />
+          {!sig.allowedFlag && sig.rejectionReason && (
+            <div className="mt-1 p-2 rounded-md bg-red-500/8 border border-red-500/20">
+              <p className="text-[11px] text-red-400 leading-relaxed">{sig.rejectionReason}</p>
+            </div>
+          )}
+        </div>
+
+        <div className="pt-2 border-t border-border/20">
+          <DetailRow label="AI Verdict" value={sig.aiVerdict ?? "—"} />
+          {sig.aiVerdict === "skipped" && (
+            <div className="mt-1 p-2 rounded-md bg-slate-500/8 border border-slate-500/20">
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Signal was blocked by a system gate before reaching AI verification.
+              </p>
+            </div>
+          )}
+          {sig.aiReasoning && sig.aiVerdict !== "skipped" && (
+            <div className="mt-1 p-2 rounded-md bg-muted/30 border border-border/30">
+              <p className="text-[11px] text-muted-foreground leading-relaxed whitespace-pre-wrap">{sig.aiReasoning}</p>
+            </div>
+          )}
+          {sig.aiConfidenceAdj != null && sig.aiConfidenceAdj !== 0 && (
+            <DetailRow label="AI Confidence Adj" value={`${sig.aiConfidenceAdj > 0 ? "+" : ""}${sig.aiConfidenceAdj}`} />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-function FilterPill({ label, active, onClick, onClear }: { label: string; active: boolean; onClick: () => void; onClear?: () => void }) {
+function DetailRow({ label, value, highlight }: { label: string; value: string; highlight?: "green" | "red" }) {
+  const valClass = highlight === "green" ? "text-emerald-400" : highlight === "red" ? "text-red-400" : "text-foreground";
   return (
-    <button
-      onClick={active && onClear ? onClear : onClick}
-      className={cn(
-        "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium border transition-all",
-        active
-          ? "bg-primary/15 text-primary border-primary/30"
-          : "bg-card text-muted-foreground border-border/50 hover:border-border"
-      )}
-    >
-      {label}
-      {active && onClear && <X className="w-3 h-3" />}
-    </button>
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[10px] text-muted-foreground">{label}</span>
+      <span className={cn("text-[11px] mono-num font-medium", valClass)}>{value}</span>
+    </div>
   );
 }
 
@@ -202,6 +245,7 @@ export default function Signals() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(0);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const params: GetLatestSignalsParams = useMemo(() => {
     const p: GetLatestSignalsParams = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
@@ -240,8 +284,9 @@ export default function Signals() {
       strategy: s.strategyName, direction: s.direction, compositeScore: s.compositeScore,
       score: s.score, expectedValue: s.expectedValue, regime: s.regime,
       regimeConfidence: s.regimeConfidence, allocationPct: s.allocationPct,
+      suggestedTp: s.suggestedTp, suggestedSl: s.suggestedSl,
       status: s.allowedFlag ? "approved" : "blocked", rejectionReason: s.rejectionReason,
-      aiVerdict: s.aiVerdict, aiReasoning: s.aiReasoning,
+      aiVerdict: s.aiVerdict, aiReasoning: s.aiReasoning, mode: s.mode,
     })), "signals_log");
   }
 
@@ -344,6 +389,7 @@ export default function Signals() {
           <table>
             <thead>
               <tr>
+                <th className="w-6"></th>
                 <th>Time</th>
                 <th>Symbol</th>
                 <th>Family</th>
@@ -359,9 +405,9 @@ export default function Signals() {
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={11} className="text-center py-10 text-muted-foreground">Loading decisions…</td></tr>
+                <tr><td colSpan={12} className="text-center py-10 text-muted-foreground">Loading decisions…</td></tr>
               ) : signals.length === 0 ? (
-                <tr><td colSpan={11} className="text-center py-16 text-muted-foreground">
+                <tr><td colSpan={12} className="text-center py-16 text-muted-foreground">
                   <div className="flex flex-col items-center gap-3">
                     <ClipboardList className="w-8 h-8 text-muted-foreground/40" />
                     {hasFilters ? (
@@ -382,77 +428,108 @@ export default function Signals() {
                   </div>
                 </td></tr>
               ) : (
-                signals.map((sig) => (
-                  <tr key={sig.id} className={cn(!sig.allowedFlag && "opacity-60")}>
-                    <td className="mono-num text-muted-foreground text-xs whitespace-nowrap">
-                      {new Date(sig.ts).toLocaleDateString(undefined, { month: "short", day: "numeric" })}{" "}
-                      {new Date(sig.ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                    </td>
-                    <td className="font-semibold text-foreground text-sm">{sig.symbol}</td>
-                    <td>
-                      {sig.strategyFamily ? (
-                        <span className={cn("inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border", FAMILY_COLORS[sig.strategyFamily] || "bg-gray-500/12 text-gray-400 border-gray-500/25")}>
-                          {FAMILY_LABELS[sig.strategyFamily] || sig.strategyFamily}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">{sig.strategyName}</span>
-                      )}
-                    </td>
-                    <td>
-                      {sig.direction === "buy"
-                        ? <span className="inline-flex items-center gap-1 text-success text-xs font-semibold"><ArrowUpRight className="w-3.5 h-3.5" />BUY</span>
-                        : sig.direction === "sell"
-                        ? <span className="inline-flex items-center gap-1 text-destructive text-xs font-semibold"><ArrowDownRight className="w-3.5 h-3.5" />SELL</span>
-                        : <span className="text-muted-foreground">—</span>}
-                    </td>
-                    <td className="text-right">
-                      <div className="flex flex-col items-end gap-0.5">
-                        <CompositeScoreBadge score={sig.compositeScore} />
-                        <DimensionsBreakdown dimensions={sig.scoringDimensions} />
-                      </div>
-                    </td>
-                    <td className="text-right mono-num text-xs text-muted-foreground">{formatNumber(sig.score, 2)}</td>
-                    <td className={cn("text-right mono-num text-xs", sig.expectedValue > 0 ? "text-success" : "text-destructive")}>
-                      {formatNumber(sig.expectedValue, 4)}
-                    </td>
-                    <td>
-                      {sig.regime ? (
-                        <div className="flex flex-col gap-0.5">
-                          <span className="text-xs text-foreground">{sig.regime}</span>
-                          {sig.regimeConfidence != null && (
-                            <span className="text-[10px] mono-num text-muted-foreground">{(sig.regimeConfidence * 100).toFixed(0)}%</span>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground/50">—</span>
-                      )}
-                    </td>
-                    <td className="text-right mono-num text-xs">
-                      {sig.allocationPct != null ? (
-                        <span className="text-foreground">{sig.allocationPct.toFixed(0)}%</span>
-                      ) : (
-                        <span className="text-muted-foreground/50">—</span>
-                      )}
-                    </td>
-                    <td>
-                      {sig.allowedFlag ? (
-                        <Badge variant="success">Approved</Badge>
-                      ) : (
-                        <div className="flex flex-col gap-0.5">
-                          <Badge variant="destructive">Blocked</Badge>
-                          {sig.rejectionReason && (
-                            <span className="text-[10px] text-muted-foreground truncate max-w-[140px]" title={sig.rejectionReason}>
-                              {sig.rejectionReason}
+                signals.map((sig) => {
+                  const isExpanded = expandedId === sig.id;
+                  return (
+                    <React.Fragment key={sig.id}>
+                      <tr
+                        className={cn(
+                          !sig.allowedFlag && "opacity-60",
+                          "cursor-pointer hover:bg-muted/30 transition-colors",
+                          isExpanded && "bg-muted/20 opacity-100"
+                        )}
+                        onClick={() => setExpandedId(isExpanded ? null : sig.id)}
+                      >
+                        <td className="w-6 text-center">
+                          {isExpanded
+                            ? <ChevronUp className="w-3.5 h-3.5 text-primary inline-block" />
+                            : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground inline-block" />
+                          }
+                        </td>
+                        <td className="mono-num text-muted-foreground text-xs whitespace-nowrap">
+                          {new Date(sig.ts).toLocaleDateString(undefined, { month: "short", day: "numeric" })}{" "}
+                          {new Date(sig.ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </td>
+                        <td className="font-semibold text-foreground text-sm">{sig.symbol}</td>
+                        <td>
+                          {sig.strategyFamily ? (
+                            <span className={cn("inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border", FAMILY_COLORS[sig.strategyFamily] || "bg-gray-500/12 text-gray-400 border-gray-500/25")}>
+                              {FAMILY_LABELS[sig.strategyFamily] || sig.strategyFamily}
                             </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">{sig.strategyName}</span>
                           )}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      <AIVerdictBadge verdict={sig.aiVerdict} reasoning={sig.aiReasoning} />
-                    </td>
-                  </tr>
-                ))
+                        </td>
+                        <td>
+                          {sig.direction === "buy"
+                            ? <span className="inline-flex items-center gap-1 text-success text-xs font-semibold"><ArrowUpRight className="w-3.5 h-3.5" />BUY</span>
+                            : sig.direction === "sell"
+                            ? <span className="inline-flex items-center gap-1 text-destructive text-xs font-semibold"><ArrowDownRight className="w-3.5 h-3.5" />SELL</span>
+                            : <span className="text-muted-foreground">—</span>}
+                        </td>
+                        <td className="text-right">
+                          <CompositeScoreBadge score={sig.compositeScore} />
+                        </td>
+                        <td className="text-right mono-num text-xs text-muted-foreground">{formatNumber(sig.score, 2)}</td>
+                        <td className={cn("text-right mono-num text-xs", sig.expectedValue > 0 ? "text-success" : "text-destructive")}>
+                          {formatNumber(sig.expectedValue, 4)}
+                        </td>
+                        <td>
+                          {sig.regime ? (
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-xs text-foreground">{sig.regime}</span>
+                              {sig.regimeConfidence != null && (
+                                <span className="text-[10px] mono-num text-muted-foreground">{(sig.regimeConfidence * 100).toFixed(0)}%</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground/50">—</span>
+                          )}
+                        </td>
+                        <td className="text-right mono-num text-xs">
+                          {sig.allocationPct != null ? (
+                            <span className="text-foreground">{sig.allocationPct.toFixed(0)}%</span>
+                          ) : (
+                            <span className="text-muted-foreground/50">—</span>
+                          )}
+                        </td>
+                        <td>
+                          {sig.allowedFlag ? (
+                            <Badge variant="success">Approved</Badge>
+                          ) : (
+                            <div className="flex flex-col gap-0.5">
+                              <Badge variant="destructive">Blocked</Badge>
+                              {sig.rejectionReason && (
+                                <span className="text-[10px] text-muted-foreground leading-snug line-clamp-2 max-w-[180px]">
+                                  {sig.rejectionReason}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          <AIVerdictBadge verdict={sig.aiVerdict} reasoning={sig.aiReasoning} />
+                        </td>
+                      </tr>
+                      <AnimatePresence>
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={12} className="p-0">
+                              <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: "auto" }}
+                                exit={{ opacity: 0, height: 0 }}
+                                transition={{ duration: 0.2 }}
+                              >
+                                <SignalDetailPanel sig={sig} />
+                              </motion.div>
+                            </td>
+                          </tr>
+                        )}
+                      </AnimatePresence>
+                    </React.Fragment>
+                  );
+                })
               )}
             </tbody>
           </table>
