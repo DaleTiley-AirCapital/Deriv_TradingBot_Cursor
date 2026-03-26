@@ -92,7 +92,7 @@ function buildCandidate(
     fibExtensionLevels: features.fibExtensionLevels,
     bbUpper: features.bbUpper,
     bbLower: features.bbLower,
-    currentPrice: features.ts > 0 ? 0 : 0,
+    currentPrice: (features.bbUpper + features.bbLower) / 2,
   };
 }
 
@@ -223,8 +223,8 @@ const FAMILY_RUNNERS: Record<StrategyFamily, (f: FeatureVector, r: RegimeClassif
   spike_event: spikeEvent,
 };
 
-export function runAllStrategies(features: FeatureVector, weights?: ScoringWeights): SignalCandidate[] {
-  const regime = classifyRegime(features);
+export function runAllStrategies(features: FeatureVector, weights?: ScoringWeights, cachedRegime?: RegimeClassification): SignalCandidate[] {
+  const regime = cachedRegime ?? classifyRegime(features);
 
   if (regime.regime === "no_trade") {
     return [];

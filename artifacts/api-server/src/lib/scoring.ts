@@ -154,12 +154,39 @@ function computeVolatilityCondition(features: FeatureVector, candidate: SignalCa
 }
 
 function computeRewardRisk(candidate: SignalCandidate): number {
-  const tp = Math.abs(candidate.suggestedTp ?? 0);
-  const sl = Math.abs(candidate.suggestedSl ?? 0);
+  const price = candidate.currentPrice;
+  if (!price || price <= 0) return 30;
 
-  if (sl === 0 || tp === 0) return 30;
+  const isBuy = candidate.direction === "buy";
+  const candidates_tp = [
+    candidate.swingHigh,
+    candidate.swingLow,
+    candidate.bbUpper,
+    candidate.bbLower,
+    ...(candidate.fibExtensionLevels ?? []),
+  ].filter(l => l > 0 && (isBuy ? l > price : l < price));
 
-  const rr = tp / sl;
+  const candidates_sl = [
+    candidate.swingHigh,
+    candidate.swingLow,
+    candidate.bbUpper,
+    candidate.bbLower,
+    ...(candidate.fibRetraceLevels ?? []),
+  ].filter(l => l > 0 && (isBuy ? l < price : l > price));
+
+  const nearestTp = candidates_tp.length > 0
+    ? candidates_tp.reduce((best, l) => Math.abs(l - price) < Math.abs(best - price) ? l : best)
+    : null;
+  const nearestSl = candidates_sl.length > 0
+    ? candidates_sl.reduce((best, l) => Math.abs(l - price) < Math.abs(best - price) ? l : best)
+    : null;
+
+  const tpDist = nearestTp ? Math.abs(nearestTp - price) : 0;
+  const slDist = nearestSl ? Math.abs(nearestSl - price) : 0;
+
+  if (slDist === 0 || tpDist === 0) return 30;
+
+  const rr = tpDist / slDist;
 
   if (rr >= 3.0) return 100;
   if (rr >= 2.5) return 90;

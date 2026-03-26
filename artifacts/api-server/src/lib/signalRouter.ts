@@ -218,11 +218,11 @@ function rankCandidates(candidates: SignalCandidate[]): SignalCandidate[] {
 
     const aRank = a.compositeScore * scoreWeight +
       (a.expectedValue * 10000) * evWeight +
-      ((a as any).regimeConfidence ?? 0.5) * 100 * regimeWeight;
+      (a.regimeConfidence ?? 0.5) * 100 * regimeWeight;
 
     const bRank = b.compositeScore * scoreWeight +
       (b.expectedValue * 10000) * evWeight +
-      ((b as any).regimeConfidence ?? 0.5) * 100 * regimeWeight;
+      (b.regimeConfidence ?? 0.5) * 100 * regimeWeight;
 
     return bRank - aRank;
   });
@@ -280,6 +280,22 @@ export async function routeSignals(candidates: SignalCandidate[], tradingMode: T
     } else if (remainingCapital < ctx.totalCapital * 0.05) {
       allowed = false;
       rejectionReason = "Insufficient available capital";
+    }
+
+    if (allowed && ctx.minRrRatio > 0 && signal.currentPrice > 0) {
+      const isBuy = signal.direction === "buy";
+      const price = signal.currentPrice;
+      const tpCands = [signal.swingHigh, signal.bbUpper, ...(signal.fibExtensionLevels ?? [])].filter(l => l > 0 && (isBuy ? l > price : l < price));
+      const slCands = [signal.swingLow, signal.bbLower, ...(signal.fibRetraceLevels ?? [])].filter(l => l > 0 && (isBuy ? l < price : l > price));
+      const nearTp = tpCands.length > 0 ? tpCands.reduce((b, l) => Math.abs(l - price) < Math.abs(b - price) ? l : b) : null;
+      const nearSl = slCands.length > 0 ? slCands.reduce((b, l) => Math.abs(l - price) < Math.abs(b - price) ? l : b) : null;
+      if (nearTp && nearSl && Math.abs(nearSl - price) > 0) {
+        const signalRr = Math.abs(nearTp - price) / Math.abs(nearSl - price);
+        if (signalRr < ctx.minRrRatio) {
+          allowed = false;
+          rejectionReason = `R:R ratio too low (${signalRr.toFixed(2)} < ${ctx.minRrRatio})`;
+        }
+      }
     }
 
     if (allowed) {

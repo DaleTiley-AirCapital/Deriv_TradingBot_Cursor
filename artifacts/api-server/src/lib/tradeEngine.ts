@@ -333,13 +333,12 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
     return null;
   }
 
-  const sigAny = signal as any;
-  const swingHigh = sigAny.swingHigh ?? spotPrice * 1.01;
-  const swingLow = sigAny.swingLow ?? spotPrice * 0.99;
-  const fibRetraceLevels = sigAny.fibRetraceLevels ?? [];
-  const fibExtensionLevels = sigAny.fibExtensionLevels ?? [];
-  const bbUpper = sigAny.bbUpper ?? spotPrice * 1.01;
-  const bbLower = sigAny.bbLower ?? spotPrice * 0.99;
+  const swingHigh = signal.swingHigh ?? spotPrice * 1.01;
+  const swingLow = signal.swingLow ?? spotPrice * 0.99;
+  const fibRetraceLevels = signal.fibRetraceLevels ?? [];
+  const fibExtensionLevels = signal.fibExtensionLevels ?? [];
+  const bbUpper = signal.bbUpper ?? spotPrice * 1.01;
+  const bbLower = signal.bbLower ?? spotPrice * 0.99;
 
   const tp = calculateSRFibTP({
     entryPrice: spotPrice,

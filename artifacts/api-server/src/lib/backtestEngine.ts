@@ -653,17 +653,11 @@ function simulateOnCandles(
       const minRr = config.minRrRatio ?? 1.5;
 
       for (const signal of filteredSignals) {
-        const sigTp = Math.abs(signal.suggestedTp ?? 0);
-        const sigSl = Math.abs(signal.suggestedSl ?? 0);
         if (signal.compositeScore < minComposite) continue;
         if (signal.expectedValue < minEv) continue;
-        if (sigSl <= 0 || sigTp <= 0) continue;
-        if (sigTp / sigSl < minRr) continue;
         if (openPositions.length >= maxConcurrent) break;
 
-        const alreadyHasPosition = openPositions.some(
-          p => p.symbol === sym && p.strategyName === signal.strategyName
-        );
+        const alreadyHasPosition = openPositions.some(p => p.symbol === sym);
         if (alreadyHasPosition) continue;
 
         const currentDeployed = openPositions.reduce((s, p) => s + p.positionSize, 0);
@@ -703,6 +697,10 @@ function simulateOnCandles(
           positionSize: positionSize,
           equity,
         });
+
+        const tpDist = Math.abs(tp - price);
+        const slDist = Math.abs(sl - price);
+        if (slDist <= 0 || tpDist / slDist < minRr) continue;
 
         const entryTs = candles[idx].openTs;
         const maxExitTs = entryTs * 1000 + TIME_EXIT_PROFIT_HOURS * 3600 * 1000;

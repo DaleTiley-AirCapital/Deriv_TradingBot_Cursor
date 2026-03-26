@@ -98,7 +98,7 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
   }
 
   const weights = parseScoringWeights(stateMap);
-  const candidates = runAllStrategies(features, weights);
+  const candidates = runAllStrategies(features, weights, regime);
   if (candidates.length === 0) {
     console.log(`[Scan] ${symbol} | regime=${regime.regime} | families=[${regime.allowedFamilies.join(",")}] | candidates=0 | SKIP=no_signals`);
     return;
