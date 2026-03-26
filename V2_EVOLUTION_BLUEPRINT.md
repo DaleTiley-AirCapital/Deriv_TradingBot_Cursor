@@ -20,6 +20,7 @@
 6. [Emerging Pattern Detection](#section-6-emerging-pattern-detection)
 7. [Competitive Adaptation](#section-7-competitive-adaptation)
 8. [Implementation Phases](#section-8-implementation-phases)
+9. [Support/Resistance-Based TP Placement](#section-9-supportresistance-based-tp-placement)
 
 ---
 
@@ -820,7 +821,204 @@ Dashboard display:
 | Phase 1 | 2 (UI Enrichment) | Immediate next | ~15–20 dev days | V1 stable |
 | Phase 2 | 3, 5 (Thresholds + Degradation) | After Phase 1 | ~12–18 dev days | None (can parallel with Phase 1) |
 | Phase 3 | 4, 6, 7 (Calibration + Patterns + Competition) | After Phase 2 | ~30–40 dev days | Phase 2 health data |
-| **Total** | All | | **~57–78 dev days** | |
+| Phase 4 | 9 (S/R-Based TP Placement) | After Phase 3 | ~18–25 dev days | Phase 2 health data, extended candle history |
+| **Total** | All | | **~75–103 dev days** | |
+
+---
+
+## Section 9: Support/Resistance-Based TP Placement
+
+### Current State
+
+The system calculates take-profit levels purely from ATR multipliers. Each strategy family defines a `tpMultiple` in `FAMILY_CONFIG` (`strategies.ts`), and the `sltp()` function computes TP as `entry ± ATR × tpMultiple`. The trade engine further refines this via `calculateDynamicTP()` in `tradeEngine.ts`, which factors in confidence level, historical average move, and mode-specific capture ratios — but the core mechanism remains ATR-based distance from entry.
+
+The system already computes swing high/low levels via 5-bar pivot detection in `features.ts` (`findSwingLevels`). These swing levels produce `swingHighDist` and `swingLowDist` features that are used as signal inputs (e.g., mean reversion detects swing breach/reclaim patterns). However, these levels are never used for TP targeting. The current exit infrastructure has no concept of support/resistance zones, no horizontal level detection, and no trend line identification.
+
+The `FAMILY_HOLD_PROFILE` in `tradeEngine.ts` also defines per-family `tpAtrMultiplier` values (trend_continuation: 6.0, mean_reversion: 4.0, breakout_expansion: 8.0, spike_event: 4.0), which are mode-overridable via the state table but still fundamentally ATR-based.
+
+### Concept
+
+Replace or augment the fixed ATR-based TP with dynamic, level-based TP targeting. The system would detect horizontal and diagonal support/resistance zones from historical price pivots, then set TP near the next significant S/R level in the trade direction rather than at a fixed ATR multiple.
+
+For a trend line breakout strategy, the flow is:
+1. Identify active trend lines (diagonal support/resistance) from recent swing points.
+2. Detect when price touches or breaks a trend line (entry trigger).
+3. Find the next major S/R level in the trade direction.
+4. Place TP near that level (with a small buffer to account for the tendency of price to reverse just before reaching exact levels).
+
+This approach adapts TP to the market structure visible on the chart, potentially improving the reward-to-risk ratio by targeting levels where price has historically reversed rather than arbitrary ATR distances.
+
+### S/R Detection Methods
+
+#### 9.1 Horizontal S/R from Pivot Clusters
+
+Use the existing `findSwingLevels` 5-bar pivot detection as a foundation, but extend it to collect all historical pivots rather than just the most recent swing high/low.
+
+**Algorithm:**
+1. Scan the lookback window (e.g., last 200–500 candles) and identify all swing highs and swing lows using the existing pivot logic.
+2. Group pivots within a price tolerance band (e.g., ±0.15% of the pivot price). Pivots that fall within the same band form a "level cluster."
+3. A cluster with 2 or more touches qualifies as an S/R level. The level price is the average of all pivots in the cluster.
+4. Assign a strength score to each level:
+   - **Touch count weight**: `touches × 2` (more touches = stronger level).
+   - **Recency weight**: each touch is weighted by `1 / (1 + candles_since_touch / 100)`, so recent touches count more.
+   - **Breach penalty**: if price has previously broken through the level and closed beyond it, reduce strength by 30% per breach.
+   - **Final strength** = `sum(touch_weights × recency_weights) × breach_adjustment`.
+5. Rank levels by strength and retain the top N (e.g., 10) levels above and below the current price.
+
+**Tolerance band tuning**: The ±0.15% default should be configurable per instrument family. Volatility 75 Index may need a wider band (±0.25%) while less volatile instruments may need a tighter band (±0.10%).
+
+#### 9.2 Trend Line Detection
+
+Connect successive swing highs (resistance trend line) or swing lows (support trend line) to detect diagonal S/R.
+
+**Algorithm:**
+1. Collect all swing highs from the lookback window (200–500 candles).
+2. For each pair of swing highs, compute the slope and intercept of the line connecting them.
+3. Check how many additional swing highs fall within the tolerance band of this line (projected at their respective bar indices). A valid trend line requires 3 or more touches within tolerance.
+4. For multiple overlapping trend lines, keep the one with the most touches and the highest R² (goodness of fit via linear regression).
+5. Repeat for swing lows to detect support trend lines.
+6. Track the slope of each trend line. Positive slope on a support line = ascending support. Negative slope on a resistance line = descending resistance.
+7. Project each trend line forward to the current candle to compute the "current level" value.
+
+**Validity rules:**
+- A trend line is invalidated if price closes beyond it by more than 2× the tolerance band (a decisive break).
+- Trend lines older than 500 candles without a recent touch (last 50 candles) are discarded.
+- Maximum 3 active resistance trend lines and 3 active support trend lines at any time.
+
+#### 9.3 Volume-Weighted Levels
+
+For instruments that provide tick volume data, weight S/R strength by volume at those price zones.
+
+**Algorithm:**
+1. Divide the price range of the lookback window into bins (e.g., 0.1% wide).
+2. Accumulate tick count (from the `tickCount` field on candle records) for each bin.
+3. Identify bins with tick count significantly above the mean (e.g., > 1.5 standard deviations). These are high-volume nodes.
+4. High-volume nodes that coincide with horizontal S/R levels (from 9.1) amplify the level's strength score by a configurable factor (e.g., 1.3×).
+
+**Limitation for Deriv synthetic indices:** These instruments are algorithmically generated and do not have traditional order book volume. The `tickCount` field on candle records represents the number of price ticks within the candle's time window, which serves as a proxy for "activity" but does not reflect genuine supply/demand dynamics. Volume weighting should therefore be treated as a secondary confirmation factor, not a primary one, when applied to synthetic indices.
+
+#### 9.4 Multi-Timeframe Confluence
+
+S/R levels that appear on multiple timeframes carry more weight.
+
+**Algorithm:**
+1. Run the horizontal S/R detection (9.1) independently on 1m, 5m, and 1h candle data.
+2. For each level detected on the 1m timeframe, check if a corresponding level (within tolerance) exists on the 5m and/or 1h timeframe.
+3. Apply a confluence multiplier to the strength score:
+   - Level on 1m only: 1.0× (baseline).
+   - Level on 1m + 5m: 1.5×.
+   - Level on 1m + 1h: 2.0×.
+   - Level on all three timeframes: 2.5×.
+4. Levels detected on 1h candles that do not appear on lower timeframes are still included with a strength floor of 1.5× (higher timeframe levels are significant even without lower timeframe confirmation).
+
+### TP Placement Logic
+
+#### For a BUY Trade
+
+1. Collect all resistance levels (horizontal + diagonal) above the entry price.
+2. Filter to levels within a reasonable range: distance must be between 1.5× ATR and 12× ATR from entry. Levels closer than 1.5× ATR are too tight (high chance of noise triggering TP). Levels farther than 12× ATR are unrealistically far.
+3. Sort remaining levels by strength (descending).
+4. Select the strongest level as the S/R-based TP candidate.
+5. Apply a buffer: set TP at `level_price × (1 - 0.002)` (2 pips below the resistance level, since price often reverses just before reaching exact levels).
+
+#### For a SELL Trade
+
+1. Collect all support levels (horizontal + diagonal) below the entry price.
+2. Apply the same 1.5–12× ATR range filter.
+3. Sort by strength, select the strongest.
+4. Apply buffer: set TP at `level_price × (1 + 0.002)` (2 pips above the support level).
+
+#### Fallback to ATR-Based TP
+
+If no qualifying S/R level is found within the valid range, or if the detected levels have very low strength scores (below a configurable minimum, e.g., strength < 3.0), fall back to the existing ATR-based TP calculation. This ensures the system always has a TP level and never leaves a trade without a target.
+
+#### Blend Option
+
+Instead of a binary S/R-or-ATR decision, compute a weighted average:
+
+```
+blended_tp = (sr_weight × sr_tp) + (atr_weight × atr_tp)
+```
+
+Default weights: `sr_weight = 0.60`, `atr_weight = 0.40`. The weights can be tuned per strategy family:
+- **Trend continuation**: 0.50 S/R + 0.50 ATR (trends may push through S/R levels).
+- **Mean reversion**: 0.70 S/R + 0.30 ATR (mean reversion profits depend heavily on reaching a level).
+- **Breakout expansion**: 0.40 S/R + 0.60 ATR (breakouts often exceed known levels).
+- **Spike event**: 0.50 S/R + 0.50 ATR (spikes are unpredictable; balance both).
+
+#### Partial TP at S/R Levels
+
+For higher-confidence setups (composite score ≥ 90), use a staged exit:
+1. Close 50% of the position at the nearest S/R level.
+2. Move the stop-loss to break-even on the remaining 50%.
+3. Let the remaining position run with a trailing stop until either a second S/R level is hit or the trailing stop triggers.
+
+This approach captures guaranteed profit at the first S/R level while allowing the trade to benefit from extended moves. It integrates with the existing trailing stop logic in `tradeEngine.ts`.
+
+### Deriv Synthetic Index Considerations
+
+Deriv synthetic indices (Volatility 10/25/50/75/100, Boom 300/500/1000, Crash 300/500/1000, Range Break 100/200, Step Index, Jump indices) are algorithmically generated using a cryptographically secure random number generator. They do not have:
+- Traditional order flow or institutional positioning.
+- Genuine volume reflecting supply and demand.
+- Fundamental news events that create structural support/resistance.
+
+However, statistical S/R still has predictive value for these instruments because:
+
+1. **Price clusters at round numbers and historical extremes.** The generation algorithm produces price paths that revisit previous high/low levels with non-random frequency due to mean-reverting components in some synthetic index formulas (particularly Volatility indices).
+
+2. **Algorithmic memory effects.** While each tick is generated independently, the cumulative path creates structures (trends, ranges, spikes) that exhibit statistical tendencies around prior turning points. Backtesting can measure whether price reversal probability increases near historical swing levels.
+
+3. **Self-fulfilling dynamics among algorithmic traders.** If multiple bots trade these instruments using S/R-based logic, their collective behaviour can reinforce these levels — entries and exits cluster at the same prices, creating real (if artificial) supply/demand zones.
+
+4. **Empirical validation is essential.** Before deploying S/R-based TP on any synthetic index, run a dedicated backtest comparing:
+   - ATR-only TP (current system) vs S/R-based TP vs blended TP.
+   - Measure win rate, average profit per trade, profit factor, and Sharpe ratio.
+   - If S/R-based TP does not outperform ATR-only on a given instrument, disable it for that instrument and fall back to ATR-only.
+
+5. **Per-instrument calibration.** The tolerance band, minimum strength threshold, and blend weights should be calibrated independently for each synthetic index family. Volatility indices may behave differently from Boom/Crash indices, which have asymmetric spike characteristics.
+
+### Data Requirements
+
+| Requirement | Description |
+|---|---|
+| Extended candle history | S/R detection needs 200–500 candles of lookback. The current system stores 12 months of 1m and 1h candles, which is sufficient. No schema change needed. |
+| S/R level cache table | New table `sr_levels` to store detected S/R levels and avoid recomputation on every signal. Columns: `id`, `symbol`, `timeframe`, `level_type` (support/resistance/trendline), `price`, `strength`, `touch_count`, `first_seen_ts`, `last_touch_ts`, `slope` (null for horizontal), `valid` (boolean), `updated_at`. |
+| Level strength scoring | Computed during S/R detection and stored in the `sr_levels` table. Refreshed periodically (e.g., every 15 minutes or after each new candle close). |
+| S/R computation job | A scheduled job (or on-demand computation triggered by signal generation) that runs S/R detection for each active symbol and updates the `sr_levels` cache. |
+| TP decision log | Extend the existing signal log or trade record to include: `tp_method` (atr/sr/blend), `sr_level_used` (price of the S/R level), `sr_level_strength`, `atr_tp_value`, `final_tp_value`. This enables post-hoc analysis of S/R-based TP effectiveness. |
+
+### Integration Points
+
+| Component | File | Integration |
+|---|---|---|
+| `sltp()` function | `strategies.ts` (line 64–82) | Add an optional `srLevel` parameter. When provided, use it as the TP target (with buffer) instead of or blended with the ATR-based TP. The function signature becomes `sltp(price, direction, atr, slMultiple, tpMultiple, srLevel?)`. |
+| `FAMILY_HOLD_PROFILE` | `tradeEngine.ts` (line 381–446) | Add `srBlendWeight` to each family's profile (e.g., trend_continuation: 0.50, mean_reversion: 0.70). The `calculateDynamicTP()` function reads this weight and blends S/R and ATR targets. |
+| `findSwingLevels` | `features.ts` (line 110–143) | Extract and generalize the pivot detection logic into a reusable `findAllPivots()` function that returns all historical pivots (not just the most recent swing high/low). This becomes the foundation for horizontal S/R detection (9.1). |
+| Signal generation | `strategies.ts` | Before calling `sltp()`, query the `sr_levels` cache for the instrument and pass the nearest qualifying level. Each strategy function gains access to S/R context. |
+| Trade opening | `tradeEngine.ts` → `openPosition()` | Log the TP method and S/R level used on the trade record for performance tracking. |
+| Partial TP | `tradeEngine.ts` → trade management loop | Add logic to close a portion of the position when price reaches the first S/R level, then adjust SL to break-even on the remainder. Integrates with the existing trailing stop mechanism. |
+| Per-strategy overrides | `FAMILY_CONFIG` in `strategies.ts` | Add optional `srEnabled` and `srBlendWeight` fields per family, allowing S/R-based TP to be enabled/disabled and tuned independently for each strategy. |
+| Backtest engine | `backtestEngine.ts` | Extend the backtest simulation to support S/R-based TP so that backtests can compare ATR-only vs S/R vs blended TP performance. |
+
+### Estimated Effort and Phase
+
+This feature is placed in **Phase 4** (after Phase 3: Dynamic Calibration + Emerging Patterns + Competitive Adaptation) because it requires:
+- Mature health monitoring infrastructure (Phase 2) to validate S/R effectiveness per instrument.
+- Sufficient historical trade data to compare ATR-only vs S/R-based TP outcomes.
+- The backtest engine enhancements from Phase 3 to properly test S/R TP in backtests.
+
+| Task | Estimated Effort | Dependencies |
+|---|---|---|
+| `findAllPivots()` extraction and horizontal S/R detection (9.1) | 3–4 days | Existing `findSwingLevels` |
+| Trend line detection (9.2) | 3–4 days | Pivot data |
+| Volume-weighted level scoring (9.3) | 1–2 days | S/R levels |
+| Multi-timeframe confluence scoring (9.4) | 2–3 days | S/R detection on multiple timeframes |
+| `sr_levels` cache table + refresh job | 1–2 days | S/R detection |
+| TP placement logic + `sltp()` integration | 2–3 days | S/R cache |
+| Partial TP + trailing stop integration | 2–3 days | TP placement |
+| Backtest engine S/R TP support | 2–3 days | TP placement logic |
+| Per-instrument calibration backtests | 2–3 days | Backtest S/R support |
+| **Total Phase 4** | **~18–25 dev days** | Phase 2 health data, extended candle history |
 
 ---
 
