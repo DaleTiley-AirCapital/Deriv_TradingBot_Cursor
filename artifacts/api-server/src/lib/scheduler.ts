@@ -4,7 +4,7 @@ import { routeSignals, logSignalDecisions } from "./signalRouter.js";
 import type { ScoringWeights } from "./scoring.js";
 import { openPosition, manageOpenPositions } from "./tradeEngine.js";
 import { verifySignal } from "./openai.js";
-import { classifyRegime, classifyInstrument, getCachedRegime, cacheRegime } from "./regimeEngine.js";
+import { classifyRegime, classifyRegimeFromHTF, classifyInstrument, getCachedRegime, cacheRegime, accumulateHourlyFeatures } from "./regimeEngine.js";
 import { db, platformStateTable, tradesTable, candlesTable, backtestRunsTable, backtestTradesTable } from "@workspace/db";
 import { eq, desc, and } from "drizzle-orm";
 import { runBacktestSimulation } from "./backtestEngine.js";
@@ -81,8 +81,10 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
     return;
   }
 
-  const cachedRegime = await getCachedRegime(symbol, features);
-  const regime = cachedRegime ?? classifyRegime(features);
+  accumulateHourlyFeatures(features);
+
+  const cachedRegime = await getCachedRegime(symbol);
+  const regime = cachedRegime ?? classifyRegimeFromHTF(features);
   if (!cachedRegime) {
     await cacheRegime(symbol, regime);
   }

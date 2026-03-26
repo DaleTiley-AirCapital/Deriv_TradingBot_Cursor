@@ -158,19 +158,16 @@ function computeRewardRisk(candidate: SignalCandidate): number {
   if (!price || price <= 0) return 30;
 
   const isBuy = candidate.direction === "buy";
+  const fibExts = isBuy ? (candidate.fibExtensionLevels ?? []) : (candidate.fibExtensionLevelsDown ?? []);
   const candidates_tp = [
-    candidate.swingHigh,
-    candidate.swingLow,
-    candidate.bbUpper,
-    candidate.bbLower,
-    ...(candidate.fibExtensionLevels ?? []),
+    isBuy ? candidate.swingHigh : candidate.swingLow,
+    isBuy ? candidate.bbUpper : candidate.bbLower,
+    ...fibExts,
   ].filter(l => l > 0 && (isBuy ? l > price : l < price));
 
   const candidates_sl = [
-    candidate.swingHigh,
-    candidate.swingLow,
-    candidate.bbUpper,
-    candidate.bbLower,
+    isBuy ? candidate.swingLow : candidate.swingHigh,
+    isBuy ? candidate.bbLower : candidate.bbUpper,
     ...(candidate.fibRetraceLevels ?? []),
   ].filter(l => l > 0 && (isBuy ? l < price : l > price));
 
@@ -205,13 +202,17 @@ function computeProbabilityOfSuccess(modelScore: number): number {
 export function computeScoringDimensions(
   features: FeatureVector,
   candidate: SignalCandidate,
-  modelScore: number
+  modelScore: number,
+  hourlyFeatures?: Partial<FeatureVector>,
 ): ScoringDimensions {
+  const htfFeatures: FeatureVector = hourlyFeatures
+    ? { ...features, ...hourlyFeatures, symbol: features.symbol, ts: features.ts }
+    : features;
   return {
     regimeFit: computeRegimeFit(features, candidate),
     setupQuality: computeSetupQuality(candidate, modelScore),
-    trendAlignment: computeTrendAlignment(features, candidate.direction),
-    volatilityCondition: computeVolatilityCondition(features, candidate),
+    trendAlignment: computeTrendAlignment(htfFeatures, candidate.direction),
+    volatilityCondition: computeVolatilityCondition(htfFeatures, candidate),
     rewardRisk: computeRewardRisk(candidate),
     probabilityOfSuccess: computeProbabilityOfSuccess(modelScore),
   };

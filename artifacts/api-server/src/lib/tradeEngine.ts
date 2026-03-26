@@ -58,11 +58,12 @@ export function calculateSRFibTP(params: {
   swingHigh: number;
   swingLow: number;
   fibExtensionLevels: number[];
+  fibExtensionLevelsDown?: number[];
   bbUpper: number;
   bbLower: number;
   atrPct: number;
 }): number {
-  const { entryPrice, direction, swingHigh, swingLow, fibExtensionLevels, bbUpper, bbLower, atrPct } = params;
+  const { entryPrice, direction, swingHigh, swingLow, fibExtensionLevels, fibExtensionLevelsDown, bbUpper, bbLower, atrPct } = params;
 
   if (direction === "buy") {
     const resistanceLevels = [
@@ -89,9 +90,10 @@ export function calculateSRFibTP(params: {
 
     return bestTp * 0.998;
   } else {
+    const downExtensions = fibExtensionLevelsDown ?? [];
     const supportLevels = [
       swingLow,
-      ...fibExtensionLevels.map(l => entryPrice - (l - entryPrice)).filter(l => l < entryPrice && l > 0),
+      ...downExtensions.filter(l => l < entryPrice && l > 0),
       bbLower,
     ].filter(l => l < entryPrice && l > 0).sort((a, b) => b - a);
 
@@ -337,6 +339,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
   const swingLow = signal.swingLow ?? spotPrice * 0.99;
   const fibRetraceLevels = signal.fibRetraceLevels ?? [];
   const fibExtensionLevels = signal.fibExtensionLevels ?? [];
+  const fibExtensionLevelsDown = signal.fibExtensionLevelsDown ?? [];
   const bbUpper = signal.bbUpper ?? spotPrice * 1.01;
   const bbLower = signal.bbLower ?? spotPrice * 0.99;
 
@@ -346,6 +349,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
     swingHigh,
     swingLow,
     fibExtensionLevels,
+    fibExtensionLevelsDown,
     bbUpper,
     bbLower,
     atrPct,

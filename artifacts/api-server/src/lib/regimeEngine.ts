@@ -57,6 +57,87 @@ interface CachedRegime {
 
 const inMemoryRegimeCache: Record<string, CachedRegime> = {};
 
+interface HourlyFeatureAccumulator {
+  samples: Array<{
+    emaSlope: number;
+    rsi14: number;
+    bbWidth: number;
+    bbWidthRoc: number;
+    atr14: number;
+    atrRank: number;
+    atrAccel: number;
+    zScore: number;
+    spikeHazardScore: number;
+    bbPctB: number;
+    ts: number;
+  }>;
+  windowStartMs: number;
+}
+
+const hourlyAccumulators: Record<string, HourlyFeatureAccumulator> = {};
+const HOURLY_WINDOW_MS = 60 * 60 * 1000;
+
+export function accumulateHourlyFeatures(features: FeatureVector): void {
+  const sym = features.symbol;
+  const now = Date.now();
+  if (!hourlyAccumulators[sym] || (now - hourlyAccumulators[sym].windowStartMs) >= HOURLY_WINDOW_MS) {
+    hourlyAccumulators[sym] = { samples: [], windowStartMs: now };
+  }
+  hourlyAccumulators[sym].samples.push({
+    emaSlope: features.emaSlope,
+    rsi14: features.rsi14,
+    bbWidth: features.bbWidth,
+    bbWidthRoc: features.bbWidthRoc,
+    atr14: features.atr14,
+    atrRank: features.atrRank,
+    atrAccel: features.atrAccel,
+    zScore: features.zScore,
+    spikeHazardScore: features.spikeHazardScore,
+    bbPctB: features.bbPctB,
+    ts: now,
+  });
+}
+
+export function getHourlyAveragedFeatures(symbol: string): Partial<FeatureVector> | null {
+  const acc = hourlyAccumulators[symbol];
+  if (!acc || acc.samples.length < 3) return null;
+  const n = acc.samples.length;
+  const avg = (fn: (s: typeof acc.samples[0]) => number) => acc.samples.reduce((s, x) => s + fn(x), 0) / n;
+  return {
+    emaSlope: avg(s => s.emaSlope),
+    rsi14: avg(s => s.rsi14),
+    bbWidth: avg(s => s.bbWidth),
+    bbWidthRoc: avg(s => s.bbWidthRoc),
+    atr14: avg(s => s.atr14),
+    atrRank: avg(s => s.atrRank),
+    atrAccel: avg(s => s.atrAccel),
+    zScore: avg(s => s.zScore),
+    spikeHazardScore: avg(s => s.spikeHazardScore),
+    bbPctB: avg(s => s.bbPctB),
+  };
+}
+
+export function classifyRegimeFromHTF(features: FeatureVector): RegimeClassification {
+  const hourly = getHourlyAveragedFeatures(features.symbol);
+  if (hourly) {
+    const htfFeatures: FeatureVector = {
+      ...features,
+      emaSlope: hourly.emaSlope ?? features.emaSlope,
+      rsi14: hourly.rsi14 ?? features.rsi14,
+      bbWidth: hourly.bbWidth ?? features.bbWidth,
+      bbWidthRoc: hourly.bbWidthRoc ?? features.bbWidthRoc,
+      atr14: hourly.atr14 ?? features.atr14,
+      atrRank: hourly.atrRank ?? features.atrRank,
+      atrAccel: hourly.atrAccel ?? features.atrAccel,
+      zScore: hourly.zScore ?? features.zScore,
+      spikeHazardScore: hourly.spikeHazardScore ?? features.spikeHazardScore,
+      bbPctB: hourly.bbPctB ?? features.bbPctB,
+    };
+    return classifyRegime(htfFeatures);
+  }
+  return classifyRegime(features);
+}
+
 export function classifyRegime(features: FeatureVector): RegimeClassification {
   const instrumentFamily = classifyInstrument(features.symbol);
   const isBoomCrash = instrumentFamily === "boom" || instrumentFamily === "crash";

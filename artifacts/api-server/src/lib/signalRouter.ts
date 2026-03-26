@@ -285,8 +285,9 @@ export async function routeSignals(candidates: SignalCandidate[], tradingMode: T
     if (allowed && ctx.minRrRatio > 0 && signal.currentPrice > 0) {
       const isBuy = signal.direction === "buy";
       const price = signal.currentPrice;
-      const tpCands = [signal.swingHigh, signal.bbUpper, ...(signal.fibExtensionLevels ?? [])].filter(l => l > 0 && (isBuy ? l > price : l < price));
-      const slCands = [signal.swingLow, signal.bbLower, ...(signal.fibRetraceLevels ?? [])].filter(l => l > 0 && (isBuy ? l < price : l > price));
+      const fibExts = isBuy ? (signal.fibExtensionLevels ?? []) : (signal.fibExtensionLevelsDown ?? []);
+      const tpCands = [isBuy ? signal.swingHigh : signal.swingLow, isBuy ? signal.bbUpper : signal.bbLower, ...fibExts].filter(l => l > 0 && (isBuy ? l > price : l < price));
+      const slCands = [isBuy ? signal.swingLow : signal.swingHigh, isBuy ? signal.bbLower : signal.bbUpper, ...(signal.fibRetraceLevels ?? [])].filter(l => l > 0 && (isBuy ? l < price : l > price));
       const nearTp = tpCands.length > 0 ? tpCands.reduce((b, l) => Math.abs(l - price) < Math.abs(b - price) ? l : b) : null;
       const nearSl = slCands.length > 0 ? slCands.reduce((b, l) => Math.abs(l - price) < Math.abs(b - price) ? l : b) : null;
       if (nearTp && nearSl && Math.abs(nearSl - price) > 0) {

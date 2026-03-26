@@ -44,6 +44,8 @@ export interface FeatureVector {
   fibExtensionLevels: number[];
   bbUpper: number;
   bbLower: number;
+  latestClose: number;
+  fibExtensionLevelsDown: number[];
 }
 
 function ema(values: number[], period: number): number[] {
@@ -206,14 +208,15 @@ function detectSwingBreachAndReclaim(
   return { breached: false, reclaimed: false, breachCandles: 0, breachDirection: null };
 }
 
-function computeFibonacciLevels(swingLow: number, swingHigh: number): { retracements: number[]; extensions: number[] } {
+function computeFibonacciLevels(swingLow: number, swingHigh: number): { retracements: number[]; extensions: number[]; extensionsDown: number[] } {
   const range = swingHigh - swingLow;
-  if (range <= 0) return { retracements: [], extensions: [] };
+  if (range <= 0) return { retracements: [], extensions: [], extensionsDown: [] };
   const retracementRatios = [0.236, 0.382, 0.5, 0.618, 0.786];
   const extensionRatios = [1.272, 1.618, 2.0];
   const retracements = retracementRatios.map(r => swingHigh - range * r);
   const extensions = extensionRatios.map(r => swingLow + range * r);
-  return { retracements, extensions };
+  const extensionsDown = extensionRatios.map(r => swingHigh - range * r).filter(l => l > 0);
+  return { retracements, extensions, extensionsDown };
 }
 
 function detectRegime(closes: number[], atrVal: number, ema20: number[]): string {
@@ -414,6 +417,8 @@ export async function computeFeatures(symbol: string, lookback = 100): Promise<F
     fibExtensionLevels: fibLevels.extensions,
     bbUpper,
     bbLower,
+    latestClose: price,
+    fibExtensionLevelsDown: fibLevels.extensionsDown,
   };
 }
 

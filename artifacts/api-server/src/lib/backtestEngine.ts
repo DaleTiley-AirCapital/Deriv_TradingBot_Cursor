@@ -311,7 +311,10 @@ export function computeFeaturesFromCandles(
     ? [0.236, 0.382, 0.5, 0.618, 0.786].map(r => swingHigh - fibRange * r)
     : [];
   const fibExtensionLevels = fibRange > 0
-    ? [1.272, 1.618, 2.0].map(r => swingHigh + fibRange * (r - 1))
+    ? [1.272, 1.618, 2.0].map(r => swingLow + fibRange * r)
+    : [];
+  const fibExtensionLevelsDown = fibRange > 0
+    ? [1.272, 1.618, 2.0].map(r => swingHigh - fibRange * r).filter(l => l > 0)
     : [];
 
   const largeMoves = closes.slice(-50).filter((c, i, arr) => {
@@ -364,8 +367,10 @@ export function computeFeaturesFromCandles(
     swingLow,
     fibRetraceLevels,
     fibExtensionLevels,
+    fibExtensionLevelsDown,
     bbUpper,
     bbLower,
+    latestClose: price,
   };
 }
 
@@ -680,6 +685,7 @@ function simulateOnCandles(
           swingHigh: features.swingHigh,
           swingLow: features.swingLow,
           fibExtensionLevels: features.fibExtensionLevels,
+          fibExtensionLevelsDown: features.fibExtensionLevelsDown,
           bbUpper: features.bbUpper,
           bbLower: features.bbLower,
           atrPct,

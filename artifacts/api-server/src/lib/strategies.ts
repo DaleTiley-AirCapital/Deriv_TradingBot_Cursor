@@ -1,7 +1,7 @@
 import type { FeatureVector } from "./features.js";
 import { scoreFeaturesForFamily } from "./model.js";
 import { computeScoringDimensions, computeCompositeScore, type ScoringWeights } from "./scoring.js";
-import { classifyRegime, getCachedRegime, cacheRegime, type StrategyFamily, type RegimeClassification } from "./regimeEngine.js";
+import { classifyRegime, getCachedRegime, cacheRegime, getHourlyAveragedFeatures, type StrategyFamily, type RegimeClassification } from "./regimeEngine.js";
 
 export interface SignalCandidate {
   symbol: string;
@@ -25,6 +25,7 @@ export interface SignalCandidate {
   swingLow: number;
   fibRetraceLevels: number[];
   fibExtensionLevels: number[];
+  fibExtensionLevelsDown: number[];
   bbUpper: number;
   bbLower: number;
   currentPrice: number;
@@ -90,9 +91,10 @@ function buildCandidate(
     swingLow: features.swingLow,
     fibRetraceLevels: features.fibRetraceLevels,
     fibExtensionLevels: features.fibExtensionLevels,
+    fibExtensionLevelsDown: features.fibExtensionLevelsDown,
     bbUpper: features.bbUpper,
     bbLower: features.bbLower,
-    currentPrice: (features.bbUpper + features.bbLower) / 2,
+    currentPrice: features.latestClose,
   };
 }
 
@@ -239,8 +241,10 @@ export function runAllStrategies(features: FeatureVector, weights?: ScoringWeigh
     if (candidate) candidates.push(candidate);
   }
 
+  const hourlyFeats = getHourlyAveragedFeatures(features.symbol) ?? undefined;
+
   for (const candidate of candidates) {
-    const dims = computeScoringDimensions(features, candidate, candidate.score);
+    const dims = computeScoringDimensions(features, candidate, candidate.score, hourlyFeats);
     candidate.dimensions = dims;
     candidate.compositeScore = computeCompositeScore(dims, weights);
   }
