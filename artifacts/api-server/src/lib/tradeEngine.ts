@@ -88,7 +88,9 @@ export function calculateSRFibTP(params: {
     const minTp = entryPrice * (1 + atrPct * 3);
     bestTp = Math.max(bestTp, minTp);
 
-    return bestTp * 0.998;
+    let tp = bestTp * 0.998;
+    if (tp <= entryPrice) tp = entryPrice * (1 + atrPct * 3);
+    return tp;
   } else {
     const downExtensions = fibExtensionLevelsDown ?? [];
     const supportLevels = [
@@ -113,7 +115,9 @@ export function calculateSRFibTP(params: {
     const minTp = entryPrice * (1 - atrPct * 3);
     bestTp = Math.min(bestTp, minTp);
 
-    return bestTp * 1.002;
+    let tp = bestTp * 1.002;
+    if (tp >= entryPrice) tp = entryPrice * (1 - atrPct * 3);
+    return tp;
   }
 }
 
@@ -150,13 +154,14 @@ export function calculateSRFibSL(params: {
           break;
         }
       }
-      sl = bestSl * 1.002;
+      sl = bestSl * 0.998;
     }
 
     const maxSlDistance = (equity * 0.10) / positionSize;
     const safetyFloor = entryPrice * (1 - maxSlDistance);
     sl = Math.max(sl, safetyFloor);
 
+    if (sl >= entryPrice) sl = entryPrice * (1 - atrPct * 2.5);
     return sl;
   } else {
     const resistanceLevels = [
@@ -184,6 +189,7 @@ export function calculateSRFibSL(params: {
     const safetyCeiling = entryPrice * (1 + maxSlDistance);
     sl = Math.min(sl, safetyCeiling);
 
+    if (sl <= entryPrice) sl = entryPrice * (1 + atrPct * 2.5);
     return sl;
   }
 }
