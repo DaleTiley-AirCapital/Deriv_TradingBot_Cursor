@@ -1,4 +1,5 @@
 import express, { type Express } from "express";
+import compression from "compression";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
@@ -7,6 +8,7 @@ import router from "./routes/index.js";
 
 const app: Express = express();
 
+app.use(compression());
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
