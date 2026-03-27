@@ -290,7 +290,7 @@ function trendlineBreakout(features: FeatureVector, regime: RegimeClassification
     : true;
   if (!vwapConfirm) return null;
 
-  const { score, confidence, expectedValue } = scoreFeaturesForFamily(features, "breakout_expansion");
+  const { score, confidence, expectedValue } = scoreFeaturesForFamily(features, "trendline_breakout");
   if (score < cfg.minModelScore) return null;
 
   return buildCandidate(features, regime, "trendline_breakout", direction, score, confidence, expectedValue, `[${regime.regime}] ${reason}`, "trendline_breakout");

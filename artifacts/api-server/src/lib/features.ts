@@ -303,13 +303,13 @@ function detectSwingBreachAndReclaim(
   return { breached: false, reclaimed: false, breachCandles: 0, breachDirection: null };
 }
 
-function computeVWAP(candles: { close: number; high: number; low: number }[]): number {
+function computeVWAP(candles: { close: number; high: number; low: number; tickCount?: number }[]): number {
   if (candles.length === 0) return 0;
   let cumTPV = 0;
   let cumV = 0;
   for (const c of candles) {
     const tp = (c.high + c.low + c.close) / 3;
-    const vol = c.high - c.low || 1;
+    const vol = (c.tickCount && c.tickCount > 0) ? c.tickCount : (c.high - c.low || 1);
     cumTPV += tp * vol;
     cumV += vol;
   }

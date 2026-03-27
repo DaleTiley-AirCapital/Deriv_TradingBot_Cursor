@@ -117,6 +117,7 @@ export interface CandleData {
   low: number;
   close: number;
   symbol: string;
+  tickCount?: number;
 }
 
 interface OpenPosition {
@@ -395,7 +396,7 @@ export function computeFeaturesFromCandles(
     let cumTPV = 0, cumV = 0;
     for (const c of candles) {
       const tp = (c.high + c.low + c.close) / 3;
-      const vol = c.high - c.low || 1;
+      const vol = (c.tickCount && c.tickCount > 0) ? c.tickCount : (c.high - c.low || 1);
       cumTPV += tp * vol;
       cumV += vol;
     }

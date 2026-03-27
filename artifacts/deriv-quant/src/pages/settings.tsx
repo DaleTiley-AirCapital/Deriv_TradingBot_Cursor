@@ -837,7 +837,7 @@ function ModeSettingsTab({ mode, form, update, suggestions, onApplySuggestion, u
               <p><strong>TP/SL:</strong> Dynamically calculated using S/R levels + Fibonacci confluence (not configurable — adapts to market structure).</p>
               <p><strong>Trailing Stop:</strong> 30% drawdown from peak unrealized profit. Activates only when trade is in profit.</p>
               <p><strong>Time Exits:</strong> 72h profitable = close. 168h hard cap. Negative trades wait for first profit after 72h.</p>
-              <p><strong>Entry:</strong> One position per symbol. No multi-stage building.</p>
+              <p><strong>Entry:</strong> Up to 2 positions per symbol (different strategies). No multi-stage building.</p>
             </div>
           </CardContent>
         </Card>
