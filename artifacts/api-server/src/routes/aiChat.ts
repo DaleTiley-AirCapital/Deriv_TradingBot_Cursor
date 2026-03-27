@@ -715,7 +715,8 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
       for (const tc of toolCalls) {
         let result: string;
         try {
-          if (tc.function.name === "get_current_settings") {
+          const fn = tc as { type: "function"; function: { name: string; arguments: string }; id: string };
+          if (fn.function.name === "get_current_settings") {
             const settings = await getCurrentSettings();
             const aiSuggestions: Record<string, string> = {};
             for (const [k, v] of Object.entries(settings)) {
@@ -730,8 +731,8 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
               }
             }
             result = JSON.stringify({ settings: actualSettings, pendingSuggestions: aiSuggestions }, null, 2);
-          } else if (tc.function.name === "write_suggestions") {
-            const args = JSON.parse(tc.function.arguments);
+          } else if (fn.function.name === "write_suggestions") {
+            const args = JSON.parse(fn.function.arguments);
             const toSuggest = args.suggestions || {};
             const reasoning = args.reasoning || "";
             const written: string[] = [];
@@ -765,11 +766,11 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
                 : "No suggestions were written.",
               reasoning,
             });
-          } else if (tc.function.name === "analyze_trades") {
-            const args = JSON.parse(tc.function.arguments);
+          } else if (fn.function.name === "analyze_trades") {
+            const args = JSON.parse(fn.function.arguments);
             result = await handleAnalyzeTrades(args);
-          } else if (tc.function.name === "analyze_signals") {
-            const args = JSON.parse(tc.function.arguments);
+          } else if (fn.function.name === "analyze_signals") {
+            const args = JSON.parse(fn.function.arguments);
             result = await handleAnalyzeSignals(args);
           } else {
             result = JSON.stringify({ error: "Unknown function" });

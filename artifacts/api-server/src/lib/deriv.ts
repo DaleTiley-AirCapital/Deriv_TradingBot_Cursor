@@ -203,7 +203,7 @@ async function updateOpenCandles(symbol: string, quote: number, epochTs: number)
 class DerivClient {
   private ws: WebSocket | null = null;
   private apiToken: string;
-  private authorized = false;
+  authorized = false;
   private streaming = false;
   private subscribedSymbols: Set<string> = new Set();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;

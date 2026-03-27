@@ -266,9 +266,9 @@ function detectRegime(closes: number[], atrVal: number, ema20: number[]): string
   const slope = (slopePoints[slopePoints.length - 1] - slopePoints[0]) / slopePoints[0];
   const currentPrice = closes[closes.length - 1];
   const vol = atrVal / currentPrice;
-  if (vol > 0.003) return "volatile";
-  if (slope > 0.001) return "trending_up";
-  if (slope < -0.001) return "trending_down";
+  if (vol > 0.003) return "breakout_expansion";
+  if (slope > 0.001) return "trend_up";
+  if (slope < -0.001) return "trend_down";
   return "ranging";
 }
 
@@ -779,7 +779,7 @@ function simulateOnCandles(
         if (slDist <= 0 || tpDist / slDist < minRr) continue;
 
         const entryTs = candles[idx].openTs;
-        const maxExitTs = entryTs * 1000 + TIME_EXIT_PROFIT_HOURS * 3600 * 1000;
+        const maxExitTs = entryTs + MAX_EXIT_HOURS * 3600;
 
         openPositions.push({
           symbol: sym,
