@@ -27,7 +27,7 @@ let setupProgress: SetupProgress = {
 };
 
 const MAX_PROGRESS_EVENTS = 2000;
-const STRATEGIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"] as const;
+const STRATEGIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event", "trendline_breakout"] as const;
 const GRANULARITY_1M = 60;
 const GRANULARITY_5M = 300;
 const MAX_BATCH = 5000;

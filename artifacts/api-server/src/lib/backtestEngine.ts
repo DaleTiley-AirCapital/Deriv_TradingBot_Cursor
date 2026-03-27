@@ -988,7 +988,7 @@ export async function runFullBacktest(config: BacktestConfig): Promise<BacktestR
     trades,
     config: {
       symbols,
-      strategies: strategies || ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"],
+      strategies: strategies || ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event", "trendline_breakout"],
       initialCapital: config.initialCapital,
       mode: config.mode,
     },
@@ -1235,8 +1235,8 @@ export async function runBacktestSimulation(
     initialCapital,
     mode,
     basePct,
-    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "85"),
-    minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.003"),
+    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "60"),
+    minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
     minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
     scoringWeights,
   });
@@ -1328,13 +1328,13 @@ export async function runSymbolBacktest(
     initialCapital,
     mode,
     basePct,
-    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "85"),
-    minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.003"),
+    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "60"),
+    minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
     minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
     scoringWeights,
   });
 
-  const strategies = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"];
+  const strategies = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event", "trendline_breakout"];
   const profitableStrategies: SymbolBacktestResult["profitableStrategies"] = [];
 
   for (const stratName of strategies) {
