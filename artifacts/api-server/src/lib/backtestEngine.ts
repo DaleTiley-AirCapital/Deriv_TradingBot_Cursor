@@ -1237,7 +1237,7 @@ export async function runBacktestSimulation(
     basePct,
     minCompositeScore: parseFloat(stateMap["min_composite_score"] || "60"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
-    minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
+    minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.2"),
     scoringWeights,
   });
 
@@ -1330,7 +1330,7 @@ export async function runSymbolBacktest(
     basePct,
     minCompositeScore: parseFloat(stateMap["min_composite_score"] || "60"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
-    minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
+    minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.2"),
     scoringWeights,
   });
 

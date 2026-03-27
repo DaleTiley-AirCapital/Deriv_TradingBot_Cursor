@@ -33,7 +33,7 @@ function decryptSecret(stored: string): string {
 }
 
 const ALL_SYMBOLS_DEFAULT = "BOOM1000,CRASH1000,BOOM900,CRASH900,BOOM600,CRASH600,BOOM500,CRASH500,BOOM300,CRASH300,R_75,R_100";
-const ALL_STRATEGIES_DEFAULT = "trend_continuation,mean_reversion,breakout_expansion,spike_event";
+const ALL_STRATEGIES_DEFAULT = "trend_continuation,mean_reversion,breakout_expansion,spike_event,trendline_breakout";
 
 const SETTING_DEFAULTS: Record<string, string> = {
   kill_switch: "false",
@@ -43,7 +43,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   enabled_symbols: ALL_SYMBOLS_DEFAULT,
   min_composite_score: "55",
   min_ev_threshold: "0.001",
-  min_rr_ratio: "1.5",
+  min_rr_ratio: "1.2",
   scoring_weight_regime_fit: "16.67",
   scoring_weight_setup_quality: "16.67",
   scoring_weight_trend_alignment: "16.67",

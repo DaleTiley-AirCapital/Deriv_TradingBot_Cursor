@@ -259,7 +259,7 @@ async function initDb(): Promise<void> {
       ('demo_min_composite_score',  '65'),
       ('real_min_composite_score',  '75'),
       ('min_ev_threshold',    '0.001'),
-      ('min_rr_ratio',        '1.5'),
+      ('min_rr_ratio',        '1.2'),
 
       ('paper_capital',               '10000'),
       ('paper_equity_pct_per_trade',  '30'),

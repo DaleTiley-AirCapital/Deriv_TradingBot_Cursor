@@ -164,7 +164,7 @@ In V2, TP and SL are computed dynamically at trade execution using Support/Resis
 |---------|--------------|---------|
 | min_composite_score | Minimum quality score (0-100) for trading | 55/65/75 (paper/demo/real) |
 | min_ev_threshold | Minimum expected value | 0.001 |
-| min_rr_ratio | Minimum reward-to-risk ratio (from S/R levels) | 1.5 |
+| min_rr_ratio | Minimum reward-to-risk ratio (from S/R levels) | 1.2 |
 | scoring_weight_* | Six dimension weights for composite scoring | See §4 |
 | scan_interval_seconds | Scan frequency | 30 |
 | ai_verification_enabled | AI reviews signals before trading | true |
@@ -248,7 +248,7 @@ async function buildDynamicContext(): Promise<string> {
   const globalSettings = [
     `min_composite_score: ${settings["min_composite_score"] || "55"}`,
     `min_ev_threshold: ${settings["min_ev_threshold"] || "0.001"}`,
-    `min_rr_ratio: ${settings["min_rr_ratio"] || "1.5"}`,
+    `min_rr_ratio: ${settings["min_rr_ratio"] || "1.2"}`,
     `scan_interval_seconds: ${settings["scan_interval_seconds"] || "30"}`,
     `ai_verification_enabled: ${settings["ai_verification_enabled"] || "true"}`,
     `kill_switch: ${settings["kill_switch"] || "false"}`,

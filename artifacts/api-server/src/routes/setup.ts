@@ -283,8 +283,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       })),
     });
 
-    console.log("[Setup] Deleting old data tables...");
-    await db.delete(candlesTable);
+    console.log("[Setup] Clearing derived data tables (preserving candles if present)...");
     await db.delete(backtestRunsTable);
     await db.delete(backtestTradesTable);
     await db.delete(tradesTable);
@@ -293,7 +292,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
     await db.delete(spikeEventsTable);
     await db.delete(featuresTable);
     await db.delete(modelRunsTable);
-    console.log("[Setup] Tables cleared. Connecting to Deriv WS...");
+    console.log("[Setup] Derived tables cleared. Connecting to Deriv WS...");
 
     const client = await getDerivClientWithDbToken();
     await client.connect();
@@ -345,12 +344,34 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       });
 
       for (const { tf, granularity } of timeframes) {
+        const tfExpected = tf === "1m" ? expected1m : expected5m;
+
+        const existingCount = await db
+          .select({ cnt: count() })
+          .from(candlesTable)
+          .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, tf)));
+        const existingCnt = existingCount[0]?.cnt ?? 0;
+        const coverageRatio = tfExpected > 0 ? existingCnt / tfExpected : 0;
+
+        if (coverageRatio >= 0.9) {
+          console.log(`[Setup] Skipping ${symbol} ${tf}: already has ${existingCnt}/${tfExpected} candles (${(coverageRatio * 100).toFixed(1)}% coverage)`);
+          jobsDone++;
+          symbolTotalInserted += existingCnt;
+          candleTotal += existingCnt;
+          send({
+            phase: "backfill_tf_complete", stage: "backfill", symbol, timeframe: tf,
+            inserted: existingCnt, skipped: true,
+            message: `${symbol} ${tf}: skipped (${existingCnt} candles already present)`,
+            overallPct: Math.round((jobsDone / totalJobs) * 100),
+          });
+          continue;
+        }
+
         let endEpoch = Math.floor(Date.now() / 1000);
         let tfInserted = 0;
         let oldestDateStr: string | null = null;
         let page = 0;
         let consecutiveErrors = 0;
-        const tfExpected = tf === "1m" ? expected1m : expected5m;
 
         while (true) {
           page++;

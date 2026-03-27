@@ -472,7 +472,7 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
 
   const currentMinScore = parseFloat(stateMap["min_composite_score"] || "55");
   const currentMinEV = parseFloat(stateMap["min_ev_threshold"] || "0.001");
-  const currentMinRR = parseFloat(stateMap["min_rr_ratio"] || "1.5");
+  const currentMinRR = parseFloat(stateMap["min_rr_ratio"] || "1.2");
 
   const allWinRate = closedTrades.length > 0
     ? closedTrades.filter(t => (t.pnl ?? 0) > 0).length / closedTrades.length : 0.5;

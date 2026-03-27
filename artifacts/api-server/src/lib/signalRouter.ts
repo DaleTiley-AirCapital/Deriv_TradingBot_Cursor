@@ -147,7 +147,7 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
       (mode === "paper" ? "55" : mode === "demo" ? "65" : "75")
     ),
     minEvThreshold: parseFloat(stateMap[`${prefix}_min_ev_threshold`] || stateMap["min_ev_threshold"] || "0.001"),
-    minRrRatio: parseFloat(stateMap[`${prefix}_min_rr_ratio`] || stateMap["min_rr_ratio"] || "1.5"),
+    minRrRatio: parseFloat(stateMap[`${prefix}_min_rr_ratio`] || stateMap["min_rr_ratio"] || "1.2"),
     correlatedFamilyCap,
     openTrades: openTrades.map(t => ({
       symbol: t.symbol,
