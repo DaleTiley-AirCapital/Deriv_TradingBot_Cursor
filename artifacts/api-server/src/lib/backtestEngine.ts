@@ -382,10 +382,6 @@ export function computeFeaturesFromCandles(
     ? [1.272, 1.618, 2.0].map(r => swingHigh - fibRange * r).filter(l => l > 0)
     : [];
 
-  const largeMoves = closes.slice(-50).filter((c, i, arr) => {
-    if (i === 0) return false;
-    return Math.abs(c - arr[i - 1]) / arr[i - 1] > atr14 * 3;
-  });
   const candlesSinceLastLargeMove = (() => {
     for (let i = candles.length - 1; i >= 1; i--) {
       const move = Math.abs(candles[i].close - candles[i - 1].close) / candles[i - 1].close;
@@ -394,6 +390,38 @@ export function computeFeaturesFromCandles(
     return 500;
   })();
   const spikeHazardScore = Math.min(1, candlesSinceLastLargeMove / 200);
+
+  const vwapCalc = (() => {
+    let cumTPV = 0, cumV = 0;
+    for (const c of candles) {
+      const tp = (c.high + c.low + c.close) / 3;
+      const vol = c.high - c.low || 1;
+      cumTPV += tp * vol;
+      cumV += vol;
+    }
+    return cumV > 0 ? cumTPV / cumV : price;
+  })();
+
+  const prevHalf = candles.slice(0, Math.floor(candles.length / 2));
+  const prevSessionHigh = prevHalf.length > 0 ? Math.max(...prevHalf.map(c => c.high)) : price;
+  const prevSessionLow = prevHalf.length > 0 ? Math.min(...prevHalf.map(c => c.low)) : price;
+  const prevSessionClose = prevHalf.length > 0 ? prevHalf[prevHalf.length - 1].close : price;
+  const pp = (prevSessionHigh + prevSessionLow + prevSessionClose) / 3;
+  const pivotR1 = 2 * pp - prevSessionLow;
+  const pivotS1 = 2 * pp - prevSessionHigh;
+  const pivotR2 = pp + (prevSessionHigh - prevSessionLow);
+  const pivotS2 = pp - (prevSessionHigh - prevSessionLow);
+  const pivotR3 = prevSessionHigh + 2 * (pp - prevSessionLow);
+  const pivotS3 = prevSessionLow - 2 * (prevSessionHigh - pp);
+  const camRange = prevSessionHigh - prevSessionLow;
+  const camH3 = prevSessionClose + camRange * 1.1 / 4;
+  const camH4 = prevSessionClose + camRange * 1.1 / 2;
+  const camL3 = prevSessionClose - camRange * 1.1 / 4;
+  const camL4 = prevSessionClose - camRange * 1.1 / 2;
+
+  const magnitude = price > 0 ? Math.pow(10, Math.floor(Math.log10(price))) : 1;
+  const roundUnit = magnitude >= 100 ? 100 : magnitude >= 10 ? 10 : magnitude >= 1 ? 1 : 0.1;
+  const psychRound = Math.round(price / roundUnit) * roundUnit;
 
   return {
     symbol,
@@ -436,6 +464,22 @@ export function computeFeaturesFromCandles(
     bbUpper,
     bbLower,
     latestClose: price,
+    vwap: vwapCalc,
+    pivotPoint: pp,
+    pivotR1,
+    pivotR2,
+    pivotR3,
+    pivotS1,
+    pivotS2,
+    pivotS3,
+    camarillaH3: camH3,
+    camarillaH4: camH4,
+    camarillaL3: camL3,
+    camarillaL4: camL4,
+    psychRound,
+    prevSessionHigh,
+    prevSessionLow,
+    prevSessionClose,
   };
 }
 
@@ -723,17 +767,19 @@ function simulateOnCandles(
         ? signals.filter(s => strategies.includes(s.strategyName))
         : signals;
 
-      const minComposite = config.minCompositeScore ?? 85;
-      const minEv = config.minEvThreshold ?? 0.003;
-      const minRr = config.minRrRatio ?? 1.5;
+      const minComposite = config.minCompositeScore ?? 60;
+      const minEv = config.minEvThreshold ?? 0.001;
+      const minRr = config.minRrRatio ?? 1.2;
 
       for (const signal of filteredSignals) {
         if (signal.compositeScore < minComposite) continue;
         if (signal.expectedValue < minEv) continue;
         if (openPositions.length >= maxConcurrent) break;
 
-        const alreadyHasPosition = openPositions.some(p => p.symbol === sym);
-        if (alreadyHasPosition) continue;
+        const positionsOnSymbol = openPositions.filter(p => p.symbol === sym);
+        if (positionsOnSymbol.length >= 2) continue;
+        const sameStrategy = positionsOnSymbol.some(p => p.strategyName === signal.strategyName);
+        if (sameStrategy) continue;
 
         const currentDeployed = openPositions.reduce((s, p) => s + p.positionSize, 0);
         const maxDeployable = equity * MAX_EQUITY_DEPLOYED_PCT;
@@ -749,6 +795,12 @@ function simulateOnCandles(
         const price = candles[idx].close;
         const atrPct = Math.max(features.atr14, 0.001);
 
+        const pivotLevels = [
+          features.pivotPoint, features.pivotR1, features.pivotR2, features.pivotR3,
+          features.pivotS1, features.pivotS2, features.pivotS3,
+          features.camarillaH3, features.camarillaH4, features.camarillaL3, features.camarillaL4,
+        ].filter((l): l is number => l != null && l > 0);
+
         const tp = calculateSRFibTP({
           entryPrice: price,
           direction: signal.direction,
@@ -759,6 +811,11 @@ function simulateOnCandles(
           bbUpper: features.bbUpper,
           bbLower: features.bbLower,
           atrPct,
+          pivotLevels,
+          vwap: features.vwap,
+          psychRound: features.psychRound,
+          prevSessionHigh: features.prevSessionHigh,
+          prevSessionLow: features.prevSessionLow,
         });
 
         const sl = calculateSRFibSL({
@@ -772,6 +829,10 @@ function simulateOnCandles(
           atrPct,
           positionSize: positionSize,
           equity,
+          pivotLevels,
+          vwap: features.vwap,
+          prevSessionLow: features.prevSessionLow,
+          prevSessionHigh: features.prevSessionHigh,
         });
 
         const tpDist = Math.abs(tp - price);

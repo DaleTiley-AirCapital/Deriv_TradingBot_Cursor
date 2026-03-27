@@ -215,44 +215,51 @@ async function initDb(): Promise<void> {
   }
   console.log(`[DB] Ran ${migrations.length} column migrations.`);
 
-  console.log("[DB] Truncating all data tables for clean first-run state...");
-  await db.execute(sql`TRUNCATE TABLE backtest_trades CASCADE`);
-  await db.execute(sql`TRUNCATE TABLE backtest_runs CASCADE`);
-  await db.execute(sql`TRUNCATE TABLE trades CASCADE`);
-  await db.execute(sql`TRUNCATE TABLE signal_log CASCADE`);
-  await db.execute(sql`TRUNCATE TABLE features CASCADE`);
-  await db.execute(sql`TRUNCATE TABLE model_runs CASCADE`);
-  await db.execute(sql`TRUNCATE TABLE spike_events CASCADE`);
-  await db.execute(sql`TRUNCATE TABLE candles CASCADE`);
-  await db.execute(sql`TRUNCATE TABLE ticks CASCADE`);
+  const setupCheckRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "initial_setup_complete")).limit(1);
+  const alreadySetUp = setupCheckRow.length > 0 && setupCheckRow[0].value === "true";
 
-  const apiKeyKeys = ["deriv_api_token", "deriv_api_token_demo", "deriv_api_token_real", "openai_api_key"];
-  const existingKeys = await db.select().from(platformStateTable);
-  const savedApiKeys: { key: string; value: string }[] = [];
-  for (const row of existingKeys) {
-    if (apiKeyKeys.includes(row.key) && row.value) {
-      savedApiKeys.push({ key: row.key, value: row.value });
+  if (alreadySetUp) {
+    console.log("[DB] Setup already complete — preserving existing data. Skipping truncation.");
+  } else {
+    console.log("[DB] First-run detected — truncating data tables for clean state...");
+    await db.execute(sql`TRUNCATE TABLE backtest_trades CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE backtest_runs CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE trades CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE signal_log CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE features CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE model_runs CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE spike_events CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE candles CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE ticks CASCADE`);
+
+    const apiKeyKeys = ["deriv_api_token", "deriv_api_token_demo", "deriv_api_token_real", "openai_api_key"];
+    const existingKeys = await db.select().from(platformStateTable);
+    const savedApiKeys: { key: string; value: string }[] = [];
+    for (const row of existingKeys) {
+      if (apiKeyKeys.includes(row.key) && row.value) {
+        savedApiKeys.push({ key: row.key, value: row.value });
+      }
     }
-  }
-  await db.execute(sql`TRUNCATE TABLE platform_state CASCADE`);
+    await db.execute(sql`TRUNCATE TABLE platform_state CASCADE`);
 
-  for (const { key, value } of savedApiKeys) {
-    await db.insert(platformStateTable).values({ key, value }).onConflictDoNothing();
+    for (const { key, value } of savedApiKeys) {
+      await db.insert(platformStateTable).values({ key, value }).onConflictDoNothing();
+    }
   }
 
   await db.execute(sql`
     INSERT INTO platform_state (key, value)
-    SELECT * FROM (VALUES
+    SELECT key, value FROM (VALUES
       ('mode',                'idle'),
       ('kill_switch',         'false'),
       ('streaming',           'false'),
       ('disabled_strategies', ''),
-      ('min_composite_score', '80'),
-      ('paper_min_composite_score', '80'),
-      ('demo_min_composite_score',  '85'),
-      ('real_min_composite_score',  '90'),
-      ('min_ev_threshold',    '0.003'),
-      ('min_rr_ratio',        '3.0'),
+      ('min_composite_score', '55'),
+      ('paper_min_composite_score', '55'),
+      ('demo_min_composite_score',  '65'),
+      ('real_min_composite_score',  '75'),
+      ('min_ev_threshold',    '0.001'),
+      ('min_rr_ratio',        '1.5'),
 
       ('paper_capital',               '10000'),
       ('paper_equity_pct_per_trade',  '30'),
@@ -284,10 +291,10 @@ async function initDb(): Promise<void> {
       ('real_extraction_target_pct','50'),
       ('real_correlated_family_cap','3')
     ) AS defaults(key, value)
-    WHERE NOT EXISTS (SELECT 1 FROM platform_state WHERE key = 'mode');
+    WHERE NOT EXISTS (SELECT 1 FROM platform_state ps WHERE ps.key = defaults.key);
   `);
 
-  console.log("[DB] Schema ready — clean first-run state.");
+  console.log("[DB] Schema ready.");
 }
 
 async function autoConfigureAI(): Promise<void> {
@@ -342,11 +349,11 @@ initDb()
   .then(() => {
     app.listen(port, () => {
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log(`  Deriv Capital Extraction App v1`);
+      console.log(`  Deriv Capital Extraction App v2`);
       console.log(`  Port: ${port} | ENV: ${process.env.NODE_ENV || "development"}`);
       console.log(`  Health: /api/healthz`);
       console.log(`  Deployable symbols: 12 (Boom/Crash + R_75/R_100)`);
-      console.log(`  Strategy families: 4 (trend_continuation, mean_reversion, breakout_expansion, spike_event)`);
+      console.log(`  Strategy families: 5 (trend_continuation, mean_reversion, breakout_expansion, spike_event, trendline_breakout)`);
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       startScheduler();
       autoStartStreaming();

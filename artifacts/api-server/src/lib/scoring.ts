@@ -34,13 +34,15 @@ const FAMILY_IDEAL_REGIMES: Record<string, string[]> = {
   "mean_reversion": ["mean_reversion", "ranging"],
   "breakout_expansion": ["compression", "breakout_expansion", "trend_up", "trend_down"],
   "spike_event": ["spike_zone", "ranging"],
+  "trendline_breakout": ["compression", "ranging", "breakout_expansion", "trend_up", "trend_down"],
 };
 
 const FAMILY_IDEAL_VOLATILITY: Record<string, { min: number; max: number }> = {
-  "trend_continuation": { min: 0.001, max: 0.004 },
-  "mean_reversion": { min: 0.002, max: 0.006 },
-  "breakout_expansion": { min: 0.003, max: 0.010 },
-  "spike_event": { min: 0.001, max: 0.010 },
+  "trend_continuation": { min: 0.001, max: 0.015 },
+  "mean_reversion": { min: 0.002, max: 0.020 },
+  "breakout_expansion": { min: 0.003, max: 0.030 },
+  "spike_event": { min: 0.001, max: 0.025 },
+  "trendline_breakout": { min: 0.002, max: 0.025 },
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -60,7 +62,7 @@ function computeRegimeFit(features: FeatureVector, candidate: SignalCandidate): 
   if (idealRegimes.length === 0) return 50;
 
   const isIdeal = idealRegimes.includes(regimeLabel);
-  if (!isIdeal) return 15;
+  if (!isIdeal) return 40;
 
   let score = 75;
   const regimeConf = candidate.regimeConfidence ?? 0.5;

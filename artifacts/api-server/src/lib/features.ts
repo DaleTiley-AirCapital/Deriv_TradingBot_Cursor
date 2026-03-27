@@ -46,6 +46,22 @@ export interface FeatureVector {
   bbLower: number;
   latestClose: number;
   fibExtensionLevelsDown: number[];
+  vwap: number;
+  pivotPoint: number;
+  pivotR1: number;
+  pivotR2: number;
+  pivotR3: number;
+  pivotS1: number;
+  pivotS2: number;
+  pivotS3: number;
+  camarillaH3: number;
+  camarillaH4: number;
+  camarillaL3: number;
+  camarillaL4: number;
+  psychRound: number;
+  prevSessionHigh: number;
+  prevSessionLow: number;
+  prevSessionClose: number;
 }
 
 function ema(values: number[], period: number): number[] {
@@ -206,6 +222,71 @@ function detectSwingBreachAndReclaim(
   }
 
   return { breached: false, reclaimed: false, breachCandles: 0, breachDirection: null };
+}
+
+function computeVWAP(candles: { close: number; high: number; low: number }[]): number {
+  if (candles.length === 0) return 0;
+  let cumTPV = 0;
+  let cumV = 0;
+  for (const c of candles) {
+    const tp = (c.high + c.low + c.close) / 3;
+    const vol = c.high - c.low || 1;
+    cumTPV += tp * vol;
+    cumV += vol;
+  }
+  return cumV > 0 ? cumTPV / cumV : candles[candles.length - 1].close;
+}
+
+function computePivotPoints(prevHigh: number, prevLow: number, prevClose: number): {
+  pp: number; r1: number; r2: number; r3: number; s1: number; s2: number; s3: number;
+  camH3: number; camH4: number; camL3: number; camL4: number;
+} {
+  const pp = (prevHigh + prevLow + prevClose) / 3;
+  const r1 = 2 * pp - prevLow;
+  const s1 = 2 * pp - prevHigh;
+  const r2 = pp + (prevHigh - prevLow);
+  const s2 = pp - (prevHigh - prevLow);
+  const r3 = prevHigh + 2 * (pp - prevLow);
+  const s3 = prevLow - 2 * (prevHigh - pp);
+  const range = prevHigh - prevLow;
+  const camH3 = prevClose + range * 1.1 / 4;
+  const camH4 = prevClose + range * 1.1 / 2;
+  const camL3 = prevClose - range * 1.1 / 4;
+  const camL4 = prevClose - range * 1.1 / 2;
+  return { pp, r1, r2, r3, s1, s2, s3, camH3, camH4, camL3, camL4 };
+}
+
+function computePsychologicalRound(price: number): number {
+  if (price <= 0) return 0;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(price)));
+  const roundUnit = magnitude >= 100 ? 100 : magnitude >= 10 ? 10 : magnitude >= 1 ? 1 : 0.1;
+  return Math.round(price / roundUnit) * roundUnit;
+}
+
+function getPreviousSession(candles: { high: number; low: number; close: number; openTs: number }[]): {
+  high: number; low: number; close: number;
+} {
+  if (candles.length < 2) {
+    const c = candles[candles.length - 1] || { high: 0, low: 0, close: 0 };
+    return { high: c.high, low: c.low, close: c.close };
+  }
+  const lastTs = candles[candles.length - 1].openTs;
+  const oneDayAgo = lastTs - 86400;
+  const sessionCandles = candles.filter(c => c.openTs >= oneDayAgo && c.openTs < lastTs);
+  if (sessionCandles.length === 0) {
+    const half = Math.floor(candles.length / 2);
+    const prevHalf = candles.slice(0, half);
+    return {
+      high: Math.max(...prevHalf.map(c => c.high)),
+      low: Math.min(...prevHalf.map(c => c.low)),
+      close: prevHalf[prevHalf.length - 1].close,
+    };
+  }
+  return {
+    high: Math.max(...sessionCandles.map(c => c.high)),
+    low: Math.min(...sessionCandles.map(c => c.low)),
+    close: sessionCandles[sessionCandles.length - 1].close,
+  };
 }
 
 function computeFibonacciLevels(swingLow: number, swingHigh: number): { retracements: number[]; extensions: number[]; extensionsDown: number[] } {
@@ -378,6 +459,12 @@ export async function computeFeatures(symbol: string, lookback = 100): Promise<F
     }
   }
 
+  const vwap = computeVWAP(candles);
+
+  const prevSession = getPreviousSession(candles as unknown as { high: number; low: number; close: number; openTs: number }[]);
+  const pivots = computePivotPoints(prevSession.high, prevSession.low, prevSession.close);
+  const psychRound = computePsychologicalRound(price);
+
   return {
     symbol,
     ts: last.closeTs,
@@ -419,6 +506,22 @@ export async function computeFeatures(symbol: string, lookback = 100): Promise<F
     bbLower,
     latestClose: price,
     fibExtensionLevelsDown: fibLevels.extensionsDown,
+    vwap,
+    pivotPoint: pivots.pp,
+    pivotR1: pivots.r1,
+    pivotR2: pivots.r2,
+    pivotR3: pivots.r3,
+    pivotS1: pivots.s1,
+    pivotS2: pivots.s2,
+    pivotS3: pivots.s3,
+    camarillaH3: pivots.camH3,
+    camarillaH4: pivots.camH4,
+    camarillaL3: pivots.camL3,
+    camarillaL4: pivots.camL4,
+    psychRound,
+    prevSessionHigh: prevSession.high,
+    prevSessionLow: prevSession.low,
+    prevSessionClose: prevSession.close,
   };
 }
 

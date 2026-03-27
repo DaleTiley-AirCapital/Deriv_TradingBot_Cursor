@@ -17,21 +17,21 @@ import { useToast } from "@/hooks/use-toast";
 const V1_DEFAULTS: Record<string, Record<string, string>> = {
   paper: {
     capital: "10000", equity_pct_per_trade: "30", max_open_trades: "4", allocation_mode: "aggressive",
-    min_composite_score: "80", min_ev_threshold: "0.003", min_rr_ratio: "3.0",
+    min_composite_score: "55", min_ev_threshold: "0.001", min_rr_ratio: "1.5",
     max_daily_loss_pct: "8", max_weekly_loss_pct: "15", max_drawdown_pct: "25",
     extraction_target_pct: "50", auto_extraction: "false",
     correlated_family_cap: "4",
   },
   demo: {
     capital: "600", equity_pct_per_trade: "20", max_open_trades: "3", allocation_mode: "balanced",
-    min_composite_score: "85", min_ev_threshold: "0.003", min_rr_ratio: "3.0",
+    min_composite_score: "65", min_ev_threshold: "0.001", min_rr_ratio: "1.5",
     max_daily_loss_pct: "5", max_weekly_loss_pct: "10", max_drawdown_pct: "18",
     extraction_target_pct: "50", auto_extraction: "false",
     correlated_family_cap: "3",
   },
   real: {
     capital: "600", equity_pct_per_trade: "15", max_open_trades: "3", allocation_mode: "balanced",
-    min_composite_score: "90", min_ev_threshold: "0.003", min_rr_ratio: "3.0",
+    min_composite_score: "75", min_ev_threshold: "0.001", min_rr_ratio: "1.5",
     max_daily_loss_pct: "3", max_weekly_loss_pct: "6", max_drawdown_pct: "12",
     extraction_target_pct: "50", auto_extraction: "false",
     correlated_family_cap: "3",
@@ -363,6 +363,7 @@ const STRATEGY_FAMILIES = [
   { key: "mean_reversion", label: "Mean Reversion", desc: "Catches reversals after extreme moves or liquidity sweeps", subStrategies: ["Exhaustion Rebound", "Liquidity Sweep + Reversal"] },
   { key: "breakout_expansion", label: "Breakout / Expansion", desc: "Trades breakouts and explosive volatility moves", subStrategies: ["Volatility Breakout", "Volatility Expansion Capture"] },
   { key: "spike_event", label: "Spike / Event", desc: "Exploits Boom/Crash spike patterns deterministically", subStrategies: ["Spike Hazard Capture"] },
+  { key: "trendline_breakout", label: "Trendline Breakout", desc: "Breakouts from dynamic trendlines with VWAP/pivot confluence", subStrategies: ["Trendline Breakout"] },
 ];
 
 function InstrumentsPicker({ enabledSymbols, onChange, aiSuggestion, onApplySuggestion }: { enabledSymbols: string; onChange: (v: string) => void; aiSuggestion?: string; onApplySuggestion?: () => void }) {

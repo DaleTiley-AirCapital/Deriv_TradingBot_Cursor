@@ -11,7 +11,6 @@ const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
 const TIME_EXIT_PROFIT_HOURS = 72;
 const TIME_EXIT_HARD_CAP_HOURS = 168;
 
-export type StrategyFamily = "trend_continuation" | "mean_reversion" | "breakout_expansion" | "spike_event";
 
 interface PositionSizing {
   size: number;
@@ -62,14 +61,39 @@ export function calculateSRFibTP(params: {
   bbUpper: number;
   bbLower: number;
   atrPct: number;
+  pivotLevels?: number[];
+  vwap?: number;
+  psychRound?: number;
+  prevSessionHigh?: number;
+  prevSessionLow?: number;
 }): number {
-  const { entryPrice, direction, swingHigh, swingLow, fibExtensionLevels, fibExtensionLevelsDown, bbUpper, bbLower, atrPct } = params;
+  const { entryPrice, direction, swingHigh, swingLow, fibExtensionLevels, fibExtensionLevelsDown, bbUpper, bbLower, atrPct, pivotLevels, vwap, psychRound, prevSessionHigh, prevSessionLow } = params;
+
+  const extraResistance: number[] = [];
+  const extraSupport: number[] = [];
+  if (pivotLevels) {
+    for (const l of pivotLevels) {
+      if (l > entryPrice) extraResistance.push(l);
+      else if (l < entryPrice) extraSupport.push(l);
+    }
+  }
+  if (vwap && vwap > 0) {
+    if (vwap > entryPrice) extraResistance.push(vwap);
+    else extraSupport.push(vwap);
+  }
+  if (psychRound && psychRound > 0) {
+    if (psychRound > entryPrice) extraResistance.push(psychRound);
+    else if (psychRound < entryPrice) extraSupport.push(psychRound);
+  }
+  if (prevSessionHigh && prevSessionHigh > entryPrice) extraResistance.push(prevSessionHigh);
+  if (prevSessionLow && prevSessionLow > 0 && prevSessionLow < entryPrice) extraSupport.push(prevSessionLow);
 
   if (direction === "buy") {
     const resistanceLevels = [
       swingHigh,
       ...fibExtensionLevels.filter(l => l > entryPrice),
       bbUpper,
+      ...extraResistance,
     ].filter(l => l > entryPrice).sort((a, b) => a - b);
 
     if (resistanceLevels.length === 0) {
@@ -97,6 +121,7 @@ export function calculateSRFibTP(params: {
       swingLow,
       ...downExtensions.filter(l => l < entryPrice && l > 0),
       bbLower,
+      ...extraSupport,
     ].filter(l => l < entryPrice && l > 0).sort((a, b) => b - a);
 
     if (supportLevels.length === 0) {
@@ -132,14 +157,34 @@ export function calculateSRFibSL(params: {
   atrPct: number;
   positionSize: number;
   equity: number;
+  pivotLevels?: number[];
+  vwap?: number;
+  prevSessionLow?: number;
+  prevSessionHigh?: number;
 }): number {
-  const { entryPrice, direction, swingHigh, swingLow, fibRetraceLevels, bbUpper, bbLower, atrPct, positionSize, equity } = params;
+  const { entryPrice, direction, swingHigh, swingLow, fibRetraceLevels, bbUpper, bbLower, atrPct, positionSize, equity, pivotLevels, vwap, prevSessionLow, prevSessionHigh } = params;
+
+  const extraSupportLevels: number[] = [];
+  const extraResistanceLevels: number[] = [];
+  if (pivotLevels) {
+    for (const l of pivotLevels) {
+      if (l < entryPrice && l > 0) extraSupportLevels.push(l);
+      else if (l > entryPrice) extraResistanceLevels.push(l);
+    }
+  }
+  if (vwap && vwap > 0) {
+    if (vwap < entryPrice) extraSupportLevels.push(vwap);
+    else extraResistanceLevels.push(vwap);
+  }
+  if (prevSessionLow && prevSessionLow > 0 && prevSessionLow < entryPrice) extraSupportLevels.push(prevSessionLow);
+  if (prevSessionHigh && prevSessionHigh > entryPrice) extraResistanceLevels.push(prevSessionHigh);
 
   if (direction === "buy") {
     const supportLevels = [
       swingLow,
       ...fibRetraceLevels.filter(l => l < entryPrice && l > 0),
       bbLower,
+      ...extraSupportLevels,
     ].filter(l => l < entryPrice && l > 0).sort((a, b) => b - a);
 
     let sl: number;
@@ -168,6 +213,7 @@ export function calculateSRFibSL(params: {
       swingHigh,
       ...fibRetraceLevels.filter(l => l > entryPrice),
       bbUpper,
+      ...extraResistanceLevels,
     ].filter(l => l > entryPrice).sort((a, b) => a - b);
 
     let sl: number;
@@ -343,6 +389,19 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
   const bbUpper = signal.bbUpper ?? spotPrice * 1.01;
   const bbLower = signal.bbLower ?? spotPrice * 0.99;
 
+  const pivotLevels: number[] = [];
+  if (signal.pivotR1) pivotLevels.push(signal.pivotR1);
+  if (signal.pivotR2) pivotLevels.push(signal.pivotR2);
+  if (signal.pivotR3) pivotLevels.push(signal.pivotR3);
+  if (signal.pivotS1) pivotLevels.push(signal.pivotS1);
+  if (signal.pivotS2) pivotLevels.push(signal.pivotS2);
+  if (signal.pivotS3) pivotLevels.push(signal.pivotS3);
+  if (signal.camarillaH3) pivotLevels.push(signal.camarillaH3);
+  if (signal.camarillaH4) pivotLevels.push(signal.camarillaH4);
+  if (signal.camarillaL3) pivotLevels.push(signal.camarillaL3);
+  if (signal.camarillaL4) pivotLevels.push(signal.camarillaL4);
+  if (signal.pivotPoint) pivotLevels.push(signal.pivotPoint);
+
   const tp = calculateSRFibTP({
     entryPrice: spotPrice,
     direction: signal.direction,
@@ -353,6 +412,11 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
     bbUpper,
     bbLower,
     atrPct,
+    pivotLevels,
+    vwap: signal.vwap,
+    psychRound: signal.psychRound,
+    prevSessionHigh: signal.prevSessionHigh,
+    prevSessionLow: signal.prevSessionLow,
   });
 
   const sl = calculateSRFibSL({
@@ -366,6 +430,10 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
     atrPct,
     positionSize: sizing.size,
     equity,
+    pivotLevels,
+    vwap: signal.vwap,
+    prevSessionLow: signal.prevSessionLow,
+    prevSessionHigh: signal.prevSessionHigh,
   });
 
   const entryTs = new Date();

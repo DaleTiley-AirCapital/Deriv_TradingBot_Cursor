@@ -75,7 +75,7 @@ router.post("/backtest/run", async (req, res): Promise<void> => {
   } = req.body ?? {};
 
   const validStrategies = [
-    "trend_continuation", "mean_reversion", "breakout_expansion", "spike_event",
+    "trend_continuation", "mean_reversion", "breakout_expansion", "spike_event", "trendline_breakout",
   ];
   if (!validStrategies.includes(strategyName)) {
     res.status(400).json({ error: `Invalid strategy. Use: ${validStrategies.join(", ")}` });

@@ -29,15 +29,32 @@ export interface SignalCandidate {
   bbUpper: number;
   bbLower: number;
   currentPrice: number;
+  vwap?: number;
+  pivotPoint?: number;
+  pivotR1?: number;
+  pivotR2?: number;
+  pivotR3?: number;
+  pivotS1?: number;
+  pivotS2?: number;
+  pivotS3?: number;
+  camarillaH3?: number;
+  camarillaH4?: number;
+  camarillaL3?: number;
+  camarillaL4?: number;
+  psychRound?: number;
+  prevSessionHigh?: number;
+  prevSessionLow?: number;
+  prevSessionClose?: number;
 }
 
 const FAMILY_CONFIG: Record<StrategyFamily, {
   minModelScore: number;
 }> = {
-  trend_continuation: { minModelScore: 0.58 },
-  mean_reversion: { minModelScore: 0.60 },
-  breakout_expansion: { minModelScore: 0.55 },
-  spike_event: { minModelScore: 0.62 },
+  trend_continuation: { minModelScore: 0.50 },
+  mean_reversion: { minModelScore: 0.52 },
+  breakout_expansion: { minModelScore: 0.48 },
+  spike_event: { minModelScore: 0.55 },
+  trendline_breakout: { minModelScore: 0.50 },
 };
 
 function buildCandidate(
@@ -77,17 +94,33 @@ function buildCandidate(
     bbUpper: features.bbUpper,
     bbLower: features.bbLower,
     currentPrice: features.latestClose,
+    vwap: features.vwap,
+    pivotPoint: features.pivotPoint,
+    pivotR1: features.pivotR1,
+    pivotR2: features.pivotR2,
+    pivotR3: features.pivotR3,
+    pivotS1: features.pivotS1,
+    pivotS2: features.pivotS2,
+    pivotS3: features.pivotS3,
+    camarillaH3: features.camarillaH3,
+    camarillaH4: features.camarillaH4,
+    camarillaL3: features.camarillaL3,
+    camarillaL4: features.camarillaL4,
+    psychRound: features.psychRound,
+    prevSessionHigh: features.prevSessionHigh,
+    prevSessionLow: features.prevSessionLow,
+    prevSessionClose: features.prevSessionClose,
   };
 }
 
 function trendContinuation(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
   const cfg = FAMILY_CONFIG.trend_continuation;
 
-  const inUptrend = features.emaSlope > 0.0003;
-  const inDowntrend = features.emaSlope < -0.0003;
-  const pulledBack = Math.abs(features.emaDist) < 0.008;
-  const rsiNeutral = features.rsi14 > 38 && features.rsi14 < 65;
-  const noExtreme = Math.abs(features.zScore) < 2.0;
+  const inUptrend = features.emaSlope > 0.0001;
+  const inDowntrend = features.emaSlope < -0.0001;
+  const pulledBack = Math.abs(features.emaDist) < 0.015;
+  const rsiNeutral = features.rsi14 > 30 && features.rsi14 < 70;
+  const noExtreme = Math.abs(features.zScore) < 2.5;
 
   let direction: "buy" | "sell" | null = null;
   let reason = "";
@@ -111,9 +144,9 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
 function meanReversion(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
   const cfg = FAMILY_CONFIG.mean_reversion;
 
-  const oversold = features.rsi14 < 32 && features.zScore < -1.8;
-  const overbought = features.rsi14 > 68 && features.zScore > 1.8;
-  const multipleAdverse = Math.abs(features.consecutive) >= 3;
+  const oversold = features.rsi14 < 38 && features.zScore < -1.2;
+  const overbought = features.rsi14 > 62 && features.zScore > 1.2;
+  const multipleAdverse = Math.abs(features.consecutive) >= 2;
 
   const sweepSetup = features.swingBreached && features.swingReclaimed &&
     features.swingBreachCandles >= 0 && features.swingBreachCandles <= 3 &&
@@ -149,15 +182,15 @@ function meanReversion(features: FeatureVector, regime: RegimeClassification): S
 function breakoutExpansion(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
   const cfg = FAMILY_CONFIG.breakout_expansion;
 
-  const squeeze = features.bbWidth < 0.006;
-  const atrExpanding = features.atrRank > 0.8;
+  const squeeze = features.bbWidth < 0.012;
+  const atrExpanding = features.atrRank > 0.6;
   const atUpperBand = features.bbPctB > 0.85;
   const atLowerBand = features.bbPctB < 0.15;
 
-  const wasCompressed = features.bbWidth < 0.008;
-  const bbExpanding = features.bbWidthRoc > 0.10;
-  const atrAccelerating = features.atrAccel > 0.08;
-  const bodyExpanding = features.candleBody > 0.6;
+  const wasCompressed = features.bbWidth < 0.015;
+  const bbExpanding = features.bbWidthRoc > 0.06;
+  const atrAccelerating = features.atrAccel > 0.04;
+  const bodyExpanding = features.candleBody > 0.5;
 
   let direction: "buy" | "sell" | null = null;
   let reason = "";
@@ -200,11 +233,63 @@ function spikeEvent(features: FeatureVector, regime: RegimeClassification): Sign
   return buildCandidate(features, regime, "spike_event", direction, boostedScore, features.spikeHazardScore, Math.max(expectedValue, 0.008), `[${regime.regime}] ${reason}`, "spike_capture");
 }
 
+function trendlineBreakout(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
+  const cfg = FAMILY_CONFIG.trendline_breakout;
+
+  const hasSwings = features.swingHigh > 0 && features.swingLow > 0;
+  if (!hasSwings) return null;
+
+  const price = features.latestClose;
+  const swingRange = features.swingHigh - features.swingLow;
+  if (swingRange <= 0) return null;
+
+  const pricePositionInRange = (price - features.swingLow) / swingRange;
+  const momentumConfirm = features.atrAccel > 0.03 && features.candleBody > 0.4;
+  const volumeExpanding = features.atrRank > 0.7;
+
+  let direction: "buy" | "sell" | null = null;
+  let reason = "";
+
+  const breakAboveResistance = price > features.swingHigh &&
+    features.swingHighDist > 0 && features.swingHighDist < 0.01 &&
+    momentumConfirm;
+
+  const breakBelowSupport = price < features.swingLow &&
+    features.swingLowDist < 0 && features.swingLowDist > -0.01 &&
+    momentumConfirm;
+
+  const nearResistanceBreak = pricePositionInRange > 0.92 &&
+    features.bbPctB > 0.8 &&
+    features.emaSlope > 0.0001 &&
+    volumeExpanding;
+
+  const nearSupportBreak = pricePositionInRange < 0.08 &&
+    features.bbPctB < 0.2 &&
+    features.emaSlope < -0.0001 &&
+    volumeExpanding;
+
+  if (breakAboveResistance || nearResistanceBreak) {
+    direction = "buy";
+    reason = `Trendline breakout up: price=${price.toFixed(2)}, swingHigh=${features.swingHigh.toFixed(2)}, atrAccel=${features.atrAccel.toFixed(3)}, body=${features.candleBody.toFixed(2)}`;
+  } else if (breakBelowSupport || nearSupportBreak) {
+    direction = "sell";
+    reason = `Trendline breakout down: price=${price.toFixed(2)}, swingLow=${features.swingLow.toFixed(2)}, atrAccel=${features.atrAccel.toFixed(3)}, body=${features.candleBody.toFixed(2)}`;
+  }
+
+  if (!direction) return null;
+
+  const { score, confidence, expectedValue } = scoreFeaturesForFamily(features, "breakout_expansion");
+  if (score < cfg.minModelScore) return null;
+
+  return buildCandidate(features, regime, "trendline_breakout", direction, score, confidence, expectedValue, `[${regime.regime}] ${reason}`, "trendline_breakout");
+}
+
 const FAMILY_RUNNERS: Record<StrategyFamily, (f: FeatureVector, r: RegimeClassification) => SignalCandidate | null> = {
   trend_continuation: trendContinuation,
   mean_reversion: meanReversion,
   breakout_expansion: breakoutExpansion,
   spike_event: spikeEvent,
+  trendline_breakout: trendlineBreakout,
 };
 
 export function runAllStrategies(features: FeatureVector, weights?: ScoringWeights, cachedRegime?: RegimeClassification, explicitHourlyFeatures?: Partial<FeatureVector>): SignalCandidate[] {

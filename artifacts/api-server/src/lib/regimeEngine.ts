@@ -18,7 +18,8 @@ export type StrategyFamily =
   | "trend_continuation"
   | "mean_reversion"
   | "breakout_expansion"
-  | "spike_event";
+  | "spike_event"
+  | "trendline_breakout";
 
 export interface RegimeClassification {
   regime: RegimeState;
@@ -35,12 +36,12 @@ export function classifyInstrument(symbol: string): InstrumentFamily {
 }
 
 const STRATEGY_PERMISSION_MATRIX: Record<RegimeState, StrategyFamily[]> = {
-  trend_up: ["trend_continuation", "breakout_expansion"],
-  trend_down: ["trend_continuation", "breakout_expansion"],
+  trend_up: ["trend_continuation", "breakout_expansion", "trendline_breakout"],
+  trend_down: ["trend_continuation", "breakout_expansion", "trendline_breakout"],
   mean_reversion: ["mean_reversion"],
-  ranging: ["mean_reversion", "spike_event"],
-  compression: ["breakout_expansion"],
-  breakout_expansion: ["breakout_expansion", "trend_continuation"],
+  ranging: ["mean_reversion", "spike_event", "trendline_breakout"],
+  compression: ["breakout_expansion", "trendline_breakout"],
+  breakout_expansion: ["breakout_expansion", "trend_continuation", "trendline_breakout"],
   spike_zone: ["spike_event"],
   no_trade: [],
 };
@@ -146,13 +147,13 @@ export function classifyRegime(features: FeatureVector): RegimeClassification {
   let confidence: number;
 
   const slopeAbs = Math.abs(features.emaSlope);
-  const isSqueeze = features.bbWidth < 0.005;
-  const isExpanding = features.bbWidthRoc > 0.15 && features.atrAccel > 0.10;
-  const isOverstretched = Math.abs(features.zScore) > 2.0;
-  const rsiExtreme = features.rsi14 < 28 || features.rsi14 > 72;
-  const strongTrend = slopeAbs > 0.0005;
-  const veryStrongTrend = slopeAbs > 0.001;
-  const highVol = features.atr14 > 0.004;
+  const isSqueeze = features.bbWidth < 0.010;
+  const isExpanding = features.bbWidthRoc > 0.08 && features.atrAccel > 0.05;
+  const isOverstretched = Math.abs(features.zScore) > 1.8;
+  const rsiExtreme = features.rsi14 < 32 || features.rsi14 > 68;
+  const strongTrend = slopeAbs > 0.0003;
+  const veryStrongTrend = slopeAbs > 0.0008;
+  const highVol = features.atr14 > 0.008;
   const spikeImminent = isBoomCrash && features.spikeHazardScore > 0.72;
 
   if (spikeImminent) {

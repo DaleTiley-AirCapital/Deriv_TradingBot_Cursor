@@ -22,7 +22,7 @@ const DEFAULT_SCAN_INTERVAL_MS = 30_000;
 const DEFAULT_STAGGER_SECONDS = 10;
 const POSITION_MGMT_INTERVAL_MS = 10_000;
 
-const STRATEGY_FAMILIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"] as const;
+const STRATEGY_FAMILIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event", "trendline_breakout"] as const;
 
 let schedulerHandle: ReturnType<typeof setInterval> | null = null;
 let positionMgmtHandle: ReturnType<typeof setInterval> | null = null;

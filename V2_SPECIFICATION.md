@@ -48,30 +48,40 @@ New fields computed in `computeFeatures()`:
 | `fibExtensionLevels` | `number[]` | Fibonacci extension levels: 127.2%, 161.8%, 200% projected beyond swing range |
 | `bbUpper` | `number` | Upper Bollinger Band value |
 | `bbLower` | `number` | Lower Bollinger Band value |
+| `vwap` | `number` | Volume-Weighted Average Price (range-proxy) |
+| `pivotPoint` | `number` | Classic pivot point from previous session H/L/C |
+| `pivotR1`–`pivotR3` | `number` | Classic pivot resistance levels |
+| `pivotS1`–`pivotS3` | `number` | Classic pivot support levels |
+| `camarillaH3`/`camarillaH4` | `number` | Camarilla resistance levels |
+| `camarillaL3`/`camarillaL4` | `number` | Camarilla support levels |
+| `psychRound` | `number` | Nearest psychological round number |
+| `prevSessionHigh` | `number` | Previous session high |
+| `prevSessionLow` | `number` | Previous session low |
+| `prevSessionClose` | `number` | Previous session close |
 
 ### `calculateSRFibTP()` (`tradeEngine.ts`)
 
 For **buy** trades:
-1. Collect candidates: swing high, all fib extension levels, BB upper.
+1. Collect candidates: swing high, all fib extension levels, BB upper, pivot R1-R3, Camarilla H3/H4, VWAP, psychological round, previous session high.
 2. Filter to candidates **above** entry price.
-3. Find the level closest to entry price (nearest resistance above).
+3. Find confluence zones (2+ levels within 0.5% of each other) — prefer nearest confluence cluster.
 4. Apply 0.2% buffer inside the level: `tp = level * 0.998`.
 5. Floor: `tp >= entry * (1 + 3 * atrPct)`.
 6. Fallback (no candidates): `tp = entry * (1 + 6 * atrPct)`.
 
-For **sell** trades: mirror logic using candidates below entry, fib extensions projected downward.
+For **sell** trades: mirror logic using candidates below entry, fib extensions projected downward, pivot S1-S3, Camarilla L3/L4, previous session low.
 
 ### `calculateSRFibSL()` (`tradeEngine.ts`)
 
 For **buy** trades:
-1. Collect candidates: swing low, all fib retrace levels, BB lower.
+1. Collect candidates: swing low, all fib retrace levels, BB lower, pivot S1-S3, Camarilla L3/L4, VWAP, previous session low.
 2. Filter to candidates **below** entry price.
-3. Find the level closest to entry price (nearest support below).
+3. Find confluence zones (2+ levels within 0.5%) — prefer nearest confluence cluster.
 4. Apply 0.2% buffer outside the level: `sl = level * 0.998`.
 5. Safety floor: `sl = max(sl, entry * (1 - 0.10 * equity / positionSize))` — caps loss at 10% of equity.
 6. Fallback (no candidates): `sl = entry * (1 - 2.5 * atrPct)`.
 
-For **sell** trades: mirror logic.
+For **sell** trades: mirror logic using candidates above entry, pivot R1-R3, Camarilla H3/H4, previous session high.
 
 ### Strategy-Level Integration (`strategies.ts`)
 
@@ -140,12 +150,20 @@ Added `"ranging"` to the `RegimeType` union. Detected when:
 - No spike hazard (< 0.50).
 - Z-score is moderate (< 1.5 absolute).
 
+### Trendline Breakout Strategy (`strategies.ts`)
+
+New `trendline_breakout` family added. Uses `scoreFeaturesForFamily("breakout_expansion")` scoring. Entry conditions:
+- BB width expansion (bbWidth > 0.008)
+- Price breaking above/below trendline with ATR confirmation
+- Allowed in regimes: `compression`, `ranging`, `breakout_expansion`, `trend_up`, `trend_down`
+
 ### Strategy Permission Matrix
 
 `STRATEGY_PERMISSION_MATRIX` updated:
 - `mean_reversion` and `spike_event` strategies are now also allowed in `"ranging"` regime.
 - `trend_continuation` allowed in: `trend_up`, `trend_down`, `breakout_expansion`.
 - `breakout_expansion` allowed in: `compression`, `breakout_expansion`, `high_volatility`.
+- `trendline_breakout` allowed in: `compression`, `ranging`, `breakout_expansion`, `trend_up`, `trend_down`.
 
 ---
 
@@ -161,6 +179,7 @@ Updated to include `"ranging"` for families that benefit from it:
 | `mean_reversion` | `mean_reversion`, `ranging` |
 | `breakout_expansion` | `compression`, `breakout_expansion`, `trend_up`, `trend_down` |
 | `spike_event` | `spike_zone`, `ranging` |
+| `trendline_breakout` | `compression`, `ranging`, `breakout_expansion`, `trend_up`, `trend_down` |
 
 ### Regime Data Source
 
@@ -170,10 +189,11 @@ Regime fit, trend alignment, and volatility condition scores use the hourly-cach
 
 ## 7. Entry Simplification
 
-### One Position Per Symbol
+### Two Positions Per Symbol (Different Strategies)
 
 - No more probe/confirmation/momentum stages.
-- Each symbol gets at most one open position.
+- Each symbol allows up to **2 concurrent positions** from different strategy families.
+- Same strategy family blocked on same symbol if already open.
 - Position size = `equity_pct_per_trade` (from settings) × equity.
 
 ### Signal Quality Gates
@@ -182,9 +202,13 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 
 | Setting | Paper | Demo | Real |
 |---|---|---|---|
-| `min_composite_score` | 80 | 85 | 90 |
-| `min_ev_threshold` | 0.003 | 0.003 | 0.003 |
-| `min_rr_ratio` | 3.0 | 3.0 | 3.0 |
+| `min_composite_score` | 55 | 65 | 75 |
+| `min_ev_threshold` | 0.001 | 0.001 | 0.001 |
+| `min_rr_ratio` | 1.5 | 1.5 | 1.5 |
+
+### Trade Frequency Target
+
+8-15 trades per symbol per month. Thresholds calibrated for Boom/Crash/Volatility synthetic indices.
 
 ---
 
@@ -233,9 +257,9 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 | `equity_pct_per_trade` | 30 | 20 | 15 | % of equity per position |
 | `max_open_trades` | 4 | 3 | 3 | Max simultaneous positions |
 | `allocation_mode` | aggressive | balanced | balanced | Capital deployment aggressiveness |
-| `min_composite_score` | 80 | 85 | 90 | Min composite score for entry |
-| `min_ev_threshold` | 0.003 | 0.003 | 0.003 | Min expected value |
-| `min_rr_ratio` | 3.0 | 3.0 | 3.0 | Min reward-to-risk ratio |
+| `min_composite_score` | 55 | 65 | 75 | Min composite score for entry |
+| `min_ev_threshold` | 0.001 | 0.001 | 0.001 | Min expected value |
+| `min_rr_ratio` | 1.5 | 1.5 | 1.5 | Min reward-to-risk ratio |
 | `max_daily_loss_pct` | 8 | 5 | 3 | Daily loss limit |
 | `max_weekly_loss_pct` | 15 | 10 | 6 | Weekly loss limit |
 | `max_drawdown_pct` | 25 | 18 | 12 | Kill switch drawdown |
@@ -266,7 +290,9 @@ The backtest engine (`backtestEngine.ts`) mirrors all V2 logic:
 - Uses `calculateSRFibTP` and `calculateSRFibSL` for entry TP/SL.
 - Uses `calculateProfitTrailingStop` for trailing.
 - Time exits: 72h profit close, 168h hard cap.
-- Feature computation includes `swingHigh`, `swingLow`, `fibRetraceLevels`, `fibExtensionLevels`, `bbUpper`, `bbLower`.
+- Feature computation includes `swingHigh`, `swingLow`, `fibRetraceLevels`, `fibExtensionLevels`, `bbUpper`, `bbLower`, `vwap`, `pivotPoint`, `pivotR1`–`R3`, `pivotS1`–`S3`, `camarillaH3/H4/L3/L4`, `psychRound`, `prevSessionHigh/Low/Close`.
+- Default thresholds lowered: minComposite 60, minEv 0.001, minRr 1.2.
+- Multi-position: up to 2 positions per symbol (different strategies).
 - Removed: old ATR-based SL/TP, `calculateTrailingStop`, `INITIAL_EXIT_HOURS`/`EXTENSION_HOURS`/`MAX_EXIT_HOURS`.
 
 ---
@@ -294,11 +320,13 @@ The backtest engine (`backtestEngine.ts`) mirrors all V2 logic:
 
 | File | Changes |
 |---|---|
-| `features.ts` | Added `swingHigh`, `swingLow`, `fibRetraceLevels`, `fibExtensionLevels`, `bbUpper`, `bbLower` to `FeatureVector` and `computeFeatures()` |
-| `regimeEngine.ts` | Added `"ranging"` regime, hourly caching via `getCachedRegime`/`cacheRegime`, updated `STRATEGY_PERMISSION_MATRIX` |
-| `strategies.ts` | Replaced ATR-based SL/TP with `calculateSRFibTP`/`calculateSRFibSL` calls; removed `FAMILY_CONFIG.slMultiple`/`tpMultiple` usage |
-| `tradeEngine.ts` | Added `calculateSRFibTP`, `calculateSRFibSL`, `calculateProfitTrailingStop`; removed `calculateDynamicTP`, `calculateInitialSL`, `calculateTrailingStop`, `evaluateProfitHarvest`, `FAMILY_HOLD_PROFILE`; simplified time exits |
-| `signalRouter.ts` | Removed entry stage logic (probe/confirmation/momentum) |
+| `features.ts` | Added `swingHigh`, `swingLow`, `fibRetraceLevels`, `fibExtensionLevels`, `bbUpper`, `bbLower`, `vwap`, pivots (classic + Camarilla), `psychRound`, `prevSessionHigh/Low/Close` to `FeatureVector`; added `computeVWAP`, `computePivotPoints`, `computePsychologicalRound`, `getPreviousSession` helpers |
+| `regimeEngine.ts` | Added `"ranging"` regime, `"trendline_breakout"` family, hourly caching via `getCachedRegime`/`cacheRegime`, updated `STRATEGY_PERMISSION_MATRIX` |
+| `strategies.ts` | Widened entry thresholds for synthetics; added `trendlineBreakout()` strategy; replaced ATR-based SL/TP with `calculateSRFibTP`/`calculateSRFibSL` calls |
+| `tradeEngine.ts` | Added `calculateSRFibTP`, `calculateSRFibSL` with pivot/VWAP/psychRound/prevSession confluence; added `calculateProfitTrailingStop`; removed legacy SL/TP functions |
+| `signalRouter.ts` | Removed entry stage logic; allows 2 positions per symbol (blocks same strategy on same symbol); lowered composite/EV/RR defaults |
+| `scoring.ts` | Widened volatility ranges (0.015-0.030); raised non-ideal regime score 15→40 |
+| `model.ts` | Added `trendline_breakout` family weights and rule configs |
 | `extractionEngine.ts` | Removed entry stage references |
 | `scoring.ts` | Updated `FAMILY_IDEAL_REGIMES` to include `"ranging"` |
 | `backtestEngine.ts` | Mirrored all V2 changes: S/R+Fib TP/SL, profit trailing, simplified time exits |

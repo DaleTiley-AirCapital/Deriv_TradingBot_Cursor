@@ -39,7 +39,7 @@ async function getCurrentSettings(): Promise<Record<string, string>> {
 }
 
 const MODE_PREFIXES = ["paper", "demo", "real"];
-const FAMILIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event"];
+const FAMILIES = ["trend_continuation", "mean_reversion", "breakout_expansion", "spike_event", "trendline_breakout"];
 const PER_MODE_KEYS = [
   "capital", "equity_pct_per_trade", "max_open_trades", "allocation_mode",
   "max_daily_loss_pct", "max_weekly_loss_pct", "max_drawdown_pct",
@@ -77,21 +77,21 @@ Each mode has its own capital, settings, and trades. They run simultaneously and
 | **Demo** | 80% | Balanced | Uses Deriv demo account with virtual funds. Tests execution. |
 | **Real** | 50% | Conservative | Real money. Tightest risk controls. Most conservative settings. |
 
-## 2. The Four Strategy Families
+## 2. The Five Strategy Families
 Each family is a distinct trading approach, activated only when its matching market regime is detected.
 
 ### 2.1 Trend Continuation
-- **When**: EMA slope > 0.0003 (up) or < -0.0003 (down), price pulled back near EMA, RSI 38-65
+- **When**: EMA slope > 0.0001 (up) or < -0.0001 (down), price pulled back near EMA (emaDist < 0.015), RSI 30-70
 - **Regime**: trend_up or trend_down
 - **Best for**: R_75, R_100 during trending periods
 
 ### 2.2 Mean Reversion
-- **When**: z-score > 1.8 or < -1.8, RSI extreme (>68 or <32), 3+ adverse candles OR liquidity sweep
+- **When**: z-score > 1.8 or < -1.8 (with zScore < 2.5 safety), RSI extreme (>62 or <38), 3+ adverse candles OR liquidity sweep
 - **Regime**: mean_reversion or ranging
 - **Best for**: Boom/Crash indices that overshoot
 
 ### 2.3 Breakout Expansion
-- **When**: BB squeeze (width < 0.006), ATR expanding, price at BB edge
+- **When**: BB squeeze (width < 0.012), ATR expanding, price at BB edge
 - **Regime**: compression or breakout_expansion
 - **Best for**: All instruments during consolidation → expansion transitions
 
@@ -100,17 +100,22 @@ Each family is a distinct trading approach, activated only when its matching mar
 - **Regime**: spike_zone or ranging
 - **Best for**: BOOM and CRASH indices exclusively
 
+### 2.5 Trendline Breakout
+- **When**: BB width expanding (> 0.008), price breaking above/below dynamic trendline with ATR confirmation, VWAP/pivot confluence
+- **Regime**: compression, ranging, breakout_expansion, trend_up, trend_down
+- **Best for**: All instruments during trendline break setups
+
 ## 3. V2 Trade Management — S/R + Fibonacci TP/SL
 In V2, TP and SL are computed dynamically at trade execution using Support/Resistance levels and Fibonacci confluence — NOT fixed ATR multipliers.
 
 ### Take-Profit (TP) Computation
-1. Collect resistance levels (buy) or support levels (sell) from: swing high/low, Fibonacci extension levels (1.272, 1.618, 2.0), BB upper/lower
+1. Collect resistance levels (buy) or support levels (sell) from: swing high/low, Fibonacci extension levels (1.272, 1.618, 2.0), BB upper/lower, pivot R1-R3, Camarilla H3/H4, VWAP, psychological round numbers, previous session high
 2. Cluster nearby levels (within 0.5% of each other) — 2+ confluent levels form a strong target
 3. Pick the strongest cluster as TP target, with 0.2% buffer inside
 4. Minimum TP = 3 × ATR from entry; fallback TP = 6 × ATR if no S/R levels found
 
 ### Stop-Loss (SL) Computation
-1. Collect support levels (buy) or resistance levels (sell) from: swing high/low, Fibonacci retracement levels, BB lower/upper
+1. Collect support levels (buy) or resistance levels (sell) from: swing high/low, Fibonacci retracement levels, BB lower/upper, pivot S1-S3, Camarilla L3/L4, VWAP, previous session low
 2. Cluster nearby levels — 2+ confluent levels form strong support/resistance
 3. Pick the nearest strong cluster, with 0.2% buffer outside
 4. Fallback SL = 2.5 × ATR if no S/R levels found
@@ -129,7 +134,7 @@ In V2, TP and SL are computed dynamically at trade execution using Support/Resis
 
 ## 4. Signal Pipeline — How Trades are Born
 1. **Tick Streaming** → Live price ticks from Deriv WebSocket
-2. **Feature Extraction** → 20+ technical features (EMA, RSI, z-score, ATR, BB, spike hazard, swing H/L, Fibonacci levels)
+2. **Feature Extraction** → 40+ technical features (EMA, RSI, z-score, ATR, BB, spike hazard, swing H/L, Fibonacci levels, VWAP, pivot points, Camarilla levels, psychological round numbers, previous session H/L/C)
 3. **Regime Classification** → Cached hourly: trend_up, trend_down, mean_reversion, ranging, compression, breakout_expansion, spike_zone, or no_trade
 4. **Strategy Evaluation** → Only matching strategies run per regime
 5. **ML Scoring** → Logistic regression model per family scores features (0-1)
@@ -138,11 +143,11 @@ In V2, TP and SL are computed dynamically at trade execution using Support/Resis
 7. **Filtering** → composite score ≥ min_composite_score, EV ≥ min_ev_threshold, R:R ≥ min_rr_ratio (estimated from S/R levels)
 8. **AI Verification** (optional) → OpenAI reviews signal
 9. **Portfolio Allocation** → Risk checks: daily/weekly loss limits, max drawdown, max open trades, correlated exposure cap
-10. **Position Sizing** → equity × equity_pct_per_trade × confidence factor (one entry per symbol)
+10. **Position Sizing** → equity × equity_pct_per_trade × confidence factor (up to 2 entries per symbol from different strategies)
 11. **Execution** → S/R+Fib TP/SL computed, trade opened
 
 ## 5. Position Sizing (V2)
-- One position per symbol (no probe/confirmation/momentum stages)
+- Up to 2 positions per symbol from different strategy families (no probe/confirmation/momentum stages)
 - Size = equity × equity_pct_per_trade × clamp(confidence, 0.5, 1.0) × allocation_mode multiplier
 - Clamped to min 5% equity and max remaining capacity
 
@@ -157,8 +162,8 @@ In V2, TP and SL are computed dynamically at trade execution using Support/Resis
 ### Global Settings
 | Setting | What it means | Default |
 |---------|--------------|---------|
-| min_composite_score | Minimum quality score (0-100) for trading | 80 |
-| min_ev_threshold | Minimum expected value | 0.003 |
+| min_composite_score | Minimum quality score (0-100) for trading | 55/65/75 (paper/demo/real) |
+| min_ev_threshold | Minimum expected value | 0.001 |
 | min_rr_ratio | Minimum reward-to-risk ratio (from S/R levels) | 1.5 |
 | scoring_weight_* | Six dimension weights for composite scoring | See §4 |
 | scan_interval_seconds | Scan frequency | 30 |
@@ -199,7 +204,7 @@ In V2, TP and SL are computed dynamically at trade execution using Support/Resis
 4. You can ANALYSE trade performance data for advice.
 5. Always explain WHY — reference actual data.
 6. Real mode = most conservative. Paper = most aggressive.
-7. Never suggest composite score below 80.
+7. Never suggest composite score below 40.
 8. Always favour FEWER, LARGER, HIGHER-QUALITY trades.
 
 ## 10. Core Trading Philosophy
@@ -241,8 +246,8 @@ async function buildDynamicContext(): Promise<string> {
   }
 
   const globalSettings = [
-    `min_composite_score: ${settings["min_composite_score"] || "80"}`,
-    `min_ev_threshold: ${settings["min_ev_threshold"] || "0.003"}`,
+    `min_composite_score: ${settings["min_composite_score"] || "55"}`,
+    `min_ev_threshold: ${settings["min_ev_threshold"] || "0.001"}`,
     `min_rr_ratio: ${settings["min_rr_ratio"] || "1.5"}`,
     `scan_interval_seconds: ${settings["scan_interval_seconds"] || "30"}`,
     `ai_verification_enabled: ${settings["ai_verification_enabled"] || "true"}`,

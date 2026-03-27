@@ -144,10 +144,10 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
     minCompositeScore: parseFloat(
       stateMap[`${prefix}_min_composite_score`] ||
       stateMap["min_composite_score"] ||
-      (mode === "paper" ? "80" : mode === "demo" ? "85" : "90")
+      (mode === "paper" ? "55" : mode === "demo" ? "65" : "75")
     ),
-    minEvThreshold: parseFloat(stateMap[`${prefix}_min_ev_threshold`] || stateMap["min_ev_threshold"] || "0.003"),
-    minRrRatio: parseFloat(stateMap[`${prefix}_min_rr_ratio`] || stateMap["min_rr_ratio"] || "3.0"),
+    minEvThreshold: parseFloat(stateMap[`${prefix}_min_ev_threshold`] || stateMap["min_ev_threshold"] || "0.001"),
+    minRrRatio: parseFloat(stateMap[`${prefix}_min_rr_ratio`] || stateMap["min_rr_ratio"] || "1.5"),
     correlatedFamilyCap,
     openTrades: openTrades.map(t => ({
       symbol: t.symbol,
@@ -173,8 +173,14 @@ function checkConflicts(
   const pendingOnSymbol = alreadyAllowed.filter(s => s.symbol === signal.symbol);
   const allOnSymbol = [...existingOnSymbol, ...pendingOnSymbol.map(s => ({ symbol: s.symbol, side: s.direction, strategyName: s.strategyName }))];
 
-  if (allOnSymbol.length > 0) {
-    return { blocked: true, reason: `Already has position on ${signal.symbol}` };
+  const MAX_PER_SYMBOL = 2;
+  if (allOnSymbol.length >= MAX_PER_SYMBOL) {
+    return { blocked: true, reason: `Max ${MAX_PER_SYMBOL} positions on ${signal.symbol} (has ${allOnSymbol.length})` };
+  }
+
+  const sameStrategy = allOnSymbol.find(t => t.strategyName === signal.strategyName);
+  if (sameStrategy) {
+    return { blocked: true, reason: `Already has ${signal.strategyName} position on ${signal.symbol}` };
   }
 
   return { blocked: false, reason: null };
@@ -284,8 +290,15 @@ export async function routeSignals(candidates: SignalCandidate[], tradingMode: T
       const isBuy = signal.direction === "buy";
       const price = signal.currentPrice;
       const fibExts = isBuy ? (signal.fibExtensionLevels ?? []) : (signal.fibExtensionLevelsDown ?? []);
-      const tpCands = [isBuy ? signal.swingHigh : signal.swingLow, isBuy ? signal.bbUpper : signal.bbLower, ...fibExts].filter(l => l > 0 && (isBuy ? l > price : l < price));
-      const slCands = [isBuy ? signal.swingLow : signal.swingHigh, isBuy ? signal.bbLower : signal.bbUpper, ...(signal.fibRetraceLevels ?? [])].filter(l => l > 0 && (isBuy ? l < price : l > price));
+      const pivotLevels = [signal.pivotPoint, signal.pivotR1, signal.pivotR2, signal.pivotR3, signal.pivotS1, signal.pivotS2, signal.pivotS3, signal.camarillaH3, signal.camarillaH4, signal.camarillaL3, signal.camarillaL4].filter((l): l is number => l != null && l > 0);
+      const extraUp = [...pivotLevels.filter(l => l > price)];
+      const extraDown = [...pivotLevels.filter(l => l < price)];
+      if (signal.vwap && signal.vwap > 0) { if (signal.vwap > price) extraUp.push(signal.vwap); else extraDown.push(signal.vwap); }
+      if (signal.psychRound && signal.psychRound > 0) { if (signal.psychRound > price) extraUp.push(signal.psychRound); else if (signal.psychRound < price) extraDown.push(signal.psychRound); }
+      if (signal.prevSessionHigh && signal.prevSessionHigh > price) extraUp.push(signal.prevSessionHigh);
+      if (signal.prevSessionLow && signal.prevSessionLow > 0 && signal.prevSessionLow < price) extraDown.push(signal.prevSessionLow);
+      const tpCands = [isBuy ? signal.swingHigh : signal.swingLow, isBuy ? signal.bbUpper : signal.bbLower, ...fibExts, ...(isBuy ? extraUp : extraDown)].filter(l => l > 0 && (isBuy ? l > price : l < price));
+      const slCands = [isBuy ? signal.swingLow : signal.swingHigh, isBuy ? signal.bbLower : signal.bbUpper, ...(signal.fibRetraceLevels ?? []), ...(isBuy ? extraDown : extraUp)].filter(l => l > 0 && (isBuy ? l < price : l > price));
       const nearTp = tpCands.length > 0 ? tpCands.reduce((b, l) => Math.abs(l - price) < Math.abs(b - price) ? l : b) : null;
       const nearSl = slCands.length > 0 ? slCands.reduce((b, l) => Math.abs(l - price) < Math.abs(b - price) ? l : b) : null;
       if (nearTp && nearSl && Math.abs(nearSl - price) > 0) {

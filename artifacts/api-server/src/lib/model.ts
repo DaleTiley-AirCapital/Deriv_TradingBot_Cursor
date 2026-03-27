@@ -70,6 +70,17 @@ const FAMILY_WEIGHTS: Record<StrategyFamily, ModelWeights> = {
     consecutive: 0.2,
     bbPctB: 0.1,
   },
+  trendline_breakout: {
+    intercept: -0.15,
+    emaSlope: 1.5,
+    rsi14: 0.3,
+    atr14: 1.5,
+    bbWidth: -1.5,
+    zScore: 0.5,
+    spikeHazard: 0.2,
+    consecutive: 0.4,
+    bbPctB: 1.2,
+  },
 };
 
 const FAMILY_RULE_CONFIGS: Record<StrategyFamily, {
@@ -111,6 +122,14 @@ const FAMILY_RULE_CONFIGS: Record<StrategyFamily, {
     spikeWeight: 0.50,
     meanRevWeight: 0.05,
     atrWeight: 0.10,
+  },
+  trendline_breakout: {
+    trendWeight: 0.15,
+    rsiWeight: 0.05,
+    bbWeight: 0.20,
+    spikeWeight: 0.05,
+    meanRevWeight: 0.05,
+    atrWeight: 0.30,
   },
 };
 
