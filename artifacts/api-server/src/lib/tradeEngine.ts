@@ -249,10 +249,8 @@ export function checkTimeExit(params: {
     return { shouldExit: true, exitReason: "hard_time_limit_168h" };
   }
 
-  if (hoursOpen >= TIME_EXIT_PROFIT_HOURS) {
-    if (currentPnl > 0) {
-      return { shouldExit: true, exitReason: "profitable_at_72h" };
-    }
+  if (hoursOpen >= TIME_EXIT_PROFIT_HOURS && currentPnl > 0) {
+    return { shouldExit: true, exitReason: "profitable_after_72h" };
   }
 
   return { shouldExit: false, exitReason: null };

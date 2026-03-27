@@ -33,29 +33,11 @@ export interface SignalCandidate {
 
 const FAMILY_CONFIG: Record<StrategyFamily, {
   minModelScore: number;
-  minEV: number;
-  minRR: number;
 }> = {
-  trend_continuation: {
-    minModelScore: 0.58,
-    minEV: 0.005,
-    minRR: 1.5,
-  },
-  mean_reversion: {
-    minModelScore: 0.60,
-    minEV: 0.006,
-    minRR: 1.8,
-  },
-  breakout_expansion: {
-    minModelScore: 0.55,
-    minEV: 0.005,
-    minRR: 1.5,
-  },
-  spike_event: {
-    minModelScore: 0.62,
-    minEV: 0.008,
-    minRR: 2.0,
-  },
+  trend_continuation: { minModelScore: 0.58 },
+  mean_reversion: { minModelScore: 0.60 },
+  breakout_expansion: { minModelScore: 0.55 },
+  spike_event: { minModelScore: 0.62 },
 };
 
 function buildCandidate(
@@ -121,7 +103,7 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
   if (!direction) return null;
 
   const { score, confidence, expectedValue } = scoreFeaturesForFamily(features, "trend_continuation");
-  if (score < cfg.minModelScore || expectedValue < cfg.minEV) return null;
+  if (score < cfg.minModelScore) return null;
 
   return buildCandidate(features, regime, "trend_continuation", direction, score, confidence, expectedValue, reason, "trend_continuation");
 }
@@ -159,7 +141,7 @@ function meanReversion(features: FeatureVector, regime: RegimeClassification): S
   if (!direction) return null;
 
   const { score, confidence, expectedValue } = scoreFeaturesForFamily(features, "mean_reversion");
-  if (score < cfg.minModelScore || expectedValue < cfg.minEV) return null;
+  if (score < cfg.minModelScore) return null;
 
   return buildCandidate(features, regime, "mean_reversion", direction, score, confidence, expectedValue, `[${regime.regime}] ${reason}`, "mean_reversion");
 }
@@ -194,7 +176,7 @@ function breakoutExpansion(features: FeatureVector, regime: RegimeClassification
   if (!direction) return null;
 
   const { score, confidence, expectedValue } = scoreFeaturesForFamily(features, "breakout_expansion");
-  if (score < cfg.minModelScore || expectedValue < cfg.minEV) return null;
+  if (score < cfg.minModelScore) return null;
 
   return buildCandidate(features, regime, "breakout_expansion", direction, score, confidence, expectedValue, `[${regime.regime}] ${reason}`, "breakout_expansion");
 }
