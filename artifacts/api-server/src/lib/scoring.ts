@@ -48,8 +48,8 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function computeRegimeFit(features: FeatureVector, candidate: SignalCandidate): number {
-  const regimeLabel = (candidate as any).regimeState || features.regimeLabel;
-  const lookupKeys = [candidate.strategyName, (candidate as any).strategyFamily];
+  const regimeLabel = candidate.regimeState || features.regimeLabel;
+  const lookupKeys = [candidate.strategyName, candidate.strategyFamily];
   let idealRegimes: string[] = [];
   for (const key of lookupKeys) {
     if (FAMILY_IDEAL_REGIMES[key]) {
@@ -63,7 +63,7 @@ function computeRegimeFit(features: FeatureVector, candidate: SignalCandidate): 
   if (!isIdeal) return 15;
 
   let score = 75;
-  const regimeConf = (candidate as any).regimeConfidence ?? 0.5;
+  const regimeConf = candidate.regimeConfidence ?? 0.5;
   score += clamp(regimeConf * 25, 0, 25);
 
   return clamp(Math.round(score), 0, 100);
@@ -118,7 +118,7 @@ function computeTrendAlignment(features: FeatureVector, direction: "buy" | "sell
 }
 
 function computeVolatilityCondition(features: FeatureVector, candidate: SignalCandidate): number {
-  const lookupKeys = [candidate.strategyName, (candidate as any).strategyFamily];
+  const lookupKeys = [candidate.strategyName, candidate.strategyFamily];
   let ideal = { min: 0.001, max: 0.006 };
   for (const key of lookupKeys) {
     if (FAMILY_IDEAL_VOLATILITY[key]) {

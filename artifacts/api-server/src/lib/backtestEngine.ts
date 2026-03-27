@@ -2,6 +2,7 @@ import { db, candlesTable, platformStateTable } from "@workspace/db";
 import { eq, and, asc, gte, lte } from "drizzle-orm";
 import { runAllStrategies, type SignalCandidate } from "./strategies.js";
 import { calculateProfitTrailingStop, calculateSRFibTP, calculateSRFibSL } from "./tradeEngine.js";
+import { classifyRegime, type RegimeClassification } from "./regimeEngine.js";
 import type { FeatureVector } from "./features.js";
 import type { ScoringWeights } from "./scoring.js";
 
@@ -9,6 +10,55 @@ const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
 const TIME_EXIT_PROFIT_HOURS = 72;
 const MAX_EXIT_HOURS = 168;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
+const HOURLY_WINDOW_SEC = 3600;
+
+interface HourlyAccumulator {
+  samples: Array<{
+    emaSlope: number; rsi14: number; bbWidth: number; bbWidthRoc: number;
+    atr14: number; atrRank: number; atrAccel: number; zScore: number;
+    spikeHazardScore: number; bbPctB: number;
+  }>;
+  windowStartTs: number;
+}
+
+function backtestAccumulateHourly(
+  accumulators: Record<string, HourlyAccumulator>,
+  features: FeatureVector,
+  ts: number,
+): void {
+  const sym = features.symbol;
+  if (!accumulators[sym] || (ts - accumulators[sym].windowStartTs) >= HOURLY_WINDOW_SEC) {
+    accumulators[sym] = { samples: [], windowStartTs: ts };
+  }
+  accumulators[sym].samples.push({
+    emaSlope: features.emaSlope, rsi14: features.rsi14,
+    bbWidth: features.bbWidth, bbWidthRoc: features.bbWidthRoc,
+    atr14: features.atr14, atrRank: features.atrRank,
+    atrAccel: features.atrAccel, zScore: features.zScore,
+    spikeHazardScore: features.spikeHazardScore, bbPctB: features.bbPctB,
+  });
+}
+
+function backtestClassifyRegimeHTF(
+  accumulators: Record<string, HourlyAccumulator>,
+  features: FeatureVector,
+): RegimeClassification {
+  const acc = accumulators[features.symbol];
+  if (acc && acc.samples.length >= 3) {
+    const n = acc.samples.length;
+    const avg = (fn: (s: typeof acc.samples[0]) => number) => acc.samples.reduce((s, x) => s + fn(x), 0) / n;
+    const htfFeatures: FeatureVector = {
+      ...features,
+      emaSlope: avg(s => s.emaSlope), rsi14: avg(s => s.rsi14),
+      bbWidth: avg(s => s.bbWidth), bbWidthRoc: avg(s => s.bbWidthRoc),
+      atr14: avg(s => s.atr14), atrRank: avg(s => s.atrRank),
+      atrAccel: avg(s => s.atrAccel), zScore: avg(s => s.zScore),
+      spikeHazardScore: avg(s => s.spikeHazardScore), bbPctB: avg(s => s.bbPctB),
+    };
+    return classifyRegime(htfFeatures);
+  }
+  return classifyRegime(features);
+}
 
 const DEFAULT_MAX_CONCURRENT_LIVE = 3;
 const DEFAULT_MAX_CONCURRENT_PAPER = 3;
@@ -507,6 +557,7 @@ function simulateOnCandles(
   const openPositions: OpenPosition[] = [];
   const completedTrades: BacktestTrade[] = [];
   const equityCurve: { ts: string; equity: number }[] = [];
+  const htfAccumulators: Record<string, HourlyAccumulator> = {};
 
   const regimeByTrade: Map<BacktestTrade, string> = new Map();
 
@@ -648,7 +699,10 @@ function simulateOnCandles(
       const features = computeFeaturesFromCandles(window, sym);
       if (!features) continue;
 
-      const signals = runAllStrategies(features, config.scoringWeights);
+      backtestAccumulateHourly(htfAccumulators, features, ts);
+      const cachedRegime = backtestClassifyRegimeHTF(htfAccumulators, features);
+
+      const signals = runAllStrategies(features, config.scoringWeights, cachedRegime);
       const filteredSignals = strategies
         ? signals.filter(s => strategies.includes(s.strategyName))
         : signals;
