@@ -40,21 +40,41 @@ function backtestAccumulateHourly(
   });
 }
 
+function backtestGetHourlyAveraged(
+  accumulators: Record<string, HourlyAccumulator>,
+  symbol: string,
+): Partial<FeatureVector> | null {
+  const acc = accumulators[symbol];
+  if (!acc || acc.samples.length < 3) return null;
+  const n = acc.samples.length;
+  const avg = (fn: (s: typeof acc.samples[0]) => number) => acc.samples.reduce((s, x) => s + fn(x), 0) / n;
+  return {
+    emaSlope: avg(s => s.emaSlope), rsi14: avg(s => s.rsi14),
+    bbWidth: avg(s => s.bbWidth), bbWidthRoc: avg(s => s.bbWidthRoc),
+    atr14: avg(s => s.atr14), atrRank: avg(s => s.atrRank),
+    atrAccel: avg(s => s.atrAccel), zScore: avg(s => s.zScore),
+    spikeHazardScore: avg(s => s.spikeHazardScore), bbPctB: avg(s => s.bbPctB),
+  };
+}
+
 function backtestClassifyRegimeHTF(
   accumulators: Record<string, HourlyAccumulator>,
   features: FeatureVector,
 ): RegimeClassification {
-  const acc = accumulators[features.symbol];
-  if (acc && acc.samples.length >= 3) {
-    const n = acc.samples.length;
-    const avg = (fn: (s: typeof acc.samples[0]) => number) => acc.samples.reduce((s, x) => s + fn(x), 0) / n;
+  const hourly = backtestGetHourlyAveraged(accumulators, features.symbol);
+  if (hourly) {
     const htfFeatures: FeatureVector = {
       ...features,
-      emaSlope: avg(s => s.emaSlope), rsi14: avg(s => s.rsi14),
-      bbWidth: avg(s => s.bbWidth), bbWidthRoc: avg(s => s.bbWidthRoc),
-      atr14: avg(s => s.atr14), atrRank: avg(s => s.atrRank),
-      atrAccel: avg(s => s.atrAccel), zScore: avg(s => s.zScore),
-      spikeHazardScore: avg(s => s.spikeHazardScore), bbPctB: avg(s => s.bbPctB),
+      emaSlope: hourly.emaSlope ?? features.emaSlope,
+      rsi14: hourly.rsi14 ?? features.rsi14,
+      bbWidth: hourly.bbWidth ?? features.bbWidth,
+      bbWidthRoc: hourly.bbWidthRoc ?? features.bbWidthRoc,
+      atr14: hourly.atr14 ?? features.atr14,
+      atrRank: hourly.atrRank ?? features.atrRank,
+      atrAccel: hourly.atrAccel ?? features.atrAccel,
+      zScore: hourly.zScore ?? features.zScore,
+      spikeHazardScore: hourly.spikeHazardScore ?? features.spikeHazardScore,
+      bbPctB: hourly.bbPctB ?? features.bbPctB,
     };
     return classifyRegime(htfFeatures);
   }
@@ -697,7 +717,8 @@ function simulateOnCandles(
       backtestAccumulateHourly(htfAccumulators, features, ts);
       const cachedRegime = backtestClassifyRegimeHTF(htfAccumulators, features);
 
-      const signals = runAllStrategies(features, config.scoringWeights, cachedRegime);
+      const hourlyFeats = backtestGetHourlyAveraged(htfAccumulators, sym) ?? undefined;
+      const signals = runAllStrategies(features, config.scoringWeights, cachedRegime, hourlyFeats);
       const filteredSignals = strategies
         ? signals.filter(s => strategies.includes(s.strategyName))
         : signals;

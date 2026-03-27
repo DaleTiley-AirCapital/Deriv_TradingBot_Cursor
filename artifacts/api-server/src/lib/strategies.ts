@@ -207,7 +207,7 @@ const FAMILY_RUNNERS: Record<StrategyFamily, (f: FeatureVector, r: RegimeClassif
   spike_event: spikeEvent,
 };
 
-export function runAllStrategies(features: FeatureVector, weights?: ScoringWeights, cachedRegime?: RegimeClassification): SignalCandidate[] {
+export function runAllStrategies(features: FeatureVector, weights?: ScoringWeights, cachedRegime?: RegimeClassification, explicitHourlyFeatures?: Partial<FeatureVector>): SignalCandidate[] {
   const regime = cachedRegime ?? classifyRegime(features);
 
   if (regime.regime === "no_trade") {
@@ -223,7 +223,7 @@ export function runAllStrategies(features: FeatureVector, weights?: ScoringWeigh
     if (candidate) candidates.push(candidate);
   }
 
-  const hourlyFeats = getHourlyAveragedFeatures(features.symbol) ?? undefined;
+  const hourlyFeats = explicitHourlyFeatures ?? getHourlyAveragedFeatures(features.symbol) ?? undefined;
 
   for (const candidate of candidates) {
     const dims = computeScoringDimensions(features, candidate, candidate.score, hourlyFeats);
