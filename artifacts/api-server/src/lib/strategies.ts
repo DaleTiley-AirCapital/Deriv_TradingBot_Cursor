@@ -235,31 +235,21 @@ function spikeEvent(features: FeatureVector, regime: RegimeClassification): Sign
 
 function trendlineBreakout(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
   const cfg = FAMILY_CONFIG.trendline_breakout;
-
-  const hasSwings = features.swingHigh > 0 && features.swingLow > 0;
-  if (!hasSwings) return null;
-
   const price = features.latestClose;
-  const swingRange = features.swingHigh - features.swingLow;
-  if (swingRange <= 0) return null;
-
   const atr = features.atr14;
+  if (price <= 0 || atr <= 0) return null;
 
-  const resistanceTouches: number[] = [];
-  if (features.swingHigh > 0) resistanceTouches.push(features.swingHigh);
-  if (features.pivotR1 && Math.abs(features.pivotR1 - features.swingHigh) / features.swingHigh < 0.005) resistanceTouches.push(features.pivotR1);
-  if (features.pivotR2 && Math.abs(features.pivotR2 - features.swingHigh) / features.swingHigh < 0.008) resistanceTouches.push(features.pivotR2);
-  if (features.camarillaH3 && Math.abs(features.camarillaH3 - features.swingHigh) / features.swingHigh < 0.005) resistanceTouches.push(features.camarillaH3);
-  if (features.prevSessionHigh && Math.abs(features.prevSessionHigh - features.swingHigh) / features.swingHigh < 0.005) resistanceTouches.push(features.prevSessionHigh);
-  if (features.bbUpper > 0 && Math.abs(features.bbUpper - features.swingHigh) / features.swingHigh < 0.005) resistanceTouches.push(features.bbUpper);
+  const resTouches = features.trendlineResistanceTouches ?? 0;
+  const supTouches = features.trendlineSupportTouches ?? 0;
+  const resLevel = features.trendlineResistanceLevel ?? 0;
+  const supLevel = features.trendlineSupportLevel ?? 0;
+  const resSlope = features.trendlineResistanceSlope ?? 0;
+  const supSlope = features.trendlineSupportSlope ?? 0;
 
-  const supportTouches: number[] = [];
-  if (features.swingLow > 0) supportTouches.push(features.swingLow);
-  if (features.pivotS1 && Math.abs(features.pivotS1 - features.swingLow) / features.swingLow < 0.005) supportTouches.push(features.pivotS1);
-  if (features.pivotS2 && Math.abs(features.pivotS2 - features.swingLow) / features.swingLow < 0.008) supportTouches.push(features.pivotS2);
-  if (features.camarillaL3 && Math.abs(features.camarillaL3 - features.swingLow) / features.swingLow < 0.005) supportTouches.push(features.camarillaL3);
-  if (features.prevSessionLow && Math.abs(features.prevSessionLow - features.swingLow) / features.swingLow < 0.005) supportTouches.push(features.prevSessionLow);
-  if (features.bbLower > 0 && Math.abs(features.bbLower - features.swingLow) / features.swingLow < 0.005) supportTouches.push(features.bbLower);
+  const hasResistanceTrendline = resTouches >= 3 && resLevel > 0;
+  const hasSupportTrendline = supTouches >= 3 && supLevel > 0;
+
+  if (!hasResistanceTrendline && !hasSupportTrendline) return null;
 
   const momentumConfirm = features.atrAccel > 0.02 && features.candleBody > 0.35;
   const bbExpanding = features.bbWidth > 0.008;
@@ -267,40 +257,30 @@ function trendlineBreakout(features: FeatureVector, regime: RegimeClassification
   let direction: "buy" | "sell" | null = null;
   let reason = "";
 
-  const breakAboveResistance = price > features.swingHigh &&
-    (price - features.swingHigh) < atr * 2 &&
-    resistanceTouches.length >= 3 &&
-    momentumConfirm &&
-    features.emaSlope > 0;
+  if (hasResistanceTrendline) {
+    const breakDist = price - resLevel;
+    const breakAbove = breakDist > 0 && breakDist < atr * 2 && momentumConfirm && features.emaSlope > 0;
+    const nearBreakAbove = !breakAbove &&
+      Math.abs(breakDist) < atr * 0.5 && breakDist > -atr * 0.3 &&
+      features.bbPctB > 0.85 && features.emaSlope > 0.0001 && bbExpanding;
 
-  const breakBelowSupport = price < features.swingLow &&
-    (features.swingLow - price) < atr * 2 &&
-    supportTouches.length >= 3 &&
-    momentumConfirm &&
-    features.emaSlope < 0;
+    if (breakAbove || nearBreakAbove) {
+      direction = "buy";
+      reason = `Trendline breakout up: price=${price.toFixed(2)}, trendlineRes=${resLevel.toFixed(2)}, slope=${resSlope.toFixed(6)}, touches=${resTouches}, atrAccel=${features.atrAccel.toFixed(3)}`;
+    }
+  }
 
-  const nearResistanceBreak = !breakAboveResistance &&
-    resistanceTouches.length >= 3 &&
-    features.swingHighDist > -0.003 && features.swingHighDist < 0.005 &&
-    features.bbPctB > 0.85 &&
-    features.emaSlope > 0.0001 &&
-    bbExpanding;
+  if (!direction && hasSupportTrendline) {
+    const breakDist = supLevel - price;
+    const breakBelow = breakDist > 0 && breakDist < atr * 2 && momentumConfirm && features.emaSlope < 0;
+    const nearBreakBelow = !breakBelow &&
+      Math.abs(breakDist) < atr * 0.5 && breakDist > -atr * 0.3 &&
+      features.bbPctB < 0.15 && features.emaSlope < -0.0001 && bbExpanding;
 
-  const nearSupportBreak = !breakBelowSupport &&
-    supportTouches.length >= 3 &&
-    features.swingLowDist < 0.003 && features.swingLowDist > -0.005 &&
-    features.bbPctB < 0.15 &&
-    features.emaSlope < -0.0001 &&
-    bbExpanding;
-
-  if (breakAboveResistance || nearResistanceBreak) {
-    direction = "buy";
-    const touches = resistanceTouches.length;
-    reason = `Trendline breakout up: price=${price.toFixed(2)}, swingHigh=${features.swingHigh.toFixed(2)}, touches=${touches}, atrAccel=${features.atrAccel.toFixed(3)}, body=${features.candleBody.toFixed(2)}`;
-  } else if (breakBelowSupport || nearSupportBreak) {
-    direction = "sell";
-    const touches = supportTouches.length;
-    reason = `Trendline breakout down: price=${price.toFixed(2)}, swingLow=${features.swingLow.toFixed(2)}, touches=${touches}, atrAccel=${features.atrAccel.toFixed(3)}, body=${features.candleBody.toFixed(2)}`;
+    if (breakBelow || nearBreakBelow) {
+      direction = "sell";
+      reason = `Trendline breakout down: price=${price.toFixed(2)}, trendlineSup=${supLevel.toFixed(2)}, slope=${supSlope.toFixed(6)}, touches=${supTouches}, atrAccel=${features.atrAccel.toFixed(3)}`;
+    }
   }
 
   if (!direction) return null;

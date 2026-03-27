@@ -4,7 +4,7 @@ import { runAllStrategies, type SignalCandidate } from "./strategies.js";
 import { calculateProfitTrailingStop, calculateSRFibTP, calculateSRFibSL } from "./tradeEngine.js";
 import { classifyRegime, type RegimeClassification } from "./regimeEngine.js";
 import type { FeatureVector } from "./features.js";
-import { findSwingLevels } from "./features.js";
+import { findSwingLevels, findMultiSwingTrendlines } from "./features.js";
 import type { ScoringWeights } from "./scoring.js";
 
 const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
@@ -480,6 +480,17 @@ export function computeFeaturesFromCandles(
     prevSessionHigh,
     prevSessionLow,
     prevSessionClose,
+    ...(() => {
+      const trendlines = findMultiSwingTrendlines(highs, lows, closes, 5, atr14);
+      return {
+        trendlineResistanceSlope: trendlines.resistance.slope,
+        trendlineSupportSlope: trendlines.support.slope,
+        trendlineResistanceTouches: trendlines.resistance.touches,
+        trendlineSupportTouches: trendlines.support.touches,
+        trendlineResistanceLevel: trendlines.resistance.level,
+        trendlineSupportLevel: trendlines.support.level,
+      };
+    })(),
   };
 }
 

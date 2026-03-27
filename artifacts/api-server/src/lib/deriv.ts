@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import { db, ticksTable, candlesTable, spikeEventsTable, platformStateTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and, count, sql } from "drizzle-orm";
 import { createDecipheriv, scryptSync } from "crypto";
 import { recordTick, validateActiveSymbols, isSymbolValid, markSymbolError, markSymbolSubscribed, startWatchdog, getAllSymbolStatuses, getApiSymbol } from "./symbolValidator.js";
 
@@ -672,6 +672,22 @@ class DerivClient {
     let cumulativeCandles = 0;
 
     for (const [tf, granularity] of [["1m", 60], ["5m", 300]] as [string, number][]) {
+      const tfExpected = tf === "1m" ? totalExpected1m : totalExpected5m;
+      const existingCount = await db
+        .select({ cnt: count() })
+        .from(candlesTable)
+        .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, tf)));
+      const existingCnt = existingCount[0]?.cnt ?? 0;
+      const coverageRatio = tfExpected > 0 ? existingCnt / tfExpected : 0;
+
+      if (coverageRatio >= 0.9) {
+        console.log(`[Deriv] Skipping ${symbol} ${tf} backfill: ${existingCnt}/${tfExpected} candles (${(coverageRatio * 100).toFixed(1)}% coverage)`);
+        cumulativeCandles += existingCnt;
+        storedCandles += existingCnt;
+        emit(`candles_${tf}`, cumulativeCandles);
+        continue;
+      }
+
       let endEpoch = now;
       let totalForTf = 0;
       let pages = 0;

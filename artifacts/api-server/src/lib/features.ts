@@ -62,6 +62,12 @@ export interface FeatureVector {
   prevSessionHigh: number;
   prevSessionLow: number;
   prevSessionClose: number;
+  trendlineResistanceSlope: number;
+  trendlineSupportSlope: number;
+  trendlineResistanceTouches: number;
+  trendlineSupportTouches: number;
+  trendlineResistanceLevel: number;
+  trendlineSupportLevel: number;
 }
 
 function ema(values: number[], period: number): number[] {
@@ -154,6 +160,79 @@ export function findSwingLevels(highs: number[], lows: number[], pivotBars = 5):
   }
 
   return { swingHigh, swingLow, swingHighIdx, swingLowIdx };
+}
+
+interface TrendlineResult {
+  slope: number;
+  level: number;
+  touches: number;
+}
+
+export function findMultiSwingTrendlines(
+  highs: number[], lows: number[], closes: number[], pivotBars = 5, atr = 0
+): { resistance: TrendlineResult; support: TrendlineResult } {
+  const n = highs.length;
+  const tolerance = atr > 0 ? atr * 0.3 : 0;
+
+  const swingHighs: { idx: number; val: number }[] = [];
+  const swingLows: { idx: number; val: number }[] = [];
+
+  for (let i = n - pivotBars - 1; i >= pivotBars; i--) {
+    let isHigh = true;
+    let isLow = true;
+    for (let j = 1; j <= pivotBars; j++) {
+      if (highs[i] <= highs[i - j] || highs[i] <= highs[i + j]) isHigh = false;
+      if (lows[i] >= lows[i - j] || lows[i] >= lows[i + j]) isLow = false;
+    }
+    if (isHigh) swingHighs.push({ idx: i, val: highs[i] });
+    if (isLow) swingLows.push({ idx: i, val: lows[i] });
+    if (swingHighs.length >= 8 && swingLows.length >= 8) break;
+  }
+
+  function fitTrendline(points: { idx: number; val: number }[], ascending: boolean): TrendlineResult {
+    if (points.length < 2) return { slope: 0, level: 0, touches: 0 };
+
+    let bestTouches = 0;
+    let bestSlope = 0;
+    let bestLevel = 0;
+
+    for (let i = 0; i < points.length - 1 && i < 6; i++) {
+      for (let j = i + 1; j < points.length && j < 7; j++) {
+        const p1 = points[i];
+        const p2 = points[j];
+        if (p1.idx === p2.idx) continue;
+
+        const slope = (p1.val - p2.val) / (p1.idx - p2.idx);
+
+        if (ascending && slope < 0) continue;
+        if (!ascending && slope > 0) continue;
+
+        const currentLevel = p1.val + slope * (n - 1 - p1.idx);
+        if (currentLevel <= 0) continue;
+
+        let touches = 0;
+        for (const p of points) {
+          const expectedVal = p1.val + slope * (p.idx - p1.idx);
+          const diff = Math.abs(p.val - expectedVal);
+          const tol = tolerance > 0 ? tolerance : Math.abs(expectedVal) * 0.003;
+          if (diff <= tol) touches++;
+        }
+
+        if (touches > bestTouches || (touches === bestTouches && Math.abs(slope) < Math.abs(bestSlope))) {
+          bestTouches = touches;
+          bestSlope = slope;
+          bestLevel = currentLevel;
+        }
+      }
+    }
+
+    return { slope: bestSlope, level: bestLevel, touches: bestTouches };
+  }
+
+  const resistance = fitTrendline(swingHighs, false);
+  const support = fitTrendline(swingLows, true);
+
+  return { resistance, support };
 }
 
 function computeBbWidthAtIndex(closes: number[], idx: number, period = 20): number {
@@ -522,6 +601,17 @@ export async function computeFeatures(symbol: string, lookback = 100): Promise<F
     prevSessionHigh: prevSession.high,
     prevSessionLow: prevSession.low,
     prevSessionClose: prevSession.close,
+    ...(() => {
+      const trendlines = findMultiSwingTrendlines(highs, lows, closes, 5, atr14);
+      return {
+        trendlineResistanceSlope: trendlines.resistance.slope,
+        trendlineSupportSlope: trendlines.support.slope,
+        trendlineResistanceTouches: trendlines.resistance.touches,
+        trendlineSupportTouches: trendlines.support.touches,
+        trendlineResistanceLevel: trendlines.resistance.level,
+        trendlineSupportLevel: trendlines.support.level,
+      };
+    })(),
   };
 }
 
