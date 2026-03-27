@@ -287,14 +287,10 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
 
   const prefix = mode === "paper" ? "paper" : mode === "demo" ? "demo" : "real";
   const modeMaxTrades = parseInt(
-    stateMap[`${prefix}_max_open_trades`] ||
-    (mode === "paper" ? stateMap["paper_max_open_trades"] : stateMap["live_max_open_trades"]) ||
-    String(MAX_OPEN_TRADES)
+    stateMap[`${prefix}_max_open_trades`] || String(MAX_OPEN_TRADES)
   );
   const modeEquityPct = parseFloat(
-    stateMap[`${prefix}_equity_pct_per_trade`] ||
-    (mode === "paper" ? stateMap["paper_equity_pct_per_trade"] : stateMap["live_equity_pct_per_trade"]) ||
-    "22"
+    stateMap[`${prefix}_equity_pct_per_trade`] || "22"
   );
 
   const openTrades = await db.select().from(tradesTable).where(
