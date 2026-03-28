@@ -240,7 +240,7 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 | `tp_multiplier_strong/medium/weak` | Replaced by S/R + Fib TP |
 | `sl_ratio` | Replaced by S/R + Fib SL |
 | `tp_capture_ratio` | No longer applicable |
-| `min_sl_atr_multiplier` | SL uses S/R levels, min = 3×ATR built in |
+| `min_sl_atr_multiplier` | SL uses spike drift (Boom/Crash) or structural S/R (Volatility) |
 | `trailing_stop_pct` | Replaced by 30% profit trailing |
 | `peak_drawdown_exit_pct` | Replaced by profit trailing |
 | `min_peak_profit_pct` | Removed (trailing activates on any profit) |
@@ -293,11 +293,16 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 | `PROFIT_TRAIL_DRAWDOWN_PCT` | 0.30 | `tradeEngine.ts` |
 | `TIME_EXIT_PROFIT_HOURS` | 72 | `tradeEngine.ts` |
 | `TIME_EXIT_HARD_CAP_HOURS` | 168 | `tradeEngine.ts` |
-| S/R buffer | 0.2% | `calculateSRFibTP/SL` |
-| Min TP distance | 3 × ATR | `calculateSRFibTP` |
-| Fallback TP distance | 6 × ATR | `calculateSRFibTP` |
-| Fallback SL distance | 2.5 × ATR | `calculateSRFibSL` |
+| Boom/Crash TP target | spike p75 magnitude | `calculateSRFibTP` |
+| Boom/Crash TP floor | spike median magnitude | `calculateSRFibTP` |
+| Boom/Crash SL drift | 30% of median spike | `calculateSRFibSL` |
+| Boom/Crash SL min drift | 0.5% | `calculateSRFibSL` |
+| Volatility TP | 70% of major swing range | `calculateSRFibTP` |
+| Volatility SL buffer | 0.3% outside cluster | `calculateSRFibSL` |
 | Safety floor SL | 10% equity | `calculateSRFibSL` |
+| Spike rolling window | 60-90 days | `getSpikeMagnitudeStats` |
+| Structural candle window | 1500 candles | `computeFeatures` |
+| Fast indicator window | 100 candles | `computeFeatures` |
 | Regime cache TTL | 1 hour | `regimeEngine.ts` |
 
 ---
@@ -306,10 +311,11 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 
 The backtest engine (`backtestEngine.ts`) mirrors all V2 logic:
 
-- Uses `calculateSRFibTP` and `calculateSRFibSL` for entry TP/SL.
+- Uses `calculateSRFibTP` and `calculateSRFibSL` for entry TP/SL (spike-magnitude-aware).
+- Passes `spikeMagnitudeBySymbol` from `getSpikeMagnitudeStats()` with `beforeTs` anchor to prevent lookahead bias.
 - Uses `calculateProfitTrailingStop` for trailing.
 - Time exits: 72h profit close, 168h hard cap.
-- Feature computation includes `swingHigh`, `swingLow`, `fibRetraceLevels`, `fibExtensionLevels`, `bbUpper`, `bbLower`, `vwap`, `pivotPoint`, `pivotR1`–`R3`, `pivotS1`–`S3`, `camarillaH3/H4/L3/L4`, `psychRound`, `prevSessionHigh/Low/Close`.
+- Feature computation with 1500-candle LOOKBACK includes `swingHigh`, `swingLow`, `majorSwingHigh`, `majorSwingLow`, `spikeMagnitude`, `fibRetraceLevels`, `fibExtensionLevels`, `bbUpper`, `bbLower`, `vwap`, `pivotPoint`, `pivotR1`–`R3`, `pivotS1`–`S3`, `camarillaH3/H4/L3/L4`, `psychRound`, `prevSessionHigh/Low/Close`.
 - Default thresholds lowered: minComposite 60, minEv 0.001, minRr 1.2.
 - Multi-position: up to 2 positions per symbol (different strategies).
 - Removed: old ATR-based SL/TP, `calculateTrailingStop`, `INITIAL_EXIT_HOURS`/`EXTENSION_HOURS`/`MAX_EXIT_HOURS`.
@@ -321,10 +327,12 @@ The backtest engine (`backtestEngine.ts`) mirrors all V2 logic:
 ### Signal Verification Prompt (`openai.ts`)
 
 - Removed `entryStage` from the `SignalContext` interface.
-- AI prompt updated to reflect V2 trade management:
-  - References S/R + Fibonacci TP/SL.
-  - References 30% profit trailing stop.
+- AI prompt updated to reflect V2 spike-magnitude-aware trade management:
+  - Boom/Crash TP from spike p75, SL from 30% median drift.
+  - Volatility TP from 70% major swing range, SL from structural confluence.
+  - References 30% profit trailing stop (safety net only).
   - References 72h/168h time exits.
+  - No ATR-based TP/SL references.
   - No longer mentions entry stages or profit harvesting.
 
 ### AI Mandate

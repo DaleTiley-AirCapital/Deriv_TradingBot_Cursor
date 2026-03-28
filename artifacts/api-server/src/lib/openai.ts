@@ -201,11 +201,13 @@ export async function analyseBacktest(metrics: BacktestMetrics): Promise<Backtes
   const prompt = `You are a quantitative finance analyst reviewing a backtest for a LOW-FREQUENCY capital extraction system (V2) on Deriv synthetic indices.
 
 V2 TRADE MANAGEMENT CONTEXT:
-- TP/SL are computed dynamically from S/R + Fibonacci confluence zones (not fixed ATR multipliers)
+- TP is the PRIMARY exit targeting full spike magnitude (50-200%+ moves). Trailing stop is SAFETY NET ONLY.
+- Boom/Crash TP: derived from rolling 60-90 day spike p75 magnitude. Boom/Crash SL: 30% of median spike drift.
+- Volatility TP: 70% of major swing range (multi-day structural levels). Volatility SL: nearest structural S/R confluence with 0.3% buffer.
+- No ATR-based TP/SL ever. All exits from market structure + spike magnitude analysis.
 - Trailing stop: 30% drawdown from peak unrealized profit (activates only in-profit)
 - Time exits: after 72h, close on first profitable tick; 168h hard cap on all trades
 - Position sizing: equity_pct_per_trade * confidence (single entry, no probe/confirmation stages)
-- Min TP distance: 3x ATR; fallback TP: 6x ATR; fallback SL: 2.5x ATR
 
 Backtest Results:
 - Strategy: ${metrics.strategyName}

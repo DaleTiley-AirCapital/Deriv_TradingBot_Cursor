@@ -42,6 +42,13 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
     -   **Symbol Diagnostics:** `/api/diagnostics/symbols` endpoint and Settings > Diagnostics tab show per-symbol stream health, validation status, tick counts, and errors.
 -   **Database Schema:** Key tables include `ticks`, `candles`, `spike_events`, `features`, `model_runs`, `backtest_trades`, `backtest_runs`, `trades`, `signal_log`, and `platform_state`.
 
+### CRITICAL DESIGN MANDATES — DO NOT VIOLATE
+1. **TP is PRIMARY exit** targeting full spike magnitude (50-200%+). Trailing stop is SAFETY NET ONLY.
+2. **Never use ATR-based TP/SL exits.** All exits from market structure and spike magnitude analysis.
+3. **Never compute structural indicators from only 100 one-minute candles.** Use 1500+ candles for structure, 100 for fast indicators.
+4. **Use rolling 60-90 day windows** (not static all-time levels) for spike magnitude analysis.
+5. **Boom/Crash and Volatility treated differently** — spike p75 TP for Boom/Crash, 70% major swing range TP for Volatility.
+
 **Deployment:**
 -   Recommended deployment via Railway, using `railway.toml` and a multi-stage `Dockerfile`.
 -   Legacy Docker Compose deployments are supported for Docker and Synology NAS environments.

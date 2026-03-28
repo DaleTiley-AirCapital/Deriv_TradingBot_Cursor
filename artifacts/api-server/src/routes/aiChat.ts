@@ -105,21 +105,31 @@ Each family is a distinct trading approach, activated only when its matching mar
 - **Regime**: compression, ranging, breakout_expansion, trend_up, trend_down
 - **Best for**: All instruments during trendline break setups
 
-## 3. V2 Trade Management — S/R + Fibonacci TP/SL
-In V2, TP and SL are computed dynamically at trade execution using Support/Resistance levels and Fibonacci confluence — NOT fixed ATR multipliers.
+## 3. V2 Trade Management — Spike-Magnitude-Aware TP/SL
+TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL ever.
 
-### Take-Profit (TP) Computation
-1. Collect resistance levels (buy) or support levels (sell) from: swing high/low, Fibonacci extension levels (1.272, 1.618, 2.0), BB upper/lower, pivot R1-R3, Camarilla H3/H4, VWAP, psychological round numbers, previous session high
-2. Cluster nearby levels (within 0.5% of each other) — 2+ confluent levels form a strong target
-3. Pick the strongest cluster as TP target, with 0.2% buffer inside
-4. Minimum TP = 3 × ATR from entry; fallback TP = 6 × ATR if no S/R levels found
+### Take-Profit (TP) — Boom/Crash Indices
+1. Primary TP = entry ± spike p75 magnitude (from rolling 60-90 day spike_events analysis)
+2. Targets full spike travel (50-200%+ moves). Never scalp 1-5% moves.
+3. Structural confluence (major swing levels, fib extensions, pivots) used to refine target within 15% of spike TP.
+4. Minimum TP floor = median spike magnitude.
 
-### Stop-Loss (SL) Computation
-1. Collect support levels (buy) or resistance levels (sell) from: swing high/low, Fibonacci retracement levels, BB lower/upper, pivot S1-S3, Camarilla L3/L4, VWAP, previous session low
-2. Cluster nearby levels — 2+ confluent levels form strong support/resistance
-3. Pick the nearest strong cluster, with 0.2% buffer outside
-4. Fallback SL = 2.5 × ATR if no S/R levels found
-5. Safety floor: SL ≤ 10% equity risk per position (max loss = equity × 10% / positionSize)
+### Take-Profit (TP) — Volatility Indices
+1. TP = entry ± 70% of major swing range (from 1500+ candle 20-bar structural levels)
+2. Clamped to major swing high/low if TP exceeds it.
+3. Structural confluence clusters prioritised when 2+ levels within 0.5%.
+
+### Stop-Loss (SL) — Boom/Crash Indices
+1. SL distance = 30% of median spike magnitude (converted to percentage of entry price)
+2. Minimum drift floor = 0.5%
+3. Nearest structural support/resistance can tighten SL if between drift level and entry
+4. Safety cap: max loss = 10% of equity per position
+
+### Stop-Loss (SL) — Volatility Indices
+1. Collect structural levels: major swing, swing, fib retracement, BB, pivots, Camarilla, VWAP, previous session levels
+2. Find nearest confluence cluster (2+ levels within 0.5%) below entry (buy) or above entry (sell)
+3. Place SL with 0.3% buffer outside the cluster
+4. Safety cap: max loss = 10% of equity per position
 
 ### Trailing Stop — 30% Peak-Profit Drawdown
 - Activates only when the trade is in profit
@@ -134,7 +144,7 @@ In V2, TP and SL are computed dynamically at trade execution using Support/Resis
 
 ## 4. Signal Pipeline — How Trades are Born
 1. **Tick Streaming** → Live price ticks from Deriv WebSocket
-2. **Feature Extraction** → 40+ technical features (EMA, RSI, z-score, ATR, BB, spike hazard, swing H/L, Fibonacci levels, VWAP, pivot points, Camarilla levels, psychological round numbers, previous session H/L/C)
+2. **Feature Extraction** → 40+ technical features (EMA, RSI, z-score, BB, spike hazard, swing H/L, major swing H/L, spike magnitude stats, Fibonacci levels, VWAP, pivot points, Camarilla levels, psychological round numbers, previous session H/L/C) from 1500+ candle structural window
 3. **Regime Classification** → Cached hourly: trend_up, trend_down, mean_reversion, ranging, compression, breakout_expansion, spike_zone, or no_trade
 4. **Strategy Evaluation** → Only matching strategies run per regime
 5. **ML Scoring** → Logistic regression model per family scores features (0-1)
@@ -211,7 +221,7 @@ In V2, TP and SL are computed dynamically at trade execution using Support/Resis
 - LARGE CAPITAL PER TRADE: Deploy 15-25% equity per position
 - HIGHEST-QUALITY SIGNALS ONLY: Composite score ≥ 80+
 - LONG HOLD: 72h profit exit, 168h hard cap
-- DYNAMIC TP/SL: S/R + Fibonacci confluence, not fixed ATR multiples
+- DYNAMIC TP/SL: Spike-magnitude-aware (Boom/Crash) + structural S/R confluence (Volatility). TP is PRIMARY exit; trailing stop is SAFETY NET ONLY. No ATR fallbacks.
 - 30% PEAK-PROFIT TRAILING: Lock in gains from peak unrealised profit
 - FEW POSITIONS: Max 2-4 open trades
 - EXTRACT PROFITS REGULARLY: Don't let compound risk grow`;
