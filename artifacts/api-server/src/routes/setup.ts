@@ -36,7 +36,7 @@ const DEFAULT_CAPITAL = 600;
 const API_RATE_DELAY_MS = 150;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
 const MIN_SYMBOLS_FOR_PROCEED = 8;
-const SUFFICIENT_CANDLE_COUNT = 330_000;
+const SUFFICIENT_CANDLE_COUNT = 325_000;
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade",
   "demo_equity_pct_per_trade",

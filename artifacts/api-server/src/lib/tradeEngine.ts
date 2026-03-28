@@ -84,7 +84,6 @@ export function calculateSRFibTP(params: {
     const longTermRangePct = spikeMagnitude.longTermRangePct || 0;
     const targetPct = Math.max(longTermRangePct * 0.50, 0.10);
 
-    console.log(`[TP] Boom/Crash long-term range: ${(longTermRangePct * 100).toFixed(2)}% | TP target: ${(targetPct * 100).toFixed(2)}% | High=${spikeMagnitude.longTermHigh.toFixed(2)} Low=${spikeMagnitude.longTermLow.toFixed(2)}`);
 
     if (direction === "buy") {
       const rangeTargetPrice = entryPrice * (1 + targetPct);
