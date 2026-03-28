@@ -120,8 +120,8 @@ TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL eve
 3. Structural confluence clusters prioritised when 2+ levels within 0.5%.
 
 ### Stop-Loss (SL) — Boom/Crash Indices
-1. SL distance = 30% of median spike magnitude (converted to percentage of entry price)
-2. Minimum drift floor = 0.5%
+1. SL distance = 5% of 90-day price range
+2. Minimum drift floor = 2%
 3. Nearest structural support/resistance can tighten SL if between drift level and entry
 4. Safety cap: max loss = 10% of equity per position
 
@@ -173,7 +173,7 @@ TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL eve
 |---------|--------------|---------|
 | min_composite_score | Minimum quality score (0-100) for trading | 80/85/90 (paper/demo/real) |
 | min_ev_threshold | Minimum expected value | 0.001 |
-| min_rr_ratio | Minimum reward-to-risk ratio (from S/R levels) | 1.5 (live) / 1.2 (backtest) |
+| min_rr_ratio | Minimum reward-to-risk ratio (from S/R levels) | 1.5 |
 | scoring_weight_* | Six dimension weights for composite scoring | See §4 |
 | scan_interval_seconds | Scan frequency | 30 |
 | ai_verification_enabled | AI reviews signals before trading | true |

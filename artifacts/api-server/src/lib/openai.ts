@@ -121,7 +121,7 @@ TRADE MANAGEMENT (V2 Spike-Magnitude-Aware TP/SL):
 - Fib Extensions (up): ${ctx.fibExtensionLevels?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
 - Fib Extensions (down): ${ctx.fibExtensionLevelsDown?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
 - TP: PRIMARY exit. Boom/Crash: 50% of 90-day price range (min 10% of entry). Volatility: 70% major swing range.
-- SL: Boom/Crash: 30% of median spike drift. Volatility: structural S/R confluence with 0.3% buffer.
+- SL: Boom/Crash: 5% of 90-day range (min 2%). Volatility: structural S/R confluence with 0.3% buffer.
 - No ATR-based TP/SL. All exits from market structure + spike magnitude analysis.
 - Trailing: 30% peak-profit drawdown stop (SAFETY NET ONLY, activates in-profit)
 - NO TIME EXITS: Trades hold until TP, SL, or trailing stop. No forced 72h/168h closures.
