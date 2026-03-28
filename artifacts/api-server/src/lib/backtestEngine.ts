@@ -280,11 +280,18 @@ export function computeFeaturesFromCandles(
 ): FeatureVector | null {
   if (candles.length < 30) return null;
 
-  const closes = candles.map(c => c.close);
-  const highs = candles.map(c => c.high);
-  const lows = candles.map(c => c.low);
+  const allCloses = candles.map(c => c.close);
+  const allHighs = candles.map(c => c.high);
+  const allLows = candles.map(c => c.low);
   const last = candles[candles.length - 1];
   const price = last.close;
+
+  const FAST_WINDOW = 100;
+  const fastStart = Math.max(0, candles.length - FAST_WINDOW);
+  const fastCandles = candles.slice(fastStart);
+  const closes = fastCandles.map(c => c.close);
+  const highs = fastCandles.map(c => c.high);
+  const lows = fastCandles.map(c => c.low);
 
   const ema20Arr = emaCalc(closes, 20);
   const ema20 = ema20Arr[ema20Arr.length - 1];
@@ -335,7 +342,7 @@ export function computeFeaturesFromCandles(
 
   const regimeLabel = detectRegime(closes, atr14Raw, ema20Arr);
 
-  const swingResult = findSwingLevels(highs, lows, 5);
+  const swingResult = findSwingLevels(allHighs, allLows, 5);
   let swingHigh = swingResult.swingHigh;
   let swingLow = swingResult.swingLow;
   const swingHighDist = (price - swingHigh) / price;
@@ -503,7 +510,7 @@ export function computeFeaturesFromCandles(
     prevSessionClose,
     ...(() => {
       const atr14Abs = atr14 * price;
-      const trendlines = findMultiSwingTrendlines(highs, lows, closes, 5, atr14Abs);
+      const trendlines = findMultiSwingTrendlines(allHighs, allLows, allCloses, 5, atr14Abs);
       return {
         trendlineResistanceSlope: trendlines.resistance.slope,
         trendlineSupportSlope: trendlines.support.slope,
@@ -516,7 +523,7 @@ export function computeFeaturesFromCandles(
     spikeMagnitude: spikeMagnitudeOverride ?? null,
     ...(() => {
       if (candles.length >= 200) {
-        const major = findMajorSwingLevels(highs, lows, 20);
+        const major = findMajorSwingLevels(allHighs, allLows, 20);
         return { majorSwingHigh: major.majorSwingHigh, majorSwingLow: major.majorSwingLow };
       }
       return { majorSwingHigh: swingHigh, majorSwingLow: swingLow };

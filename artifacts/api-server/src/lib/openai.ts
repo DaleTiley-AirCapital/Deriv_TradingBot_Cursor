@@ -113,15 +113,17 @@ SCORES:
 - Confidence: ${(ctx.confidence * 100).toFixed(1)}%
 - Expected Value: ${(ctx.expectedValue * 100).toFixed(3)}%
 
-TRADE MANAGEMENT (V2 Dynamic S/R + Fibonacci):
+TRADE MANAGEMENT (V2 Spike-Magnitude-Aware TP/SL):
 - Latest Close: ${ctx.latestClose?.toFixed(4) ?? "N/A"}
 - Swing High: ${ctx.swingHigh?.toFixed(4) ?? "N/A"}
 - Swing Low: ${ctx.swingLow?.toFixed(4) ?? "N/A"}
 - Fib Retrace Levels: ${ctx.fibRetraceLevels?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
 - Fib Extensions (up): ${ctx.fibExtensionLevels?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
 - Fib Extensions (down): ${ctx.fibExtensionLevelsDown?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
-- TP/SL: Computed dynamically at execution from S/R + Fibonacci confluence zones
-- Trailing: 30% peak-profit drawdown stop (activates only in-profit)
+- TP: PRIMARY exit. Boom/Crash: spike p75 magnitude (50-200%+ moves). Volatility: 70% major swing range.
+- SL: Boom/Crash: 30% of median spike drift. Volatility: structural S/R confluence with 0.3% buffer.
+- No ATR-based TP/SL. All exits from market structure + spike magnitude analysis.
+- Trailing: 30% peak-profit drawdown stop (SAFETY NET ONLY, activates in-profit)
 - Time Exits: 72h profitable close / 168h hard cap
 
 TECHNICAL INDICATORS:
