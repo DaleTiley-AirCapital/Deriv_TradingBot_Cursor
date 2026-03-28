@@ -11,6 +11,9 @@ export interface SpikeMagnitudeStats {
   p90: number;
   count: number;
   instrumentFamily: "boom" | "crash" | "volatility" | "other_synthetic";
+  longTermRangePct: number;
+  longTermHigh: number;
+  longTermLow: number;
 }
 
 export interface FeatureVector {
@@ -426,7 +429,46 @@ export async function getSpikeMagnitudeStats(symbol: string, rollingDays = 90, b
     .where(and(...conditions))
     .orderBy(desc(spikeEventsTable.eventTs));
 
-  if (spikes.length < 5) return null;
+  const candleConditions = [
+    eq(candlesTable.symbol, symbol),
+    eq(candlesTable.timeframe, "1m"),
+    gte(candlesTable.openTs, cutoffTs),
+  ];
+  if (beforeTs != null) {
+    candleConditions.push(lte(candlesTable.openTs, beforeTs));
+  }
+
+  const rangeCandles = await db.select({
+    high: candlesTable.high,
+    low: candlesTable.low,
+  }).from(candlesTable)
+    .where(and(...candleConditions));
+
+  let longTermHigh = 0;
+  let longTermLow = Infinity;
+  for (const c of rangeCandles) {
+    if (c.high > longTermHigh) longTermHigh = c.high;
+    if (c.low < longTermLow) longTermLow = c.low;
+  }
+
+  if (longTermLow === Infinity || longTermLow <= 0) {
+    longTermLow = longTermHigh > 0 ? longTermHigh * 0.8 : 1;
+  }
+
+  const longTermRangePct = longTermLow > 0 ? (longTermHigh - longTermLow) / longTermLow : 0;
+
+  if (spikes.length < 5) {
+    return {
+      median: 0,
+      p75: 0,
+      p90: 0,
+      count: 0,
+      instrumentFamily: classifyInstrumentForSpike(symbol),
+      longTermRangePct,
+      longTermHigh,
+      longTermLow,
+    };
+  }
 
   const sizes = spikes.map(s => Math.abs(s.spikeSize)).sort((a, b) => a - b);
   const n = sizes.length;
@@ -443,6 +485,9 @@ export async function getSpikeMagnitudeStats(symbol: string, rollingDays = 90, b
     p90,
     count: n,
     instrumentFamily: classifyInstrumentForSpike(symbol),
+    longTermRangePct,
+    longTermHigh,
+    longTermLow,
   };
 }
 

@@ -26,7 +26,7 @@
 V2 replaces V1's static ATR-multiplier trade management with dynamic, market-structure-aware logic. The core principles:
 
 - **Large capital, long hold, max profit.** Swing trades on highest-probability signals only.
-- **TP targets spike p75 magnitude** (absolute price points from spike_events, converted to % of entry price). TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY.
+- **TP targets full spike magnitude (50-200%+).** TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. Never scalp 1-5% moves.
 - **TP/SL derived from actual market structure + spike magnitude analysis** — never from ATR multiples.
 - **Rolling 60-90 day spike magnitude analysis** from `spike_events` table drives TP distance for Boom/Crash indices.
 - **1500+ candle structural window** for swing levels, VWAP, pivots, Fibonacci — never just 100 one-minute candles.
@@ -37,7 +37,7 @@ V2 replaces V1's static ATR-multiplier trade management with dynamic, market-str
 - **AI never auto-changes settings.** Blocked signals get `aiVerdict="skipped"`.
 
 ### CRITICAL DESIGN MANDATES — DO NOT VIOLATE
-1. **TP is PRIMARY exit** targeting spike p75 magnitude. Trailing stop is SAFETY NET ONLY.
+1. **TP is PRIMARY exit** targeting full spike magnitude (50-200%+). Trailing stop is SAFETY NET ONLY.
 2. **Never use ATR-based TP/SL exits.** All exits from market structure and spike magnitude analysis.
 3. **Never compute structural indicators from only 100 one-minute candles.** Use 1500+ candles for structure, 100 for fast indicators.
 4. **Use rolling 60-90 day windows** (not static all-time levels) for spike magnitude analysis.
@@ -131,7 +131,7 @@ Replaces the old price-based trailing stop with profit-percentage trailing:
 ## 4. Exit Policy: No Time Exits
 
 Trades exit ONLY via:
-1. **TP hit** (primary exit) — targeting spike p75 magnitude from rolling 60-90 day window
+1. **TP hit** (primary exit) — targeting full spike magnitude (50-200%+ moves)
 2. **SL hit** — structural S/R confluence placement
 3. **30% trailing stop** — safety net, activates only in profit
 
@@ -286,10 +286,10 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 | Constant | Value | Location |
 |---|---|---|
 | `PROFIT_TRAIL_DRAWDOWN_PCT` | 0.30 | `tradeEngine.ts` |
-| Boom/Crash TP target | spike p75 magnitude | `calculateSRFibTP` |
-| Boom/Crash TP floor | spike median magnitude | `calculateSRFibTP` |
-| Boom/Crash SL drift | 30% of median spike | `calculateSRFibSL` |
-| Boom/Crash SL min drift | 0.5% | `calculateSRFibSL` |
+| Boom/Crash TP target | 50% of 90-day price range (min 10%) | `calculateSRFibTP` |
+| Boom/Crash TP floor | 10% of entry price | `calculateSRFibTP` |
+| Boom/Crash SL drift | 5% of 90-day range (min 2%) | `calculateSRFibSL` |
+| Boom/Crash SL min drift | 2% | `calculateSRFibSL` |
 | Volatility TP | 70% of major swing range | `calculateSRFibTP` |
 | Volatility SL buffer | 0.3% outside cluster | `calculateSRFibSL` |
 | Safety floor SL | 10% equity | `calculateSRFibSL` |

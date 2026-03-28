@@ -81,62 +81,66 @@ export function calculateSRFibTP(params: {
     (spikeMagnitude.instrumentFamily === "boom" || spikeMagnitude.instrumentFamily === "crash");
 
   if (isBoomCrash && spikeMagnitude) {
-    const spikeAbsolutePoints = spikeMagnitude.p75;
-    const spikeTargetPct = spikeAbsolutePoints / entryPrice;
+    const longTermRangePct = spikeMagnitude.longTermRangePct || 0;
+    const targetPct = Math.max(longTermRangePct * 0.50, 0.10);
 
-    console.log(`[TP] Boom/Crash spike TP: p75=${spikeAbsolutePoints.toFixed(4)} pts, entry=${entryPrice.toFixed(4)}, targetPct=${(spikeTargetPct * 100).toFixed(4)}%`);
+    console.log(`[TP] Boom/Crash long-term range: ${(longTermRangePct * 100).toFixed(2)}% | TP target: ${(targetPct * 100).toFixed(2)}% | High=${spikeMagnitude.longTermHigh.toFixed(2)} Low=${spikeMagnitude.longTermLow.toFixed(2)}`);
 
     if (direction === "buy") {
-      const spikeTargetPrice = entryPrice * (1 + spikeTargetPct);
+      const rangeTargetPrice = entryPrice * (1 + targetPct);
 
       const structuralResistance = [
+        spikeMagnitude.longTermHigh,
         majorSwingHigh ?? swingHigh,
         ...fibExtensionLevels.filter(l => l > entryPrice),
         ...(pivotLevels ?? []).filter(l => l > entryPrice),
         prevSessionHigh,
       ].filter((l): l is number => l != null && l > entryPrice).sort((a, b) => a - b);
 
-      const nearSpikeTarget = structuralResistance.filter(l =>
-        Math.abs(l - spikeTargetPrice) / spikeTargetPrice < 0.15
-      );
+      const farTargets = structuralResistance.filter(l => {
+        const dist = (l - entryPrice) / entryPrice;
+        return dist >= targetPct * 0.5 && dist <= targetPct * 2.0;
+      });
 
       let tp: number;
-      if (nearSpikeTarget.length > 0) {
-        tp = Math.min(...nearSpikeTarget) * 0.998;
+      if (farTargets.length > 0) {
+        tp = Math.max(...farTargets) * 0.998;
       } else {
-        tp = spikeTargetPrice;
+        tp = rangeTargetPrice;
       }
 
-      const minTpPct = spikeMagnitude.median / entryPrice;
+      const minTpPct = 0.10;
       tp = Math.max(tp, entryPrice * (1 + minTpPct));
 
-      if (tp <= entryPrice) tp = spikeTargetPrice;
+      if (tp <= entryPrice) tp = rangeTargetPrice;
       return tp;
     } else {
-      const spikeTargetPrice = entryPrice * (1 - spikeTargetPct);
+      const rangeTargetPrice = entryPrice * (1 - targetPct);
 
       const structuralSupport = [
+        spikeMagnitude.longTermLow,
         majorSwingLow ?? swingLow,
         ...(fibExtensionLevelsDown ?? []).filter(l => l < entryPrice && l > 0),
         ...(pivotLevels ?? []).filter(l => l < entryPrice && l > 0),
         prevSessionLow,
       ].filter((l): l is number => l != null && l < entryPrice && l > 0).sort((a, b) => b - a);
 
-      const nearSpikeTarget = structuralSupport.filter(l =>
-        Math.abs(l - spikeTargetPrice) / entryPrice < 0.15
-      );
+      const farTargets = structuralSupport.filter(l => {
+        const dist = (entryPrice - l) / entryPrice;
+        return dist >= targetPct * 0.5 && dist <= targetPct * 2.0;
+      });
 
       let tp: number;
-      if (nearSpikeTarget.length > 0) {
-        tp = Math.max(...nearSpikeTarget) * 1.002;
+      if (farTargets.length > 0) {
+        tp = Math.min(...farTargets) * 1.002;
       } else {
-        tp = spikeTargetPrice;
+        tp = rangeTargetPrice;
       }
 
-      const minTpPct = spikeMagnitude.median / entryPrice;
+      const minTpPct = 0.10;
       tp = Math.min(tp, entryPrice * (1 - minTpPct));
 
-      if (tp >= entryPrice || tp <= 0) tp = spikeTargetPrice;
+      if (tp >= entryPrice || tp <= 0) tp = rangeTargetPrice;
       return tp;
     }
   }
@@ -238,8 +242,9 @@ export function calculateSRFibSL(params: {
     (spikeMagnitude.instrumentFamily === "boom" || spikeMagnitude.instrumentFamily === "crash");
 
   if (isBoomCrash && spikeMagnitude) {
-    const driftPct = (spikeMagnitude.median / entryPrice) * 0.3;
-    const minDrift = 0.005;
+    const longTermRange = spikeMagnitude.longTermRangePct || 0;
+    const driftPct = longTermRange * 0.05;
+    const minDrift = 0.02;
     const slDistPct = Math.max(driftPct, minDrift);
 
     let sl: number;

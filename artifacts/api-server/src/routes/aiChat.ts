@@ -109,10 +109,10 @@ Each family is a distinct trading approach, activated only when its matching mar
 TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL ever.
 
 ### Take-Profit (TP) — Boom/Crash Indices
-1. Primary TP = entry ± spike p75 magnitude (from rolling 60-90 day spike_events analysis)
-2. Targets full spike travel (spike p75 magnitude from rolling 60-90 day window). Never scalp; hold until TP hit.
-3. Structural confluence (major swing levels, fib extensions, pivots) used to refine target within 15% of spike TP.
-4. Minimum TP floor = median spike magnitude.
+1. Primary TP = 50% of 90-day price range (long-term high - long-term low), minimum 10% of entry price.
+2. Targets full spike travel (50-200%+ moves). Never scalp 1-5% moves.
+3. Structural confluence (long-term high/low, major swing levels, fib extensions, pivots) used to refine target.
+4. Minimum TP floor = 10% of entry price. Trades hold for days/weeks until hit.
 
 ### Take-Profit (TP) — Volatility Indices
 1. TP = entry ± 70% of major swing range (from 1500+ candle 20-bar structural levels)

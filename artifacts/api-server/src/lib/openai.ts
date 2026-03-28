@@ -120,7 +120,7 @@ TRADE MANAGEMENT (V2 Spike-Magnitude-Aware TP/SL):
 - Fib Retrace Levels: ${ctx.fibRetraceLevels?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
 - Fib Extensions (up): ${ctx.fibExtensionLevels?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
 - Fib Extensions (down): ${ctx.fibExtensionLevelsDown?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
-- TP: PRIMARY exit. Boom/Crash: spike p75 magnitude (absolute price points from spike_events table). Volatility: 70% major swing range.
+- TP: PRIMARY exit. Boom/Crash: 50% of 90-day price range (min 10% of entry). Volatility: 70% major swing range.
 - SL: Boom/Crash: 30% of median spike drift. Volatility: structural S/R confluence with 0.3% buffer.
 - No ATR-based TP/SL. All exits from market structure + spike magnitude analysis.
 - Trailing: 30% peak-profit drawdown stop (SAFETY NET ONLY, activates in-profit)
@@ -204,8 +204,8 @@ export async function analyseBacktest(metrics: BacktestMetrics): Promise<Backtes
   const prompt = `You are a quantitative finance analyst reviewing a backtest for a LOW-FREQUENCY capital extraction system (V2) on Deriv synthetic indices.
 
 V2 TRADE MANAGEMENT CONTEXT:
-- TP is the PRIMARY exit targeting spike p75 magnitude (absolute points from spike_events). Trailing stop is SAFETY NET ONLY.
-- Boom/Crash TP: derived from rolling 60-90 day spike p75 magnitude. Boom/Crash SL: 30% of median spike drift.
+- TP is the PRIMARY exit targeting full spike magnitude (50-200%+ moves). Trailing stop is SAFETY NET ONLY.
+- Boom/Crash TP: 50% of 90-day price range (min 10% of entry price). Boom/Crash SL: 5% of 90-day range (min 2%).
 - Volatility TP: 70% of major swing range (multi-day structural levels). Volatility SL: nearest structural S/R confluence with 0.3% buffer.
 - No ATR-based TP/SL ever. All exits from market structure + spike magnitude analysis.
 - Trailing stop: 30% drawdown from peak unrealized profit (activates only in-profit, SAFETY NET ONLY)
