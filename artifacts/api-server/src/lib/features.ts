@@ -56,6 +56,7 @@ export interface FeatureVector {
   bbUpper: number;
   bbLower: number;
   latestClose: number;
+  latestOpen: number;
   fibExtensionLevelsDown: number[];
   vwap: number;
   pivotPoint: number;
@@ -758,6 +759,7 @@ export async function computeFeatures(symbol: string, lookback = STRUCTURAL_LOOK
     bbUpper,
     bbLower,
     latestClose: price,
+    latestOpen: last.open,
     fibExtensionLevelsDown: fibLevels.extensionsDown,
     vwap,
     pivotPoint: pivots.pp,

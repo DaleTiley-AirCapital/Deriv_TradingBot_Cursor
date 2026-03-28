@@ -129,26 +129,26 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
   let reason = "";
 
   if (isCrash) {
-    const confirmedSwingHigh = features.distFromRange30dHighPct > -0.03 && features.priceChange24hPct < -0.005;
-    const driftDown = features.emaSlope < -0.0002;
-    const notExhausted = features.rsi14 > 25 && features.rsi14 < 60;
-    const trendConfirmed = features.priceChange24hPct < -0.01;
-    const notOverextended = features.distFromRange30dLowPct > 0.02;
-
-    if (confirmedSwingHigh && driftDown && notExhausted && trendConfirmed && notOverextended) {
-      direction = "sell";
-      reason = `Crash drift after swing high reversal: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, dist_30d_high=${(features.distFromRange30dHighPct*100).toFixed(2)}%`;
-    }
-  } else if (isBoom) {
     const confirmedSwingLow = features.distFromRange30dLowPct < 0.03 && features.priceChange24hPct > 0.005;
     const driftUp = features.emaSlope > 0.0002;
-    const notExhausted = features.rsi14 > 40 && features.rsi14 < 75;
+    const notExhausted = features.rsi14 > 35 && features.rsi14 < 70;
     const trendConfirmed = features.priceChange24hPct > 0.01;
     const notOverextended = features.distFromRange30dHighPct < -0.02;
 
     if (confirmedSwingLow && driftUp && notExhausted && trendConfirmed && notOverextended) {
       direction = "buy";
-      reason = `Boom drift after swing low reversal: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, dist_30d_low=${(features.distFromRange30dLowPct*100).toFixed(2)}%`;
+      reason = `Crash drift up after swing low: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, dist_30d_low=${(features.distFromRange30dLowPct*100).toFixed(2)}%`;
+    }
+  } else if (isBoom) {
+    const confirmedSwingHigh = features.distFromRange30dHighPct > -0.03 && features.priceChange24hPct < -0.005;
+    const driftDown = features.emaSlope < -0.0002;
+    const notExhausted = features.rsi14 > 30 && features.rsi14 < 65;
+    const trendConfirmed = features.priceChange24hPct < -0.01;
+    const notOverextended = features.distFromRange30dLowPct > 0.02;
+
+    if (confirmedSwingHigh && driftDown && notExhausted && trendConfirmed && notOverextended) {
+      direction = "sell";
+      reason = `Boom drift down after swing high: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, dist_30d_high=${(features.distFromRange30dHighPct*100).toFixed(2)}%`;
     }
   } else if (isVol) {
     const confirmedReversalUp = features.priceChange24hPct > 0.005 && features.distFromRange30dLowPct < 0.10;
@@ -245,21 +245,23 @@ function spikeClusterRecovery(features: FeatureVector, regime: RegimeClassificat
 
   if (isCrash) {
     const priceDeclined24h = features.priceChange24hPct < -0.02;
-    const stabilizing = features.emaSlope > -0.0001 || features.rsi14 > 30;
-    const candleStabilized = features.candleBody < 0.40;
+    const reversalCandle = features.latestClose > features.latestOpen;
+    const candleSmall = features.candleBody < 0.40;
+    const slopeFlattening = features.emaSlope > -0.0002;
 
-    if (priceDeclined24h && stabilizing && candleStabilized) {
+    if (priceDeclined24h && reversalCandle && candleSmall && slopeFlattening) {
       direction = "buy";
-      reason = `Crash spike cluster exhaustion → BUY: ${features.spikeCount4h} spikes/4h, ${features.spikeCount24h}/24h, 24h_decline=${(features.priceChange24hPct*100).toFixed(2)}%, stabilizing (slope=${features.emaSlope.toFixed(5)}, body=${features.candleBody.toFixed(2)})`;
+      reason = `Crash spike cluster → BUY: ${features.spikeCount4h} spikes/4h, ${features.spikeCount24h}/24h, 24h_decline=${(features.priceChange24hPct*100).toFixed(2)}%, green reversal candle, slope=${features.emaSlope.toFixed(5)}`;
     }
   } else {
     const priceRallied24h = features.priceChange24hPct > 0.02;
-    const stabilizing = features.emaSlope < 0.0001 || features.rsi14 < 70;
-    const candleStabilized = features.candleBody < 0.40;
+    const reversalCandle = features.latestClose < features.latestOpen;
+    const candleSmall = features.candleBody < 0.40;
+    const slopeFlattening = features.emaSlope < 0.0002;
 
-    if (priceRallied24h && stabilizing && candleStabilized) {
+    if (priceRallied24h && reversalCandle && candleSmall && slopeFlattening) {
       direction = "sell";
-      reason = `Boom spike cluster exhaustion → SELL: ${features.spikeCount4h} spikes/4h, ${features.spikeCount24h}/24h, 24h_rally=${(features.priceChange24hPct*100).toFixed(2)}%, stabilizing (slope=${features.emaSlope.toFixed(5)}, body=${features.candleBody.toFixed(2)})`;
+      reason = `Boom spike cluster → SELL: ${features.spikeCount4h} spikes/4h, ${features.spikeCount24h}/24h, 24h_rally=${(features.priceChange24hPct*100).toFixed(2)}%, red reversal candle, slope=${features.emaSlope.toFixed(5)}`;
     }
   }
 

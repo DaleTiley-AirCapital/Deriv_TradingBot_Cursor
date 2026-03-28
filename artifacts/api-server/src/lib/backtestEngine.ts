@@ -493,6 +493,7 @@ export function computeFeaturesFromCandles(
     bbUpper,
     bbLower,
     latestClose: price,
+    latestOpen: last.open,
     vwap: vwapCalc,
     pivotPoint: pp,
     pivotR1,
@@ -534,13 +535,15 @@ export function computeFeaturesFromCandles(
       const spikeThreshold = 0.01;
       let sc4h = 0, sc24h = 0, sc7d = 0;
       if (isBoomCrash) {
+        const isCrash = symbol.startsWith("CRASH");
         const fourHoursCandles = 4 * 60;
         const twentyFourHoursCandles = 24 * 60;
         const sevenDaysCandles = 7 * 24 * 60;
         for (let i = candles.length - 1; i >= 1; i--) {
           const candlesBack = candles.length - 1 - i;
-          const move = Math.abs(candles[i].close - candles[i - 1].close) / candles[i - 1].close;
-          if (move > spikeThreshold) {
+          const rawMove = (candles[i].close - candles[i - 1].close) / candles[i - 1].close;
+          const isDirectionalSpike = isCrash ? (rawMove < -spikeThreshold) : (rawMove > spikeThreshold);
+          if (isDirectionalSpike) {
             if (candlesBack <= fourHoursCandles) sc4h++;
             if (candlesBack <= twentyFourHoursCandles) sc24h++;
             if (candlesBack <= sevenDaysCandles) sc7d++;
