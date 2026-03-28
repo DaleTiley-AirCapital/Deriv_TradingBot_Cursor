@@ -9,7 +9,7 @@
 1. [Design Philosophy](#1-design-philosophy)
 2. [TP/SL: S/R + Fibonacci Confluence](#2-tpsl-sr--fibonacci-confluence)
 3. [Trailing Stop: Profit-Based](#3-trailing-stop-profit-based)
-4. [Time Exits](#4-time-exits)
+4. [Exit Policy: No Time Exits](#4-exit-policy-no-time-exits)
 5. [Regime Engine: Hourly Caching + Ranging](#5-regime-engine-hourly-caching--ranging)
 6. [Scoring Updates](#6-scoring-updates)
 7. [Entry Simplification](#7-entry-simplification)
@@ -32,7 +32,7 @@ V2 replaces V1's static ATR-multiplier trade management with dynamic, market-str
 - **1500+ candle structural window** for swing levels, VWAP, pivots, Fibonacci — never just 100 one-minute candles.
 - **Boom/Crash and Volatility indices treated differently** — spike-magnitude TP for Boom/Crash, multi-day S/R for Volatility.
 - **Trailing stop protects realized profit** — trails at 30% below peak unrealized profit percentage, not price.
-- **Simplified time exits** — 72h profitable close, 168h hard cap. No extension logic.
+- **No time exits** — trades hold until TP, SL, or trailing stop. Long-hold strategy.
 - **Up to 2 positions per symbol** (different strategy families). No multi-stage building.
 - **AI never auto-changes settings.** Blocked signals get `aiVerdict="skipped"`.
 
@@ -128,26 +128,21 @@ Replaces the old price-based trailing stop with profit-percentage trailing:
 
 ---
 
-## 4. Time Exits
+## 4. Exit Policy: No Time Exits
 
-### Constants
+Trades exit ONLY via:
+1. **TP hit** (primary exit) — targeting full spike magnitude (50-200%+ moves)
+2. **SL hit** — structural S/R confluence placement
+3. **30% trailing stop** — safety net, activates only in profit
 
-| Constant | Value | Description |
-|---|---|---|
-| `TIME_EXIT_PROFIT_HOURS` | 72 | Close if profitable after 72h |
-| `TIME_EXIT_HARD_CAP_HOURS` | 168 | Force close after 168h regardless |
+### Removed (V2.1)
 
-### Logic (`evaluateTimeExit()` in `tradeEngine.ts`)
-
-1. If position held ≥ 168h → force close (`"time_exit_hard_cap"`).
-2. If position held ≥ 72h AND currently profitable → close (`"time_exit_profit"`).
-3. If position held ≥ 72h AND currently at a loss → keep open (wait for profit or 168h cap).
-
-### Removed
-
+- `TIME_EXIT_PROFIT_HOURS` (72h) and `TIME_EXIT_HARD_CAP_HOURS` (168h) constants — deleted.
+- `checkTimeExit()` function — now returns `{shouldExit: false}` always (no-op).
 - `INITIAL_EXIT_HOURS`, `EXTENSION_HOURS`, `MAX_EXIT_HOURS` constants.
 - Extension logic for near-breakeven trades.
 - Per-family hold profiles (`FAMILY_HOLD_PROFILE`).
+- All time-based forced closures from both live engine and backtest engine.
 
 ---
 
@@ -245,7 +240,7 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 | `peak_drawdown_exit_pct` | Replaced by profit trailing |
 | `min_peak_profit_pct` | Removed (trailing activates on any profit) |
 | `large_peak_threshold_pct` | Removed |
-| `time_exit_window_hours` | Replaced by 72h/168h constants |
+| `time_exit_window_hours` | Removed — no time exits |
 | `probe_threshold` | No entry stages |
 | `confirmation_threshold` | No entry stages |
 | `momentum_threshold` | No entry stages |
@@ -291,8 +286,6 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 | Constant | Value | Location |
 |---|---|---|
 | `PROFIT_TRAIL_DRAWDOWN_PCT` | 0.30 | `tradeEngine.ts` |
-| `TIME_EXIT_PROFIT_HOURS` | 72 | `tradeEngine.ts` |
-| `TIME_EXIT_HARD_CAP_HOURS` | 168 | `tradeEngine.ts` |
 | Boom/Crash TP target | spike p75 magnitude | `calculateSRFibTP` |
 | Boom/Crash TP floor | spike median magnitude | `calculateSRFibTP` |
 | Boom/Crash SL drift | 30% of median spike | `calculateSRFibSL` |
@@ -314,9 +307,9 @@ The backtest engine (`backtestEngine.ts`) mirrors all V2 logic:
 - Uses `calculateSRFibTP` and `calculateSRFibSL` for entry TP/SL (spike-magnitude-aware).
 - Passes `spikeMagnitudeBySymbol` from `getSpikeMagnitudeStats()` with `beforeTs` anchor to prevent lookahead bias.
 - Uses `calculateProfitTrailingStop` for trailing.
-- Time exits: 72h profit close, 168h hard cap.
+- No time exits — trades hold until TP, SL, or trailing stop.
 - Feature computation with 1500-candle LOOKBACK includes `swingHigh`, `swingLow`, `majorSwingHigh`, `majorSwingLow`, `spikeMagnitude`, `fibRetraceLevels`, `fibExtensionLevels`, `bbUpper`, `bbLower`, `vwap`, `pivotPoint`, `pivotR1`–`R3`, `pivotS1`–`S3`, `camarillaH3/H4/L3/L4`, `psychRound`, `prevSessionHigh/Low/Close`.
-- Default thresholds lowered: minComposite 60, minEv 0.001, minRr 1.2.
+- Default thresholds raised: minComposite 80 (paper), minEv 0.001, minRr 1.5.
 - Multi-position: up to 2 positions per symbol (different strategies).
 - Removed: old ATR-based SL/TP, `calculateTrailingStop`, `INITIAL_EXIT_HOURS`/`EXTENSION_HOURS`/`MAX_EXIT_HOURS`.
 
@@ -331,7 +324,7 @@ The backtest engine (`backtestEngine.ts`) mirrors all V2 logic:
   - Boom/Crash TP from spike p75, SL from 30% median drift.
   - Volatility TP from 70% major swing range, SL from structural confluence.
   - References 30% profit trailing stop (safety net only).
-  - References 72h/168h time exits.
+  - Explicitly states NO time exits — trades hold until TP/SL/trailing.
   - No ATR-based TP/SL references.
   - No longer mentions entry stages or profit harvesting.
 
@@ -356,7 +349,7 @@ The backtest engine (`backtestEngine.ts`) mirrors all V2 logic:
 | `model.ts` | Added `trendline_breakout` family weights and rule configs |
 | `extractionEngine.ts` | Removed entry stage references |
 | `scoring.ts` | Updated `FAMILY_IDEAL_REGIMES` to include `"ranging"` |
-| `backtestEngine.ts` | Mirrored all V2 changes: S/R+Fib TP/SL, profit trailing, simplified time exits |
+| `backtestEngine.ts` | Mirrored all V2 changes: S/R+Fib TP/SL, profit trailing, no time exits |
 | `scheduler.ts` | Integrated regime caching in scanner; removed V1 setting references |
 | `openai.ts` | Updated `SignalContext` interface and AI prompt for V2 |
 | `settings.tsx` | Removed V1 settings from defaults and UI; added Signal Quality Thresholds and Trade Management info card |

@@ -521,8 +521,8 @@ function GroupedResultsSection() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <span className="font-semibold text-foreground">{sym.symbol}</span>
-                  <Badge variant={sym.portfolioNetProfit > 0 ? "default" : "destructive"}>
-                    {sym.portfolioNetProfit > 0 ? "+" : ""}{formatCurrency(sym.portfolioNetProfit)}
+                  <Badge variant={(sym.portfolioNetProfit ?? 0) > 0 ? "default" : "destructive"}>
+                    {(sym.portfolioNetProfit ?? 0) > 0 ? "+" : ""}{formatCurrency(sym.portfolioNetProfit)}
                   </Badge>
                   <span className="text-xs text-muted-foreground">
                     {sym.strategies.length} profitable {sym.strategies.length === 1 ? "strategy" : "strategies"}
@@ -570,7 +570,7 @@ function GroupedResultsSection() {
                                 <td className="px-3 py-2 font-medium">{STRATEGY_LABELS[strat.strategyName] ?? strat.strategyName}</td>
                                 <td className="px-3 py-2 text-right mono-num profit">{formatCurrency(strat.netProfit)}</td>
                                 <td className="px-3 py-2 text-right mono-num">{formatPercent(strat.winRate)}</td>
-                                <td className="px-3 py-2 text-right mono-num">{strat.profitFactor === Infinity ? "∞" : strat.profitFactor.toFixed(2)}</td>
+                                <td className="px-3 py-2 text-right mono-num">{strat.profitFactor == null ? "—" : strat.profitFactor === Infinity ? "∞" : strat.profitFactor.toFixed(2)}</td>
                                 <td className="px-3 py-2 text-right mono-num">{strat.tradeCount}</td>
                                 <td className="px-3 py-2 text-right">
                                   <button

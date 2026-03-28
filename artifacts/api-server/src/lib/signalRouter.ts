@@ -144,7 +144,7 @@ export async function getPortfolioContext(mode: TradingMode): Promise<PortfolioC
     minCompositeScore: parseFloat(
       stateMap[`${prefix}_min_composite_score`] ||
       stateMap["min_composite_score"] ||
-      (mode === "paper" ? "55" : mode === "demo" ? "65" : "75")
+      (mode === "paper" ? "80" : mode === "demo" ? "85" : "90")
     ),
     minEvThreshold: parseFloat(stateMap[`${prefix}_min_ev_threshold`] || stateMap["min_ev_threshold"] || "0.001"),
     minRrRatio: parseFloat(stateMap[`${prefix}_min_rr_ratio`] || stateMap["min_rr_ratio"] || "1.5"),

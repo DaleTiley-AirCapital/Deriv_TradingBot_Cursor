@@ -14,7 +14,7 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 
 **Core Layers:**
 1.  **Data Collector:** Handles tick ingestion, candle building, and spike event detection.
-2.  **Backtesting Engine (V2):** A production-grade simulator mirroring live V2 logic — S/R + Fibonacci TP/SL, 30% profit-based trailing stop, 72h/168h time exits, confidence-scaled position sizing, and portfolio-level equity management. Supports walk-forward testing and provides comprehensive metrics.
+2.  **Backtesting Engine (V2):** A production-grade simulator mirroring live V2 logic — S/R + Fibonacci TP/SL, 30% profit-based trailing stop (safety net only), NO time exits (trades hold until TP/SL/trailing), confidence-scaled position sizing, and portfolio-level equity management. Supports walk-forward testing and provides comprehensive metrics.
 3.  **Probability Model:** Focuses on feature engineering and gradient boost scoring.
 4.  **Strategy Engine:** Incorporates four strategy families: trend_continuation (trend pullback), mean_reversion (exhaustion rebound, liquidity sweep), breakout_expansion (volatility breakout, volatility expansion), spike_event (spike hazard).
 5.  **Risk & Capital Manager:** Manages portfolio allocation, daily/weekly/max-drawdown limits, correlated family caps, and includes a kill switch mechanism.
@@ -37,7 +37,7 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
     -   **Signal Router:** Manages conflict resolution, multi-asset ranking, and tiered allocation.
     -   **AI Signal Verification:** GPT-4o powered verification of signals.
     -   **Signal Scheduler:** Manages staggered symbol scanning and position management.
-    -   **Trade Engine (V2):** Spike-magnitude-aware TP/SL. Boom/Crash: TP from rolling 60-90 day spike p75 (targets 50-200%+ full moves); SL from 30% of median spike drift. Volatility: structural S/R (major swing levels, pivots, Camarilla). 1500+ candle structural window. No ATR fallbacks ever. TP is PRIMARY exit; 30% trailing stop is SAFETY NET ONLY. Up to 2 positions per symbol (different strategies). See `V2_SPECIFICATION.md`.
+    -   **Trade Engine (V2):** Spike-magnitude-aware TP/SL. Boom/Crash: TP from rolling 60-90 day spike p75 (targets 50-200%+ full moves); SL from 30% of median spike drift. Volatility: structural S/R (major swing levels, pivots, Camarilla). 1500+ candle structural window. No ATR fallbacks ever. TP is PRIMARY exit; 30% trailing stop is SAFETY NET ONLY. NO time exits — trades hold until TP, SL, or trailing stop. Composite thresholds: 80 (paper), 85 (demo), 90 (real). Up to 2 positions per symbol (different strategies). See `V2_SPECIFICATION.md`.
     -   **Extraction Engine:** Manages capital cycles, targeting profit percentages for auto-extraction.
     -   **Symbol Diagnostics:** `/api/diagnostics/symbols` endpoint and Settings > Diagnostics tab show per-symbol stream health, validation status, tick counts, and errors.
 -   **Database Schema:** Key tables include `ticks`, `candles`, `spike_events`, `features`, `model_runs`, `backtest_trades`, `backtest_runs`, `trades`, `signal_log`, and `platform_state`.

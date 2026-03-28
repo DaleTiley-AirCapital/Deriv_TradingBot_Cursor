@@ -8,8 +8,6 @@ import { checkAndAutoExtract } from "./extractionEngine.js";
 const MAX_OPEN_TRADES = 3;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
 const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
-const TIME_EXIT_PROFIT_HOURS = 72;
-const TIME_EXIT_HARD_CAP_HOURS = 168;
 
 
 interface PositionSizing {
@@ -409,22 +407,10 @@ export function calculateProfitTrailingStop(params: {
   return { newSl: currentSl, updated: false };
 }
 
-export function checkTimeExit(params: {
+export function checkTimeExit(_params: {
   entryTs: Date;
   currentPnl: number;
 }): { shouldExit: boolean; exitReason: string | null } {
-  const { entryTs, currentPnl } = params;
-  const now = new Date();
-  const hoursOpen = (now.getTime() - entryTs.getTime()) / (1000 * 60 * 60);
-
-  if (hoursOpen >= TIME_EXIT_HARD_CAP_HOURS) {
-    return { shouldExit: true, exitReason: "hard_time_limit_168h" };
-  }
-
-  if (hoursOpen >= TIME_EXIT_PROFIT_HOURS && currentPnl > 0) {
-    return { shouldExit: true, exitReason: "profitable_after_72h" };
-  }
-
   return { shouldExit: false, exitReason: null };
 }
 
@@ -569,7 +555,6 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
   });
 
   const entryTs = new Date();
-  const maxExitTs = new Date(entryTs.getTime() + TIME_EXIT_HARD_CAP_HOURS * 60 * 60 * 1000);
 
   if ((mode === "demo" || mode === "real") && client) {
     try {
@@ -613,7 +598,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
       confidence: signal.confidence,
       trailingStopPct: PROFIT_TRAILING_DRAWDOWN_PCT,
       peakPrice: result.entrySpot,
-      maxExitTs,
+      maxExitTs: null,
       currentPrice: result.entrySpot,
       notes: `V2 S/R+Fib | Strategy: ${signal.strategyName} | Reason: ${signal.reason}`,
     }).returning();
@@ -634,7 +619,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
       confidence: signal.confidence,
       trailingStopPct: PROFIT_TRAILING_DRAWDOWN_PCT,
       peakPrice: spotPrice,
-      maxExitTs,
+      maxExitTs: null,
       currentPrice: spotPrice,
       notes: `V2 S/R+Fib | Strategy: ${signal.strategyName} | Reason: ${signal.reason}`,
     }).returning();

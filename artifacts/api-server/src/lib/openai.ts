@@ -124,7 +124,8 @@ TRADE MANAGEMENT (V2 Spike-Magnitude-Aware TP/SL):
 - SL: Boom/Crash: 30% of median spike drift. Volatility: structural S/R confluence with 0.3% buffer.
 - No ATR-based TP/SL. All exits from market structure + spike magnitude analysis.
 - Trailing: 30% peak-profit drawdown stop (SAFETY NET ONLY, activates in-profit)
-- Time Exits: 72h profitable close / 168h hard cap
+- NO TIME EXITS: Trades hold until TP, SL, or trailing stop. No forced 72h/168h closures.
+- Expect few trades (5-30 per multi-month period), long hold times (days/weeks).
 
 TECHNICAL INDICATORS:
 - RSI(14): ${ctx.rsi14.toFixed(2)}
@@ -207,9 +208,10 @@ V2 TRADE MANAGEMENT CONTEXT:
 - Boom/Crash TP: derived from rolling 60-90 day spike p75 magnitude. Boom/Crash SL: 30% of median spike drift.
 - Volatility TP: 70% of major swing range (multi-day structural levels). Volatility SL: nearest structural S/R confluence with 0.3% buffer.
 - No ATR-based TP/SL ever. All exits from market structure + spike magnitude analysis.
-- Trailing stop: 30% drawdown from peak unrealized profit (activates only in-profit)
-- Time exits: after 72h, close on first profitable tick; 168h hard cap on all trades
+- Trailing stop: 30% drawdown from peak unrealized profit (activates only in-profit, SAFETY NET ONLY)
+- NO time exits: trades hold until TP, SL, or trailing stop. No forced closures.
 - Position sizing: equity_pct_per_trade * confidence (single entry, no probe/confirmation stages)
+- Expect ~5-30 trades per multi-month backtest (long hold, few trades). NOT hundreds of trades.
 
 Backtest Results:
 - Strategy: ${metrics.strategyName}

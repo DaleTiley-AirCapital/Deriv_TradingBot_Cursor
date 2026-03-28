@@ -131,16 +131,15 @@ TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL eve
 3. Place SL with 0.3% buffer outside the cluster
 4. Safety cap: max loss = 10% of equity per position
 
-### Trailing Stop — 30% Peak-Profit Drawdown
+### Trailing Stop — 30% Peak-Profit Drawdown (SAFETY NET ONLY)
 - Activates only when the trade is in profit
 - Tracks peak unrealised profit percentage
 - Triggers exit when profit drops 30% from peak (e.g., peak 10% → exit at 7%)
-- This replaces V1's price-based trailing stop
+- This is a SAFETY NET — TP is the primary exit
 
-### Time Exits
-- **72 hours**: If profitable after 72h, close and take profit
-- **168 hours**: Hard cap — all trades closed regardless of PnL
-- No extensions, no per-family timing
+### NO Time Exits
+- No 72-hour profit exit. No 168-hour hard cap. Trades hold until TP, SL, or trailing stop.
+- Long-hold strategy: trades may remain open for days or weeks until the full spike move is captured.
 
 ## 4. Signal Pipeline — How Trades are Born
 1. **Tick Streaming** → Live price ticks from Deriv WebSocket
@@ -172,7 +171,7 @@ TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL eve
 ### Global Settings
 | Setting | What it means | Default |
 |---------|--------------|---------|
-| min_composite_score | Minimum quality score (0-100) for trading | 55/65/75 (paper/demo/real) |
+| min_composite_score | Minimum quality score (0-100) for trading | 80/85/90 (paper/demo/real) |
 | min_ev_threshold | Minimum expected value | 0.001 |
 | min_rr_ratio | Minimum reward-to-risk ratio (from S/R levels) | 1.5 (live) / 1.2 (backtest) |
 | scoring_weight_* | Six dimension weights for composite scoring | See §4 |
@@ -219,11 +218,11 @@ TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL eve
 
 ## 10. Core Trading Philosophy
 - LARGE CAPITAL PER TRADE: Deploy 15-25% equity per position
-- HIGHEST-QUALITY SIGNALS ONLY: Composite score ≥ 80+
-- LONG HOLD: 72h profit exit, 168h hard cap
+- HIGHEST-QUALITY SIGNALS ONLY: Composite score ≥ 80 (paper), ≥ 85 (demo), ≥ 90 (real)
+- LONG HOLD, NO TIME EXITS: Trades stay open until TP, SL, or trailing stop. No forced closures.
 - DYNAMIC TP/SL: Spike-magnitude-aware (Boom/Crash) + structural S/R confluence (Volatility). TP is PRIMARY exit; trailing stop is SAFETY NET ONLY. No ATR fallbacks.
-- 30% PEAK-PROFIT TRAILING: Lock in gains from peak unrealised profit
-- FEW POSITIONS: Max 2-4 open trades
+- 30% PEAK-PROFIT TRAILING: Lock in gains from peak unrealised profit (safety net only)
+- FEW POSITIONS: Max 2-4 open trades. Expect ~5-30 trades per multi-month backtest, NOT hundreds.
 - EXTRACT PROFITS REGULARLY: Don't let compound risk grow`;
 
 

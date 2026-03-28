@@ -8,8 +8,6 @@ import { findSwingLevels, findMultiSwingTrendlines, findMajorSwingLevels } from 
 import type { ScoringWeights } from "./scoring.js";
 
 const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
-const TIME_EXIT_PROFIT_HOURS = 72;
-const MAX_EXIT_HOURS = 168;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
 const HOURLY_WINDOW_SEC = 3600;
 
@@ -132,7 +130,6 @@ interface OpenPosition {
   currentSl: number;
   confidence: number;
   positionSize: number;
-  maxExitTs: number;
   extended: boolean;
 }
 
@@ -752,22 +749,6 @@ function simulateOnCandles(
         }
       }
 
-      if (!exitPrice) {
-        const hardMaxTs = pos.entryTs + MAX_EXIT_HOURS * 3600;
-        if (ts >= hardMaxTs) {
-          exitPrice = candle.close;
-          exitReason = "TIME_HARD_CAP_168H";
-        } else if (hoursOpen >= TIME_EXIT_PROFIT_HOURS) {
-          const unrealizedPnl = pos.direction === "buy"
-            ? (candle.close - pos.entryPrice) / pos.entryPrice
-            : (pos.entryPrice - candle.close) / pos.entryPrice;
-
-          if (unrealizedPnl > 0) {
-            exitPrice = candle.close;
-            exitReason = "PROFITABLE_AT_72H";
-          }
-        }
-      }
 
       if (exitPrice !== null && exitReason !== null) {
         const priceDiff = pos.direction === "buy"
@@ -817,7 +798,7 @@ function simulateOnCandles(
         ? signals.filter(s => strategies.includes(s.strategyName))
         : signals;
 
-      const minComposite = config.minCompositeScore ?? 60;
+      const minComposite = config.minCompositeScore ?? 80;
       const minEv = config.minEvThreshold ?? 0.001;
       const minRr = config.minRrRatio ?? 1.2;
 
@@ -896,7 +877,6 @@ function simulateOnCandles(
         if (slDist <= 0 || tpDist / slDist < minRr) continue;
 
         const entryTs = candles[idx].openTs;
-        const maxExitTs = entryTs + MAX_EXIT_HOURS * 3600;
 
         openPositions.push({
           symbol: sym,
@@ -910,7 +890,6 @@ function simulateOnCandles(
           currentSl: sl,
           confidence: signal.confidence,
           positionSize,
-          maxExitTs,
           extended: false,
         });
       }
@@ -1301,9 +1280,9 @@ export async function runBacktestSimulation(
     initialCapital,
     mode,
     basePct,
-    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "60"),
+    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "80"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
-    minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.2"),
+    minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
     scoringWeights,
   });
 
@@ -1394,9 +1373,9 @@ export async function runSymbolBacktest(
     initialCapital,
     mode,
     basePct,
-    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "60"),
+    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "80"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
-    minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.2"),
+    minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
     scoringWeights,
   });
 
