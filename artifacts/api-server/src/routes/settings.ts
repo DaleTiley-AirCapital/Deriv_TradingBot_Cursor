@@ -271,12 +271,7 @@ router.get("/settings/openai-health", async (_req, res): Promise<void> => {
 });
 
 const STRATEGIES = ["trend_continuation", "mean_reversion", "spike_cluster_recovery", "swing_exhaustion", "trendline_breakout"];
-const DEFAULT_SYMBOLS = [
-  "BOOM1000", "CRASH1000", "BOOM900", "CRASH900",
-  "BOOM600", "CRASH600", "BOOM500", "CRASH500",
-  "BOOM300", "CRASH300",
-  "R_75", "R_100",
-];
+const DEFAULT_SYMBOLS = ["CRASH300", "BOOM300", "R_75", "R_100"];
 
 
 async function runBacktestForOptimisation(
