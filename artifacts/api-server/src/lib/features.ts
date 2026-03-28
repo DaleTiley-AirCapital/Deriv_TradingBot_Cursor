@@ -601,19 +601,36 @@ export async function computeFeatures(symbol: string, lookback = STRUCTURAL_LOOK
   const zScore = z20Std > 0 ? (price - z20Mean) / z20Std : 0;
   const rollingSkew = skewness(z20Closes);
 
-  // Spike features
+  // Spike features — candle-based directional spike counting (>1% single-candle move)
+  const isBoomCrash = symbol.startsWith("BOOM") || symbol.startsWith("CRASH");
+  const isCrashSymbol = symbol.startsWith("CRASH");
+  const spikeThreshold = 0.01;
+  let spikeCount4h = 0, spikeCount24h = 0, spikeCount7d = 0;
+
+  if (isBoomCrash && candles.length >= 2) {
+    const fourHoursCandles = 4 * 60;
+    const twentyFourHoursCandles = 24 * 60;
+    const sevenDaysCandles = 7 * 24 * 60;
+    for (let ci = candles.length - 1; ci >= 1; ci--) {
+      const candlesBack = candles.length - 1 - ci;
+      const rawMove = (candles[ci].close - candles[ci - 1].close) / candles[ci - 1].close;
+      const isDirectionalSpike = isCrashSymbol ? (rawMove < -spikeThreshold) : (rawMove > spikeThreshold);
+      if (isDirectionalSpike) {
+        if (candlesBack <= fourHoursCandles) spikeCount4h++;
+        if (candlesBack <= twentyFourHoursCandles) spikeCount24h++;
+        if (candlesBack <= sevenDaysCandles) spikeCount7d++;
+      }
+      if (candlesBack > sevenDaysCandles) break;
+    }
+  }
+
+  // DB spike events still used for hazard score calculation
   const nowEpoch = Math.floor(Date.now() / 1000);
-  const fourHoursAgo = nowEpoch - 4 * 3600;
-  const twentyFourHoursAgo = nowEpoch - 24 * 3600;
   const sevenDaysAgo = nowEpoch - 7 * 86400;
 
   const allRecentSpikes = await db.select().from(spikeEventsTable)
     .where(and(eq(spikeEventsTable.symbol, symbol), gte(spikeEventsTable.eventTs, sevenDaysAgo)))
     .orderBy(desc(spikeEventsTable.eventTs));
-
-  const spikeCount4h = allRecentSpikes.filter(s => s.eventTs >= fourHoursAgo).length;
-  const spikeCount24h = allRecentSpikes.filter(s => s.eventTs >= twentyFourHoursAgo).length;
-  const spikeCount7d = allRecentSpikes.length;
 
   let ticksSinceSpike = 9999;
   let runLengthSinceSpike = 500;

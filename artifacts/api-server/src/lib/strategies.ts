@@ -244,7 +244,7 @@ function spikeClusterRecovery(features: FeatureVector, regime: RegimeClassificat
   let reason: string = "";
 
   if (isCrash) {
-    const priceDeclined24h = features.priceChange24hPct < -0.02;
+    const priceDeclined24h = features.priceChange24hPct < -0.05;
     const reversalCandle = features.latestClose > features.latestOpen;
     const candleSmall = features.candleBody < 0.40;
     const slopeFlattening = features.emaSlope > -0.0002;
@@ -254,7 +254,7 @@ function spikeClusterRecovery(features: FeatureVector, regime: RegimeClassificat
       reason = `Crash spike cluster → BUY: ${features.spikeCount4h} spikes/4h, ${features.spikeCount24h}/24h, 24h_decline=${(features.priceChange24hPct*100).toFixed(2)}%, green reversal candle, slope=${features.emaSlope.toFixed(5)}`;
     }
   } else {
-    const priceRallied24h = features.priceChange24hPct > 0.02;
+    const priceRallied24h = features.priceChange24hPct > 0.05;
     const reversalCandle = features.latestClose < features.latestOpen;
     const candleSmall = features.candleBody < 0.40;
     const slopeFlattening = features.emaSlope < 0.0002;
