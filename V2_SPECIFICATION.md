@@ -26,11 +26,21 @@
 V2 replaces V1's static ATR-multiplier trade management with dynamic, market-structure-aware logic. The core principles:
 
 - **Large capital, long hold, max profit.** Swing trades on highest-probability signals only.
-- **TP/SL derived from actual market structure** (swing highs/lows, Fibonacci levels, Bollinger Bands) — not fixed ATR multiples.
+- **TP targets full spike magnitude (50-200%+).** TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. Never scalp 1-5% moves.
+- **TP/SL derived from actual market structure + spike magnitude analysis** — never from ATR multiples.
+- **Rolling 60-90 day spike magnitude analysis** from `spike_events` table drives TP distance for Boom/Crash indices.
+- **1500+ candle structural window** for swing levels, VWAP, pivots, Fibonacci — never just 100 one-minute candles.
+- **Boom/Crash and Volatility indices treated differently** — spike-magnitude TP for Boom/Crash, multi-day S/R for Volatility.
 - **Trailing stop protects realized profit** — trails at 30% below peak unrealized profit percentage, not price.
 - **Simplified time exits** — 72h profitable close, 168h hard cap. No extension logic.
-- **One position per symbol.** No multi-stage building (probe/confirmation/momentum removed).
+- **Up to 2 positions per symbol** (different strategy families). No multi-stage building.
 - **AI never auto-changes settings.** Blocked signals get `aiVerdict="skipped"`.
+
+### CRITICAL DESIGN MANDATES — DO NOT VIOLATE
+1. **TP is PRIMARY exit** targeting full spike magnitude (50-200%+). Trailing stop is SAFETY NET ONLY.
+2. **Never use ATR-based TP/SL exits.** All exits from market structure and spike magnitude analysis.
+3. **Never compute structural indicators from only 100 one-minute candles.** Use 1500+ candles for structure, 100 for fast indicators.
+4. **Use rolling 60-90 day windows** (not static all-time levels) for spike magnitude analysis.
 
 ---
 
@@ -38,16 +48,19 @@ V2 replaces V1's static ATR-multiplier trade management with dynamic, market-str
 
 ### Feature Vector Additions (`features.ts`)
 
-New fields computed in `computeFeatures()`:
+New fields computed in `computeFeatures()` (1500-candle structural window, 100-candle fast window):
 
 | Field | Type | Description |
 |---|---|---|
 | `swingHigh` | `number` | Highest high in lookback window (50 candles) |
 | `swingLow` | `number` | Lowest low in lookback window |
+| `majorSwingHigh` | `number` | 20-bar major swing high from 1500+ candle window |
+| `majorSwingLow` | `number` | 20-bar major swing low from 1500+ candle window |
+| `spikeMagnitude` | `SpikeMagnitudeStats \| null` | Rolling 60-90 day spike stats: `{ median, p75, p90, count }` (absolute price change) |
 | `fibRetraceLevels` | `number[]` | Fibonacci retracement levels: 23.6%, 38.2%, 50%, 61.8%, 78.6% between swing low and swing high |
 | `fibExtensionLevels` | `number[]` | Fibonacci extension levels: 127.2%, 161.8%, 200% projected beyond swing range |
-| `bbUpper` | `number` | Upper Bollinger Band value |
-| `bbLower` | `number` | Lower Bollinger Band value |
+| `bbUpper` | `number` | Upper Bollinger Band value (fast 100-candle window) |
+| `bbLower` | `number` | Lower Bollinger Band value (fast 100-candle window) |
 | `vwap` | `number` | Volume-Weighted Average Price (range-proxy) |
 | `pivotPoint` | `number` | Classic pivot point from previous session H/L/C |
 | `pivotR1`–`pivotR3` | `number` | Classic pivot resistance levels |
@@ -61,27 +74,33 @@ New fields computed in `computeFeatures()`:
 
 ### `calculateSRFibTP()` (`tradeEngine.ts`)
 
-For **buy** trades:
-1. Collect candidates: swing high, all fib extension levels, BB upper, pivot R1-R3, Camarilla H3/H4, VWAP, psychological round, previous session high.
-2. Filter to candidates **above** entry price.
-3. Find confluence zones (2+ levels within 0.5% of each other) — prefer nearest confluence cluster.
-4. Apply 0.2% buffer inside the level: `tp = level * 0.998`.
-5. Floor: `tp >= entry * (1 + 3 * atrPct)`.
-6. Fallback (no candidates): `tp = entry * (1 + 6 * atrPct)`.
+**Boom/Crash indices** (spike-magnitude primary):
+1. Primary TP = entry ± spike p75 (converted to percentage). Targets full spike travel.
+2. If spike data unavailable, falls back to structural S/R confluence (major swing levels, fib extensions, pivots).
+3. No ATR fallback ever.
 
-For **sell** trades: mirror logic using candidates below entry, fib extensions projected downward, pivot S1-S3, Camarilla L3/L4, previous session low.
+**Volatility indices** (structural S/R primary):
+1. Compute full swing range from `majorSwingHigh - majorSwingLow`.
+2. Buy TP: entry + 70% of swing range. Sell TP: entry - 70% of swing range.
+3. Clamped to major swing level if beyond it.
+4. No ATR fallback ever.
+
+For **sell** trades: mirror logic in both cases.
 
 ### `calculateSRFibSL()` (`tradeEngine.ts`)
 
-For **buy** trades:
-1. Collect candidates: swing low, all fib retrace levels, BB lower, pivot S1-S3, Camarilla L3/L4, VWAP, previous session low.
-2. Filter to candidates **below** entry price.
-3. Find confluence zones (2+ levels within 0.5%) — prefer nearest confluence cluster.
-4. Apply 0.2% buffer outside the level: `sl = level * 0.998`.
-5. Safety floor: `sl = max(sl, entry * (1 - 0.10 * equity / positionSize))` — caps loss at 10% of equity.
-6. Fallback (no candidates): `sl = entry * (1 - 2.5 * atrPct)`.
+**Boom/Crash indices** (spike-drift SL):
+1. SL distance = 30% of median spike magnitude (converted to percentage).
+2. Buy SL: entry × (1 - driftPct). Sell SL: entry × (1 + driftPct).
+3. Safety cap: max loss 10% of equity.
+4. No ATR fallback ever.
 
-For **sell** trades: mirror logic using candidates above entry, pivot R1-R3, Camarilla H3/H4, previous session high.
+**Volatility indices** (structural S/R SL):
+1. Compute nearest structural support/resistance beyond entry using major swing, pivot, Camarilla, VWAP levels.
+2. Find nearest confluence cluster below (buy) or above (sell) entry.
+3. Buffer 0.3% outside the level.
+4. Safety cap: max loss 10% of equity.
+5. No ATR fallback ever.
 
 ### Strategy-Level Integration (`strategies.ts`)
 

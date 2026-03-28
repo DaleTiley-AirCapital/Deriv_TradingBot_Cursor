@@ -1,4 +1,4 @@
-import type { FeatureVector } from "./features.js";
+import type { FeatureVector, SpikeMagnitudeStats } from "./features.js";
 import { scoreFeaturesForFamily } from "./model.js";
 import { computeScoringDimensions, computeCompositeScore, type ScoringWeights } from "./scoring.js";
 import { classifyRegime, getCachedRegime, cacheRegime, getHourlyAveragedFeatures, type StrategyFamily, type RegimeClassification } from "./regimeEngine.js";
@@ -45,6 +45,9 @@ export interface SignalCandidate {
   prevSessionHigh?: number;
   prevSessionLow?: number;
   prevSessionClose?: number;
+  spikeMagnitude?: SpikeMagnitudeStats | null;
+  majorSwingHigh?: number;
+  majorSwingLow?: number;
 }
 
 const FAMILY_CONFIG: Record<StrategyFamily, {
@@ -110,6 +113,9 @@ function buildCandidate(
     prevSessionHigh: features.prevSessionHigh,
     prevSessionLow: features.prevSessionLow,
     prevSessionClose: features.prevSessionClose,
+    spikeMagnitude: features.spikeMagnitude,
+    majorSwingHigh: features.majorSwingHigh,
+    majorSwingLow: features.majorSwingLow,
   };
 }
 

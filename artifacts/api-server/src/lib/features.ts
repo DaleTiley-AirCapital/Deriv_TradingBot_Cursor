@@ -3,7 +3,15 @@
  * Computes technical indicators and regime features from candle/tick data
  */
 import { db, candlesTable, spikeEventsTable, featuresTable } from "@workspace/db";
-import { desc, eq, and, gte } from "drizzle-orm";
+import { desc, eq, and, gte, lte } from "drizzle-orm";
+
+export interface SpikeMagnitudeStats {
+  median: number;
+  p75: number;
+  p90: number;
+  count: number;
+  instrumentFamily: "boom" | "crash" | "volatility" | "other_synthetic";
+}
 
 export interface FeatureVector {
   symbol: string;
@@ -68,6 +76,9 @@ export interface FeatureVector {
   trendlineSupportTouches: number;
   trendlineResistanceLevel: number;
   trendlineSupportLevel: number;
+  spikeMagnitude: SpikeMagnitudeStats | null;
+  majorSwingHigh: number;
+  majorSwingLow: number;
 }
 
 function ema(values: number[], period: number): number[] {
@@ -392,8 +403,76 @@ function detectRegime(closes: number[], atrVal: number, ema20: number[]): string
   return "ranging";
 }
 
-export async function computeFeatures(symbol: string, lookback = 100): Promise<FeatureVector | null> {
-  // Get recent candles
+function classifyInstrumentForSpike(symbol: string): "boom" | "crash" | "volatility" | "other_synthetic" {
+  if (symbol.startsWith("BOOM")) return "boom";
+  if (symbol.startsWith("CRASH")) return "crash";
+  if (symbol.startsWith("R_")) return "volatility";
+  return "other_synthetic";
+}
+
+export async function getSpikeMagnitudeStats(symbol: string, rollingDays = 90, beforeTs?: number): Promise<SpikeMagnitudeStats | null> {
+  const anchorTs = beforeTs ?? Date.now() / 1000;
+  const cutoffTs = anchorTs - rollingDays * 86400;
+
+  const conditions = [
+    eq(spikeEventsTable.symbol, symbol),
+    gte(spikeEventsTable.eventTs, cutoffTs),
+  ];
+  if (beforeTs != null) {
+    conditions.push(lte(spikeEventsTable.eventTs, beforeTs));
+  }
+
+  const spikes = await db.select().from(spikeEventsTable)
+    .where(and(...conditions))
+    .orderBy(desc(spikeEventsTable.eventTs));
+
+  if (spikes.length < 5) return null;
+
+  const sizes = spikes.map(s => Math.abs(s.spikeSize)).sort((a, b) => a - b);
+  const n = sizes.length;
+
+  const median = n % 2 === 0 ? (sizes[n / 2 - 1] + sizes[n / 2]) / 2 : sizes[Math.floor(n / 2)];
+  const p75Idx = Math.floor(n * 0.75);
+  const p90Idx = Math.floor(n * 0.90);
+  const p75 = sizes[Math.min(p75Idx, n - 1)];
+  const p90 = sizes[Math.min(p90Idx, n - 1)];
+
+  return {
+    median,
+    p75,
+    p90,
+    count: n,
+    instrumentFamily: classifyInstrumentForSpike(symbol),
+  };
+}
+
+export function findMajorSwingLevels(
+  highs: number[], lows: number[], pivotBars = 20
+): { majorSwingHigh: number; majorSwingLow: number } {
+  let majorHigh = -Infinity;
+  let majorLow = Infinity;
+
+  for (let i = highs.length - pivotBars - 1; i >= pivotBars; i--) {
+    let isHigh = true;
+    let isLow = true;
+    for (let j = 1; j <= pivotBars; j++) {
+      if (highs[i] <= highs[i - j] || highs[i] <= highs[i + j]) isHigh = false;
+      if (lows[i] >= lows[i - j] || lows[i] >= lows[i + j]) isLow = false;
+    }
+    if (isHigh && highs[i] > majorHigh) majorHigh = highs[i];
+    if (isLow && lows[i] < majorLow) majorLow = lows[i];
+  }
+
+  if (majorHigh === -Infinity) majorHigh = Math.max(...highs.slice(-200));
+  if (majorLow === Infinity) majorLow = Math.min(...lows.slice(-200));
+
+  return { majorSwingHigh: majorHigh, majorSwingLow: majorLow };
+}
+
+const STRUCTURAL_LOOKBACK = 1500;
+const FAST_INDICATOR_LOOKBACK = 100;
+
+export async function computeFeatures(symbol: string, lookback = STRUCTURAL_LOOKBACK): Promise<FeatureVector | null> {
   const candles = await db.select().from(candlesTable)
     .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")))
     .orderBy(desc(candlesTable.openTs))
@@ -412,21 +491,23 @@ export async function computeFeatures(symbol: string, lookback = 100): Promise<F
   const last = candles[candles.length - 1];
   const price = last.close;
 
-  // EMA
-  const ema20Arr = ema(closes, 20);
-  const ema50Arr = ema(closes, Math.min(50, closes.length));
+  const fastStart = Math.max(0, candles.length - FAST_INDICATOR_LOOKBACK);
+  const fastCloses = closes.slice(fastStart);
+  const fastHighs = highs.slice(fastStart);
+  const fastLows = lows.slice(fastStart);
+
+  const ema20Arr = ema(fastCloses, 20);
+  const ema50Arr = ema(fastCloses, Math.min(50, fastCloses.length));
   const ema20 = ema20Arr[ema20Arr.length - 1];
   const ema20Prev = ema20Arr[ema20Arr.length - 2] || ema20;
   const emaSlope = (ema20 - ema20Prev) / ema20;
   const emaDist = (price - ema20) / ema20;
 
-  // RSI
-  const rsi14 = rsi(closes, 14);
+  const rsi14 = rsi(fastCloses, 14);
   const rsiZone = rsi14 < 30 ? -1 : rsi14 > 70 ? 1 : 0;
 
-  // ATR
-  const atr14 = atr(highs, lows, closes, 14) / price;
-  const atr50 = atr(highs, lows, closes, Math.min(50, closes.length)) / price;
+  const atr14 = atr(fastHighs, fastLows, fastCloses, 14) / price;
+  const atr50 = atr(fastHighs, fastLows, fastCloses, Math.min(50, fastCloses.length)) / price;
   const atrRank = atr50 > 0 ? Math.min(atr14 / atr50, 2) : 1;
 
   // Bollinger Bands (20, 2)
@@ -501,7 +582,7 @@ export async function computeFeatures(symbol: string, lookback = 100): Promise<F
     }
   }
 
-  const regimeLabel = detectRegime(closes, atr14, ema20Arr);
+  const regimeLabel = detectRegime(fastCloses, atr14, ema20Arr);
 
   const { swingHigh, swingLow } = findSwingLevels(highs, lows, 5);
   const swingHighDist = (price - swingHigh) / price;
@@ -509,12 +590,10 @@ export async function computeFeatures(symbol: string, lookback = 100): Promise<F
   const swingResult = detectSwingBreachAndReclaim(candles, swingHigh, swingLow);
   const fibLevels = computeFibonacciLevels(swingLow, swingHigh);
 
-  // BB width rate-of-change
-  const bbWidthPrev = closes.length > 25 ? computeBbWidthAtIndex(closes, closes.length - 6) : bbWidth;
+  const bbWidthPrev = fastCloses.length > 25 ? computeBbWidthAtIndex(fastCloses, fastCloses.length - 6) : bbWidth;
   const bbWidthRoc = bbWidthPrev > 0 ? (bbWidth - bbWidthPrev) / bbWidthPrev : 0;
 
-  // ATR acceleration
-  const atr14Prev = closes.length > 20 ? atr(highs.slice(0, -5), lows.slice(0, -5), closes.slice(0, -5), 14) / (closes[closes.length - 6] || price) : atr14;
+  const atr14Prev = fastCloses.length > 20 ? atr(fastHighs.slice(0, -5), fastLows.slice(0, -5), fastCloses.slice(0, -5), 14) / (fastCloses[fastCloses.length - 6] || price) : atr14;
   const atrAccel = atr14Prev > 0 ? (atr14 / atr14Prev) - 1 : 0;
 
   // Time features
@@ -543,6 +622,12 @@ export async function computeFeatures(symbol: string, lookback = 100): Promise<F
   const prevSession = getPreviousSession(candles as unknown as { high: number; low: number; close: number; openTs: number }[]);
   const pivots = computePivotPoints(prevSession.high, prevSession.low, prevSession.close);
   const psychRound = computePsychologicalRound(price);
+
+  const spikeMagnitude = await getSpikeMagnitudeStats(symbol);
+
+  const majorSwings = candles.length >= 200
+    ? findMajorSwingLevels(highs, lows, 20)
+    : { majorSwingHigh: swingHigh, majorSwingLow: swingLow };
 
   return {
     symbol,
@@ -613,6 +698,9 @@ export async function computeFeatures(symbol: string, lookback = 100): Promise<F
         trendlineSupportLevel: trendlines.support.level,
       };
     })(),
+    spikeMagnitude,
+    majorSwingHigh: majorSwings.majorSwingHigh,
+    majorSwingLow: majorSwings.majorSwingLow,
   };
 }
 

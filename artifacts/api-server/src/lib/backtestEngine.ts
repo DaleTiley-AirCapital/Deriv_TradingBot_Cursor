@@ -3,8 +3,8 @@ import { eq, and, asc, gte, lte } from "drizzle-orm";
 import { runAllStrategies, type SignalCandidate } from "./strategies.js";
 import { calculateProfitTrailingStop, calculateSRFibTP, calculateSRFibSL } from "./tradeEngine.js";
 import { classifyRegime, type RegimeClassification } from "./regimeEngine.js";
-import type { FeatureVector } from "./features.js";
-import { findSwingLevels, findMultiSwingTrendlines } from "./features.js";
+import type { FeatureVector, SpikeMagnitudeStats } from "./features.js";
+import { findSwingLevels, findMultiSwingTrendlines, findMajorSwingLevels } from "./features.js";
 import type { ScoringWeights } from "./scoring.js";
 
 const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
@@ -276,6 +276,7 @@ function detectRegime(closes: number[], atrVal: number, ema20: number[]): string
 export function computeFeaturesFromCandles(
   candles: CandleData[],
   symbol: string,
+  spikeMagnitudeOverride?: SpikeMagnitudeStats | null,
 ): FeatureVector | null {
   if (candles.length < 30) return null;
 
@@ -512,6 +513,14 @@ export function computeFeaturesFromCandles(
         trendlineSupportLevel: trendlines.support.level,
       };
     })(),
+    spikeMagnitude: spikeMagnitudeOverride ?? null,
+    ...(() => {
+      if (candles.length >= 200) {
+        const major = findMajorSwingLevels(highs, lows, 20);
+        return { majorSwingHigh: major.majorSwingHigh, majorSwingLow: major.majorSwingLow };
+      }
+      return { majorSwingHigh: swingHigh, majorSwingLow: swingLow };
+    })(),
   };
 }
 
@@ -638,6 +647,7 @@ function simulateOnCandles(
   allCandlesBySymbol: Record<string, CandleData[]>,
   config: BacktestConfig,
   strategies?: string[],
+  spikeMagnitudeBySymbol?: Record<string, SpikeMagnitudeStats | null>,
 ): { trades: BacktestTrade[]; equityCurve: { ts: string; equity: number }[] } {
   const maxConcurrent = config.maxConcurrentPositions ??
     (config.mode === "live" ? DEFAULT_MAX_CONCURRENT_LIVE : DEFAULT_MAX_CONCURRENT_PAPER);
@@ -672,7 +682,7 @@ function simulateOnCandles(
     candleIndexBySymbol[sym] = 0;
   }
 
-  const LOOKBACK = 50;
+  const LOOKBACK = 1500;
 
   for (let tsIdx = 0; tsIdx < sortedTimestamps.length; tsIdx++) {
     const ts = sortedTimestamps[tsIdx];
@@ -787,7 +797,8 @@ function simulateOnCandles(
       if (idx < LOOKBACK || idx >= candles.length || candles[idx].openTs !== ts) continue;
 
       const window = candles.slice(Math.max(0, idx - LOOKBACK), idx + 1);
-      const features = computeFeaturesFromCandles(window, sym);
+      const symSpikeMag = spikeMagnitudeBySymbol?.[sym] ?? null;
+      const features = computeFeaturesFromCandles(window, sym, symSpikeMag);
       if (!features) continue;
 
       backtestAccumulateHourly(htfAccumulators, features, ts);
@@ -838,6 +849,8 @@ function simulateOnCandles(
           direction: signal.direction,
           swingHigh: features.swingHigh,
           swingLow: features.swingLow,
+          majorSwingHigh: features.majorSwingHigh,
+          majorSwingLow: features.majorSwingLow,
           fibExtensionLevels: features.fibExtensionLevels,
           fibExtensionLevelsDown: features.fibExtensionLevelsDown,
           bbUpper: features.bbUpper,
@@ -848,6 +861,7 @@ function simulateOnCandles(
           psychRound: features.psychRound,
           prevSessionHigh: features.prevSessionHigh,
           prevSessionLow: features.prevSessionLow,
+          spikeMagnitude: features.spikeMagnitude,
         });
 
         const sl = calculateSRFibSL({
@@ -855,6 +869,8 @@ function simulateOnCandles(
           direction: signal.direction,
           swingHigh: features.swingHigh,
           swingLow: features.swingLow,
+          majorSwingHigh: features.majorSwingHigh,
+          majorSwingLow: features.majorSwingLow,
           fibRetraceLevels: features.fibRetraceLevels,
           bbUpper: features.bbUpper,
           bbLower: features.bbLower,
@@ -865,6 +881,7 @@ function simulateOnCandles(
           vwap: features.vwap,
           prevSessionLow: features.prevSessionLow,
           prevSessionHigh: features.prevSessionHigh,
+          spikeMagnitude: features.spikeMagnitude,
         });
 
         const tpDist = Math.abs(tp - price);
@@ -999,7 +1016,16 @@ export async function runFullBacktest(config: BacktestConfig): Promise<BacktestR
     );
   }
 
-  const { trades, equityCurve } = simulateOnCandles(allCandlesBySymbol, config, strategies);
+  const { getSpikeMagnitudeStats } = await import("./features.js");
+  const backtestAnchorTs = config.startDate
+    ? new Date(config.startDate).getTime() / 1000
+    : undefined;
+  const spikeMagnitudeBySymbol: Record<string, SpikeMagnitudeStats | null> = {};
+  for (const sym of Object.keys(allCandlesBySymbol)) {
+    spikeMagnitudeBySymbol[sym] = await getSpikeMagnitudeStats(sym, 90, backtestAnchorTs);
+  }
+
+  const { trades, equityCurve } = simulateOnCandles(allCandlesBySymbol, config, strategies, spikeMagnitudeBySymbol);
 
   const portfolioMetrics = computeMetrics(trades, config.initialCapital, equityCurve);
   tagRegimes(trades, allCandlesBySymbol, portfolioMetrics);
@@ -1043,7 +1069,7 @@ export async function runFullBacktest(config: BacktestConfig): Promise<BacktestR
   }
 
   if (config.walkForward) {
-    result.walkForward = await runWalkForward(allCandlesBySymbol, config);
+    result.walkForward = await runWalkForward(allCandlesBySymbol, config, spikeMagnitudeBySymbol);
   }
 
   return result;
@@ -1071,6 +1097,7 @@ function buildEquityCurveFromTrades(
 async function runWalkForward(
   allCandlesBySymbol: Record<string, CandleData[]>,
   config: BacktestConfig,
+  spikeMagnitudeBySymbol?: Record<string, SpikeMagnitudeStats | null>,
 ): Promise<WalkForwardResult> {
   const wf = config.walkForward!;
   const allTs = Object.values(allCandlesBySymbol).flat().map(c => c.openTs).sort((a, b) => a - b);
@@ -1101,8 +1128,8 @@ async function runWalkForward(
 
     const strategies = config.strategyName ? [config.strategyName] : undefined;
 
-    const trainResult = simulateOnCandles(trainCandles, config, strategies);
-    const testResult = simulateOnCandles(testCandles, config, strategies);
+    const trainResult = simulateOnCandles(trainCandles, config, strategies, spikeMagnitudeBySymbol);
+    const testResult = simulateOnCandles(testCandles, config, strategies, spikeMagnitudeBySymbol);
 
     const isMet = computeMetrics(trainResult.trades, config.initialCapital, trainResult.equityCurve);
     const oosMet = computeMetrics(testResult.trades, config.initialCapital, testResult.equityCurve);
