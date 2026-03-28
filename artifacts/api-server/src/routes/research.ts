@@ -18,6 +18,7 @@ const MAX_CONSECUTIVE_ERRORS = 5;
 const API_RATE_DELAY_MS = 150;
 const DEFAULT_CAPITAL = 600;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
+const SUFFICIENT_CANDLE_COUNT = 330_000;
 
 const ENC_KEY_SOURCE = process.env["DATABASE_URL"] || process.env["ENCRYPTION_SECRET"];
 const ENC_DERIVED_KEY = ENC_KEY_SOURCE ? scryptSync(ENC_KEY_SOURCE, "deriv-quant-salt", 32) : null;
@@ -129,6 +130,17 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
   try {
     await pruneOldCandles();
 
+    const [candleCountResult] = await db.select({ n: count() }).from(candlesTable)
+      .where(eq(candlesTable.symbol, symbol));
+    const existingCandleCount = candleCountResult?.n ?? 0;
+
+    if (existingCandleCount >= SUFFICIENT_CANDLE_COUNT) {
+      send({
+        phase: "data_sufficient", symbol,
+        candles: existingCandleCount,
+        message: `Data sufficient (${existingCandleCount.toLocaleString()} records), skipping download — running simulation...`,
+      });
+    } else {
     send({ phase: "download_start", symbol, message: `Downloading 12 months of data for ${symbol}...` });
 
     const client = await getDerivClientWithDbToken();
@@ -226,6 +238,7 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
       candles: totalInserted,
       message: `Download complete: ${totalInserted.toLocaleString()} candles for ${symbol}`,
     });
+    }
 
     send({ phase: "backtest_start", symbol, message: `Running all strategies on ${symbol}...` });
 

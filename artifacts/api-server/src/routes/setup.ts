@@ -36,6 +36,7 @@ const DEFAULT_CAPITAL = 600;
 const API_RATE_DELAY_MS = 150;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
 const MIN_SYMBOLS_FOR_PROCEED = 8;
+const SUFFICIENT_CANDLE_COUNT = 330_000;
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade",
   "demo_equity_pct_per_trade",
@@ -333,6 +334,39 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       const apiSymbol = getApiSymbol(symbol);
       let symbolTotalInserted = 0;
       let symbolFailed = false;
+
+      const [symbolCandleCount] = await db.select({ n: count() }).from(candlesTable)
+        .where(eq(candlesTable.symbol, symbol));
+      const symbolExistingCount = symbolCandleCount?.n ?? 0;
+
+      if (symbolExistingCount >= SUFFICIENT_CANDLE_COUNT) {
+        console.log(`[Setup] Symbol ${symbol} has ${symbolExistingCount} candles (>= ${SUFFICIENT_CANDLE_COUNT}), marking complete immediately.`);
+        jobsDone += timeframes.length;
+        candleTotal += symbolExistingCount;
+        send({
+          phase: "backfill_symbol_done", stage: "backfill", symbol,
+          symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+          candlesForSymbol: symbolExistingCount, candleTotal,
+          overallPct: Math.round((jobsDone / totalJobs) * 40),
+          symbolPct: 100,
+          totalExpected: perSymbolExpected,
+          status: "done",
+          skipped: true,
+          message: `${symbol} — data sufficient (${symbolExistingCount.toLocaleString()} records), skipped download`,
+        });
+        continue;
+      }
+
+      if (symbolExistingCount > 0) {
+        console.log(`[Setup] Symbol ${symbol} has ${symbolExistingCount} candles (< ${SUFFICIENT_CANDLE_COUNT}), deleting partial data for clean re-download.`);
+        await db.delete(candlesTable).where(eq(candlesTable.symbol, symbol));
+        send({
+          phase: "backfill_partial_cleanup", stage: "backfill", symbol,
+          symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+          deletedCount: symbolExistingCount,
+          message: `${symbol}: deleted ${symbolExistingCount.toLocaleString()} partial records, re-downloading from scratch...`,
+        });
+      }
 
       send({
         phase: "backfill_symbol_start", stage: "backfill", symbol,

@@ -390,7 +390,9 @@ function DataStatusSection() {
                 {progress && progress.phase !== "complete" && (
                   <div className={cn(
                     "mt-2 px-2 py-1.5 rounded text-xs",
-                    progress.phase === "error" ? "bg-red-500/10 text-red-400" : "bg-blue-500/10 text-blue-300"
+                    progress.phase === "error" ? "bg-red-500/10 text-red-400" :
+                    progress.phase === "data_sufficient" ? "bg-emerald-500/10 text-emerald-400" :
+                    "bg-blue-500/10 text-blue-300"
                   )}>
                     {progress.message}
                   </div>
