@@ -150,3 +150,9 @@
     @apply text-xs font-medium text-muted-foreground uppercase tracking-wider;
   }
 }
+
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(150%); }
+  100% { transform: translateX(-100%); }
+}

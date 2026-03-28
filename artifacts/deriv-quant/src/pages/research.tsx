@@ -205,7 +205,7 @@ function AIChatPanel({ backtestId, onClose }: { backtestId: number; onClose: () 
   );
 }
 
-function DataStatusSection() {
+function DataStatusSection({ onBacktestComplete }: { onBacktestComplete?: () => void }) {
   const [data, setData] = useState<DataStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
@@ -261,8 +261,9 @@ function DataStatusSection() {
     } finally {
       setRunningSymbol(null);
       fetchStatus();
+      onBacktestComplete?.();
     }
-  }, [fetchStatus]);
+  }, [fetchStatus, onBacktestComplete]);
 
   const handleRerunBacktest = useCallback(async (symbol: string) => {
     setRerunning(symbol);
@@ -293,8 +294,9 @@ function DataStatusSection() {
     } finally {
       setRerunning(null);
       fetchStatus();
+      onBacktestComplete?.();
     }
-  }, [fetchStatus]);
+  }, [fetchStatus, onBacktestComplete]);
 
   const handlePrune = useCallback(async () => {
     setPruning(true);
@@ -383,7 +385,7 @@ function DataStatusSection() {
 
                 {sym.lastBacktestDate && (
                   <p className="text-[10px] text-muted-foreground">
-                    Last backtest: {new Date(sym.lastBacktestDate).toLocaleDateString()}
+                    Last backtest: {new Date(sym.lastBacktestDate).toLocaleDateString()} {new Date(sym.lastBacktestDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </p>
                 )}
 
@@ -434,6 +436,22 @@ function DataStatusSection() {
                           {isRerunning ? "Running..." : "Re-run Backtest"}
                         </Button>
                       </div>
+                      {isRunning && (
+                        <div className="space-y-1.5">
+                          <div className="w-full h-1.5 bg-muted/30 rounded-full overflow-hidden">
+                            <div className="h-full bg-blue-500 rounded-full animate-pulse" style={{ width: progress?.phase === "backtest_start" || progress?.phase === "backtest_complete" ? "80%" : progress?.phase === "download_complete" ? "60%" : "30%", transition: "width 0.5s ease" }} />
+                          </div>
+                          <p className="text-[10px] text-blue-300">{progress?.message || "Starting..."}</p>
+                        </div>
+                      )}
+                      {isRerunning && (
+                        <div className="space-y-1.5">
+                          <div className="w-full h-1.5 bg-muted/30 rounded-full overflow-hidden">
+                            <div className="h-full bg-amber-500 rounded-full animate-[progress-indeterminate_1.5s_ease-in-out_infinite]" style={{ width: "40%" }} />
+                          </div>
+                          <p className="text-[10px] text-amber-300">Running backtest simulation...</p>
+                        </div>
+                      )}
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -446,7 +464,7 @@ function DataStatusSection() {
   );
 }
 
-function GroupedResultsSection() {
+function GroupedResultsSection({ refreshTrigger }: { refreshTrigger: number }) {
   const [data, setData] = useState<{ symbols: GroupedSymbol[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
@@ -465,6 +483,7 @@ function GroupedResultsSection() {
   }, []);
 
   useEffect(() => { fetchResults(); }, [fetchResults]);
+  useEffect(() => { if (refreshTrigger > 0) fetchResults(); }, [refreshTrigger]);
 
   const loadBacktestDetail = useCallback(async (backtestId: number) => {
     try {
@@ -534,8 +553,10 @@ function GroupedResultsSection() {
                   <span className="text-xs text-muted-foreground">
                     WR: {formatPercent(sym.portfolioWinRate)}
                   </span>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(sym.latestBacktestDate).toLocaleDateString()}
+                  <span className="text-xs text-muted-foreground text-right leading-tight">
+                    <span>{new Date(sym.latestBacktestDate).toLocaleDateString()}</span>
+                    <br />
+                    <span className="text-[10px]">{new Date(sym.latestBacktestDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </span>
                   {isExpanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                 </div>
@@ -626,6 +647,11 @@ function GroupedResultsSection() {
 }
 
 export default function Research() {
+  const [resultsRefreshTrigger, setResultsRefreshTrigger] = useState(0);
+  const handleBacktestComplete = useCallback(() => {
+    setResultsRefreshTrigger(prev => prev + 1);
+  }, []);
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       <div>
@@ -633,8 +659,8 @@ export default function Research() {
         <p className="page-subtitle">Data health monitoring, per-symbol backtesting, and AI-powered analysis</p>
       </div>
 
-      <DataStatusSection />
-      <GroupedResultsSection />
+      <DataStatusSection onBacktestComplete={handleBacktestComplete} />
+      <GroupedResultsSection refreshTrigger={resultsRefreshTrigger} />
     </div>
   );
 }

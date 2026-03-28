@@ -592,9 +592,10 @@ router.get("/research/grouped-results", async (_req, res): Promise<void> => {
       }
     }
 
-    res.json({
-      symbols: Object.values(grouped).sort((a, b) => b.portfolioNetProfit - a.portfolioNetProfit),
-    });
+    const ordered = V1_DEFAULT_SYMBOLS
+      .filter(sym => grouped[sym])
+      .map(sym => grouped[sym]);
+    res.json({ symbols: ordered });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
