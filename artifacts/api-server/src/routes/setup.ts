@@ -358,9 +358,12 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
         const nowEpoch = Math.floor(Date.now() / 1000);
         const targetRangeStart = nowEpoch - 365 * 24 * 3600;
 
-        const stopEpoch = existingMaxTs > targetRangeStart ? existingMaxTs + 1 : targetRangeStart;
+        const minSufficientCount = tf === "1m" ? 200_000 : 40_000;
+        const hasEnoughData = existingCnt >= minSufficientCount;
+        const isRecent = existingMaxTs > 0 && existingMaxTs >= nowEpoch - Math.max(granularity * 2, 3600);
+        const stopEpoch = (existingMaxTs > targetRangeStart && hasEnoughData) ? existingMaxTs + 1 : targetRangeStart;
 
-        if (existingMaxTs > 0 && existingMaxTs >= nowEpoch - Math.max(granularity * 2, 3600)) {
+        if (isRecent && hasEnoughData) {
           console.log(`[Setup] ${symbol} ${tf}: ${existingCnt} candles, latest ${new Date(existingMaxTs * 1000).toISOString().slice(0, 16)} — up to date, skipping.`);
           jobsDone++;
           symbolTotalInserted += existingCnt;

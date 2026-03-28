@@ -157,9 +157,12 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
       const existingCnt = coverageResult[0]?.cnt ?? 0;
       const existingMaxTs = coverageResult[0]?.maxTs ?? 0;
 
-      const stopEpoch = existingMaxTs > oneYearAgoEpoch ? existingMaxTs + 1 : oneYearAgoEpoch;
+      const minSufficientCount = tf === "1m" ? 200_000 : 40_000;
+      const hasEnoughData = existingCnt >= minSufficientCount;
+      const isRecent = existingMaxTs > 0 && existingMaxTs >= nowEpoch - Math.max(granularity * 2, 3600);
+      const stopEpoch = (existingMaxTs > oneYearAgoEpoch && hasEnoughData) ? existingMaxTs + 1 : oneYearAgoEpoch;
 
-      if (existingMaxTs > 0 && existingMaxTs >= nowEpoch - Math.max(granularity * 2, 3600)) {
+      if (isRecent && hasEnoughData) {
         send({
           phase: "download_progress", symbol, tf,
           candles: existingCnt,
