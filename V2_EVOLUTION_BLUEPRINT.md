@@ -288,7 +288,7 @@ A complete catalog of every hardcoded threshold ("magic number") across all 4 st
 
 ### 3.1 Strategy Entry Thresholds
 
-#### Trend Continuation (`strategies.ts` → `trendContinuation()`)
+#### Trend Continuation (`strategies.ts` → `trendContinuation()`) — UPDATED
 
 | Threshold | Current Value | Variable/Expression | Purpose | Impact of Change |
 |---|---|---|---|---|
@@ -299,7 +299,7 @@ A complete catalog of every hardcoded threshold ("magic number") across all 4 st
 | RSI upper bound | < 65 | `features.rsi14 < 65` | RSI must not be overbought | Lower → more restrictive; higher → allows entries in stronger momentum |
 | Z-score extreme | < 2.0 | `Math.abs(features.zScore) < 2.0` | Price must not be statistically extreme | Lower → filters out more volatile moments; higher → allows more deviation |
 
-#### Mean Reversion (`strategies.ts` → `meanReversion()`)
+#### Mean Reversion (`strategies.ts` → `meanReversion()`) — UPDATED
 
 | Threshold | Current Value | Variable/Expression | Purpose | Impact of Change |
 |---|---|---|---|---|
@@ -311,7 +311,7 @@ A complete catalog of every hardcoded threshold ("magic number") across all 4 st
 | Candle body (sweep) | < 0.35 | `features.candleBody < 0.35` | Small body indicates rejection wick | Higher → allows bigger bodies; lower → stricter rejection wick filter |
 | Swing breach candles | 0–3 | `swingBreachCandles >= 0 && <= 3` | Breach must be recent (last 0-3 candles) | Wider range → allows older breaches |
 
-#### Breakout Expansion (`strategies.ts` → `breakoutExpansion()`)
+#### Breakout Expansion (`strategies.ts` → `breakoutExpansion()`) — UPDATED
 
 | Threshold | Current Value | Variable/Expression | Purpose | Impact of Change |
 |---|---|---|---|---|
@@ -332,20 +332,18 @@ A complete catalog of every hardcoded threshold ("magic number") across all 4 st
 | Boosted score blend | 0.4 × score + 0.5 × hazard | `score * 0.4 + spikeHazardScore * 0.5` | Weight balance between model and hazard | Adjusting weights shifts reliance between ML model and statistical hazard |
 | Minimum expected value | 0.008 (floor) | `Math.max(expectedValue, 0.008)` | Minimum EV override for spike signals | Lower → allows lower quality setups; higher → stricter quality gate |
 
-### 3.2 Per-Family Config (`strategies.ts` → `FAMILY_CONFIG`)
+### 3.2 Per-Family Config (`strategies.ts` → `FAMILY_CONFIG`) — UPDATED
 
-| Family | minModelScore | minEV | minRR | slMultiple | tpMultiple |
-|---|---|---|---|---|---|
-| trend_continuation | 0.58 | 0.005 | 1.5 | 2.5 | 6.0 |
-| mean_reversion | 0.60 | 0.006 | 1.8 | 3.0 | 4.0 |
-| breakout_expansion | 0.55 | 0.005 | 1.5 | 2.0 | 8.0 |
-| spike_event | 0.62 | 0.008 | 2.0 | 1.5 | 4.0 |
+| Family | minModelScore |
+|---|---|
+| trend_continuation | 0.58 |
+| mean_reversion | 0.60 |
+| breakout_expansion | 0.55 |
+| spike_event | 0.62 |
+| trendline_breakout | 0.55 |
 
 - **minModelScore**: Minimum ML model score to proceed with signal generation. Lower → more signals but potentially lower quality.
-- **minEV**: Minimum expected value. Filters out low-edge setups.
-- **minRR**: Minimum reward-to-risk ratio (unused directly in entry filter, used in signal router).
-- **slMultiple**: ATR multiplier for stop-loss distance. Higher → wider stops, fewer SL hits, but larger losses when hit.
-- **tpMultiple**: ATR multiplier for take-profit distance. Higher → larger targets, fewer TP hits, but larger wins when hit.
+- **SL/TP**: No longer per-family ATR multiples. TP is calculated from full price history (spike magnitude for Boom/Crash, major swing range for Volatility). SL = TP distance / 5 (fixed 1:5 R:R ratio).
 
 ### 3.3 Regime Engine Thresholds (`regimeEngine.ts`)
 
@@ -403,7 +401,7 @@ A complete catalog of every hardcoded threshold ("magic number") across all 4 st
 
 ### 3.7 Trade Engine Thresholds (`tradeEngine.ts`) — UPDATED IN V2
 
-> **V2 changes:** ATR-based TP/SL replaced with S/R + Fibonacci. Price trailing replaced with 30% profit trailing. Time exits simplified to 72h/168h. See `V2_SPECIFICATION.md`.
+> **V2 changes:** TP calculated from full price history (spike magnitude for Boom/Crash, major swing range for Volatility). SL derived from TP using fixed 1:5 R:R ratio. Price trailing replaced with 30% profit trailing. 72h profitable time exit preserved. See `V2_SPECIFICATION.md`.
 
 | Threshold | Current Value | Purpose |
 |---|---|---|
@@ -413,11 +411,9 @@ A complete catalog of every hardcoded threshold ("magic number") across all 4 st
 | POSITION_SIZE_MAX_PCT | 0.25 | Maximum 25% of equity per position |
 | PROFIT_TRAIL_DRAWDOWN_PCT | 0.30 | 30% drawdown from peak profit (V2) |
 | TIME_EXIT_PROFIT_HOURS | 72 | Close if profitable after 72h (V2) |
-| TIME_EXIT_HARD_CAP_HOURS | 168 | Hard cap at 168h (V2) |
-| S/R buffer | 0.2% | Buffer inside S/R levels for TP/SL (V2) |
-| Min TP distance | 3 × ATR | Floor for TP distance (V2) |
-| Fallback TP distance | 6 × ATR | When no S/R candidates found (V2) |
-| Fallback SL distance | 2.5 × ATR | When no S/R candidates found (V2) |
+| RR_RATIO | 5 | SL = TP distance / 5 (1:5 R:R ratio) |
+| Boom/Crash TP | 50% of longTermRangePct (min 10%) | Full market move target |
+| Volatility TP | 70% of major swing range (min 2%) | Full swing range target |
 | Safety floor SL | 10% equity | Max loss per position (V2) |
 
 ### 3.8 Family Hold Profiles — REMOVED IN V2
@@ -426,21 +422,21 @@ A complete catalog of every hardcoded threshold ("magic number") across all 4 st
 
 ### 3.9 Backtest Engine Defaults (`backtestEngine.ts`) — UPDATED IN V2
 
-> **V2 changes:** Backtest mirrors live engine exactly — S/R+Fib TP/SL, profit trailing, 72h/168h time exits.
+> **V2 changes:** Backtest mirrors live engine exactly — full price history TP, 1:5 R:R SL, profit trailing, 72h profitable time exit.
 
 | Threshold | Current Value | Purpose |
 |---|---|---|
 | PROFIT_TRAIL_DRAWDOWN_PCT | 0.30 | 30% profit trailing (V2) |
 | TIME_EXIT_PROFIT_HOURS | 72 | Profit close at 72h (V2) |
-| TIME_EXIT_HARD_CAP_HOURS | 168 | Hard cap at 168h (V2) |
+| RR_RATIO | 5 | SL = TP distance / 5 (1:5 R:R ratio) |
 | MAX_EQUITY_DEPLOYED_PCT | 0.80 | Same as live |
 | DEFAULT_MAX_CONCURRENT_LIVE | 3 | Max positions in live backtest |
 | DEFAULT_MAX_CONCURRENT_PAPER | 3 | Max positions in paper backtest |
 | DEFAULT_LIVE_BASE_PCT | 0.08 | 8% base position size (live) |
 | DEFAULT_PAPER_BASE_PCT | 0.16 | 16% base position size (paper) |
-| LOOKBACK window | 50 | Candles for feature computation |
-| Default minCompositeScore | 85 | Backtest entry filter |
-| Default minEvThreshold | 0.003 | Backtest EV filter |
+| LOOKBACK window | 1500 | Candles for feature computation |
+| Default minCompositeScore | 80 (paper) / 90 (live) | Backtest entry filter |
+| Default minEvThreshold | 0.001 | Backtest EV filter |
 | Default minRrRatio | 1.5 | Backtest RR filter |
 
 ### 3.10 Signal Router Thresholds (`signalRouter.ts`)

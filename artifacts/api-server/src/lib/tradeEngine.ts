@@ -71,9 +71,8 @@ export function calculateSRFibTP(params: {
   spikeMagnitude?: SpikeMagnitudeStats | null;
 }): number {
   const {
-    entryPrice, direction, swingHigh, swingLow, majorSwingHigh, majorSwingLow,
-    fibExtensionLevels, fibExtensionLevelsDown, bbUpper, bbLower, atrPct,
-    pivotLevels, vwap, psychRound, prevSessionHigh, prevSessionLow,
+    entryPrice, direction, majorSwingHigh, majorSwingLow,
+    swingHigh, swingLow,
     spikeMagnitude,
   } = params;
 
@@ -84,291 +83,67 @@ export function calculateSRFibTP(params: {
     const longTermRangePct = spikeMagnitude.longTermRangePct || 0;
     const targetPct = Math.max(longTermRangePct * 0.50, 0.10);
 
-
     if (direction === "buy") {
-      const rangeTargetPrice = entryPrice * (1 + targetPct);
-
-      const structuralResistance = [
-        spikeMagnitude.longTermHigh,
-        majorSwingHigh ?? swingHigh,
-        ...fibExtensionLevels.filter(l => l > entryPrice),
-        ...(pivotLevels ?? []).filter(l => l > entryPrice),
-        prevSessionHigh,
-      ].filter((l): l is number => l != null && l > entryPrice).sort((a, b) => a - b);
-
-      const farTargets = structuralResistance.filter(l => {
-        const dist = (l - entryPrice) / entryPrice;
-        return dist >= targetPct * 0.5 && dist <= targetPct * 2.0;
-      });
-
-      let tp: number;
-      if (farTargets.length > 0) {
-        tp = Math.max(...farTargets) * 0.998;
-      } else {
-        tp = rangeTargetPrice;
-      }
-
-      const minTpPct = 0.10;
-      tp = Math.max(tp, entryPrice * (1 + minTpPct));
-
-      if (tp <= entryPrice) tp = rangeTargetPrice;
-      return tp;
+      return entryPrice * (1 + targetPct);
     } else {
-      const rangeTargetPrice = entryPrice * (1 - targetPct);
-
-      const structuralSupport = [
-        spikeMagnitude.longTermLow,
-        majorSwingLow ?? swingLow,
-        ...(fibExtensionLevelsDown ?? []).filter(l => l < entryPrice && l > 0),
-        ...(pivotLevels ?? []).filter(l => l < entryPrice && l > 0),
-        prevSessionLow,
-      ].filter((l): l is number => l != null && l < entryPrice && l > 0).sort((a, b) => b - a);
-
-      const farTargets = structuralSupport.filter(l => {
-        const dist = (entryPrice - l) / entryPrice;
-        return dist >= targetPct * 0.5 && dist <= targetPct * 2.0;
-      });
-
-      let tp: number;
-      if (farTargets.length > 0) {
-        tp = Math.min(...farTargets) * 1.002;
-      } else {
-        tp = rangeTargetPrice;
-      }
-
-      const minTpPct = 0.10;
-      tp = Math.min(tp, entryPrice * (1 - minTpPct));
-
-      if (tp >= entryPrice || tp <= 0) tp = rangeTargetPrice;
-      return tp;
+      const tp = entryPrice * (1 - targetPct);
+      return tp > 0 ? tp : entryPrice * 0.90;
     }
   }
 
   const msh = majorSwingHigh ?? swingHigh;
   const msl = majorSwingLow ?? swingLow;
   const majorSwingRange = Math.abs(msh - msl);
+  const minRange = entryPrice * 0.02;
+  const effectiveRange = Math.max(majorSwingRange, minRange);
 
   if (direction === "buy") {
-    const primaryTp = entryPrice + majorSwingRange * 0.70;
-    const clampedTp = Math.min(primaryTp, msh);
-
-    const candidates = [
-      clampedTp,
-      ...fibExtensionLevels.filter(l => l > entryPrice),
-      ...(pivotLevels ?? []).filter(l => l > entryPrice),
-      prevSessionHigh,
-      vwap,
-      psychRound,
-    ].filter((l): l is number => l != null && l > entryPrice).sort((a, b) => a - b);
-
-    if (candidates.length === 0) {
-      return entryPrice + Math.max(majorSwingRange * 0.70, entryPrice * 0.02);
-    }
-
-    let bestTp = clampedTp;
-    for (const level of candidates) {
-      const nearby = candidates.filter(l => Math.abs(l - level) / level < 0.005);
-      if (nearby.length >= 2 && level >= entryPrice + majorSwingRange * 0.3) {
-        bestTp = Math.min(...nearby);
-        break;
-      }
-    }
-
-    bestTp = Math.max(bestTp, entryPrice + majorSwingRange * 0.3);
-    let tp = bestTp * 0.998;
-    if (tp <= entryPrice) tp = entryPrice + majorSwingRange * 0.70;
-    return tp;
+    const tp = entryPrice + effectiveRange * 0.70;
+    return tp > entryPrice ? tp : entryPrice + minRange;
   } else {
-    const primaryTp = entryPrice - majorSwingRange * 0.70;
-    const clampedTp = Math.max(primaryTp, msl);
-
-    const candidates = [
-      clampedTp,
-      ...(fibExtensionLevelsDown ?? []).filter(l => l < entryPrice && l > 0),
-      ...(pivotLevels ?? []).filter(l => l < entryPrice && l > 0),
-      prevSessionLow,
-      vwap,
-      psychRound,
-    ].filter((l): l is number => l != null && l < entryPrice && l > 0).sort((a, b) => b - a);
-
-    if (candidates.length === 0) {
-      return entryPrice - Math.max(majorSwingRange * 0.70, entryPrice * 0.02);
-    }
-
-    let bestTp = clampedTp;
-    for (const level of candidates) {
-      const nearby = candidates.filter(l => Math.abs(l - level) / level < 0.005);
-      if (nearby.length >= 2 && level <= entryPrice - majorSwingRange * 0.3) {
-        bestTp = Math.max(...nearby);
-        break;
-      }
-    }
-
-    bestTp = Math.min(bestTp, entryPrice - majorSwingRange * 0.3);
-    let tp = bestTp * 1.002;
-    if (tp >= entryPrice) tp = entryPrice - majorSwingRange * 0.70;
-    return tp;
+    const tp = entryPrice - effectiveRange * 0.70;
+    return tp > 0 && tp < entryPrice ? tp : entryPrice - minRange;
   }
 }
+
+export const RR_RATIO = 5;
 
 export function calculateSRFibSL(params: {
   entryPrice: number;
   direction: "buy" | "sell";
-  swingHigh: number;
-  swingLow: number;
-  majorSwingHigh?: number;
-  majorSwingLow?: number;
-  fibRetraceLevels: number[];
-  bbUpper: number;
-  bbLower: number;
-  atrPct: number;
+  tp: number;
   positionSize: number;
   equity: number;
-  pivotLevels?: number[];
-  vwap?: number;
-  prevSessionLow?: number;
-  prevSessionHigh?: number;
-  spikeMagnitude?: SpikeMagnitudeStats | null;
 }): number {
-  const {
-    entryPrice, direction, swingHigh, swingLow, majorSwingHigh, majorSwingLow,
-    fibRetraceLevels, bbUpper, bbLower, atrPct,
-    positionSize, equity, pivotLevels, vwap, prevSessionLow, prevSessionHigh,
-    spikeMagnitude,
-  } = params;
+  const { entryPrice, direction, tp, positionSize, equity } = params;
 
-  const isBoomCrash = spikeMagnitude &&
-    (spikeMagnitude.instrumentFamily === "boom" || spikeMagnitude.instrumentFamily === "crash");
-
-  if (isBoomCrash && spikeMagnitude) {
-    const longTermRange = spikeMagnitude.longTermRangePct || 0;
-    const driftPct = longTermRange * 0.05;
-    const minDrift = 0.02;
-    const slDistPct = Math.max(driftPct, minDrift);
-
-    let sl: number;
-    if (direction === "buy") {
-      sl = entryPrice * (1 - slDistPct);
-
-      const structuralSupport = [
-        swingLow,
-        ...fibRetraceLevels.filter(l => l < entryPrice && l > 0),
-        ...(pivotLevels ?? []).filter(l => l < entryPrice && l > 0),
-        prevSessionLow,
-      ].filter((l): l is number => l != null && l < entryPrice && l > 0).sort((a, b) => b - a);
-
-      for (const level of structuralSupport) {
-        if (level > sl && level < entryPrice * (1 - minDrift * 0.5)) {
-          sl = level * 0.998;
-          break;
-        }
-      }
-    } else {
-      sl = entryPrice * (1 + slDistPct);
-
-      const structuralResistance = [
-        swingHigh,
-        ...fibRetraceLevels.filter(l => l > entryPrice),
-        ...(pivotLevels ?? []).filter(l => l > entryPrice),
-        prevSessionHigh,
-      ].filter((l): l is number => l != null && l > entryPrice).sort((a, b) => a - b);
-
-      for (const level of structuralResistance) {
-        if (level < sl && level > entryPrice * (1 + minDrift * 0.5)) {
-          sl = level * 1.002;
-          break;
-        }
-      }
-    }
-
-    const maxSlDistance = (equity * 0.10) / positionSize;
-    if (direction === "buy") {
-      sl = Math.max(sl, entryPrice * (1 - maxSlDistance));
-      if (sl >= entryPrice) sl = entryPrice * (1 - slDistPct);
-    } else {
-      sl = Math.min(sl, entryPrice * (1 + maxSlDistance));
-      if (sl <= entryPrice) sl = entryPrice * (1 + slDistPct);
-    }
-
-    return sl;
+  const tpDist = Math.abs(tp - entryPrice);
+  if (tpDist <= 0 || !isFinite(tpDist)) {
+    const fallbackDist = entryPrice * 0.02;
+    return direction === "buy" ? entryPrice - fallbackDist / RR_RATIO : entryPrice + fallbackDist / RR_RATIO;
   }
+  const slDist = tpDist / RR_RATIO;
 
-  const msh = majorSwingHigh ?? swingHigh;
-  const msl = majorSwingLow ?? swingLow;
-
+  let sl: number;
   if (direction === "buy") {
-    const supportLevels = [
-      msl,
-      swingLow,
-      ...fibRetraceLevels.filter(l => l < entryPrice && l > 0),
-      bbLower,
-      ...(pivotLevels ?? []).filter(l => l < entryPrice && l > 0),
-      prevSessionLow,
-      vwap,
-    ].filter((l): l is number => l != null && l < entryPrice && l > 0).sort((a, b) => b - a);
-
-    let sl: number;
-    if (supportLevels.length === 0) {
-      const swingRange = Math.abs(msh - msl);
-      sl = entryPrice - Math.max(swingRange * 0.5, entryPrice * 0.01);
-    } else {
-      let bestSl = supportLevels[0];
-      for (const level of supportLevels) {
-        const nearby = supportLevels.filter(l => Math.abs(l - level) / level < 0.005);
-        if (nearby.length >= 2) {
-          bestSl = Math.max(...nearby);
-          break;
-        }
-      }
-      sl = bestSl * 0.997;
-    }
-
-    const maxSlDistance = (equity * 0.10) / positionSize;
-    const safetyFloor = entryPrice * (1 - maxSlDistance);
-    sl = Math.max(sl, safetyFloor);
-
-    if (sl >= entryPrice) {
-      const swingRange = Math.abs(msh - msl);
-      sl = entryPrice - Math.max(swingRange * 0.5, entryPrice * 0.01);
-    }
-    return sl;
+    sl = entryPrice - slDist;
   } else {
-    const resistanceLevels = [
-      msh,
-      swingHigh,
-      ...fibRetraceLevels.filter(l => l > entryPrice),
-      bbUpper,
-      ...(pivotLevels ?? []).filter(l => l > entryPrice),
-      prevSessionHigh,
-      vwap,
-    ].filter((l): l is number => l != null && l > entryPrice).sort((a, b) => a - b);
-
-    let sl: number;
-    if (resistanceLevels.length === 0) {
-      const swingRange = Math.abs(msh - msl);
-      sl = entryPrice + Math.max(swingRange * 0.5, entryPrice * 0.01);
-    } else {
-      let bestSl = resistanceLevels[0];
-      for (const level of resistanceLevels) {
-        const nearby = resistanceLevels.filter(l => Math.abs(l - level) / level < 0.005);
-        if (nearby.length >= 2) {
-          bestSl = Math.min(...nearby);
-          break;
-        }
-      }
-      sl = bestSl * 1.003;
-    }
-
-    const maxSlDistance = (equity * 0.10) / positionSize;
-    const safetyCeiling = entryPrice * (1 + maxSlDistance);
-    sl = Math.min(sl, safetyCeiling);
-
-    if (sl <= entryPrice) {
-      const swingRange = Math.abs(msh - msl);
-      sl = entryPrice + Math.max(swingRange * 0.5, entryPrice * 0.01);
-    }
-    return sl;
+    sl = entryPrice + slDist;
   }
+
+  const safePositionSize = Math.max(positionSize, 1);
+  const maxSlDistanceRatio = (equity * 0.10) / safePositionSize;
+  if (direction === "buy") {
+    const safetyFloor = entryPrice * (1 - maxSlDistanceRatio);
+    sl = Math.max(sl, safetyFloor);
+    if (sl >= entryPrice) sl = entryPrice - slDist;
+  } else {
+    const safetyCeiling = entryPrice * (1 + maxSlDistanceRatio);
+    sl = Math.min(sl, safetyCeiling);
+    if (sl <= entryPrice) sl = entryPrice + slDist;
+  }
+
+  return sl;
 }
 
 export function calculateProfitTrailingStop(params: {
@@ -552,21 +327,9 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
   const sl = calculateSRFibSL({
     entryPrice: spotPrice,
     direction: signal.direction,
-    swingHigh,
-    swingLow,
-    majorSwingHigh: signal.majorSwingHigh,
-    majorSwingLow: signal.majorSwingLow,
-    fibRetraceLevels,
-    bbUpper,
-    bbLower,
-    atrPct,
+    tp,
     positionSize: sizing.size,
     equity,
-    pivotLevels,
-    vwap: signal.vwap,
-    prevSessionLow: signal.prevSessionLow,
-    prevSessionHigh: signal.prevSessionHigh,
-    spikeMagnitude: signal.spikeMagnitude,
   });
 
   const entryTs = new Date();
@@ -615,7 +378,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
       peakPrice: result.entrySpot,
       maxExitTs: null,
       currentPrice: result.entrySpot,
-      notes: `V2 S/R+Fib | Strategy: ${signal.strategyName} | Reason: ${signal.reason}`,
+      notes: `V2 FullMove 1:5RR | Strategy: ${signal.strategyName} | Reason: ${signal.reason}`,
     }).returning();
 
     const tpDistPct = Math.abs(tp - result.entrySpot) / result.entrySpot * 100;
@@ -638,7 +401,7 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
       peakPrice: spotPrice,
       maxExitTs: null,
       currentPrice: spotPrice,
-      notes: `V2 S/R+Fib | Strategy: ${signal.strategyName} | Reason: ${signal.reason}`,
+      notes: `V2 FullMove 1:5RR | Strategy: ${signal.strategyName} | Reason: ${signal.reason}`,
     }).returning();
 
     const tpDistPctPaper = Math.abs(tp - spotPrice) / spotPrice * 100;

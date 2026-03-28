@@ -53,11 +53,11 @@ export interface SignalCandidate {
 const FAMILY_CONFIG: Record<StrategyFamily, {
   minModelScore: number;
 }> = {
-  trend_continuation: { minModelScore: 0.50 },
-  mean_reversion: { minModelScore: 0.52 },
-  breakout_expansion: { minModelScore: 0.48 },
-  spike_event: { minModelScore: 0.55 },
-  trendline_breakout: { minModelScore: 0.50 },
+  trend_continuation: { minModelScore: 0.58 },
+  mean_reversion: { minModelScore: 0.60 },
+  breakout_expansion: { minModelScore: 0.55 },
+  spike_event: { minModelScore: 0.62 },
+  trendline_breakout: { minModelScore: 0.55 },
 };
 
 function buildCandidate(
@@ -122,11 +122,11 @@ function buildCandidate(
 function trendContinuation(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
   const cfg = FAMILY_CONFIG.trend_continuation;
 
-  const inUptrend = features.emaSlope > 0.0001;
-  const inDowntrend = features.emaSlope < -0.0001;
-  const pulledBack = Math.abs(features.emaDist) < 0.015;
-  const rsiNeutral = features.rsi14 > 30 && features.rsi14 < 70;
-  const noExtreme = Math.abs(features.zScore) < 2.5;
+  const inUptrend = features.emaSlope > 0.0003;
+  const inDowntrend = features.emaSlope < -0.0003;
+  const pulledBack = Math.abs(features.emaDist) < 0.008;
+  const rsiNeutral = features.rsi14 > 38 && features.rsi14 < 65;
+  const noExtreme = Math.abs(features.zScore) < 2.0;
 
   let direction: "buy" | "sell" | null = null;
   let reason = "";
@@ -150,9 +150,9 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
 function meanReversion(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
   const cfg = FAMILY_CONFIG.mean_reversion;
 
-  const oversold = features.rsi14 < 38 && features.zScore < -1.2;
-  const overbought = features.rsi14 > 62 && features.zScore > 1.2;
-  const multipleAdverse = Math.abs(features.consecutive) >= 2;
+  const oversold = features.rsi14 < 32 && features.zScore < -1.8;
+  const overbought = features.rsi14 > 68 && features.zScore > 1.8;
+  const multipleAdverse = Math.abs(features.consecutive) >= 3;
 
   const sweepSetup = features.swingBreached && features.swingReclaimed &&
     features.swingBreachCandles >= 0 && features.swingBreachCandles <= 3 &&
@@ -188,15 +188,15 @@ function meanReversion(features: FeatureVector, regime: RegimeClassification): S
 function breakoutExpansion(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
   const cfg = FAMILY_CONFIG.breakout_expansion;
 
-  const squeeze = features.bbWidth < 0.012;
-  const atrExpanding = features.atrRank > 0.6;
+  const squeeze = features.bbWidth < 0.006;
+  const atrExpanding = features.atrRank > 0.8;
   const atUpperBand = features.bbPctB > 0.85;
   const atLowerBand = features.bbPctB < 0.15;
 
-  const wasCompressed = features.bbWidth < 0.015;
-  const bbExpanding = features.bbWidthRoc > 0.06;
-  const atrAccelerating = features.atrAccel > 0.04;
-  const bodyExpanding = features.candleBody > 0.5;
+  const wasCompressed = features.bbWidth < 0.008;
+  const bbExpanding = features.bbWidthRoc > 0.10;
+  const atrAccelerating = features.atrAccel > 0.08;
+  const bodyExpanding = features.candleBody > 0.6;
 
   let direction: "buy" | "sell" | null = null;
   let reason = "";

@@ -25,6 +25,11 @@ function buildMetricsJson(result: BacktestResult) {
     monthlyReturns: pm.monthlyReturns,
     returnBySymbol: pm.returnBySymbol,
     returnByRegime: pm.returnByRegime,
+    tpHitRate: pm.tpHitRate,
+    slHitRate: pm.slHitRate,
+    tradesPerDay: pm.tradesPerDay,
+    avgRR: pm.avgRR,
+    avgHoldingHours: pm.avgHoldingHours,
     strategyMetrics: result.strategyMetrics,
     inSample: result.inSample ? {
       totalReturn: result.inSample.totalReturn,

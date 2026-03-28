@@ -74,33 +74,30 @@ New fields computed in `computeFeatures()` (1500-candle structural window, 100-c
 
 ### `calculateSRFibTP()` (`tradeEngine.ts`)
 
-**Boom/Crash indices** (spike-magnitude primary):
-1. Primary TP = entry ± spike p75 (converted to percentage). Targets full spike travel.
-2. If spike data unavailable, falls back to structural S/R confluence (major swing levels, fib extensions, pivots).
-3. No ATR fallback ever.
+**TP is calculated from full available price history** — not from the 1-minute candle that triggered the signal.
 
-**Volatility indices** (structural S/R primary):
-1. Compute full swing range from `majorSwingHigh - majorSwingLow`.
+**Boom/Crash indices** (spike-magnitude primary):
+1. Primary TP = 50% of `longTermRangePct` from rolling 60-90 day spike analysis (minimum 10% of entry price).
+2. `longTermRangePct` represents the full multi-week/multi-month price range from `spike_events` table.
+3. No structural S/R confluence filtering — TP targets the full expected market move directly.
+4. No ATR fallback ever.
+
+**Volatility indices** (major swing range primary):
+1. Compute full swing range from `majorSwingHigh - majorSwingLow` (from 1500+ candle window, covering multi-day/multi-week history).
 2. Buy TP: entry + 70% of swing range. Sell TP: entry - 70% of swing range.
-3. Clamped to major swing level if beyond it.
+3. Minimum range floor: 2% of entry price.
 4. No ATR fallback ever.
 
 For **sell** trades: mirror logic in both cases.
 
 ### `calculateSRFibSL()` (`tradeEngine.ts`)
 
-**Boom/Crash indices** (spike-drift SL):
-1. SL distance = 30% of median spike magnitude (converted to percentage).
-2. Buy SL: entry × (1 - driftPct). Sell SL: entry × (1 + driftPct).
-3. Safety cap: max loss 10% of equity.
-4. No ATR fallback ever.
+**SL is derived from TP using a fixed 1:5 R:R ratio.** No independent SL calculation.
 
-**Volatility indices** (structural S/R SL):
-1. Compute nearest structural support/resistance beyond entry using major swing, pivot, Camarilla, VWAP levels.
-2. Find nearest confluence cluster below (buy) or above (sell) entry.
-3. Buffer 0.3% outside the level.
-4. Safety cap: max loss 10% of equity.
-5. No ATR fallback ever.
+1. SL distance = TP distance / 5 (1:5 R:R ratio). Example: 80% TP → 16% SL.
+2. Safety cap: max loss 10% of equity per position.
+3. No structural S/R-based SL logic — the old approach produced 0.13% SL distances which were immediately hit.
+4. No ATR fallback ever.
 
 ### Strategy-Level Integration (`strategies.ts`)
 
@@ -215,7 +212,7 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 
 | Setting | Paper | Demo | Real |
 |---|---|---|---|
-| `min_composite_score` | 55 | 65 | 75 |
+| `min_composite_score` | 80 | 85 | 90 |
 | `min_ev_threshold` | 0.001 | 0.001 | 0.001 |
 | `min_rr_ratio` | 1.5 | 1.5 | 1.5 |
 
@@ -270,7 +267,7 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 | `equity_pct_per_trade` | 30 | 20 | 15 | % of equity per position |
 | `max_open_trades` | 4 | 3 | 3 | Max simultaneous positions |
 | `allocation_mode` | aggressive | balanced | balanced | Capital deployment aggressiveness |
-| `min_composite_score` | 55 | 65 | 75 | Min composite score for entry |
+| `min_composite_score` | 80 | 85 | 90 | Min composite score for entry |
 | `min_ev_threshold` | 0.001 | 0.001 | 0.001 | Min expected value |
 | `min_rr_ratio` | 1.5 | 1.5 | 1.5 | Min reward-to-risk ratio |
 | `max_daily_loss_pct` | 8 | 5 | 3 | Daily loss limit |
@@ -287,10 +284,8 @@ Signals must pass these minimum thresholds (configurable per mode in settings):
 | `PROFIT_TRAIL_DRAWDOWN_PCT` | 0.30 | `tradeEngine.ts` |
 | Boom/Crash TP target | 50% of 90-day price range (min 10%) | `calculateSRFibTP` |
 | Boom/Crash TP floor | 10% of entry price | `calculateSRFibTP` |
-| Boom/Crash SL drift | 5% of 90-day range (min 2%) | `calculateSRFibSL` |
-| Boom/Crash SL min drift | 2% | `calculateSRFibSL` |
-| Volatility TP | 70% of major swing range | `calculateSRFibTP` |
-| Volatility SL buffer | 0.3% outside cluster | `calculateSRFibSL` |
+| Volatility TP | 70% of major swing range (min 2% of entry) | `calculateSRFibTP` |
+| SL derivation | TP distance / 5 (1:5 R:R ratio) | `calculateSRFibSL` |
 | Safety floor SL | 10% equity | `calculateSRFibSL` |
 | Spike rolling window | 60-90 days | `getSpikeMagnitudeStats` |
 | Structural candle window | 1500 candles | `computeFeatures` |

@@ -167,6 +167,10 @@ export interface StrategyMetrics {
   monthlyReturns: Record<string, number>;
   returnBySymbol: Record<string, number>;
   returnByRegime: Record<string, number>;
+  tpHitRate: number;
+  slHitRate: number;
+  tradesPerDay: number;
+  avgRR: number;
 }
 
 export interface WalkForwardFold {
@@ -540,6 +544,7 @@ function computeMetrics(
       maxDrawdown: 0, maxDrawdownDuration: 0, tradeCount: 0,
       avgHoldingHours: 0, sharpeRatio: 0,
       equityCurve, monthlyReturns: {}, returnBySymbol: {}, returnByRegime: {},
+      tpHitRate: 0, slHitRate: 0, tradesPerDay: 0, avgRR: 0,
     };
   }
 
@@ -607,12 +612,27 @@ function computeMetrics(
 
   const returnByRegime: Record<string, number> = {};
 
+  const tpHits = trades.filter(t => t.exitReason === "TP" || t.exitReason?.toLowerCase().includes("tp")).length;
+  const slHits = trades.filter(t => t.exitReason === "SL" || t.exitReason?.toLowerCase().includes("sl")).length;
+  const tpHitRate = trades.length > 0 ? tpHits / trades.length : 0;
+  const slHitRate = trades.length > 0 ? slHits / trades.length : 0;
+
+  const tradeDates = trades.map(t => t.entryTs.getTime());
+  const spanMs = tradeDates.length >= 2
+    ? Math.max(...tradeDates) - Math.min(...tradeDates)
+    : 1;
+  const spanDays = Math.max(spanMs / (1000 * 60 * 60 * 24), 1);
+  const tradesPerDay = trades.length / spanDays;
+
+  const avgRR = avgLoss > 0 ? avgWin / avgLoss : (avgWin > 0 ? Infinity : 0);
+
   return {
     totalReturn, netProfit, grossProfit, grossLoss, winRate,
     avgWin, avgLoss, expectancy, profitFactor,
     maxDrawdown, maxDrawdownDuration, tradeCount: trades.length,
     avgHoldingHours, sharpeRatio,
     equityCurve, monthlyReturns, returnBySymbol, returnByRegime,
+    tpHitRate, slHitRate, tradesPerDay, avgRR,
   };
 }
 
@@ -865,21 +885,9 @@ function simulateOnCandles(
         const sl = calculateSRFibSL({
           entryPrice: price,
           direction: signal.direction,
-          swingHigh: features.swingHigh,
-          swingLow: features.swingLow,
-          majorSwingHigh: features.majorSwingHigh,
-          majorSwingLow: features.majorSwingLow,
-          fibRetraceLevels: features.fibRetraceLevels,
-          bbUpper: features.bbUpper,
-          bbLower: features.bbLower,
-          atrPct,
+          tp,
           positionSize: positionSize,
           equity,
-          pivotLevels,
-          vwap: features.vwap,
-          prevSessionLow: features.prevSessionLow,
-          prevSessionHigh: features.prevSessionHigh,
-          spikeMagnitude: features.spikeMagnitude,
         });
 
         const tpDist = Math.abs(tp - price);
@@ -1209,6 +1217,18 @@ async function runWalkForward(
     monthlyReturns: combinedOOSMonthly,
     returnBySymbol: combinedOOSBySymbol,
     returnByRegime: combinedOOSByRegime,
+    tpHitRate: totalOOSTrades > 0
+      ? folds.reduce((s, f) => s + f.outOfSample.tpHitRate * f.outOfSample.tradeCount, 0) / totalOOSTrades
+      : 0,
+    slHitRate: totalOOSTrades > 0
+      ? folds.reduce((s, f) => s + f.outOfSample.slHitRate * f.outOfSample.tradeCount, 0) / totalOOSTrades
+      : 0,
+    tradesPerDay: totalOOSTrades > 0
+      ? folds.reduce((s, f) => s + f.outOfSample.tradesPerDay, 0) / Math.max(folds.length, 1)
+      : 0,
+    avgRR: totalOOSTrades > 0
+      ? folds.reduce((s, f) => s + f.outOfSample.avgRR * f.outOfSample.tradeCount, 0) / totalOOSTrades
+      : 0,
   };
 
   const avgISSharpe = folds.reduce((s, f) => s + f.inSample.sharpeRatio, 0) / Math.max(folds.length, 1);
