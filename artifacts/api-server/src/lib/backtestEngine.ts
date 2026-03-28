@@ -395,7 +395,7 @@ export function computeFeaturesFromCandles(
   const candlesSinceLastLargeMove = (() => {
     for (let i = candles.length - 1; i >= 1; i--) {
       const move = Math.abs(candles[i].close - candles[i - 1].close) / candles[i - 1].close;
-      if (move > atr14 * 3) return candles.length - 1 - i;
+      if (move > 0.01) return candles.length - 1 - i;
     }
     return 500;
   })();
@@ -531,7 +531,7 @@ export function computeFeaturesFromCandles(
     })(),
     ...(() => {
       const isBoomCrash = symbol.startsWith("BOOM") || symbol.startsWith("CRASH");
-      const spikeThreshold = atr14 * 3;
+      const spikeThreshold = 0.01;
       let sc4h = 0, sc24h = 0, sc7d = 0;
       if (isBoomCrash) {
         const fourHoursCandles = 4 * 60;

@@ -129,37 +129,39 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
   let reason = "";
 
   if (isCrash) {
+    const confirmedSwingHigh = features.distFromRange30dHighPct > -0.03 && features.priceChange24hPct < -0.005;
     const driftDown = features.emaSlope < -0.0002;
     const notExhausted = features.rsi14 > 25 && features.rsi14 < 60;
     const trendConfirmed = features.priceChange24hPct < -0.01;
     const notOverextended = features.distFromRange30dLowPct > 0.02;
 
-    if (driftDown && notExhausted && trendConfirmed && notOverextended) {
+    if (confirmedSwingHigh && driftDown && notExhausted && trendConfirmed && notOverextended) {
       direction = "sell";
-      reason = `Crash drift continuation: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, RSI=${features.rsi14.toFixed(1)}`;
+      reason = `Crash drift after swing high reversal: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, dist_30d_high=${(features.distFromRange30dHighPct*100).toFixed(2)}%`;
     }
   } else if (isBoom) {
+    const confirmedSwingLow = features.distFromRange30dLowPct < 0.03 && features.priceChange24hPct > 0.005;
     const driftUp = features.emaSlope > 0.0002;
     const notExhausted = features.rsi14 > 40 && features.rsi14 < 75;
     const trendConfirmed = features.priceChange24hPct > 0.01;
     const notOverextended = features.distFromRange30dHighPct < -0.02;
 
-    if (driftUp && notExhausted && trendConfirmed && notOverextended) {
+    if (confirmedSwingLow && driftUp && notExhausted && trendConfirmed && notOverextended) {
       direction = "buy";
-      reason = `Boom drift continuation: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, RSI=${features.rsi14.toFixed(1)}`;
+      reason = `Boom drift after swing low reversal: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, dist_30d_low=${(features.distFromRange30dLowPct*100).toFixed(2)}%`;
     }
   } else if (isVol) {
-    const strongUptrend = features.emaSlope > 0.0003 && features.priceChange24hPct > 0.005;
-    const strongDowntrend = features.emaSlope < -0.0003 && features.priceChange24hPct < -0.005;
+    const confirmedReversalUp = features.priceChange24hPct > 0.005 && features.distFromRange30dLowPct < 0.10;
+    const confirmedReversalDown = features.priceChange24hPct < -0.005 && features.distFromRange30dHighPct > -0.10;
     const pulledBack = Math.abs(features.emaDist) < 0.01;
     const rsiNeutral = features.rsi14 > 35 && features.rsi14 < 65;
 
-    if (strongUptrend && pulledBack && rsiNeutral) {
+    if (confirmedReversalUp && features.emaSlope > 0.0003 && pulledBack && rsiNeutral) {
       direction = "buy";
-      reason = `Vol trend continuation up: slope=${features.emaSlope.toFixed(5)}, pullback=${(features.emaDist*100).toFixed(3)}%`;
-    } else if (strongDowntrend && pulledBack && rsiNeutral) {
+      reason = `Vol continuation after swing low reversal: slope=${features.emaSlope.toFixed(5)}, pullback=${(features.emaDist*100).toFixed(3)}%, dist_30d_low=${(features.distFromRange30dLowPct*100).toFixed(2)}%`;
+    } else if (confirmedReversalDown && features.emaSlope < -0.0003 && pulledBack && rsiNeutral) {
       direction = "sell";
-      reason = `Vol trend continuation down: slope=${features.emaSlope.toFixed(5)}, pullback=${(features.emaDist*100).toFixed(3)}%`;
+      reason = `Vol continuation after swing high reversal: slope=${features.emaSlope.toFixed(5)}, pullback=${(features.emaDist*100).toFixed(3)}%, dist_30d_high=${(features.distFromRange30dHighPct*100).toFixed(2)}%`;
     }
   }
 
@@ -238,16 +240,30 @@ function spikeClusterRecovery(features: FeatureVector, regime: RegimeClassificat
 
   if (!hasCluster4h && !hasModerateCluster) return null;
 
-  let direction: "buy" | "sell";
-  let reason: string;
+  let direction: "buy" | "sell" | null = null;
+  let reason: string = "";
 
   if (isCrash) {
-    direction = "buy";
-    reason = `Crash spike cluster exhaustion → BUY: ${features.spikeCount4h} spikes in 4h, ${features.spikeCount24h} in 24h, ${features.spikeCount7d} in 7d`;
+    const priceDeclined24h = features.priceChange24hPct < -0.02;
+    const stabilizing = features.emaSlope > -0.0001 || features.rsi14 > 30;
+    const candleStabilized = features.candleBody < 0.40;
+
+    if (priceDeclined24h && stabilizing && candleStabilized) {
+      direction = "buy";
+      reason = `Crash spike cluster exhaustion → BUY: ${features.spikeCount4h} spikes/4h, ${features.spikeCount24h}/24h, 24h_decline=${(features.priceChange24hPct*100).toFixed(2)}%, stabilizing (slope=${features.emaSlope.toFixed(5)}, body=${features.candleBody.toFixed(2)})`;
+    }
   } else {
-    direction = "sell";
-    reason = `Boom spike cluster exhaustion → SELL: ${features.spikeCount4h} spikes in 4h, ${features.spikeCount24h} in 24h, ${features.spikeCount7d} in 7d`;
+    const priceRallied24h = features.priceChange24hPct > 0.02;
+    const stabilizing = features.emaSlope < 0.0001 || features.rsi14 < 70;
+    const candleStabilized = features.candleBody < 0.40;
+
+    if (priceRallied24h && stabilizing && candleStabilized) {
+      direction = "sell";
+      reason = `Boom spike cluster exhaustion → SELL: ${features.spikeCount4h} spikes/4h, ${features.spikeCount24h}/24h, 24h_rally=${(features.priceChange24hPct*100).toFixed(2)}%, stabilizing (slope=${features.emaSlope.toFixed(5)}, body=${features.candleBody.toFixed(2)})`;
+    }
   }
+
+  if (!direction) return null;
 
   const clusterDensity = Math.min(1, features.spikeCount4h / 10);
   const hazardBoost = features.spikeHazardScore;
@@ -274,19 +290,23 @@ function swingExhaustion(features: FeatureVector, regime: RegimeClassification):
     const highSpikeCount7d = features.spikeCount7d >= 14;
     const priceUp7d = features.priceChange7dPct > 0.08;
     const nearRangeHigh = features.distFromRange30dHighPct > -0.05;
+    const failedNewHigh24h = features.priceChange24hPct < 0.005;
+    const turningDown = features.emaSlope < 0.0001;
 
-    if (highSpikeCount7d && priceUp7d && nearRangeHigh) {
+    if (highSpikeCount7d && priceUp7d && nearRangeHigh && failedNewHigh24h && turningDown) {
       direction = "sell";
-      reason = `Crash topping exhaustion: ${features.spikeCount7d} spikes in 7d, price up ${(features.priceChange7dPct*100).toFixed(1)}%, near 30d high`;
+      reason = `Crash topping exhaustion: ${features.spikeCount7d} spikes/7d, up ${(features.priceChange7dPct*100).toFixed(1)}%/7d, failed new high 24h (${(features.priceChange24hPct*100).toFixed(2)}%), slope turning (${features.emaSlope.toFixed(5)})`;
     }
   } else if (isBoom) {
     const highSpikeCount7d = features.spikeCount7d >= 14;
     const priceDown7d = features.priceChange7dPct < -0.08;
     const nearRangeLow = features.distFromRange30dLowPct < 0.05;
+    const failedNewLow24h = features.priceChange24hPct > -0.005;
+    const turningUp = features.emaSlope > -0.0001;
 
-    if (highSpikeCount7d && priceDown7d && nearRangeLow) {
+    if (highSpikeCount7d && priceDown7d && nearRangeLow && failedNewLow24h && turningUp) {
       direction = "buy";
-      reason = `Boom bottoming exhaustion: ${features.spikeCount7d} spikes in 7d, price down ${(features.priceChange7dPct*100).toFixed(1)}%, near 30d low`;
+      reason = `Boom bottoming exhaustion: ${features.spikeCount7d} spikes/7d, down ${(features.priceChange7dPct*100).toFixed(1)}%/7d, failed new low 24h (${(features.priceChange24hPct*100).toFixed(2)}%), slope turning (${features.emaSlope.toFixed(5)})`;
     }
   } else if (isVol) {
     const bigRally = features.priceChange7dPct > 0.10 && features.distFromRange30dHighPct > -0.03;
@@ -294,11 +314,17 @@ function swingExhaustion(features: FeatureVector, regime: RegimeClassification):
     const rsiExtreme = features.rsi14 > 72 || features.rsi14 < 28;
 
     if (bigRally && rsiExtreme) {
-      direction = "sell";
-      reason = `Vol rally exhaustion: 7d_change=${(features.priceChange7dPct*100).toFixed(1)}%, RSI=${features.rsi14.toFixed(1)}, near 30d high`;
+      const failedNewHigh = features.priceChange24hPct < 0.005;
+      if (failedNewHigh) {
+        direction = "sell";
+        reason = `Vol rally exhaustion: 7d=${(features.priceChange7dPct*100).toFixed(1)}%, RSI=${features.rsi14.toFixed(1)}, 24h reversal confirmed (${(features.priceChange24hPct*100).toFixed(2)}%)`;
+      }
     } else if (bigDecline && rsiExtreme) {
-      direction = "buy";
-      reason = `Vol decline exhaustion: 7d_change=${(features.priceChange7dPct*100).toFixed(1)}%, RSI=${features.rsi14.toFixed(1)}, near 30d low`;
+      const failedNewLow = features.priceChange24hPct > -0.005;
+      if (failedNewLow) {
+        direction = "buy";
+        reason = `Vol decline exhaustion: 7d=${(features.priceChange7dPct*100).toFixed(1)}%, RSI=${features.rsi14.toFixed(1)}, 24h reversal confirmed (${(features.priceChange24hPct*100).toFixed(2)}%)`;
+      }
     }
   }
 

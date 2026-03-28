@@ -32,7 +32,7 @@ function decryptSecret(stored: string): string {
   return decrypted;
 }
 
-const ALL_SYMBOLS_DEFAULT = "BOOM1000,CRASH1000,BOOM900,CRASH900,BOOM600,CRASH600,BOOM500,CRASH500,BOOM300,CRASH300,R_75,R_100";
+const ACTIVE_TRADING_SYMBOLS_DEFAULT = "CRASH300,BOOM300,R_75,R_100";
 const ALL_STRATEGIES_DEFAULT = "trend_continuation,mean_reversion,spike_cluster_recovery,swing_exhaustion,trendline_breakout";
 
 const SETTING_DEFAULTS: Record<string, string> = {
@@ -40,7 +40,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   scan_interval_seconds: "30",
   scan_stagger_seconds: "10",
   ai_verification_enabled: "false",
-  enabled_symbols: ALL_SYMBOLS_DEFAULT,
+  enabled_symbols: ACTIVE_TRADING_SYMBOLS_DEFAULT,
   min_composite_score: "55",
   min_ev_threshold: "0.001",
   min_rr_ratio: "1.5",
@@ -64,7 +64,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   paper_extraction_target_pct: "50",
   paper_auto_extraction: "false",
   paper_correlated_family_cap: "4",
-  paper_enabled_symbols: ALL_SYMBOLS_DEFAULT,
+  paper_enabled_symbols: ACTIVE_TRADING_SYMBOLS_DEFAULT,
   paper_enabled_strategies: ALL_STRATEGIES_DEFAULT,
 
   demo_mode_active: "false",
@@ -78,7 +78,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   demo_extraction_target_pct: "50",
   demo_auto_extraction: "false",
   demo_correlated_family_cap: "3",
-  demo_enabled_symbols: ALL_SYMBOLS_DEFAULT,
+  demo_enabled_symbols: ACTIVE_TRADING_SYMBOLS_DEFAULT,
   demo_enabled_strategies: ALL_STRATEGIES_DEFAULT,
 
   real_mode_active: "false",
@@ -92,7 +92,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   real_extraction_target_pct: "50",
   real_auto_extraction: "false",
   real_correlated_family_cap: "3",
-  real_enabled_symbols: ALL_SYMBOLS_DEFAULT,
+  real_enabled_symbols: ACTIVE_TRADING_SYMBOLS_DEFAULT,
   real_enabled_strategies: ALL_STRATEGIES_DEFAULT,
 };
 
@@ -330,7 +330,9 @@ async function runBacktestForOptimisation(
         direction = rsi < 32 ? 1 : -1;
         break;
       case "spike_cluster_recovery": {
-        signal = Math.random() < 0.10;
+        const bodyRatio = Math.abs(last.close - last.open) / Math.max(0.0001, last.high - last.low);
+        const bigMove = closes.length >= 2 && Math.abs(closes[closes.length - 1] - closes[closes.length - 2]) / closes[closes.length - 2] > 0.01;
+        signal = bigMove && bodyRatio < 0.40 && (rsi < 35 || rsi > 65);
         direction = symbol.startsWith("CRASH") ? 1 : -1;
         break;
       }
