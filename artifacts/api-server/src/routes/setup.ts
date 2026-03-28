@@ -36,7 +36,6 @@ const DEFAULT_CAPITAL = 600;
 const API_RATE_DELAY_MS = 150;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
 const MIN_SYMBOLS_FOR_PROCEED = 8;
-const SUFFICIENT_CANDLE_COUNT = 325_000;
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade",
   "demo_equity_pct_per_trade",
@@ -335,39 +334,6 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       let symbolTotalInserted = 0;
       let symbolFailed = false;
 
-      const [symbolCandleCount] = await db.select({ n: count() }).from(candlesTable)
-        .where(eq(candlesTable.symbol, symbol));
-      const symbolExistingCount = symbolCandleCount?.n ?? 0;
-
-      if (symbolExistingCount >= SUFFICIENT_CANDLE_COUNT) {
-        console.log(`[Setup] Symbol ${symbol} has ${symbolExistingCount} candles (>= ${SUFFICIENT_CANDLE_COUNT}), marking complete immediately.`);
-        jobsDone += timeframes.length;
-        candleTotal += symbolExistingCount;
-        send({
-          phase: "backfill_symbol_done", stage: "backfill", symbol,
-          symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
-          candlesForSymbol: symbolExistingCount, candleTotal,
-          overallPct: Math.round((jobsDone / totalJobs) * 40),
-          symbolPct: 100,
-          totalExpected: perSymbolExpected,
-          status: "done",
-          skipped: true,
-          message: `${symbol} — data sufficient (${symbolExistingCount.toLocaleString()} records), skipped download`,
-        });
-        continue;
-      }
-
-      if (symbolExistingCount > 0) {
-        console.log(`[Setup] Symbol ${symbol} has ${symbolExistingCount} candles (< ${SUFFICIENT_CANDLE_COUNT}), deleting partial data for clean re-download.`);
-        await db.delete(candlesTable).where(eq(candlesTable.symbol, symbol));
-        send({
-          phase: "backfill_partial_cleanup", stage: "backfill", symbol,
-          symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
-          deletedCount: symbolExistingCount,
-          message: `${symbol}: deleted ${symbolExistingCount.toLocaleString()} partial records, re-downloading from scratch...`,
-        });
-      }
-
       send({
         phase: "backfill_symbol_start", stage: "backfill", symbol,
         symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
@@ -389,26 +355,30 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
           .from(candlesTable)
           .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, tf)));
         const existingCnt = coverageResult[0]?.cnt ?? 0;
-        const existingMinTs = coverageResult[0]?.minTs ?? 0;
         const existingMaxTs = coverageResult[0]?.maxTs ?? 0;
         const nowEpoch = Math.floor(Date.now() / 1000);
         const targetRangeStart = nowEpoch - 365 * 24 * 3600;
-        const coversStart = existingMinTs > 0 && existingMinTs <= targetRangeStart + 86400;
-        const coversEnd = existingMaxTs > 0 && existingMaxTs >= nowEpoch - 3600;
-        const coverageRatio = tfExpected > 0 ? existingCnt / tfExpected : 0;
 
-        if (coversStart && coversEnd && coverageRatio >= 0.85) {
-          console.log(`[Setup] Skipping ${symbol} ${tf}: ${existingCnt} candles covering ${new Date(existingMinTs * 1000).toISOString().slice(0, 10)} to ${new Date(existingMaxTs * 1000).toISOString().slice(0, 10)} (${(coverageRatio * 100).toFixed(1)}%)`);
+        const stopEpoch = existingMaxTs > targetRangeStart ? existingMaxTs + 1 : targetRangeStart;
+
+        if (existingMaxTs > 0 && existingMaxTs >= nowEpoch - granularity * 2) {
+          console.log(`[Setup] ${symbol} ${tf}: ${existingCnt} candles, latest ${new Date(existingMaxTs * 1000).toISOString().slice(0, 16)} — up to date, skipping.`);
           jobsDone++;
           symbolTotalInserted += existingCnt;
           candleTotal += existingCnt;
           send({
             phase: "backfill_tf_complete", stage: "backfill", symbol, timeframe: tf,
             inserted: existingCnt, skipped: true,
-            message: `${symbol} ${tf}: skipped (${existingCnt} candles, range covered)`,
+            message: `${symbol} ${tf}: up to date (${existingCnt.toLocaleString()} candles)`,
             overallPct: Math.round((jobsDone / totalJobs) * 100),
           });
           continue;
+        }
+
+        if (existingCnt > 0) {
+          console.log(`[Setup] ${symbol} ${tf}: ${existingCnt} candles, latest ${new Date(existingMaxTs * 1000).toISOString().slice(0, 16)} — gap-filling to now...`);
+        } else {
+          console.log(`[Setup] ${symbol} ${tf}: no data — downloading full 12-month range...`);
         }
 
         let endEpoch = Math.floor(Date.now() / 1000);
@@ -504,9 +474,9 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
 
           const sorted = [...candles].sort((a, b) => a.epoch - b.epoch);
           const earliestEpoch = sorted[0].epoch;
-          oldestDateStr = new Date(Math.max(earliestEpoch, oneYearAgoEpoch) * 1000).toISOString().slice(0, 10);
+          oldestDateStr = new Date(Math.max(earliestEpoch, stopEpoch) * 1000).toISOString().slice(0, 10);
 
-          const filteredByDate = sorted.filter(c => c.epoch >= oneYearAgoEpoch);
+          const filteredByDate = sorted.filter(c => c.epoch >= stopEpoch);
           if (filteredByDate.length === 0) break;
 
           const newRows = filteredByDate.map(c => ({
@@ -523,10 +493,10 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
           }
 
           if (candles.length < MAX_BATCH) break;
-          if (earliestEpoch <= oneYearAgoEpoch) break;
+          if (earliestEpoch <= stopEpoch) break;
 
           const newEnd = earliestEpoch - 1;
-          if (newEnd >= endEpoch || newEnd < oneYearAgoEpoch) break;
+          if (newEnd >= endEpoch || newEnd < stopEpoch) break;
           endEpoch = newEnd;
 
           const symbolPct = perSymbolExpected > 0

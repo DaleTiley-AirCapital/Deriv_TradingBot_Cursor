@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { eq, and, count, min, max, desc, lt, asc, gte, lte } from "drizzle-orm";
+import { eq, and, count, min, max, desc, lt, asc, gte, lte, sql } from "drizzle-orm";
 import { db, candlesTable, backtestRunsTable, backtestTradesTable, platformStateTable } from "@workspace/db";
 import { getDerivClientWithDbToken, V1_DEFAULT_SYMBOLS } from "../lib/deriv.js";
 import { getApiSymbol } from "../lib/symbolValidator.js";
@@ -18,7 +18,6 @@ const MAX_CONSECUTIVE_ERRORS = 5;
 const API_RATE_DELAY_MS = 150;
 const DEFAULT_CAPITAL = 600;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
-const SUFFICIENT_CANDLE_COUNT = 325_000;
 
 const ENC_KEY_SOURCE = process.env["DATABASE_URL"] || process.env["ENCRYPTION_SECRET"];
 const ENC_DERIVED_KEY = ENC_KEY_SOURCE ? scryptSync(ENC_KEY_SOURCE, "deriv-quant-salt", 32) : null;
@@ -130,18 +129,7 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
   try {
     await pruneOldCandles();
 
-    const [candleCountResult] = await db.select({ n: count() }).from(candlesTable)
-      .where(eq(candlesTable.symbol, symbol));
-    const existingCandleCount = candleCountResult?.n ?? 0;
-
-    if (existingCandleCount >= SUFFICIENT_CANDLE_COUNT) {
-      send({
-        phase: "data_sufficient", symbol,
-        candles: existingCandleCount,
-        message: `Data sufficient (${existingCandleCount.toLocaleString()} records), skipping download — running simulation...`,
-      });
-    } else {
-    send({ phase: "download_start", symbol, message: `Downloading 12 months of data for ${symbol}...` });
+    send({ phase: "download_start", symbol, message: `Checking data for ${symbol}...` });
 
     const client = await getDerivClientWithDbToken();
     await client.connect();
@@ -156,8 +144,40 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
     ];
 
     let totalInserted = 0;
+    let allSkipped = true;
 
     for (const { tf, granularity } of timeframes) {
+      const coverageResult = await db
+        .select({
+          cnt: count(),
+          maxTs: sql<number>`MAX(${candlesTable.openTs})`,
+        })
+        .from(candlesTable)
+        .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, tf)));
+      const existingCnt = coverageResult[0]?.cnt ?? 0;
+      const existingMaxTs = coverageResult[0]?.maxTs ?? 0;
+
+      const stopEpoch = existingMaxTs > oneYearAgoEpoch ? existingMaxTs + 1 : oneYearAgoEpoch;
+
+      if (existingMaxTs > 0 && existingMaxTs >= nowEpoch - granularity * 2) {
+        send({
+          phase: "download_progress", symbol, tf,
+          candles: existingCnt,
+          message: `${symbol} ${tf}: up to date (${existingCnt.toLocaleString()} candles), skipping...`,
+        });
+        totalInserted += existingCnt;
+        continue;
+      }
+
+      allSkipped = false;
+      if (existingCnt > 0) {
+        send({
+          phase: "download_progress", symbol, tf,
+          candles: existingCnt,
+          message: `${symbol} ${tf}: ${existingCnt.toLocaleString()} candles exist, gap-filling to now...`,
+        });
+      }
+
       let endEpoch = nowEpoch;
       let page = 0;
       let consecutiveErrors = 0;
@@ -189,36 +209,24 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
         const sorted = [...candles].sort((a, b) => a.epoch - b.epoch);
         const earliestEpoch = sorted[0].epoch;
 
-        if (earliestEpoch < oneYearAgoEpoch) {
-          const filtered = sorted.filter(c => c.epoch >= oneYearAgoEpoch);
-          if (filtered.length > 0) {
-            const newRows = filtered.map(c => ({
-              symbol, timeframe: tf, openTs: c.epoch, closeTs: c.epoch + granularity,
-              open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), tickCount: 0,
-            }));
-            for (let chunk = 0; chunk < newRows.length; chunk += 1000) {
-              await db.insert(candlesTable).values(newRows.slice(chunk, chunk + 1000))
-                .onConflictDoNothing({ target: [candlesTable.symbol, candlesTable.timeframe, candlesTable.openTs] });
-            }
-            totalInserted += newRows.length;
+        const filtered = sorted.filter(c => c.epoch >= stopEpoch);
+        if (filtered.length > 0) {
+          const newRows = filtered.map(c => ({
+            symbol, timeframe: tf, openTs: c.epoch, closeTs: c.epoch + granularity,
+            open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), tickCount: 0,
+          }));
+          for (let chunk = 0; chunk < newRows.length; chunk += 1000) {
+            await db.insert(candlesTable).values(newRows.slice(chunk, chunk + 1000))
+              .onConflictDoNothing({ target: [candlesTable.symbol, candlesTable.timeframe, candlesTable.openTs] });
           }
-          break;
+          totalInserted += newRows.length;
         }
 
-        const newRows = sorted.map(c => ({
-          symbol, timeframe: tf, openTs: c.epoch, closeTs: c.epoch + granularity,
-          open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), tickCount: 0,
-        }));
-        for (let chunk = 0; chunk < newRows.length; chunk += 1000) {
-          await db.insert(candlesTable).values(newRows.slice(chunk, chunk + 1000))
-            .onConflictDoNothing({ target: [candlesTable.symbol, candlesTable.timeframe, candlesTable.openTs] });
-        }
-        totalInserted += newRows.length;
-
+        if (earliestEpoch <= stopEpoch) break;
         if (candles.length < MAX_BATCH) break;
 
         const newEnd = earliestEpoch - 1;
-        if (newEnd >= endEpoch || newEnd < oneYearAgoEpoch) break;
+        if (newEnd >= endEpoch || newEnd < stopEpoch) break;
         endEpoch = newEnd;
 
         if (page % 3 === 0) {
@@ -236,9 +244,10 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
     send({
       phase: "download_complete", symbol,
       candles: totalInserted,
-      message: `Download complete: ${totalInserted.toLocaleString()} candles for ${symbol}`,
+      message: allSkipped
+        ? `${symbol}: all data up to date (${totalInserted.toLocaleString()} candles), running simulation...`
+        : `Download complete: ${totalInserted.toLocaleString()} candles for ${symbol}`,
     });
-    }
 
     send({ phase: "backtest_start", symbol, message: `Running all strategies on ${symbol}...` });
 
