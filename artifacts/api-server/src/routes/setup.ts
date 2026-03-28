@@ -361,7 +361,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
 
         const stopEpoch = existingMaxTs > targetRangeStart ? existingMaxTs + 1 : targetRangeStart;
 
-        if (existingMaxTs > 0 && existingMaxTs >= nowEpoch - granularity * 2) {
+        if (existingMaxTs > 0 && existingMaxTs >= nowEpoch - Math.max(granularity * 2, 3600)) {
           console.log(`[Setup] ${symbol} ${tf}: ${existingCnt} candles, latest ${new Date(existingMaxTs * 1000).toISOString().slice(0, 16)} — up to date, skipping.`);
           jobsDone++;
           symbolTotalInserted += existingCnt;
