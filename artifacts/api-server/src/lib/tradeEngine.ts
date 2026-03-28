@@ -81,7 +81,10 @@ export function calculateSRFibTP(params: {
     (spikeMagnitude.instrumentFamily === "boom" || spikeMagnitude.instrumentFamily === "crash");
 
   if (isBoomCrash && spikeMagnitude) {
-    const spikeTargetPct = spikeMagnitude.p75 / entryPrice;
+    const spikeAbsolutePoints = spikeMagnitude.p75;
+    const spikeTargetPct = spikeAbsolutePoints / entryPrice;
+
+    console.log(`[TP] Boom/Crash spike TP: p75=${spikeAbsolutePoints.toFixed(4)} pts, entry=${entryPrice.toFixed(4)}, targetPct=${(spikeTargetPct * 100).toFixed(4)}%`);
 
     if (direction === "buy") {
       const spikeTargetPrice = entryPrice * (1 + spikeTargetPct);
@@ -603,7 +606,9 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
       notes: `V2 S/R+Fib | Strategy: ${signal.strategyName} | Reason: ${signal.reason}`,
     }).returning();
 
-    console.log(`[TradeEngine] Opened ${mode.toUpperCase()} ${signal.direction} on ${signal.symbol} @ ${result.entrySpot} | Size: $${sizing.size.toFixed(2)} | TP: ${tp.toFixed(4)} | SL: ${sl.toFixed(4)}`);
+    const tpDistPct = Math.abs(tp - result.entrySpot) / result.entrySpot * 100;
+    const slDistPct = Math.abs(sl - result.entrySpot) / result.entrySpot * 100;
+    console.log(`[TradeEngine] Opened ${mode.toUpperCase()} ${signal.direction} on ${signal.symbol} @ ${result.entrySpot} | Size: $${sizing.size.toFixed(2)} | TP: ${tp.toFixed(4)} (${tpDistPct.toFixed(4)}%) | SL: ${sl.toFixed(4)} (${slDistPct.toFixed(4)}%)`);
     return inserted.id;
   } else {
     const [inserted] = await db.insert(tradesTable).values({
@@ -624,7 +629,9 @@ export async function openPosition(decision: AllocationDecision, atrPct: number,
       notes: `V2 S/R+Fib | Strategy: ${signal.strategyName} | Reason: ${signal.reason}`,
     }).returning();
 
-    console.log(`[TradeEngine] Opened PAPER ${signal.direction} on ${signal.symbol} @ ${spotPrice} | Size: $${sizing.size.toFixed(2)} | TP: ${tp.toFixed(4)} | SL: ${sl.toFixed(4)}`);
+    const tpDistPctPaper = Math.abs(tp - spotPrice) / spotPrice * 100;
+    const slDistPctPaper = Math.abs(sl - spotPrice) / spotPrice * 100;
+    console.log(`[TradeEngine] Opened PAPER ${signal.direction} on ${signal.symbol} @ ${spotPrice} | Size: $${sizing.size.toFixed(2)} | TP: ${tp.toFixed(4)} (${tpDistPctPaper.toFixed(4)}%) | SL: ${sl.toFixed(4)} (${slDistPctPaper.toFixed(4)}%)`);
     return inserted.id;
   }
 }
