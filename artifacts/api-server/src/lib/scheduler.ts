@@ -120,30 +120,6 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
 
   const windowTs = get30MinWindowTs();
 
-  const openSymbolTrades = await db.select().from(tradesTable)
-    .where(and(eq(tradesTable.status, "open"), eq(tradesTable.symbol, symbol)));
-  const existingPositionCount = openSymbolTrades.length;
-
-  const promotedCandidates: { candidate: typeof candidates[0]; atr: number }[] = [];
-  const confirmedKeysThisWindow = new Set<string>();
-
-  for (const candidate of candidates) {
-    const currentPrice = features.latestClose ?? 0;
-    const result = confirmSignal(candidate, windowTs, currentPrice, existingPositionCount);
-    const candidateKey = `${candidate.symbol}|${candidate.strategyName}|${candidate.direction}`;
-    confirmedKeysThisWindow.add(candidateKey);
-
-    if (result.promoted) {
-      console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | PROMOTED after ${result.pending.confirmCount}/${result.pending.requiredConfirmations} windows | pyramid=${result.pending.pyramidLevel}`);
-      promotedCandidates.push({ candidate, atr: features.atr14 });
-      removePendingSignal(symbol, candidate.strategyName, candidate.direction);
-    } else {
-      console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | window=${result.pending.confirmCount}/${result.pending.requiredConfirmations} | score=${candidate.compositeScore} | EV=${candidate.expectedValue.toFixed(4)}`);
-    }
-  }
-
-  invalidateUnconfirmedPending(symbol, confirmedKeysThisWindow);
-
   const aiEnabled = stateMap["ai_verification_enabled"] === "true";
 
   const activeModes = getActiveModes(stateMap);
@@ -162,8 +138,36 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
     const effectiveMode = isIntelOnly ? "paper" : mode;
     const logMode = isIntelOnly ? undefined : mode;
 
+    const openSymbolTrades = await db.select().from(tradesTable)
+      .where(and(eq(tradesTable.status, "open"), eq(tradesTable.symbol, symbol), eq(tradesTable.mode, effectiveMode)));
+    const existingPositionCount = openSymbolTrades.length;
+
+    const promotedCandidates: { candidate: typeof candidates[0]; atr: number }[] = [];
+    const confirmedKeysThisWindow = new Set<string>();
+
+    for (const candidate of candidates) {
+      const currentPrice = features.latestClose ?? 0;
+      const family = candidate.strategyFamily || candidate.strategyName;
+      const result = confirmSignal(candidate, windowTs, currentPrice, existingPositionCount);
+      const candidateKey = `${candidate.symbol}|${family}|${candidate.direction}`;
+      confirmedKeysThisWindow.add(candidateKey);
+
+      if (result.promoted) {
+        console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | PROMOTED after ${result.pending.confirmCount}/${result.pending.requiredConfirmations} windows | pyramid=${result.pending.pyramidLevel} | mode=${effectiveMode}`);
+        promotedCandidates.push({ candidate, atr: features.atr14 });
+        removePendingSignal(symbol, family, candidate.direction);
+      } else {
+        console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | window=${result.pending.confirmCount}/${result.pending.requiredConfirmations} | score=${candidate.compositeScore} | EV=${candidate.expectedValue.toFixed(4)}`);
+      }
+    }
+
+    invalidateUnconfirmedPending(symbol, confirmedKeysThisWindow);
+
     const promotedCandidateSignals = promotedCandidates.map(c => c.candidate);
-    const promotedSet = new Set(promotedCandidateSignals.map(c => `${c.symbol}|${c.strategyName}|${c.direction}`));
+    const promotedSet = new Set(promotedCandidateSignals.map(c => {
+      const family = c.strategyFamily || c.strategyName;
+      return `${c.symbol}|${family}|${c.direction}`;
+    }));
 
     const execDecisions = promotedCandidateSignals.length > 0
       ? await routeSignals(promotedCandidateSignals, effectiveMode)
@@ -259,14 +263,16 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
     const allDecisionsForLog: AllocationDecision[] = [];
 
     for (const candidate of candidates) {
-      const candidateKey = `${candidate.symbol}|${candidate.strategyName}|${candidate.direction}`;
+      const family = candidate.strategyFamily || candidate.strategyName;
+      const candidateKey = `${candidate.symbol}|${family}|${candidate.direction}`;
       const isPromoted = promotedSet.has(candidateKey);
 
-      const execMatch = execDecisions.find(d =>
-        d.signal.symbol === candidate.symbol &&
-        d.signal.strategyName === candidate.strategyName &&
-        d.signal.direction === candidate.direction
-      );
+      const execMatch = execDecisions.find(d => {
+        const dFamily = d.signal.strategyFamily || d.signal.strategyName;
+        return d.signal.symbol === candidate.symbol &&
+          dFamily === family &&
+          d.signal.direction === candidate.direction;
+      });
 
       if (isPromoted && execMatch) {
         const sig = execMatch.signal;

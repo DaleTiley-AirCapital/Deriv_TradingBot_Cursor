@@ -28,8 +28,8 @@ const PYRAMID_EXTRA_CONFIRMATIONS = 3;
 
 const pendingSignals = new Map<string, PendingSignal>();
 
-function makeKey(symbol: string, strategyName: string, direction: string): string {
-  return `${symbol}|${strategyName}|${direction}`;
+function makeKey(symbol: string, familyOrStrategy: string, direction: string): string {
+  return `${symbol}|${familyOrStrategy}|${direction}`;
 }
 
 export function confirmSignal(
@@ -38,7 +38,8 @@ export function confirmSignal(
   currentPrice: number,
   existingPositionCount: number = 0,
 ): { promoted: boolean; pending: PendingSignal } {
-  const key = makeKey(candidate.symbol, candidate.strategyName, candidate.direction);
+  const family = candidate.strategyFamily || candidate.strategyName;
+  const key = makeKey(candidate.symbol, family, candidate.direction);
   const now = Date.now();
 
   let entry = pendingSignals.get(key);
@@ -108,8 +109,8 @@ export function confirmSignal(
   return { promoted: false, pending: entry };
 }
 
-export function removePendingSignal(symbol: string, strategyName: string, direction: string): void {
-  const key = makeKey(symbol, strategyName, direction);
+export function removePendingSignal(symbol: string, familyOrStrategy: string, direction: string): void {
+  const key = makeKey(symbol, familyOrStrategy, direction);
   pendingSignals.delete(key);
 }
 
@@ -130,26 +131,28 @@ export function getAllPendingSignals(): PendingSignal[] {
   return Array.from(pendingSignals.values());
 }
 
+const WINDOW_MS = 30 * 60 * 1000;
+
 export function get30MinWindowTs(): number {
   const now = Date.now();
-  return Math.floor(now / (30 * 60 * 1000)) * (30 * 60 * 1000);
+  return Math.floor(now / WINDOW_MS) * WINDOW_MS;
 }
 
-const lastWindowEvaluated = new Map<string, number>();
+const lastProcessedBoundary = new Map<string, number>();
 
 export function shouldEvaluateWindow(symbol: string, latestCandleCloseMs?: number): boolean {
-  const currentWindow = get30MinWindowTs();
-  const lastWindow = lastWindowEvaluated.get(symbol);
+  const currentBoundary = get30MinWindowTs();
 
-  if (lastWindow === currentWindow) {
+  const lastBoundary = lastProcessedBoundary.get(symbol) ?? 0;
+  if (currentBoundary <= lastBoundary) {
     return false;
   }
 
-  if (latestCandleCloseMs !== undefined && latestCandleCloseMs < currentWindow) {
+  if (latestCandleCloseMs === undefined || latestCandleCloseMs < currentBoundary) {
     return false;
   }
 
-  lastWindowEvaluated.set(symbol, currentWindow);
+  lastProcessedBoundary.set(symbol, currentBoundary);
   return true;
 }
 
