@@ -269,17 +269,67 @@ Entry conditions:
 ## Section 6 — Scoring System (Big Move Readiness)
 
 ### Overview
-Replaced logistic regression with empirical Big Move Readiness Score based on research of actual 50-200%+ moves. No ML model — pure rule-based scoring from observed preconditions.
+Empirical Big Move Readiness Score with **per-symbol calibrated breakpoints** based on research of actual 50-200%+ moves. No ML model — pure rule-based scoring from observed preconditions. Each symbol has its own scoring breakpoints matching its empirical swing characteristics.
 
 ### Readiness Score (5 Dimensions, 0-100)
 
-| Dimension | Weight | What It Measures | Key Thresholds |
-|-----------|--------|-----------------|----------------|
-| Range Position | **25%** | Proximity to 30-day range extreme | ≤18% from extreme = 100, ≤30% = 70, >50% = 0 |
-| MA Deviation | **20%** | Distance from 7/14-day moving average | ≥8% deviation = 100, ≥5% = 70, <2% = 0 |
-| Volatility Profile | **20%** | Elevated ATR rank + BB width expansion | ATR rank ≥1.3 + BB expanding = 100 |
-| Range Expansion | **15%** | BB width rate-of-change, ATR acceleration | Both accelerating = 100 |
-| Directional Confirmation | **20%** | Reversal candle pattern + MA slope change | Both present = 100 |
+| Dimension | Weight | What It Measures |
+|-----------|--------|-----------------|
+| Range Position | **25%** | Proximity to 30-day range extreme (per-symbol tiers) |
+| MA Deviation | **20%** | Distance from EMA20 on HTF candles (per-symbol tiers) |
+| Volatility Profile | **20%** | ATR rank + BB width expansion (per-symbol ATR/BB bonuses) |
+| Range Expansion | **15%** | BB width rate-of-change, ATR acceleration (per-symbol tiers) |
+| Directional Confirmation | **20%** | Reversal candle + slope + RSI + multi-day setup (per-symbol RSI thresholds) |
+
+### Per-Symbol Scoring Breakpoints
+
+**Range Position — buy direction (distance from 30d low for score 100):**
+| Symbol | 100 | 85 | 70 | 55 | 40 | <40 |
+|--------|-----|----|----|----|----|-----|
+| CRASH300 | ≤8% | ≤15% | ≤22% | ≤30% | ≤38% | >38% |
+| BOOM300 | ≤7% | ≤12% | ≤18% | ≤25% | ≤32% | >32% |
+| R_75 | ≤5% | ≤10% | ≤14% | ≤18% | ≤22% | >22% |
+| R_100 | ≤4% | ≤8% | ≤12% | ≤16% | ≤20% | >20% |
+
+**MA Deviation — absolute EMA distance for score tiers (must be correct side):**
+| Symbol | 95 | 85 | 70 | 55 | 40 |
+|--------|----|----|----|----|-----|
+| CRASH300 | ≥10% | ≥7% | ≥4% | ≥2% | ≥1% |
+| BOOM300 | ≥8% | ≥6% | ≥3.5% | ≥1.8% | ≥0.8% |
+| R_75 | ≥6% | ≥4% | ≥2.5% | ≥1.2% | ≥0.5% |
+| R_100 | ≥6% | ≥4% | ≥2% | ≥1% | ≥0.5% |
+
+All breakpoints defined in `scoring.ts` via `getSymbolScoringBreakpoints(symbol)`.
+
+### Per-Symbol EV (Expected Value)
+
+EV is computed using per-symbol empirical win/loss magnitudes:
+| Symbol | Avg Win % | Avg Loss % | Median Hold |
+|--------|-----------|-----------|-------------|
+| CRASH300 | 42% | 8.4% | 8 days |
+| BOOM300 | 30% | 6.0% | 6 days |
+| R_75 | 18% | 3.6% | 5 days |
+| R_100 | 17% | 3.4% | 2 days |
+
+Defined in `model.ts` via `SYMBOL_EMPIRICAL_DATA`. Loss % = 20% of win % (1:5 R:R).
+
+### Signal Metadata
+Each signal candidate includes empirical metadata:
+- `expectedMovePct` — estimated move based on historical average × capture rate
+- `expectedHoldDays` — median hold time from empirical data
+- `captureRate` — estimated percentage of move captured based on entry position
+- `empiricalWinRate` — historical win probability estimate
+
+### Indicator Timeframe Alignment
+All indicators (RSI, EMA, ATR, BB, z-score) are computed on **higher-timeframe aggregated candles**, not 1m:
+| Symbol | Indicator TF | Rationale |
+|--------|-------------|-----------|
+| CRASH300 | 12h | 8-day median hold, slow drifts between spike clusters |
+| BOOM300 | 8h | 6-day median hold, intermediate speed |
+| R_75 | 4h | 5-day median hold, clean swing patterns |
+| R_100 | 4h | 2-day median hold, fastest but still multi-hour swings |
+
+Percentage features (24h change, 7d change, 30d range, spike counting) remain on 1m timestamp lookback. Implemented via `aggregateCandles()` and `getSymbolIndicatorTimeframeMins()` in `features.ts`.
 
 ### State Keys for Weights
 - `scoring_weight_range_position` (default: 25)
@@ -296,6 +346,18 @@ Replaced logistic regression with empirical Big Move Readiness Score based on re
 | Real | **92** |
 
 Additional filters: EV ≥ 0.001, R:R ≥ 1.5
+
+### Signal Confirmation
+Signals must persist across 2 consecutive 60-minute evaluation windows:
+- Window = 60 minutes (1 hour boundary)
+- Required confirmations = 2 (initial detection + 1 re-confirmation)
+- Price must not reverse >0.5% against signal direction between windows
+- Stale expiry = 4 hours (if gap > 4h between confirmations, signal resets)
+- Pyramiding requires 3 confirmations + 1% price move in expected direction
+- Implemented in `pendingSignals.ts`
+
+### Regime Engine (Informational Only)
+The regime engine classifies market state but does NOT gate strategy execution. All 5 strategy families are allowed in ALL regime states, including `no_trade`. Regime classification is logged for analysis but never blocks signals.
 
 ---
 
@@ -476,9 +538,16 @@ Key differences from previous universal thresholds:
 | `MAX_EQUITY_DEPLOYED_PCT` | 0.80 | `tradeEngine.ts` |
 | `MAX_OPEN_TRADES` | 6 | `tradeEngine.ts` |
 | `RR_RATIO` | 5 | `tradeEngine.ts` |
-| Structural candle window | 1500 | `features.ts` |
-| Fast indicator window | 100 | `features.ts` |
+| Structural candle window | 1500 (min) | `features.ts` |
+| Indicator bars needed | 55 HTF bars | `features.ts` |
+| Indicator TF (CRASH300) | 12h (720 min) | `features.ts` |
+| Indicator TF (BOOM300) | 8h (480 min) | `features.ts` |
+| Indicator TF (R_75/R_100) | 4h (240 min) | `features.ts` |
+| Signal confirmation windows | 2 (60-min) | `pendingSignals.ts` |
+| Signal stale expiry | 4 hours | `pendingSignals.ts` |
+| Scan interval | 60s | `scheduler.ts` |
 | Regime cache TTL | 1 hour | `regimeEngine.ts` |
+| Regime gating | NONE (informational) | `regimeEngine.ts` |
 
 ---
 

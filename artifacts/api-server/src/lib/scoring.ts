@@ -29,88 +29,110 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function computeRangePosition(features: FeatureVector, direction: "buy" | "sell"): number {
-  const distHigh = Math.abs(features.distFromRange30dHighPct);
-  const distLow = Math.abs(features.distFromRange30dLowPct);
+interface ScoringBreakpoints {
+  rangePosition: { tiers: number[]; scores: number[] };
+  maDeviation: { tiers: number[]; scores: number[] };
+  volatilityProfile: { atrRankTiers: number[]; atrRankScores: number[]; atrBonus: number; bbBonus: number };
+  rangeExpansion: { bbRocTiers: number[]; bbRocScores: number[]; atrAccelTiers: number[]; atrAccelScores: number[] };
+  directionalConfirmation: { slopeStrengthTiers: number[]; slopeScores: number[]; rsiMild: number; rsiExtreme: number; pcChange: number; multiDayMove: number };
+}
 
-  if (direction === "buy") {
-    if (distLow <= 0.03) return 100;
-    if (distLow <= 0.07) return 85;
-    if (distLow <= 0.10) return 70;
-    if (distLow <= 0.18) return 55;
-    if (distLow <= 0.25) return 40;
-    return 20;
-  } else {
-    if (distHigh <= 0.03) return 100;
-    if (distHigh <= 0.07) return 85;
-    if (distHigh <= 0.10) return 70;
-    if (distHigh <= 0.18) return 55;
-    if (distHigh <= 0.25) return 40;
-    return 20;
+const CRASH300_BREAKPOINTS: ScoringBreakpoints = {
+  rangePosition: { tiers: [0.08, 0.15, 0.22, 0.30, 0.38], scores: [100, 85, 70, 55, 40, 20] },
+  maDeviation: { tiers: [0.10, 0.07, 0.04, 0.02, 0.01], scores: [95, 85, 70, 55, 40, 20] },
+  volatilityProfile: { atrRankTiers: [1.3, 1.1, 0.9, 0.7], atrRankScores: [90, 75, 60, 45, 30], atrBonus: 0.015, bbBonus: 0.020 },
+  rangeExpansion: { bbRocTiers: [0.15, 0.08, 0.03], bbRocScores: [30, 20, 10], atrAccelTiers: [0.15, 0.08, 0.03], atrAccelScores: [25, 15, 8] },
+  directionalConfirmation: { slopeStrengthTiers: [0.001, 0.0004], slopeScores: [20, 12, 5], rsiMild: 42, rsiExtreme: 32, pcChange: 0.008, multiDayMove: 0.08 },
+};
+
+const BOOM300_BREAKPOINTS: ScoringBreakpoints = {
+  rangePosition: { tiers: [0.07, 0.12, 0.18, 0.25, 0.32], scores: [100, 85, 70, 55, 40, 20] },
+  maDeviation: { tiers: [0.08, 0.06, 0.035, 0.018, 0.008], scores: [95, 85, 70, 55, 40, 20] },
+  volatilityProfile: { atrRankTiers: [1.3, 1.1, 0.9, 0.7], atrRankScores: [90, 75, 60, 45, 30], atrBonus: 0.012, bbBonus: 0.016 },
+  rangeExpansion: { bbRocTiers: [0.12, 0.06, 0.025], bbRocScores: [30, 20, 10], atrAccelTiers: [0.12, 0.06, 0.025], atrAccelScores: [25, 15, 8] },
+  directionalConfirmation: { slopeStrengthTiers: [0.0008, 0.0003], slopeScores: [20, 12, 5], rsiMild: 42, rsiExtreme: 32, pcChange: 0.007, multiDayMove: 0.06 },
+};
+
+const R75_BREAKPOINTS: ScoringBreakpoints = {
+  rangePosition: { tiers: [0.05, 0.10, 0.14, 0.18, 0.22], scores: [100, 85, 70, 55, 40, 20] },
+  maDeviation: { tiers: [0.06, 0.04, 0.025, 0.012, 0.005], scores: [95, 85, 70, 55, 40, 20] },
+  volatilityProfile: { atrRankTiers: [1.3, 1.1, 0.9, 0.7], atrRankScores: [90, 75, 60, 45, 30], atrBonus: 0.010, bbBonus: 0.012 },
+  rangeExpansion: { bbRocTiers: [0.10, 0.05, 0.02], bbRocScores: [30, 20, 10], atrAccelTiers: [0.10, 0.05, 0.02], atrAccelScores: [25, 15, 8] },
+  directionalConfirmation: { slopeStrengthTiers: [0.0006, 0.0002], slopeScores: [20, 12, 5], rsiMild: 40, rsiExtreme: 30, pcChange: 0.005, multiDayMove: 0.05 },
+};
+
+const R100_BREAKPOINTS: ScoringBreakpoints = {
+  rangePosition: { tiers: [0.04, 0.08, 0.12, 0.16, 0.20], scores: [100, 85, 70, 55, 40, 20] },
+  maDeviation: { tiers: [0.06, 0.04, 0.02, 0.01, 0.005], scores: [95, 85, 70, 55, 40, 20] },
+  volatilityProfile: { atrRankTiers: [1.3, 1.1, 0.9, 0.7], atrRankScores: [90, 75, 60, 45, 30], atrBonus: 0.008, bbBonus: 0.010 },
+  rangeExpansion: { bbRocTiers: [0.10, 0.05, 0.02], bbRocScores: [30, 20, 10], atrAccelTiers: [0.10, 0.05, 0.02], atrAccelScores: [25, 15, 8] },
+  directionalConfirmation: { slopeStrengthTiers: [0.0005, 0.0002], slopeScores: [20, 12, 5], rsiMild: 40, rsiExtreme: 30, pcChange: 0.005, multiDayMove: 0.05 },
+};
+
+export function getSymbolScoringBreakpoints(symbol: string): ScoringBreakpoints {
+  if (symbol === "CRASH300" || symbol.startsWith("CRASH")) return CRASH300_BREAKPOINTS;
+  if (symbol === "BOOM300" || symbol.startsWith("BOOM")) return BOOM300_BREAKPOINTS;
+  if (symbol === "R_75") return R75_BREAKPOINTS;
+  if (symbol === "R_100") return R100_BREAKPOINTS;
+  if (symbol.startsWith("R_")) return R75_BREAKPOINTS;
+  return R75_BREAKPOINTS;
+}
+
+function computeRangePosition(features: FeatureVector, direction: "buy" | "sell"): number {
+  const bp = getSymbolScoringBreakpoints(features.symbol).rangePosition;
+  const dist = direction === "buy"
+    ? Math.abs(features.distFromRange30dLowPct)
+    : Math.abs(features.distFromRange30dHighPct);
+
+  for (let i = 0; i < bp.tiers.length; i++) {
+    if (dist <= bp.tiers[i]) return bp.scores[i];
   }
+  return bp.scores[bp.scores.length - 1];
 }
 
 function computeMaDeviation(features: FeatureVector, direction: "buy" | "sell"): number {
-  const dist7d = features.emaDist;
-  const absDist = Math.abs(dist7d);
+  const bp = getSymbolScoringBreakpoints(features.symbol).maDeviation;
+  const dist = features.emaDist;
+  const absDist = Math.abs(dist);
 
-  if (direction === "buy") {
-    if (dist7d < -0.06) return 95;
-    if (dist7d < -0.04) return 85;
-    if (dist7d < -0.02) return 70;
-    if (dist7d < -0.01) return 55;
-    if (dist7d < 0) return 40;
-    return 20;
-  } else {
-    if (dist7d > 0.06) return 95;
-    if (dist7d > 0.04) return 85;
-    if (dist7d > 0.02) return 70;
-    if (dist7d > 0.01) return 55;
-    if (dist7d > 0) return 40;
-    return 20;
+  const correctSide = (direction === "buy" && dist < 0) || (direction === "sell" && dist > 0);
+  if (!correctSide) return 20;
+
+  for (let i = 0; i < bp.tiers.length; i++) {
+    if (absDist >= bp.tiers[i]) return bp.scores[i];
   }
+  return bp.scores[bp.scores.length - 1];
 }
 
 function computeVolatilityProfile(features: FeatureVector): number {
-  const atrRank = features.atrRank;
-  const atr = features.atr14;
-
+  const bp = getSymbolScoringBreakpoints(features.symbol).volatilityProfile;
   let score = 50;
 
-  if (atrRank >= 1.3) {
-    score = 90;
-  } else if (atrRank >= 1.1) {
-    score = 75;
-  } else if (atrRank >= 0.9) {
-    score = 60;
-  } else if (atrRank >= 0.7) {
-    score = 45;
-  } else {
-    score = 30;
+  for (let i = 0; i < bp.atrRankTiers.length; i++) {
+    if (features.atrRank >= bp.atrRankTiers[i]) { score = bp.atrRankScores[i]; break; }
+    if (i === bp.atrRankTiers.length - 1) score = bp.atrRankScores[i + 1];
   }
 
-  if (atr > 0.008) score = Math.min(100, score + 10);
-  if (features.bbWidth > 0.010) score = Math.min(100, score + 5);
+  if (features.atr14 > bp.atrBonus) score = Math.min(100, score + 10);
+  if (features.bbWidth > bp.bbBonus) score = Math.min(100, score + 5);
 
   return clamp(Math.round(score), 0, 100);
 }
 
 function computeRangeExpansion(features: FeatureVector): number {
-  const bbWidthRoc = features.bbWidthRoc;
-  const atrAccel = features.atrAccel;
-
+  const bp = getSymbolScoringBreakpoints(features.symbol).rangeExpansion;
   let score = 40;
 
-  if (bbWidthRoc > 0.10) score += 30;
-  else if (bbWidthRoc > 0.05) score += 20;
-  else if (bbWidthRoc > 0.02) score += 10;
-  else if (bbWidthRoc < -0.05) score -= 10;
+  for (let i = 0; i < bp.bbRocTiers.length; i++) {
+    if (features.bbWidthRoc > bp.bbRocTiers[i]) { score += bp.bbRocScores[i]; break; }
+  }
+  if (features.bbWidthRoc < -0.05) score -= 10;
 
-  if (atrAccel > 0.10) score += 25;
-  else if (atrAccel > 0.05) score += 15;
-  else if (atrAccel > 0.02) score += 8;
+  for (let i = 0; i < bp.atrAccelTiers.length; i++) {
+    if (features.atrAccel > bp.atrAccelTiers[i]) { score += bp.atrAccelScores[i]; break; }
+  }
 
-  if (features.bbWidth < 0.005 && bbWidthRoc > 0) {
+  if (features.bbWidth < 0.005 && features.bbWidthRoc > 0) {
     score += 10;
   }
 
@@ -118,6 +140,7 @@ function computeRangeExpansion(features: FeatureVector): number {
 }
 
 function computeDirectionalConfirmation(features: FeatureVector, direction: "buy" | "sell"): number {
+  const bp = getSymbolScoringBreakpoints(features.symbol).directionalConfirmation;
   let score = 30;
 
   const slopeAligned = (direction === "buy" && features.emaSlope > 0) ||
@@ -125,29 +148,30 @@ function computeDirectionalConfirmation(features: FeatureVector, direction: "buy
   const slopeStrength = Math.abs(features.emaSlope);
 
   if (slopeAligned) {
-    if (slopeStrength > 0.0005) score += 20;
-    else if (slopeStrength > 0.0002) score += 12;
-    else score += 5;
+    for (let i = 0; i < bp.slopeStrengthTiers.length; i++) {
+      if (slopeStrength > bp.slopeStrengthTiers[i]) { score += bp.slopeScores[i]; break; }
+      if (i === bp.slopeStrengthTiers.length - 1) score += bp.slopeScores[i + 1];
+    }
   }
 
   const isReversalCandle = (direction === "buy" && features.latestClose > features.latestOpen) ||
     (direction === "sell" && features.latestClose < features.latestOpen);
   if (isReversalCandle) score += 15;
 
-  const rsiConfirms = (direction === "buy" && features.rsi14 < 40) ||
-    (direction === "sell" && features.rsi14 > 60);
+  const rsiConfirms = (direction === "buy" && features.rsi14 < bp.rsiMild) ||
+    (direction === "sell" && features.rsi14 > (100 - bp.rsiMild));
   if (rsiConfirms) score += 10;
 
-  const rsiExtreme = (direction === "buy" && features.rsi14 < 30) ||
-    (direction === "sell" && features.rsi14 > 70);
+  const rsiExtreme = (direction === "buy" && features.rsi14 < bp.rsiExtreme) ||
+    (direction === "sell" && features.rsi14 > (100 - bp.rsiExtreme));
   if (rsiExtreme) score += 10;
 
-  const priceChangeConfirms = (direction === "buy" && features.priceChange24hPct > 0.005) ||
-    (direction === "sell" && features.priceChange24hPct < -0.005);
+  const priceChangeConfirms = (direction === "buy" && features.priceChange24hPct > bp.pcChange) ||
+    (direction === "sell" && features.priceChange24hPct < -bp.pcChange);
   if (priceChangeConfirms) score += 10;
 
-  const multiDayMoveAgainst = (direction === "buy" && features.priceChange7dPct < -0.05) ||
-    (direction === "sell" && features.priceChange7dPct > 0.05);
+  const multiDayMoveAgainst = (direction === "buy" && features.priceChange7dPct < -bp.multiDayMove) ||
+    (direction === "sell" && features.priceChange7dPct > bp.multiDayMove);
   if (multiDayMoveAgainst) score += 10;
 
   return clamp(Math.round(score), 0, 100);

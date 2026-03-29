@@ -35,15 +35,20 @@ export function classifyInstrument(symbol: string): InstrumentFamily {
   return "other_synthetic";
 }
 
+const ALL_FAMILIES: StrategyFamily[] = [
+  "trend_continuation", "mean_reversion", "spike_cluster_recovery",
+  "swing_exhaustion", "trendline_breakout",
+];
+
 const STRATEGY_PERMISSION_MATRIX: Record<RegimeState, StrategyFamily[]> = {
-  trend_up: ["trend_continuation", "swing_exhaustion", "trendline_breakout"],
-  trend_down: ["trend_continuation", "swing_exhaustion", "trendline_breakout"],
-  mean_reversion: ["mean_reversion", "spike_cluster_recovery", "swing_exhaustion"],
-  ranging: ["mean_reversion", "spike_cluster_recovery", "trendline_breakout"],
-  compression: ["trendline_breakout", "spike_cluster_recovery"],
-  breakout_expansion: ["trend_continuation", "trendline_breakout", "swing_exhaustion"],
-  spike_zone: ["spike_cluster_recovery", "swing_exhaustion"],
-  no_trade: [],
+  trend_up: ALL_FAMILIES,
+  trend_down: ALL_FAMILIES,
+  mean_reversion: ALL_FAMILIES,
+  ranging: ALL_FAMILIES,
+  compression: ALL_FAMILIES,
+  breakout_expansion: ALL_FAMILIES,
+  spike_zone: ALL_FAMILIES,
+  no_trade: ALL_FAMILIES,
 };
 
 const REGIME_CACHE_TTL_MS = 60 * 60 * 1000;

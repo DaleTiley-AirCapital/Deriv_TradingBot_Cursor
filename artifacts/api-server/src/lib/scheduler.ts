@@ -11,12 +11,12 @@ import { runBacktestSimulation } from "./backtestEngine.js";
 import { getActiveModes, isAnyModeActive } from "./deriv.js";
 import type { TradingMode } from "./deriv.js";
 import type { AllocationDecision } from "./signalRouter.js";
-import { confirmSignal, removePendingSignal, expireStaleSignals, shouldEvaluateWindow, get30MinWindowTs, invalidateUnconfirmedPending } from "./pendingSignals.js";
+import { confirmSignal, removePendingSignal, expireStaleSignals, shouldEvaluateWindow, getWindowTs, invalidateUnconfirmedPending } from "./pendingSignals.js";
 
 import { ACTIVE_TRADING_SYMBOLS } from "./deriv.js";
 
 const DEFAULT_SYMBOLS = ACTIVE_TRADING_SYMBOLS;
-const DEFAULT_SCAN_INTERVAL_MS = 30_000;
+const DEFAULT_SCAN_INTERVAL_MS = 60_000;
 const DEFAULT_STAGGER_SECONDS = 10;
 const POSITION_MGMT_INTERVAL_MS = 10_000;
 
@@ -95,12 +95,6 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
 
   expireStaleSignals();
 
-  if (regime.regime === "no_trade") {
-    console.log(`[Scan] ${symbol} | regime=${regime.regime} | conf=${regime.confidence.toFixed(2)} | SKIP=no_trade_regime`);
-    invalidateUnconfirmedPending(symbol, new Set());
-    return;
-  }
-
   if (regime.allowedFamilies.length === 0) {
     console.log(`[Scan] ${symbol} | regime=${regime.regime} | SKIP=no_allowed_families`);
     invalidateUnconfirmedPending(symbol, new Set());
@@ -117,7 +111,7 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
 
   console.log(`[Intel] ${symbol} | regime=${regime.regime} | families=[${regime.allowedFamilies.join(",")}] | candidates=${candidates.length} | top=${candidates[0].strategyFamily}(${candidates[0].score.toFixed(3)}, EV=${candidates[0].expectedValue.toFixed(4)})`);
 
-  const windowTs = get30MinWindowTs();
+  const windowTs = getWindowTs();
 
   const aiEnabled = stateMap["ai_verification_enabled"] === "true";
 
@@ -349,7 +343,7 @@ async function scanCycle(): Promise<void> {
     const stateMap: Record<string, string> = {};
     for (const s of states) stateMap[s.key] = s.value;
 
-    const configuredInterval = parseInt(stateMap["scan_interval_seconds"] || "30") * 1000;
+    const configuredInterval = parseInt(stateMap["scan_interval_seconds"] || "60") * 1000;
     if (configuredInterval !== currentIntervalMs && configuredInterval >= 5000) {
       currentIntervalMs = configuredInterval;
       if (schedulerHandle) {

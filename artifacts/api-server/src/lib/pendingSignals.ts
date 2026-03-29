@@ -20,9 +20,9 @@ export interface PendingSignal {
   pyramidLevel: number;
 }
 
-const REQUIRED_CONFIRMATIONS = 3;
-const MAX_GAP_MS = 90 * 60 * 1000;
-const STALE_EXPIRY_MS = 90 * 60 * 1000;
+const REQUIRED_CONFIRMATIONS = 2;
+const MAX_GAP_MS = 4 * 60 * 60 * 1000;
+const STALE_EXPIRY_MS = 4 * 60 * 60 * 1000;
 const PYRAMID_PRICE_MOVE_PCT = 0.01;
 const PYRAMID_EXTRA_CONFIRMATIONS = 3;
 
@@ -85,6 +85,18 @@ export function confirmSignal(
     return { promoted: false, pending: entry };
   }
 
+  const priceMoveDir = entry.direction === "buy"
+    ? (currentPrice - entry.priceAtFirst) / entry.priceAtFirst
+    : (entry.priceAtFirst - currentPrice) / entry.priceAtFirst;
+
+  if (priceMoveDir < -0.005) {
+    pendingSignals.delete(key);
+    return {
+      promoted: false,
+      pending: { ...entry, confirmCount: 0 },
+    };
+  }
+
   entry.confirmCount++;
   entry.lastConfirmedAt = now;
   entry.lastCompositeScore = candidate.compositeScore;
@@ -94,9 +106,6 @@ export function confirmSignal(
   entry.windowTimestamps.push(windowTs);
 
   if (existingPositionCount > 0) {
-    const priceMoveDir = entry.direction === "buy"
-      ? (currentPrice - entry.priceAtFirst) / entry.priceAtFirst
-      : (entry.priceAtFirst - currentPrice) / entry.priceAtFirst;
     if (priceMoveDir < PYRAMID_PRICE_MOVE_PCT) {
       return { promoted: false, pending: entry };
     }
@@ -132,9 +141,9 @@ export function getAllPendingSignals(): PendingSignal[] {
   return Array.from(pendingSignals.values());
 }
 
-const WINDOW_MS = 30 * 60 * 1000;
+const WINDOW_MS = 60 * 60 * 1000;
 
-export function get30MinWindowTs(): number {
+export function getWindowTs(): number {
   const now = Date.now();
   return Math.floor(now / WINDOW_MS) * WINDOW_MS;
 }
@@ -142,7 +151,7 @@ export function get30MinWindowTs(): number {
 const lastProcessedBoundary = new Map<string, number>();
 
 export function shouldEvaluateWindow(symbol: string, latestCandleCloseMs?: number): boolean {
-  const currentBoundary = get30MinWindowTs();
+  const currentBoundary = getWindowTs();
 
   const lastBoundary = lastProcessedBoundary.get(symbol) ?? 0;
   if (currentBoundary <= lastBoundary) {

@@ -4,7 +4,7 @@ import { runAllStrategies, type SignalCandidate } from "./strategies.js";
 import { calculateProfitTrailingStop, calculateSRFibTP, calculateSRFibSL } from "./tradeEngine.js";
 import { classifyRegime, type RegimeClassification } from "./regimeEngine.js";
 import type { FeatureVector, SpikeMagnitudeStats } from "./features.js";
-import { findSwingLevels, findMultiSwingTrendlines, findMajorSwingLevels } from "./features.js";
+import { findSwingLevels, findMultiSwingTrendlines, findMajorSwingLevels, getSymbolIndicatorTimeframeMins, aggregateCandles } from "./features.js";
 import { type ScoringWeights, DEFAULT_SCORING_WEIGHTS } from "./scoring.js";
 
 const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
@@ -287,12 +287,14 @@ export function computeFeaturesFromCandles(
   const last = candles[candles.length - 1];
   const price = last.close;
 
-  const FAST_WINDOW = 100;
-  const fastStart = Math.max(0, candles.length - FAST_WINDOW);
-  const fastCandles = candles.slice(fastStart);
-  const closes = fastCandles.map(c => c.close);
-  const highs = fastCandles.map(c => c.high);
-  const lows = fastCandles.map(c => c.low);
+  const indicatorTfMins = getSymbolIndicatorTimeframeMins(symbol);
+  const htfCandles = aggregateCandles(
+    candles as { open: number; high: number; low: number; close: number; openTs: number; closeTs: number }[],
+    indicatorTfMins,
+  );
+  const closes = htfCandles.map(c => c.close);
+  const highs = htfCandles.map(c => c.high);
+  const lows = htfCandles.map(c => c.low);
 
   const ema20Arr = emaCalc(closes, 20);
   const ema20 = ema20Arr[ema20Arr.length - 1];
@@ -309,9 +311,9 @@ export function computeFeaturesFromCandles(
   const atrRank = atr50 > 0 ? Math.min(atr14 / atr50, 2) : 1;
 
   const bbPeriod = 20;
-  const bbCloses = closes.slice(-bbPeriod);
-  const bbMean = meanCalc(bbCloses);
-  const bbStd = stdDevCalc(bbCloses);
+  const bbSlice = closes.slice(-bbPeriod);
+  const bbMean = meanCalc(bbSlice);
+  const bbStd = stdDevCalc(bbSlice);
   const bbUpper = bbMean + 2 * bbStd;
   const bbLower = bbMean - 2 * bbStd;
   const bbWidth = bbStd > 0 ? (bbUpper - bbLower) / bbMean : 0;
@@ -761,7 +763,9 @@ function simulateOnCandles(
     candleIndexBySymbol[sym] = 0;
   }
 
-  const LOOKBACK = 1500;
+  const syms = Object.keys(allCandlesBySymbol);
+  const maxTfMins = syms.length > 0 ? Math.max(...syms.map((s: string) => getSymbolIndicatorTimeframeMins(s))) : 240;
+  const LOOKBACK = Math.max(1500, 55 * maxTfMins);
 
   for (let tsIdx = 0; tsIdx < sortedTimestamps.length; tsIdx++) {
     const ts = sortedTimestamps[tsIdx];

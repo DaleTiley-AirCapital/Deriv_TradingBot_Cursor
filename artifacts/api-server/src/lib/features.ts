@@ -524,17 +524,61 @@ export function findMajorSwingLevels(
 }
 
 const STRUCTURAL_LOOKBACK = 1500;
-const FAST_INDICATOR_LOOKBACK = 100;
+const INDICATOR_BARS_NEEDED = 55;
 
-export async function computeFeatures(symbol: string, lookback = STRUCTURAL_LOOKBACK): Promise<FeatureVector | null> {
+export function getSymbolIndicatorTimeframeMins(symbol: string): number {
+  if (symbol === "CRASH300" || symbol.startsWith("CRASH")) return 720;
+  if (symbol === "BOOM300" || symbol.startsWith("BOOM")) return 480;
+  if (symbol === "R_75" || symbol === "R_100" || symbol.startsWith("R_")) return 240;
+  return 240;
+}
+
+interface AggCandle {
+  open: number; high: number; low: number; close: number;
+  openTs: number; closeTs: number;
+}
+
+export function aggregateCandles(
+  candles: { open: number; high: number; low: number; close: number; openTs: number; closeTs: number }[],
+  periodMins: number,
+): AggCandle[] {
+  if (periodMins <= 1 || candles.length === 0) {
+    return candles.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close, openTs: c.openTs, closeTs: c.closeTs }));
+  }
+  const periodSecs = periodMins * 60;
+  const result: AggCandle[] = [];
+  let current: AggCandle | null = null;
+  let bucketStart = -1;
+
+  for (const c of candles) {
+    const bucket = Math.floor(c.openTs / periodSecs) * periodSecs;
+    if (bucket !== bucketStart || !current) {
+      if (current) result.push(current);
+      bucketStart = bucket;
+      current = { open: c.open, high: c.high, low: c.low, close: c.close, openTs: c.openTs, closeTs: c.closeTs };
+    } else {
+      current.high = Math.max(current.high, c.high);
+      current.low = Math.min(current.low, c.low);
+      current.close = c.close;
+      current.closeTs = c.closeTs;
+    }
+  }
+  if (current) result.push(current);
+  return result;
+}
+
+export async function computeFeatures(symbol: string, lookback?: number): Promise<FeatureVector | null> {
+  const indicatorTfMins = getSymbolIndicatorTimeframeMins(symbol);
+  const indicatorLookback = INDICATOR_BARS_NEEDED * indicatorTfMins;
+  const effectiveLookback = lookback ?? Math.max(STRUCTURAL_LOOKBACK, indicatorLookback);
+
   const candles = await db.select().from(candlesTable)
     .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")))
     .orderBy(desc(candlesTable.openTs))
-    .limit(lookback);
+    .limit(effectiveLookback);
 
   if (candles.length < 30) return null;
 
-  // Reverse to chronological order
   candles.reverse();
 
   const closes = candles.map(c => c.close);
@@ -545,30 +589,31 @@ export async function computeFeatures(symbol: string, lookback = STRUCTURAL_LOOK
   const last = candles[candles.length - 1];
   const price = last.close;
 
-  const fastStart = Math.max(0, candles.length - FAST_INDICATOR_LOOKBACK);
-  const fastCloses = closes.slice(fastStart);
-  const fastHighs = highs.slice(fastStart);
-  const fastLows = lows.slice(fastStart);
+  const htfCandles = aggregateCandles(
+    candles as { open: number; high: number; low: number; close: number; openTs: number; closeTs: number }[],
+    indicatorTfMins,
+  );
+  const htfCloses = htfCandles.map(c => c.close);
+  const htfHighs = htfCandles.map(c => c.high);
+  const htfLows = htfCandles.map(c => c.low);
 
-  const ema20Arr = ema(fastCloses, 20);
-  const ema50Arr = ema(fastCloses, Math.min(50, fastCloses.length));
+  const ema20Arr = ema(htfCloses, 20);
   const ema20 = ema20Arr[ema20Arr.length - 1];
   const ema20Prev = ema20Arr[ema20Arr.length - 2] || ema20;
   const emaSlope = (ema20 - ema20Prev) / ema20;
   const emaDist = (price - ema20) / ema20;
 
-  const rsi14 = rsi(fastCloses, 14);
+  const rsi14 = rsi(htfCloses, 14);
   const rsiZone = rsi14 < 30 ? -1 : rsi14 > 70 ? 1 : 0;
 
-  const atr14 = atr(fastHighs, fastLows, fastCloses, 14) / price;
-  const atr50 = atr(fastHighs, fastLows, fastCloses, Math.min(50, fastCloses.length)) / price;
+  const atr14 = atr(htfHighs, htfLows, htfCloses, 14) / price;
+  const atr50 = atr(htfHighs, htfLows, htfCloses, Math.min(50, htfCloses.length)) / price;
   const atrRank = atr50 > 0 ? Math.min(atr14 / atr50, 2) : 1;
 
-  // Bollinger Bands (20, 2)
   const bbPeriod = 20;
-  const bbCloses = closes.slice(-bbPeriod);
-  const bbMean = mean(bbCloses);
-  const bbStd = stdDev(bbCloses);
+  const bbSlice = htfCloses.slice(-bbPeriod);
+  const bbMean = mean(bbSlice);
+  const bbStd = stdDev(bbSlice);
   const bbUpper = bbMean + 2 * bbStd;
   const bbLower = bbMean - 2 * bbStd;
   const bbWidth = bbStd > 0 ? (bbUpper - bbLower) / bbMean : 0;
@@ -595,8 +640,7 @@ export async function computeFeatures(symbol: string, lookback = STRUCTURAL_LOOK
     }
   }
 
-  // Z-score
-  const z20Closes = closes.slice(-20);
+  const z20Closes = htfCloses.slice(-20);
   const z20Mean = mean(z20Closes);
   const z20Std = stdDev(z20Closes);
   const zScore = z20Std > 0 ? (price - z20Mean) / z20Std : 0;
@@ -690,7 +734,7 @@ export async function computeFeatures(symbol: string, lookback = STRUCTURAL_LOOK
     };
   })();
 
-  const regimeLabel = detectRegime(fastCloses, atr14, ema20Arr);
+  const regimeLabel = detectRegime(htfCloses, atr(htfHighs, htfLows, htfCloses, 14), ema20Arr);
 
   const { swingHigh, swingLow } = findSwingLevels(highs, lows, 5);
   const swingHighDist = (price - swingHigh) / price;
@@ -698,10 +742,10 @@ export async function computeFeatures(symbol: string, lookback = STRUCTURAL_LOOK
   const swingResult = detectSwingBreachAndReclaim(candles, swingHigh, swingLow);
   const fibLevels = computeFibonacciLevels(swingLow, swingHigh);
 
-  const bbWidthPrev = fastCloses.length > 25 ? computeBbWidthAtIndex(fastCloses, fastCloses.length - 6) : bbWidth;
+  const bbWidthPrev = htfCloses.length > 25 ? computeBbWidthAtIndex(htfCloses, htfCloses.length - 6) : bbWidth;
   const bbWidthRoc = bbWidthPrev > 0 ? (bbWidth - bbWidthPrev) / bbWidthPrev : 0;
 
-  const atr14Prev = fastCloses.length > 20 ? atr(fastHighs.slice(0, -5), fastLows.slice(0, -5), fastCloses.slice(0, -5), 14) / (fastCloses[fastCloses.length - 6] || price) : atr14;
+  const atr14Prev = htfCloses.length > 20 ? atr(htfHighs.slice(0, -5), htfLows.slice(0, -5), htfCloses.slice(0, -5), 14) / (htfCloses[htfCloses.length - 6] || price) : atr14;
   const atrAccel = atr14Prev > 0 ? (atr14 / atr14Prev) - 1 : 0;
 
   // Time features

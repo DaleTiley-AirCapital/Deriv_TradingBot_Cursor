@@ -150,14 +150,16 @@ Regime is computed once per symbol per hour and cached in `platform_state`.
 
 | Regime | Detection Criteria | Allowed Strategies |
 |--------|-------------------|-------------------|
-| `trend_up` | Sustained positive EMA slope, consistent candles | trend_continuation, swing_exhaustion |
-| `trend_down` | Sustained negative EMA slope | trend_continuation, swing_exhaustion |
-| `mean_reversion` | Price overstretched from mean | mean_reversion, spike_cluster_recovery, swing_exhaustion |
-| `ranging` | Flat EMA slope, moderate BB width, no spike hazard | mean_reversion, spike_cluster_recovery, trendline_breakout |
-| `compression` | Low BB width, flat slope | trendline_breakout, spike_cluster_recovery |
-| `breakout_expansion` | Expanding volatility | trend_continuation, trendline_breakout, swing_exhaustion |
-| `spike_zone` | Active Boom/Crash spike cluster | spike_cluster_recovery, swing_exhaustion |
-| `no_trade` | Unclear/conflicting signals | NONE — system waits |
+| `trend_up` | Sustained positive EMA slope, consistent candles | ALL 5 families (informational only) |
+| `trend_down` | Sustained negative EMA slope | ALL 5 families (informational only) |
+| `mean_reversion` | Price overstretched from mean | ALL 5 families (informational only) |
+| `ranging` | Flat EMA slope, moderate BB width, no spike hazard | ALL 5 families (informational only) |
+| `compression` | Low BB width, flat slope | ALL 5 families (informational only) |
+| `breakout_expansion` | Expanding volatility | ALL 5 families (informational only) |
+| `spike_zone` | Active Boom/Crash spike cluster | ALL 5 families (informational only) |
+| `no_trade` | Unclear/conflicting signals | ALL 5 families (informational only) |
+
+**Note:** Regime classification is logged for analysis but never blocks strategy execution. All 5 strategy families are permitted in all regime states.
 
 ---
 
@@ -169,13 +171,15 @@ Replaced logistic regression with empirical Big Move Readiness Score based on re
 
 ### 6.2 Readiness Score (5 Dimensions, 0-100)
 
-| Dimension | Weight | What It Measures | Key Thresholds |
-|-----------|--------|-----------------|----------------|
-| Range Position | **25%** | Proximity to 30-day range extreme (low for buy, high for sell) | ≤18% from extreme = 100, ≤30% = 70, >50% = 0 |
-| MA Deviation | **20%** | Distance from 7/14-day moving average | ≥8% deviation = 100, ≥5% = 70, <2% = 0 |
-| Volatility Profile | **20%** | Elevated ATR rank + BB width expansion | ATR rank ≥1.3 + BB expanding = 100 |
-| Range Expansion | **15%** | BB width rate-of-change, ATR acceleration | Both accelerating = 100 |
-| Directional Confirmation | **20%** | Reversal candle pattern + MA slope change | Both present = 100 |
+| Dimension | Weight | What It Measures |
+|-----------|--------|-----------------|
+| Range Position | **25%** | Proximity to 30-day range extreme — per-symbol breakpoints |
+| MA Deviation | **20%** | Distance from EMA20 on HTF candles — per-symbol breakpoints |
+| Volatility Profile | **20%** | ATR rank + BB width expansion — per-symbol bonuses |
+| Range Expansion | **15%** | BB width RoC + ATR acceleration — per-symbol tiers |
+| Directional Confirmation | **20%** | Reversal candle + slope + RSI + multi-day setup — per-symbol RSI |
+
+Per-symbol scoring breakpoints via `getSymbolScoringBreakpoints(symbol)` in `scoring.ts`. Indicators computed on HTF-aggregated candles (CRASH300→12h, BOOM300→8h, R_75/R_100→4h) via `aggregateCandles()` in `features.ts`.
 
 ### 6.3 Composite Score Thresholds
 
@@ -192,16 +196,17 @@ Additional filters: EV ≥ 0.001, R:R ≥ 1.5
 ## 7. Signal Pipeline
 
 1. **Tick Streaming** → Live price ticks from Deriv WebSocket
-2. **Feature Extraction** → 40+ features from 1500+100 candle windows
-3. **Regime Classification** → Cached hourly per symbol
-4. **Strategy Evaluation** → Only regime-permitted strategies run
-5. **Big Move Readiness** → Empirical 5-dimension readiness score (rangePosition 25%, maDeviation 20%, volatilityProfile 20%, rangeExpansion 15%, directionalConfirmation 20%)
-6. **Composite Threshold** → readiness score must exceed 85/90/92 (paper/demo/real)
+2. **Feature Extraction** → HTF-aggregated indicators (CRASH300→12h, BOOM300→8h, R_75/R_100→4h) + 1m percentage features. LOOKBACK = max(1500, 55 × tfMins) candles per symbol.
+3. **Regime Classification** → Cached hourly per symbol (informational only — never blocks strategies)
+4. **Strategy Evaluation** → All 5 families evaluated for all regime states
+5. **Big Move Readiness** → Per-symbol calibrated 5-dimension readiness score with per-symbol breakpoints
+6. **Per-Symbol EV** → Empirical win/loss magnitudes: CRASH300 42%/8.4%, BOOM300 30%/6%, R_75 18%/3.6%, R_100 17%/3.4%
 7. **Quality Filtering** → composite ≥ 85/90/92, EV ≥ 0.001, R:R ≥ 1.5
-8. **AI Verification** → Strict 5-criterion evaluation with strategy-specific checks
-9. **Portfolio Allocation** → Daily/weekly loss limits, max drawdown, max open trades, correlated exposure cap
-10. **Position Sizing** → equity × pct_per_trade × confidence factor
-11. **Execution** → S/R+Fib TP/SL computed, trade opened
+8. **Signal Confirmation** → Must persist across 2 consecutive 60-min windows. Price-reversal invalidation (>0.5% against direction). 4h stale expiry.
+9. **AI Verification** → Strict 5-criterion evaluation with strategy-specific checks
+10. **Portfolio Allocation** → Daily/weekly loss limits, max drawdown, max open trades, correlated exposure cap
+11. **Position Sizing** → equity × pct_per_trade × confidence factor
+12. **Execution** → S/R+Fib TP/SL computed, trade opened
 
 ---
 

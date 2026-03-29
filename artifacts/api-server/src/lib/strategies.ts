@@ -1,5 +1,5 @@
 import type { FeatureVector, SpikeMagnitudeStats } from "./features.js";
-import { computeBigMoveReadiness } from "./model.js";
+import { computeBigMoveReadiness, computeSignalMetadata, type SignalMetadata } from "./model.js";
 import { computeScoringDimensions, computeCompositeScore, type ScoringWeights } from "./scoring.js";
 import { classifyRegime, getCachedRegime, cacheRegime, getHourlyAveragedFeatures, type StrategyFamily, type RegimeClassification } from "./regimeEngine.js";
 
@@ -270,6 +270,10 @@ export interface SignalCandidate {
   spikeMagnitude?: SpikeMagnitudeStats | null;
   majorSwingHigh?: number;
   majorSwingLow?: number;
+  expectedMovePct?: number;
+  expectedHoldDays?: number;
+  captureRate?: number;
+  empiricalWinRate?: number;
 }
 
 function buildCandidate(
@@ -283,6 +287,7 @@ function buildCandidate(
   reason: string,
   signalType: string,
 ): SignalCandidate {
+  const meta = computeSignalMetadata(features, direction);
   return {
     symbol: features.symbol,
     strategyName: family,
@@ -328,6 +333,10 @@ function buildCandidate(
     spikeMagnitude: features.spikeMagnitude,
     majorSwingHigh: features.majorSwingHigh,
     majorSwingLow: features.majorSwingLow,
+    expectedMovePct: meta.expectedMovePct,
+    expectedHoldDays: meta.expectedHoldDays,
+    captureRate: meta.captureRate,
+    empiricalWinRate: meta.empiricalWinRate,
   };
 }
 
@@ -610,10 +619,6 @@ const FAMILY_RUNNERS: Record<StrategyFamily, (f: FeatureVector, r: RegimeClassif
 
 export function runAllStrategies(features: FeatureVector, weights?: ScoringWeights, cachedRegime?: RegimeClassification, explicitHourlyFeatures?: Partial<FeatureVector>): SignalCandidate[] {
   const regime = cachedRegime ?? classifyRegime(features);
-
-  if (regime.regime === "no_trade") {
-    return [];
-  }
 
   const candidates: SignalCandidate[] = [];
 

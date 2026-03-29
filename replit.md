@@ -30,13 +30,13 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 -   **Trading Modes:** Supports three independent trading modes (Paper, Demo, Real) which can run simultaneously, each with independent capital allocation, risk limits, position sizing, and Deriv API tokens.
 -   **Signal & ML Pipeline (Regime-First Architecture):** A sophisticated pipeline that includes:
     -   **Feature Engineering:** Computes various technical indicators and regime labels.
-    -   **Regime Engine:** Classifies market regimes and defines strategy permissions.
+    -   **Regime Engine:** Classifies market regimes (informational only — all 5 strategy families allowed in all states including no_trade).
     -   **Scoring System (Empirical Big Move Readiness v2):** 5-dimension empirical readiness score (0-100): Range Position (25%), MA Deviation (20%), Volatility Profile (20%), Range Expansion (15%), Directional Confirmation (20%). Replaced logistic regression with rule-based scoring from observed preconditions of actual 50-200%+ moves.
-    -   **Strategy Engine:** Implements five strategy families, gated by market regimes.
+    -   **Strategy Engine:** Implements five strategy families with per-symbol calibrated thresholds.
     -   **Signal Router:** Manages conflict resolution, multi-asset ranking, and tiered allocation.
     -   **AI Signal Verification:** GPT-4o powered verification of signals.
     -   **Signal Scheduler:** Manages staggered symbol scanning and position management.
-    -   **Multi-Window Signal Confirmation:** Signals must be confirmed across 3 consecutive 30-minute windows before being promoted to execution. In-memory pending signal store (`pendingSignals.ts`) tracks confirmation progress per symbol/strategy/direction. Signals expire if gap > 90 minutes between confirmations. Pyramiding requires 3 additional windows + 1% price move in expected direction. Frontend shows pending signals with progress bars on the Decision Review page.
+    -   **Multi-Window Signal Confirmation:** Signals must persist across 2 consecutive 60-minute evaluation windows before execution. In-memory pending signal store (`pendingSignals.ts`) tracks confirmation progress per symbol/strategy/direction. Signals expire if gap > 4 hours between confirmations. Price-reversal invalidation: signal reset if price moves >0.5% against expected direction. Pyramiding requires 3 confirmations + 1% price move in expected direction. Frontend shows pending signals with progress bars on the Decision Review page.
     -   **Pyramiding:** Up to 3 positions per symbol (up from 2). After Trade 1 confirmed, continue monitoring; if 3+ more windows confirm with price moved 1%+ in expected direction, open Trade 2/3. MAX_OPEN_TRADES raised to 6 (up from 3). Trades page groups pyramided positions by symbol with combined P&L.
     -   **Trade Engine (V2):** Full market move TP/SL. Boom/Crash: TP = 50% of 90-day longTermRangePct (min 10% of entry), targeting 50-200%+ full moves. Volatility: TP = 70% of major swing range from 1500+ candle window (min 2% of entry). SL = TP distance / 5 (fixed 1:5 R:R ratio) with 10% equity safety cap. No structural S/R-based SL, no ATR fallbacks ever. TP is PRIMARY exit; 30% trailing stop is SAFETY NET ONLY — activates only after trade reaches 30% of TP target (before that, only fixed SL protects). No time-based exits — trades hold 9-44 days. Composite thresholds: 85 (paper), 90 (demo), 92 (real). Up to 3 positions per symbol (pyramided). See `V2_SPECIFICATION.md`.
     -   **Extraction Engine:** Manages capital cycles, targeting profit percentages for auto-extraction.
@@ -47,7 +47,7 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 1. **TP is PRIMARY exit** targeting full spike magnitude (50-200%+). Trailing stop is SAFETY NET ONLY. NEVER dilute this to 0.01-0.3% targets.
 2. **Never use ATR-based TP/SL exits.** All exits from market structure and spike magnitude analysis.
 3. **No time-based exits** — trades hold 9-44 days until TP, SL, or trailing stop. Research shows this captures full swing magnitude.
-4. **Never compute structural indicators from only 100 one-minute candles.** Use 1500+ candles for structure, 100 for fast indicators.
+4. **Never compute indicators on raw 1-minute candles.** Indicators (RSI, EMA, ATR, BB, z-score) use per-symbol HTF aggregation: CRASH300→12h, BOOM300→8h, R_75/R_100→4h via `aggregateCandles()`. Percentage features (24h/7d change, 30d range, spike counts) use 1m timestamp lookback. Structural windows use `max(1500, 55 × tfMins)` candles.
 5. **Use rolling 60-90 day windows** (not static all-time levels) for spike magnitude analysis.
 6. **Boom/Crash and Volatility treated differently** — 50% of 90-day range TP for Boom/Crash, 70% major swing range TP for Volatility.
 
