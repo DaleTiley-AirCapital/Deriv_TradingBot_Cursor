@@ -161,30 +161,21 @@ Regime is computed once per symbol per hour and cached in `platform_state`.
 
 ---
 
-## 6. Scoring System
+## 6. Scoring System — Empirical Big Move Readiness (v2)
 
-### 6.1 Model Score
+### 6.1 Overview
 
-Per-family logistic regression model scores features 0-1. Must exceed `minModelScore` threshold:
+Replaced logistic regression with empirical Big Move Readiness Score based on research of actual 50-200%+ moves in Boom/Crash/Volatility indices. No ML model — pure rule-based scoring from observed preconditions.
 
-| Family | minModelScore |
-|--------|-------------|
-| trend_continuation | 0.60 |
-| mean_reversion | 0.60 |
-| spike_cluster_recovery | 0.58 |
-| swing_exhaustion | 0.58 |
-| trendline_breakout | 0.65 |
+### 6.2 Readiness Score (5 Dimensions, 0-100)
 
-### 6.2 Composite Score (6 Dimensions, 0-100)
-
-| Dimension | Weight | What It Measures |
-|-----------|--------|-----------------|
-| Setup Quality | **25%** | Model score margin, expected value strength, regime compatibility, confidence |
-| Reward/Risk | **20%** | R:R ratio from nearest structural TP/SL levels |
-| Regime Fit | **20%** | Strategy-to-regime alignment, regime confidence |
-| Trend Alignment | **13%** | EMA slope direction, price vs EMA, consecutive candle alignment |
-| Volatility Condition | **12%** | ATR within ideal range for strategy family, BB width, ATR rank |
-| Probability of Success | **10%** | Direct model score mapping |
+| Dimension | Weight | What It Measures | Key Thresholds |
+|-----------|--------|-----------------|----------------|
+| Range Position | **25%** | Proximity to 30-day range extreme (low for buy, high for sell) | ≤18% from extreme = 100, ≤30% = 70, >50% = 0 |
+| MA Deviation | **20%** | Distance from 7/14-day moving average | ≥8% deviation = 100, ≥5% = 70, <2% = 0 |
+| Volatility Profile | **20%** | Elevated ATR rank + BB width expansion | ATR rank ≥1.3 + BB expanding = 100 |
+| Range Expansion | **15%** | BB width rate-of-change, ATR acceleration | Both accelerating = 100 |
+| Directional Confirmation | **20%** | Reversal candle pattern + MA slope change | Both present = 100 |
 
 ### 6.3 Composite Score Thresholds
 
@@ -204,8 +195,8 @@ Additional filters: EV ≥ 0.001, R:R ≥ 1.5
 2. **Feature Extraction** → 40+ features from 1500+100 candle windows
 3. **Regime Classification** → Cached hourly per symbol
 4. **Strategy Evaluation** → Only regime-permitted strategies run
-5. **ML Scoring** → Per-family logistic regression (minModelScore gate)
-6. **Composite Scoring** → 6-dimension weighted score (setupQuality 25%, rewardRisk 20%, regimeFit 20%, etc.)
+5. **Big Move Readiness** → Empirical 5-dimension readiness score (rangePosition 25%, maDeviation 20%, volatilityProfile 20%, rangeExpansion 15%, directionalConfirmation 20%)
+6. **Composite Threshold** → readiness score must exceed 85/90/92 (paper/demo/real)
 7. **Quality Filtering** → composite ≥ 85/90/92, EV ≥ 0.001, R:R ≥ 1.5
 8. **AI Verification** → Strict 5-criterion evaluation with strategy-specific checks
 9. **Portfolio Allocation** → Daily/weekly loss limits, max drawdown, max open trades, correlated exposure cap

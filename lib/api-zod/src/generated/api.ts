@@ -381,12 +381,11 @@ export const GetLatestSignalsResponse = zod.object({
       compositeScore: zod.number().nullable(),
       scoringDimensions: zod.union([
         zod.object({
-          regimeFit: zod.number(),
-          setupQuality: zod.number(),
-          trendAlignment: zod.number(),
-          volatilityCondition: zod.number(),
-          rewardRisk: zod.number(),
-          probabilityOfSuccess: zod.number(),
+          rangePosition: zod.number(),
+          maDeviation: zod.number(),
+          volatilityProfile: zod.number(),
+          rangeExpansion: zod.number(),
+          directionalConfirmation: zod.number(),
         }),
         zod.null(),
       ]),

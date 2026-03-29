@@ -5,7 +5,7 @@ import { calculateProfitTrailingStop, calculateSRFibTP, calculateSRFibSL } from 
 import { classifyRegime, type RegimeClassification } from "./regimeEngine.js";
 import type { FeatureVector, SpikeMagnitudeStats } from "./features.js";
 import { findSwingLevels, findMultiSwingTrendlines, findMajorSwingLevels } from "./features.js";
-import type { ScoringWeights } from "./scoring.js";
+import { type ScoringWeights, DEFAULT_SCORING_WEIGHTS } from "./scoring.js";
 
 const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
@@ -1341,22 +1341,21 @@ export async function runBacktestSimulation(
   const stateMap: Record<string, string> = {};
   for (const s of states) stateMap[s.key] = s.value;
   const weightKeys: (keyof ScoringWeights)[] = [
-    "regimeFit", "setupQuality", "trendAlignment",
-    "volatilityCondition", "rewardRisk", "probabilityOfSuccess",
+    "rangePosition", "maDeviation", "volatilityProfile",
+    "rangeExpansion", "directionalConfirmation",
   ];
   const weightStateMap: Record<keyof ScoringWeights, string> = {
-    regimeFit: "scoring_weight_regime_fit",
-    setupQuality: "scoring_weight_setup_quality",
-    trendAlignment: "scoring_weight_trend_alignment",
-    volatilityCondition: "scoring_weight_volatility_condition",
-    rewardRisk: "scoring_weight_reward_risk",
-    probabilityOfSuccess: "scoring_weight_probability_of_success",
+    rangePosition: "scoring_weight_range_position",
+    maDeviation: "scoring_weight_ma_deviation",
+    volatilityProfile: "scoring_weight_volatility_profile",
+    rangeExpansion: "scoring_weight_range_expansion",
+    directionalConfirmation: "scoring_weight_directional_confirmation",
   };
   const hasWeights = weightKeys.some(k => stateMap[weightStateMap[k]] !== undefined);
   let scoringWeights: ScoringWeights | undefined;
   if (hasWeights) {
     scoringWeights = {} as ScoringWeights;
-    for (const k of weightKeys) scoringWeights[k] = parseFloat(stateMap[weightStateMap[k]] || "1");
+    for (const k of weightKeys) scoringWeights[k] = parseFloat(stateMap[weightStateMap[k]] || String(DEFAULT_SCORING_WEIGHTS[k]));
   }
 
   const result = await runFullBacktest({
@@ -1435,22 +1434,21 @@ export async function runSymbolBacktest(
   const stateMap: Record<string, string> = {};
   for (const s of states) stateMap[s.key] = s.value;
   const weightKeys: (keyof ScoringWeights)[] = [
-    "regimeFit", "setupQuality", "trendAlignment",
-    "volatilityCondition", "rewardRisk", "probabilityOfSuccess",
+    "rangePosition", "maDeviation", "volatilityProfile",
+    "rangeExpansion", "directionalConfirmation",
   ];
   const weightStateMap: Record<keyof ScoringWeights, string> = {
-    regimeFit: "scoring_weight_regime_fit",
-    setupQuality: "scoring_weight_setup_quality",
-    trendAlignment: "scoring_weight_trend_alignment",
-    volatilityCondition: "scoring_weight_volatility_condition",
-    rewardRisk: "scoring_weight_reward_risk",
-    probabilityOfSuccess: "scoring_weight_probability_of_success",
+    rangePosition: "scoring_weight_range_position",
+    maDeviation: "scoring_weight_ma_deviation",
+    volatilityProfile: "scoring_weight_volatility_profile",
+    rangeExpansion: "scoring_weight_range_expansion",
+    directionalConfirmation: "scoring_weight_directional_confirmation",
   };
   const hasWeights = weightKeys.some(k => stateMap[weightStateMap[k]] !== undefined);
   let scoringWeights: ScoringWeights | undefined;
   if (hasWeights) {
     scoringWeights = {} as ScoringWeights;
-    for (const k of weightKeys) scoringWeights[k] = parseFloat(stateMap[weightStateMap[k]] || "1");
+    for (const k of weightKeys) scoringWeights[k] = parseFloat(stateMap[weightStateMap[k]] || String(DEFAULT_SCORING_WEIGHTS[k]));
   }
 
   const result = await runFullBacktest({

@@ -48,22 +48,21 @@ export function getSchedulerStatus() {
 
 function parseScoringWeights(stateMap: Record<string, string>): ScoringWeights | undefined {
   const keys: (keyof ScoringWeights)[] = [
-    "regimeFit", "setupQuality", "trendAlignment",
-    "volatilityCondition", "rewardRisk", "probabilityOfSuccess",
+    "rangePosition", "maDeviation", "volatilityProfile",
+    "rangeExpansion", "directionalConfirmation",
   ];
   const stateKeys: Record<keyof ScoringWeights, string> = {
-    regimeFit: "scoring_weight_regime_fit",
-    setupQuality: "scoring_weight_setup_quality",
-    trendAlignment: "scoring_weight_trend_alignment",
-    volatilityCondition: "scoring_weight_volatility_condition",
-    rewardRisk: "scoring_weight_reward_risk",
-    probabilityOfSuccess: "scoring_weight_probability_of_success",
+    rangePosition: "scoring_weight_range_position",
+    maDeviation: "scoring_weight_ma_deviation",
+    volatilityProfile: "scoring_weight_volatility_profile",
+    rangeExpansion: "scoring_weight_range_expansion",
+    directionalConfirmation: "scoring_weight_directional_confirmation",
   };
   const hasAny = keys.some(k => stateMap[stateKeys[k]] !== undefined);
   if (!hasAny) return undefined;
   const weights: ScoringWeights = {} as ScoringWeights;
   for (const k of keys) {
-    weights[k] = parseFloat(stateMap[stateKeys[k]] || "1");
+    weights[k] = parseFloat(stateMap[stateKeys[k]] || "0.20");
   }
   return weights;
 }
@@ -526,8 +525,8 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
     }
     const worstRegime = Object.entries(regimeWinRates).sort((a, b) => a[1] - b[1])[0];
     if (worstRegime && worstRegime[1] < 0.25 && (regimeDistribution[worstRegime[0]] || 0) > 3) {
-      const curRegimeWeight = parseFloat(stateMap["scoring_weight_regime_fit"] || "16.67");
-      suggestions["scoring_weight_regime_fit"] = String(Math.min(curRegimeWeight * 1.15, 30).toFixed(2));
+      const curRangeWeight = parseFloat(stateMap["scoring_weight_range_position"] || "25");
+      suggestions["scoring_weight_range_position"] = String(Math.min(curRangeWeight * 1.15, 40).toFixed(2));
     }
 
     const disableFamilies: string[] = [];
@@ -566,10 +565,10 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
   const tpCount = exitReasons.filter(r => r.includes("tp")).length;
   const totalExits = closedTrades.length;
   if (totalExits > 10 && tpCount / totalExits < 0.25) {
-    const curRR = parseFloat(stateMap["scoring_weight_reward_risk"] || "16.67");
-    suggestions["scoring_weight_reward_risk"] = String(Math.min(curRR * 1.1, 30).toFixed(2));
-    const curSetup = parseFloat(stateMap["scoring_weight_setup_quality"] || "16.67");
-    suggestions["scoring_weight_setup_quality"] = String(Math.min(curSetup * 1.05, 25).toFixed(2));
+    const curVolProfile = parseFloat(stateMap["scoring_weight_volatility_profile"] || "20");
+    suggestions["scoring_weight_volatility_profile"] = String(Math.min(curVolProfile * 1.1, 35).toFixed(2));
+    const curDirConfirm = parseFloat(stateMap["scoring_weight_directional_confirmation"] || "20");
+    suggestions["scoring_weight_directional_confirmation"] = String(Math.min(curDirConfirm * 1.05, 30).toFixed(2));
   }
 
   const filteredSuggestions: Record<string, string> = {};

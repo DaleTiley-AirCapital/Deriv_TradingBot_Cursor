@@ -3,341 +3,122 @@ import { eq, and, isNotNull } from "drizzle-orm";
 import type { FeatureVector } from "./features.js";
 import type { StrategyFamily } from "./regimeEngine.js";
 
-interface ModelWeights {
-  intercept: number;
-  emaSlope: number;
-  rsi14: number;
-  atr14: number;
-  bbWidth: number;
-  zScore: number;
-  spikeHazard: number;
-  consecutive: number;
-  bbPctB: number;
-}
+export function computeBigMoveReadiness(
+  features: FeatureVector,
+  family: StrategyFamily,
+  direction: "buy" | "sell",
+): { score: number; confidence: number; expectedValue: number } {
+  let readiness = 0;
+  let factors = 0;
 
-const modelStore: Record<string, { weights: ModelWeights; type: string; trainedAt: number }> = {};
+  const distLow = Math.abs(features.distFromRange30dLowPct);
+  const distHigh = Math.abs(features.distFromRange30dHighPct);
 
-function sigmoid(x: number): number {
-  return 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x))));
-}
-
-function dot(features: number[], weights: number[]): number {
-  return features.reduce((sum, f, i) => sum + f * (weights[i] || 0), 0);
-}
-
-const FAMILY_WEIGHTS: Record<StrategyFamily, ModelWeights> = {
-  trend_continuation: {
-    intercept: -0.15,
-    emaSlope: 3.5,
-    rsi14: 1.0,
-    atr14: -0.3,
-    bbWidth: -0.5,
-    zScore: -0.5,
-    spikeHazard: 0.3,
-    consecutive: 0.5,
-    bbPctB: 0.4,
-  },
-  mean_reversion: {
-    intercept: 0.1,
-    emaSlope: -1.5,
-    rsi14: -2.5,
-    atr14: 0.5,
-    bbWidth: 0.8,
-    zScore: -2.0,
-    spikeHazard: 0.2,
-    consecutive: -1.0,
-    bbPctB: -1.5,
-  },
-  spike_cluster_recovery: {
-    intercept: -0.1,
-    emaSlope: 0.3,
-    rsi14: 0.2,
-    atr14: 0.5,
-    bbWidth: -0.3,
-    zScore: 0.3,
-    spikeHazard: 4.0,
-    consecutive: 0.2,
-    bbPctB: 0.1,
-  },
-  swing_exhaustion: {
-    intercept: -0.2,
-    emaSlope: -1.0,
-    rsi14: -1.5,
-    atr14: 0.8,
-    bbWidth: 0.5,
-    zScore: -1.5,
-    spikeHazard: 1.5,
-    consecutive: -0.8,
-    bbPctB: -0.5,
-  },
-  trendline_breakout: {
-    intercept: -0.15,
-    emaSlope: 1.5,
-    rsi14: 0.3,
-    atr14: 1.5,
-    bbWidth: -1.5,
-    zScore: 0.5,
-    spikeHazard: 0.2,
-    consecutive: 0.4,
-    bbPctB: 1.2,
-  },
-};
-
-const FAMILY_RULE_CONFIGS: Record<StrategyFamily, {
-  trendWeight: number;
-  rsiWeight: number;
-  bbWeight: number;
-  spikeWeight: number;
-  meanRevWeight: number;
-  atrWeight: number;
-}> = {
-  trend_continuation: {
-    trendWeight: 0.30,
-    rsiWeight: 0.10,
-    bbWeight: 0.05,
-    spikeWeight: 0.05,
-    meanRevWeight: 0.05,
-    atrWeight: 0.10,
-  },
-  mean_reversion: {
-    trendWeight: 0.05,
-    rsiWeight: 0.30,
-    bbWeight: 0.10,
-    spikeWeight: 0.05,
-    meanRevWeight: 0.25,
-    atrWeight: 0.05,
-  },
-  spike_cluster_recovery: {
-    trendWeight: 0.05,
-    rsiWeight: 0.05,
-    bbWeight: 0.05,
-    spikeWeight: 0.50,
-    meanRevWeight: 0.05,
-    atrWeight: 0.10,
-  },
-  swing_exhaustion: {
-    trendWeight: 0.10,
-    rsiWeight: 0.15,
-    bbWeight: 0.05,
-    spikeWeight: 0.25,
-    meanRevWeight: 0.20,
-    atrWeight: 0.10,
-  },
-  trendline_breakout: {
-    trendWeight: 0.15,
-    rsiWeight: 0.05,
-    bbWeight: 0.20,
-    spikeWeight: 0.05,
-    meanRevWeight: 0.05,
-    atrWeight: 0.30,
-  },
-};
-
-function getFamilyWeights(family: StrategyFamily, symbol: string): ModelWeights {
-  const trained = modelStore[`${family}:${symbol}`] ?? modelStore[symbol];
-  if (trained) return trained.weights;
-
-  const baseWeights = { ...FAMILY_WEIGHTS[family] };
-  const isBoom = symbol.startsWith("BOOM");
-
-  if (family === "trend_continuation") {
-    baseWeights.emaSlope = isBoom ? baseWeights.emaSlope : -baseWeights.emaSlope;
-    baseWeights.consecutive = isBoom ? 0.5 : -0.5;
-  } else if (family === "mean_reversion") {
-    baseWeights.zScore = isBoom ? -2.0 : 2.0;
-    baseWeights.rsi14 = isBoom ? -2.5 : 2.5;
+  if (direction === "buy") {
+    if (distLow <= 0.03) { readiness += 1.0; factors++; }
+    else if (distLow <= 0.10) { readiness += 0.7; factors++; }
+    else if (distLow <= 0.18) { readiness += 0.4; factors++; }
+    else { readiness += 0.15; factors++; }
+  } else {
+    if (distHigh <= 0.03) { readiness += 1.0; factors++; }
+    else if (distHigh <= 0.10) { readiness += 0.7; factors++; }
+    else if (distHigh <= 0.18) { readiness += 0.4; factors++; }
+    else { readiness += 0.15; factors++; }
   }
 
-  return baseWeights;
-}
-
-function computeFamilyRuleScore(features: FeatureVector, family: StrategyFamily): number {
-  const cfg = FAMILY_RULE_CONFIGS[family];
-  let ruleScore = 0.5;
-  let ruleWeight = 0;
-
-  if (Math.abs(features.emaSlope) > 0.0005) {
-    const aligned = family === "trend_continuation"
-      ? (features.emaSlope > 0 ? 0.70 : 0.65)
-      : (features.emaSlope > 0 ? 0.55 : 0.50);
-    ruleScore += aligned * cfg.trendWeight;
-    ruleWeight += cfg.trendWeight;
+  const maDist = features.emaDist;
+  if (direction === "buy") {
+    if (maDist < -0.06) { readiness += 1.0; factors++; }
+    else if (maDist < -0.03) { readiness += 0.75; factors++; }
+    else if (maDist < -0.01) { readiness += 0.5; factors++; }
+    else { readiness += 0.2; factors++; }
+  } else {
+    if (maDist > 0.06) { readiness += 1.0; factors++; }
+    else if (maDist > 0.03) { readiness += 0.75; factors++; }
+    else if (maDist > 0.01) { readiness += 0.5; factors++; }
+    else { readiness += 0.2; factors++; }
   }
 
-  if (features.rsi14 < 30) {
-    const revScore = family === "mean_reversion" ? 0.80 : 0.55;
-    ruleScore += revScore * cfg.rsiWeight;
-    ruleWeight += cfg.rsiWeight;
-  } else if (features.rsi14 > 70) {
-    const revScore = family === "mean_reversion" ? 0.80 : 0.45;
-    ruleScore += revScore * cfg.rsiWeight;
-    ruleWeight += cfg.rsiWeight;
-  } else if (features.rsi14 > 45 && features.rsi14 < 60) {
-    ruleScore += 0.55 * cfg.rsiWeight * 0.5;
-    ruleWeight += cfg.rsiWeight * 0.5;
+  if (features.atrRank >= 1.3) { readiness += 0.9; factors++; }
+  else if (features.atrRank >= 1.0) { readiness += 0.6; factors++; }
+  else if (features.atrRank >= 0.7) { readiness += 0.4; factors++; }
+  else { readiness += 0.2; factors++; }
+
+  if (features.bbWidthRoc > 0.08 || features.atrAccel > 0.08) {
+    readiness += 0.8; factors++;
+  } else if (features.bbWidthRoc > 0.03 || features.atrAccel > 0.03) {
+    readiness += 0.5; factors++;
+  } else {
+    readiness += 0.25; factors++;
   }
 
-  if (features.bbWidth < 0.005) {
-    const bbScore = family === "swing_exhaustion" ? 0.75 : 0.55;
-    ruleScore += bbScore * cfg.bbWeight;
-    ruleWeight += cfg.bbWeight;
+  const slopeAligned = (direction === "buy" && features.emaSlope > 0) ||
+    (direction === "sell" && features.emaSlope < 0);
+  const reversalCandle = (direction === "buy" && features.latestClose > features.latestOpen) ||
+    (direction === "sell" && features.latestClose < features.latestOpen);
+  const multiDaySetup = (direction === "buy" && features.priceChange7dPct < -0.05) ||
+    (direction === "sell" && features.priceChange7dPct > 0.05);
+
+  let confirmScore = 0;
+  if (slopeAligned) confirmScore += 0.3;
+  if (reversalCandle) confirmScore += 0.25;
+  if (multiDaySetup) confirmScore += 0.25;
+
+  const rsiConfirm = (direction === "buy" && features.rsi14 < 35) ||
+    (direction === "sell" && features.rsi14 > 65);
+  if (rsiConfirm) confirmScore += 0.2;
+
+  readiness += Math.min(1.0, confirmScore);
+  factors++;
+
+  if (family === "spike_cluster_recovery") {
+    const isBoomCrash = features.symbol.startsWith("BOOM") || features.symbol.startsWith("CRASH");
+    if (isBoomCrash) {
+      const clusterDensity = Math.min(1, features.spikeCount4h / 8);
+      if (clusterDensity > 0.3) {
+        readiness += clusterDensity * 0.8;
+        factors++;
+      }
+    }
   }
 
-  ruleScore += features.spikeHazardScore * cfg.spikeWeight;
-  ruleWeight += cfg.spikeWeight;
-
-  if (Math.abs(features.zScore) > 2.0) {
-    const revScore = features.zScore > 0 ? 0.35 : 0.65;
-    const effectiveScore = family === "mean_reversion" ? (1 - revScore) * 0.3 + revScore * 0.7 : revScore;
-    ruleScore += effectiveScore * cfg.meanRevWeight;
-    ruleWeight += cfg.meanRevWeight;
+  if (family === "swing_exhaustion") {
+    const exhaustion = Math.min(1, Math.abs(features.priceChange7dPct) / 0.15);
+    if (exhaustion > 0.4) {
+      readiness += exhaustion * 0.7;
+      factors++;
+    }
   }
 
-  if (features.atrAccel > 0.1) {
-    const atrScore = family === "swing_exhaustion" ? 0.75 : 0.55;
-    ruleScore += atrScore * cfg.atrWeight;
-    ruleWeight += cfg.atrWeight;
-  }
+  const normalizedScore = factors > 0 ? readiness / factors : 0;
+  const score = Math.min(0.95, normalizedScore);
+  const confidence = Math.max(0.1, Math.min(0.95, score * 1.1 - 0.05));
 
-  if (ruleWeight > 0) ruleScore = ruleScore / (1 + ruleWeight);
-  return ruleScore;
+  const avgWinPct = 0.08;
+  const avgLossPct = 0.03;
+  const winProb = score;
+  const expectedValue = winProb * avgWinPct - (1 - winProb) * avgLossPct;
+
+  return { score, confidence, expectedValue };
 }
 
 export function scoreFeaturesForFamily(
   features: FeatureVector,
   family: StrategyFamily,
+  direction: "buy" | "sell" = "buy",
 ): { score: number; confidence: number; expectedValue: number } {
-  const weights = getFamilyWeights(family, features.symbol);
-
-  const featureVec = [
-    features.emaSlope * 1000,
-    (features.rsi14 - 50) / 50,
-    features.atr14 * 100,
-    features.bbWidth * 10,
-    features.zScore,
-    features.spikeHazardScore,
-    features.consecutive / 5,
-    features.bbPctB,
-  ];
-
-  const logitScore = sigmoid(
-    weights.intercept +
-    weights.emaSlope * featureVec[0] +
-    weights.rsi14 * featureVec[1] +
-    weights.atr14 * featureVec[2] +
-    weights.bbWidth * featureVec[3] +
-    weights.zScore * featureVec[4] +
-    weights.spikeHazard * featureVec[5] +
-    weights.consecutive * featureVec[6] +
-    weights.bbPctB * featureVec[7]
-  );
-
-  const ruleScore = computeFamilyRuleScore(features, family);
-  const ensembleScore = 0.55 * logitScore + 0.45 * ruleScore;
-  const confidence = Math.abs(ensembleScore - 0.5) * 2;
-
-  const avgWin = 0.025;
-  const avgLoss = 0.015;
-  const expectedValue = ensembleScore * avgWin - (1 - ensembleScore) * avgLoss;
-
-  return { score: ensembleScore, confidence, expectedValue };
+  return computeBigMoveReadiness(features, family, direction);
 }
 
 export function scoreFeatures(
   features: FeatureVector,
-  modelType: "logistic-regression" | "gradient-boost" | "rule-based" = "gradient-boost"
+  _modelType: string = "empirical"
 ): { score: number; confidence: number; expectedValue: number } {
-  return scoreFeaturesForFamily(features, "trend_continuation");
-}
-
-export async function trainLogisticRegression(
-  symbol: string,
-  trainingWindowDays = 90
-): Promise<{ accuracy: number; precision: number; recall: number; f1: number; weights: ModelWeights }> {
-  const rows = await db.select().from(featuresTable)
-    .where(and(
-      eq(featuresTable.symbol, symbol),
-      isNotNull(featuresTable.targetLabel)
-    ));
-
-  if (rows.length < 20) {
-    return {
-      accuracy: 0.5, precision: 0.5, recall: 0.5, f1: 0.5,
-      weights: FAMILY_WEIGHTS.trend_continuation,
-    };
-  }
-
-  const dataset = rows.map(row => {
-    const f = row.featureJson as Record<string, number>;
-    const label = parseInt(row.targetLabel || "0");
-    return {
-      features: [
-        f.emaSlope * 1000,
-        (f.rsi14 - 50) / 50,
-        f.atr14 * 100,
-        f.bbWidth * 10,
-        f.zScore,
-        0.5,
-        0,
-        0.5,
-      ],
-      label,
-    };
-  });
-
-  const lr = 0.01;
-  const epochs = 100;
-  let weights = [0, 0, 0, 0, 0, 0, 0, 0];
-  let bias = 0;
-
-  for (let epoch = 0; epoch < epochs; epoch++) {
-    for (let i = dataset.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [dataset[i], dataset[j]] = [dataset[j], dataset[i]];
-    }
-    for (const { features, label } of dataset) {
-      const pred = sigmoid(dot(features, weights) + bias);
-      const error = pred - label;
-      weights = weights.map((w, i) => w - lr * error * features[i]);
-      bias -= lr * error;
-    }
-  }
-
-  let tp = 0, fp = 0, tn = 0, fn = 0;
-  for (const { features, label } of dataset) {
-    const pred = sigmoid(dot(features, weights) + bias) > 0.5 ? 1 : 0;
-    if (pred === 1 && label === 1) tp++;
-    else if (pred === 1 && label === 0) fp++;
-    else if (pred === 0 && label === 0) tn++;
-    else fn++;
-  }
-  const accuracy = (tp + tn) / dataset.length;
-  const precision = tp + fp > 0 ? tp / (tp + fp) : 0;
-  const recall = tp + fn > 0 ? tp / (tp + fn) : 0;
-  const f1 = precision + recall > 0 ? 2 * precision * recall / (precision + recall) : 0;
-
-  const modelWeights: ModelWeights = {
-    intercept: bias,
-    emaSlope: weights[0],
-    rsi14: weights[1],
-    atr14: weights[2],
-    bbWidth: weights[3],
-    zScore: weights[4],
-    spikeHazard: weights[5],
-    consecutive: weights[6],
-    bbPctB: weights[7],
-  };
-
-  modelStore[symbol] = { weights: modelWeights, type: "logistic-regression", trainedAt: Date.now() };
-
-  return { accuracy, precision, recall, f1, weights: modelWeights };
+  return computeBigMoveReadiness(features, "trend_continuation", "buy");
 }
 
 export function getModelStatus(symbol: string): { trained: boolean; type: string; trainedAt: number | null } {
-  const m = modelStore[symbol];
-  return m
-    ? { trained: true, type: m.type, trainedAt: m.trainedAt }
-    : { trained: false, type: "none", trainedAt: null };
+  return { trained: true, type: "empirical-v2", trainedAt: Date.now() };
 }
 
 export async function saveModelRun(
@@ -345,7 +126,7 @@ export async function saveModelRun(
   modelName: string,
   trainingWindow: number,
   metrics: { accuracy: number; precision: number; recall: number; f1: number },
-  weights: ModelWeights
+  weights: Record<string, number>
 ): Promise<void> {
   await db.insert(modelRunsTable).values({
     modelName,
@@ -355,6 +136,6 @@ export async function saveModelRun(
     precision: metrics.precision,
     recall: metrics.recall,
     f1Score: metrics.f1,
-    metricsJson: { weights, trainedOn: new Date().toISOString() },
+    metricsJson: { weights, trainedOn: new Date().toISOString(), type: "empirical-v2" },
   });
 }

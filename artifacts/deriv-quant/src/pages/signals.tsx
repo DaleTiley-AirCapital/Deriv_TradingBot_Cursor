@@ -91,12 +91,11 @@ function CompositeScoreBadge({ score }: { score: number | null | undefined }) {
 }
 
 const DIMENSION_LABELS: Record<keyof ScoringDimensions, string> = {
-  regimeFit: "Regime Fit",
-  setupQuality: "Setup Quality",
-  trendAlignment: "Trend Alignment",
-  volatilityCondition: "Volatility",
-  rewardRisk: "Reward/Risk",
-  probabilityOfSuccess: "Probability",
+  rangePosition: "Range Position",
+  maDeviation: "MA Deviation",
+  volatilityProfile: "Volatility Profile",
+  rangeExpansion: "Range Expansion",
+  directionalConfirmation: "Directional Confirm",
 };
 
 function DimensionBar({ label, value }: { label: string; value: number }) {

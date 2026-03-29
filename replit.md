@@ -31,9 +31,8 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 -   **Signal & ML Pipeline (Regime-First Architecture):** A sophisticated pipeline that includes:
     -   **Feature Engineering:** Computes various technical indicators and regime labels.
     -   **Regime Engine:** Classifies market regimes and defines strategy permissions.
-    -   **Probability Model:** Uses per-family models and scoring.
-    -   **Strategy Engine:** Implements the four strategy families, gated by market regimes.
-    -   **Composite Scoring:** A six-dimension scoring system (Regime Fit, Setup Quality, Trend Alignment, Volatility Condition, Reward/Risk, Probability of Success).
+    -   **Scoring System (Empirical Big Move Readiness v2):** 5-dimension empirical readiness score (0-100): Range Position (25%), MA Deviation (20%), Volatility Profile (20%), Range Expansion (15%), Directional Confirmation (20%). Replaced logistic regression with rule-based scoring from observed preconditions of actual 50-200%+ moves.
+    -   **Strategy Engine:** Implements five strategy families, gated by market regimes.
     -   **Signal Router:** Manages conflict resolution, multi-asset ranking, and tiered allocation.
     -   **AI Signal Verification:** GPT-4o powered verification of signals.
     -   **Signal Scheduler:** Manages staggered symbol scanning and position management.

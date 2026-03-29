@@ -1157,25 +1157,22 @@ components:
     ScoringDimensions:
       type: object
       properties:
-        regimeFit:
+        rangePosition:
           type: number
-        setupQuality:
+        maDeviation:
           type: number
-        trendAlignment:
+        volatilityProfile:
           type: number
-        volatilityCondition:
+        rangeExpansion:
           type: number
-        rewardRisk:
-          type: number
-        probabilityOfSuccess:
+        directionalConfirmation:
           type: number
       required:
-        - regimeFit
-        - setupQuality
-        - trendAlignment
-        - volatilityCondition
-        - rewardRisk
-        - probabilityOfSuccess
+        - rangePosition
+        - maDeviation
+        - volatilityProfile
+        - rangeExpansion
+        - directionalConfirmation
 
     PendingSignalsResponse:
       type: object

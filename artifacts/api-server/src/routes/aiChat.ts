@@ -48,9 +48,9 @@ const PER_MODE_KEYS = [
 ];
 const WRITABLE_SETTINGS = [
   "min_composite_score", "min_ev_threshold", "min_rr_ratio",
-  "scoring_weight_regime_fit", "scoring_weight_setup_quality",
-  "scoring_weight_trend_alignment", "scoring_weight_volatility_condition",
-  "scoring_weight_reward_risk", "scoring_weight_probability_of_success",
+  "scoring_weight_range_position", "scoring_weight_ma_deviation",
+  "scoring_weight_volatility_profile", "scoring_weight_range_expansion",
+  "scoring_weight_directional_confirmation",
   "scan_interval_seconds", "scan_stagger_seconds",
   "ai_verification_enabled", "kill_switch",
   "paper_mode_active", "demo_mode_active", "real_mode_active",
@@ -156,10 +156,9 @@ TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL eve
 2. **Feature Extraction** → 40+ technical features from 1500+ candle structural window
 3. **Regime Classification** → Cached hourly: trend_up, trend_down, mean_reversion, ranging, compression, breakout_expansion, spike_zone, or no_trade
 4. **Strategy Evaluation** → Only matching strategies run per regime
-5. **ML Scoring** → Logistic regression model per family scores features (0-1)
-6. **Composite Scoring** → 6-dimension weighted score (0-100):
-   - Setup Quality (25%), Reward/Risk (20%), Regime Fit (20%), Trend Alignment (13%), Volatility Condition (12%), Probability of Success (10%)
-7. **Filtering** → composite score ≥ min_composite_score (85/90/92), EV ≥ 0.001, R:R ≥ 1.5
+5. **Big Move Readiness** → Empirical 5-dimension readiness score (0-100):
+   - Range Position (25%), MA Deviation (20%), Volatility Profile (20%), Range Expansion (15%), Directional Confirmation (20%)
+6. **Composite Threshold** → readiness score ≥ min_composite_score (85/90/92), EV ≥ 0.001, R:R ≥ 1.5
 8. **AI Verification** (optional) → OpenAI reviews signal with strict multi-day breakout confirmation
 9. **Portfolio Allocation** → Risk checks: daily/weekly loss limits, max drawdown, max open trades, correlated exposure cap
 10. **Position Sizing** → equity × equity_pct_per_trade × confidence factor (up to 2 entries per symbol)

@@ -1,5 +1,5 @@
 import type { FeatureVector, SpikeMagnitudeStats } from "./features.js";
-import { scoreFeaturesForFamily } from "./model.js";
+import { computeBigMoveReadiness } from "./model.js";
 import { computeScoringDimensions, computeCompositeScore, type ScoringWeights } from "./scoring.js";
 import { classifyRegime, getCachedRegime, cacheRegime, getHourlyAveragedFeatures, type StrategyFamily, type RegimeClassification } from "./regimeEngine.js";
 
@@ -49,16 +49,6 @@ export interface SignalCandidate {
   majorSwingHigh?: number;
   majorSwingLow?: number;
 }
-
-const FAMILY_CONFIG: Record<StrategyFamily, {
-  minModelScore: number;
-}> = {
-  trend_continuation: { minModelScore: 0.60 },
-  mean_reversion: { minModelScore: 0.60 },
-  spike_cluster_recovery: { minModelScore: 0.58 },
-  swing_exhaustion: { minModelScore: 0.58 },
-  trendline_breakout: { minModelScore: 0.65 },
-};
 
 function buildCandidate(
   features: FeatureVector,
@@ -120,7 +110,6 @@ function buildCandidate(
 }
 
 function trendContinuation(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
-  const cfg = FAMILY_CONFIG.trend_continuation;
   const isBoom = features.symbol.startsWith("BOOM");
   const isCrash = features.symbol.startsWith("CRASH");
   const isVol = features.symbol.startsWith("R_");
@@ -167,14 +156,12 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
 
   if (!direction) return null;
 
-  const { score, confidence, expectedValue } = scoreFeaturesForFamily(features, "trend_continuation");
-  if (score < cfg.minModelScore) return null;
+  const { score, confidence, expectedValue } = computeBigMoveReadiness(features, "trend_continuation", direction);
 
   return buildCandidate(features, regime, "trend_continuation", direction, score, confidence, expectedValue, reason, "trend_continuation");
 }
 
 function meanReversion(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
-  const cfg = FAMILY_CONFIG.mean_reversion;
   const isBoom = features.symbol.startsWith("BOOM");
   const isCrash = features.symbol.startsWith("CRASH");
 
@@ -222,14 +209,12 @@ function meanReversion(features: FeatureVector, regime: RegimeClassification): S
 
   if (!direction) return null;
 
-  const { score, confidence, expectedValue } = scoreFeaturesForFamily(features, "mean_reversion");
-  if (score < cfg.minModelScore) return null;
+  const { score, confidence, expectedValue } = computeBigMoveReadiness(features, "mean_reversion", direction);
 
   return buildCandidate(features, regime, "mean_reversion", direction, score, confidence, expectedValue, `[${regime.regime}] ${reason}`, "mean_reversion");
 }
 
 function spikeClusterRecovery(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
-  const cfg = FAMILY_CONFIG.spike_cluster_recovery;
   const isBoom = features.symbol.startsWith("BOOM");
   const isCrash = features.symbol.startsWith("CRASH");
 
@@ -267,20 +252,12 @@ function spikeClusterRecovery(features: FeatureVector, regime: RegimeClassificat
 
   if (!direction) return null;
 
-  const clusterDensity = Math.min(1, features.spikeCount4h / 10);
-  const hazardBoost = features.spikeHazardScore;
-  const rawScore = 0.5 + clusterDensity * 0.3 + hazardBoost * 0.2;
-  const score = Math.min(0.95, rawScore);
-  const confidence = Math.min(0.90, 0.4 + clusterDensity * 0.3 + hazardBoost * 0.2);
-  const expectedValue = Math.max(0.01, clusterDensity * 0.03);
-
-  if (score < cfg.minModelScore) return null;
+  const { score, confidence, expectedValue } = computeBigMoveReadiness(features, "spike_cluster_recovery", direction);
 
   return buildCandidate(features, regime, "spike_cluster_recovery", direction, score, confidence, expectedValue, `[${regime.regime}] ${reason}`, "spike_cluster_recovery");
 }
 
 function swingExhaustion(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
-  const cfg = FAMILY_CONFIG.swing_exhaustion;
   const isBoom = features.symbol.startsWith("BOOM");
   const isCrash = features.symbol.startsWith("CRASH");
   const isVol = features.symbol.startsWith("R_");
@@ -332,18 +309,12 @@ function swingExhaustion(features: FeatureVector, regime: RegimeClassification):
 
   if (!direction) return null;
 
-  const exhaustionStrength = Math.min(1, Math.abs(features.priceChange7dPct) / 0.20);
-  const score = Math.min(0.92, 0.55 + exhaustionStrength * 0.25 + (features.spikeCount7d >= 14 ? 0.12 : 0));
-  const confidence = Math.min(0.85, 0.45 + exhaustionStrength * 0.25);
-  const expectedValue = Math.max(0.01, exhaustionStrength * 0.025);
-
-  if (score < cfg.minModelScore) return null;
+  const { score, confidence, expectedValue } = computeBigMoveReadiness(features, "swing_exhaustion", direction);
 
   return buildCandidate(features, regime, "swing_exhaustion", direction, score, confidence, expectedValue, `[${regime.regime}] ${reason}`, "swing_exhaustion");
 }
 
 function trendlineBreakout(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
-  const cfg = FAMILY_CONFIG.trendline_breakout;
   const price = features.latestClose;
   const atrNorm = features.atr14;
   if (price <= 0 || atrNorm <= 0) return null;
@@ -387,8 +358,7 @@ function trendlineBreakout(features: FeatureVector, regime: RegimeClassification
 
   if (!direction) return null;
 
-  const { score, confidence, expectedValue } = scoreFeaturesForFamily(features, "trendline_breakout");
-  if (score < cfg.minModelScore) return null;
+  const { score, confidence, expectedValue } = computeBigMoveReadiness(features, "trendline_breakout", direction);
 
   return buildCandidate(features, regime, "trendline_breakout", direction, score, confidence, expectedValue, `[${regime.regime}] ${reason}`, "trendline_breakout");
 }
@@ -417,10 +387,8 @@ export function runAllStrategies(features: FeatureVector, weights?: ScoringWeigh
     if (candidate) candidates.push(candidate);
   }
 
-  const hourlyFeats = explicitHourlyFeatures ?? getHourlyAveragedFeatures(features.symbol) ?? undefined;
-
   for (const candidate of candidates) {
-    const dims = computeScoringDimensions(features, candidate, candidate.score, hourlyFeats);
+    const dims = computeScoringDimensions(features, candidate);
     candidate.dimensions = dims;
     candidate.compositeScore = computeCompositeScore(dims, weights);
   }

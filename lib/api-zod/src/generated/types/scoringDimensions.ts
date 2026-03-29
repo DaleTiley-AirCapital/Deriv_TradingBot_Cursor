@@ -7,10 +7,9 @@
  */
 
 export interface ScoringDimensions {
-  regimeFit: number;
-  setupQuality: number;
-  trendAlignment: number;
-  volatilityCondition: number;
-  rewardRisk: number;
-  probabilityOfSuccess: number;
+  rangePosition: number;
+  maDeviation: number;
+  volatilityProfile: number;
+  rangeExpansion: number;
+  directionalConfirmation: number;
 }

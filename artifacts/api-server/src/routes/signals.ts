@@ -12,18 +12,17 @@ async function loadScoringWeights(): Promise<ScoringWeights | undefined> {
   const m: Record<string, string> = {};
   for (const s of states) m[s.key] = s.value;
   const map: Record<keyof ScoringWeights, string> = {
-    regimeFit: "scoring_weight_regime_fit",
-    setupQuality: "scoring_weight_setup_quality",
-    trendAlignment: "scoring_weight_trend_alignment",
-    volatilityCondition: "scoring_weight_volatility_condition",
-    rewardRisk: "scoring_weight_reward_risk",
-    probabilityOfSuccess: "scoring_weight_probability_of_success",
+    rangePosition: "scoring_weight_range_position",
+    maDeviation: "scoring_weight_ma_deviation",
+    volatilityProfile: "scoring_weight_volatility_profile",
+    rangeExpansion: "scoring_weight_range_expansion",
+    directionalConfirmation: "scoring_weight_directional_confirmation",
   };
   const keys = Object.keys(map) as (keyof ScoringWeights)[];
   const hasAny = keys.some(k => m[map[k]] !== undefined);
   if (!hasAny) return undefined;
   const w = {} as ScoringWeights;
-  for (const k of keys) w[k] = parseFloat(m[map[k]] || "1");
+  for (const k of keys) w[k] = parseFloat(m[map[k]] || "0.20");
   return w;
 }
 
