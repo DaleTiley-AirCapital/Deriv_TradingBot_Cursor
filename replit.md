@@ -1,8 +1,8 @@
-# Deriv Capital Extraction App
+# Deriv Trading - Long Hold
 
 ## Overview
 
-The Deriv Capital Extraction App is a quantitative trading research and execution platform designed for Deriv synthetic indices, specifically focusing on Boom and Crash markets. Its primary purpose is to automate and optimize trading strategies through a comprehensive system that includes data collection, backtesting, probability modeling, strategy execution, and sophisticated risk and capital management. The platform aims to identify profitable trading opportunities, manage risk effectively, and automate capital extraction.
+Deriv Trading - Long Hold (v2.0.0) is a quantitative trading research and execution platform designed for Deriv synthetic indices, specifically focusing on Boom, Crash, and Volatility markets. Its primary purpose is to automate and optimize trading strategies through a comprehensive system that includes data collection, backtesting, probability modeling, strategy execution, and sophisticated risk and capital management. The platform targets real moves of 50-200%+, with TP as primary exit, 30% trailing stop as safety net only, and 72h profitable exit as capital efficiency backstop.
 
 ## User Preferences
 

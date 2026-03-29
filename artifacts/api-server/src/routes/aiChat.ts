@@ -59,10 +59,10 @@ const WRITABLE_SETTINGS = [
   ...MODE_PREFIXES.map(m => `${m}_enabled_strategies`),
 ];
 
-const SYSTEM_KNOWLEDGE = `# Deriv Capital Extraction Platform V2 — Complete Knowledge Base
+const SYSTEM_KNOWLEDGE = `# Deriv Trading - Long Hold Platform V2 — Complete Knowledge Base
 
 ## 1. Platform Overview
-This is the **Deriv Capital Extraction App V2** — a fully automated trading system for Deriv synthetic indices. The core philosophy is CAPITAL EXTRACTION: large capital, long hold, maximum profit. Grow an account, extract profits at target, reset and repeat.
+This is the **Deriv Trading - Long Hold V2** — a fully automated trading system for Deriv synthetic indices. The core philosophy is CAPITAL EXTRACTION: large capital, long hold, maximum profit. Grow an account, extract profits at target, reset and repeat.
 
 ### Symbol Tiers & Active Trading Policy
 Data is downloaded for all 12 symbols, but **active trading is restricted to 4 high-performance symbols**:

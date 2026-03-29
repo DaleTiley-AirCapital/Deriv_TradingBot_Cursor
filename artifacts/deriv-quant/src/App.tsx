@@ -14,6 +14,7 @@ import Trades from "@/pages/trades";
 import Risk from "@/pages/risk";
 import DataManager from "@/pages/data";
 import Settings from "@/pages/settings";
+import Help from "@/pages/help";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -80,6 +81,7 @@ function Router() {
         <Route path="/risk" component={Risk} />
         <Route path="/data" component={DataManager} />
         <Route path="/settings" component={Settings} />
+        <Route path="/help" component={Help} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>

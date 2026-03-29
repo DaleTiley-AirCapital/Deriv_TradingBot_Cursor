@@ -344,7 +344,7 @@ initDb()
   .then(() => {
     app.listen(port, () => {
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log(`  Deriv Capital Extraction App v2`);
+      console.log(`  Deriv Trading - Long Hold v2`);
       console.log(`  Port: ${port} | ENV: ${process.env.NODE_ENV || "development"}`);
       console.log(`  Health: /api/healthz`);
       console.log(`  Deployable symbols: 12 (Boom/Crash + R_75/R_100)`);

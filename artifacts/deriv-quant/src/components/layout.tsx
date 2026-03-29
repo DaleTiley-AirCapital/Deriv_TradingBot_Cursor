@@ -15,6 +15,7 @@ import {
   Play,
   Square,
   Power,
+  HelpCircle,
 } from "lucide-react";
 import {
   useGetDataStatus,
@@ -40,6 +41,7 @@ const NAV_ITEMS = [
   { name: "Risk",      href: "/risk",      icon: ShieldAlert },
   { name: "Data",      href: "/data",      icon: Database },
   { name: "Settings",  href: "/settings",  icon: Settings },
+  { name: "Help",      href: "/help",      icon: HelpCircle },
 ];
 
 const MOBILE_PRIMARY = NAV_ITEMS.slice(0, 4);
@@ -223,8 +225,8 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
               <TrendingUp className="w-4 h-4" />
             </div>
             <div>
-              <h1 className="font-semibold text-sm text-foreground leading-none">Deriv Capital</h1>
-              <p className="text-[10px] text-muted-foreground mt-0.5">Extraction App</p>
+              <h1 className="font-semibold text-sm text-foreground leading-none">Deriv Trading</h1>
+              <p className="text-[10px] text-muted-foreground mt-0.5">Long Hold</p>
             </div>
           </div>
         </div>
@@ -265,7 +267,7 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
         </nav>
 
         <div className="px-4 py-3 border-t border-border/40">
-          <p className="text-[10px] text-muted-foreground/40 text-center font-mono">v0.1.0</p>
+          <p className="text-[10px] text-muted-foreground/40 text-center font-mono">v2.0.0</p>
         </div>
       </aside>
 
@@ -314,8 +316,8 @@ function TabletLayout({ children, location, tradingControls }: { children: React
 
         {/* App name */}
         <div className="px-4 flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground leading-none">Deriv Capital</p>
-          <p className="text-[10px] text-muted-foreground mt-0.5">Extraction App</p>
+          <p className="text-sm font-semibold text-foreground leading-none">Deriv Trading</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Long Hold</p>
         </div>
 
         <div className="flex items-center gap-2 mr-3 shrink-0">
@@ -408,7 +410,7 @@ function MobileLayout({ children, location, tradingControls }: { children: React
             <TrendingUp className="w-4 h-4" />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground leading-none truncate">Deriv Capital</p>
+            <p className="text-sm font-semibold text-foreground leading-none truncate">Deriv Trading</p>
             <p className="text-[10px] text-muted-foreground mt-0.5 font-mono truncate">{tradingControls.realBalance ? `Real: ${tradingControls.realBalance}` : "Real: —"}</p>
           </div>
         </div>

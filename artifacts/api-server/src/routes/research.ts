@@ -470,7 +470,7 @@ router.post("/research/ai-chat", async (req, res): Promise<void> => {
       ? JSON.stringify(metricsJson.strategyBreakdown, null, 2)
       : "N/A";
 
-    const systemPrompt = `You are a quantitative trading analyst for the Deriv Capital Extraction Platform.
+    const systemPrompt = `You are a quantitative trading analyst for the Deriv Trading - Long Hold platform.
 You are answering questions about a specific backtest result.
 
 BACKTEST CONTEXT:
