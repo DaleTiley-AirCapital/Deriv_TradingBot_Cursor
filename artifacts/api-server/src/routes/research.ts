@@ -580,6 +580,122 @@ router.get("/research/grouped-results", async (_req, res): Promise<void> => {
   }
 });
 
+router.post("/research/enrich-timeframes", async (req, res): Promise<void> => {
+  const { symbol } = req.body ?? {};
+
+  if (!symbol || !ALL_SYMBOLS.includes(symbol)) {
+    res.status(400).json({ error: `Invalid symbol: ${symbol}` });
+    return;
+  }
+
+  try {
+    const higherTimeframes: Record<string, number> = {
+      "2h": 7200, "4h": 14400, "8h": 28800, "12h": 43200,
+      "1d": 86400, "2d": 172800, "4d": 345600, "7d": 604800,
+      "15d": 1296000, "30d": 2592000,
+    };
+
+    let totalInserted = 0;
+
+    for (const [tfLabel, tfSeconds] of Object.entries(higherTimeframes)) {
+      const existing = await db.select({ cnt: count() }).from(candlesTable)
+        .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, tfLabel)));
+      if ((existing[0]?.cnt ?? 0) > 0) continue;
+
+      const oneMinCandles = await db.select().from(candlesTable)
+        .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")))
+        .orderBy(asc(candlesTable.openTs));
+
+      if (oneMinCandles.length === 0) continue;
+
+      const aggregated: { openTs: Date; closeTs: Date; open: number; high: number; low: number; close: number; tickCount: number }[] = [];
+      let bucketStart = Math.floor(new Date(oneMinCandles[0].openTs).getTime() / 1000 / tfSeconds) * tfSeconds;
+      let open = 0, high = -Infinity, low = Infinity, close = 0, ticks = 0, bucketHasData = false;
+
+      for (const c of oneMinCandles) {
+        const cEpoch = new Date(c.openTs).getTime() / 1000;
+        while (cEpoch >= bucketStart + tfSeconds) {
+          if (bucketHasData) {
+            aggregated.push({
+              openTs: new Date(bucketStart * 1000),
+              closeTs: new Date((bucketStart + tfSeconds) * 1000),
+              open, high, low, close, tickCount: ticks,
+            });
+          }
+          bucketStart += tfSeconds;
+          open = 0; high = -Infinity; low = Infinity; close = 0; ticks = 0; bucketHasData = false;
+        }
+        if (!bucketHasData) { open = c.open; bucketHasData = true; }
+        if (c.high > high) high = c.high;
+        if (c.low < low) low = c.low;
+        close = c.close;
+        ticks += c.tickCount ?? 1;
+      }
+      if (bucketHasData) {
+        aggregated.push({
+          openTs: new Date(bucketStart * 1000),
+          closeTs: new Date((bucketStart + tfSeconds) * 1000),
+          open, high, low, close, tickCount: ticks,
+        });
+      }
+
+      for (let i = 0; i < aggregated.length; i += 500) {
+        const batch = aggregated.slice(i, i + 500);
+        await db.insert(candlesTable).values(
+          batch.map(a => ({
+            symbol,
+            timeframe: tfLabel,
+            openTs: a.openTs,
+            closeTs: a.closeTs,
+            open: a.open,
+            high: a.high,
+            low: a.low,
+            close: a.close,
+            tickCount: a.tickCount,
+          }))
+        ).onConflictDoNothing();
+      }
+      totalInserted += aggregated.length;
+    }
+
+    res.json({ success: true, symbol, candlesCreated: totalInserted });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+router.get("/research/backtest-history", async (req, res): Promise<void> => {
+  const symbol = req.query.symbol as string;
+  if (!symbol) {
+    res.status(400).json({ error: "symbol required" });
+    return;
+  }
+
+  try {
+    const runs = await db.select({
+      id: backtestRunsTable.id,
+      createdAt: backtestRunsTable.createdAt,
+      netProfit: backtestRunsTable.netProfit,
+      winRate: backtestRunsTable.winRate,
+      profitFactor: backtestRunsTable.profitFactor,
+      tradeCount: backtestRunsTable.tradeCount,
+      metricsJson: backtestRunsTable.metricsJson,
+      configJson: backtestRunsTable.configJson,
+    }).from(backtestRunsTable)
+      .where(and(
+        eq(backtestRunsTable.symbol, symbol),
+        eq(backtestRunsTable.strategyName, "all_strategies"),
+        eq(backtestRunsTable.status, "completed"),
+      ))
+      .orderBy(desc(backtestRunsTable.createdAt))
+      .limit(20);
+
+    res.json({ runs });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
 router.post("/research/prune-data", async (_req, res): Promise<void> => {
   try {
     const deleted = await pruneOldCandles();
