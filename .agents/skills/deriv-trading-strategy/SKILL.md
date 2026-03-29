@@ -356,6 +356,9 @@ Signals must persist across 2 consecutive 60-minute evaluation windows:
 - Pyramiding requires 3 confirmations + 1% price move in expected direction
 - Implemented in `pendingSignals.ts`
 
+**Design note — why fixed 60m windows instead of per-symbol candle-boundary confirmation:**
+Indicator HTF timeframes (4h-12h) are too long for confirmation windows. Waiting 12+ hours for a single CRASH300 confirmation would miss actionable entries. The 60-minute fixed window provides a practical balance: long enough to filter noise, short enough to capture signals while the setup is still valid. Indicator timeframes control *what* the scoring sees; confirmation windows control *how long* a signal must persist before execution.
+
 ### Regime Engine (Informational Only)
 The regime engine classifies market state but does NOT gate strategy execution. All 5 strategy families are allowed in ALL regime states, including `no_trade`. Regime classification is logged for analysis but never blocks signals.
 
