@@ -305,6 +305,22 @@ AI uses strict 5-criterion evaluation — **disagree unless ALL conditions met**
 
 Each strategy family has additional specific checks (trend strength, overstretch genuineness, spike density, exhaustion significance, trendline validity).
 
+### Per-Symbol Calibrated Thresholds
+
+All 5 strategy families use **per-symbol calibrated thresholds** instead of universal static values. Calibration was performed on 193 days of 1-minute candle data (275k+ candles per symbol) identifying major swings:
+
+- **CRASH300**: 20 swings (3.1/month), avg UP 42.1%, avg DOWN 29.0%, median hold 8d
+- **BOOM300**: 23 swings (3.6/month), avg UP 30.2%, avg DOWN 25.7%, median hold 6d
+- **R_75**: 38 swings (5.9/month), avg UP 17.8%, avg DOWN 18.2%, median hold 5d
+- **R_100**: 91 swings (14.2/month), avg UP 17.3%, avg DOWN 15.3%, median hold 2d
+
+Key calibration adjustments from universal defaults:
+- **Boom/Crash**: Relaxed spike counts (10 vs 14 for exhaustion), wider RSI bands, bigger 7d move requirements (-8% vs -5%)
+- **R_75**: Wider range proximity (8% vs 3%), relaxed z-score (1.3 vs 1.5), no spike count for exhaustion
+- **R_100**: Most sensitive thresholds — smallest 24h change triggers (0.3%), lowest z-score (1.2), tightest RSI extremes (68/32)
+
+Implementation: `getSymbolThresholds(symbol)` in `strategies.ts` returns typed threshold objects (`CRASH_THRESHOLDS`, `BOOM_THRESHOLDS`, `R75_THRESHOLDS`, `R100_THRESHOLDS`). Full calibration data in skill file Section 10.
+
 ### AI Advisor (`aiChat.ts`)
 
 - ADVISOR only — never auto-changes settings

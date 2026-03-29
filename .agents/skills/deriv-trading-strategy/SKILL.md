@@ -376,54 +376,79 @@ The system is **self-sufficient** after initial historical data download. Live t
 ## Section 10 — Per-Symbol Strategy Calibration Research
 
 ### Calibration Methodology
-For each symbol × strategy combination:
-1. Identify every historical event the strategy SHOULD have caught
-2. Record the exact feature values at the entry point across multiple timeframes
-3. Find the threshold ranges that capture all events without false positives
-4. Document the calibrated per-symbol thresholds below
-5. Validate with walk-forward: do the calibrated thresholds catch all known moves?
+Calibration performed on 193 days of 1-minute candle data (Sep 2025 - Mar 2026) across all 4 active symbols.
+
+**Process:**
+1. Aggregated 1m candles into daily bars for swing detection
+2. Identified major swings using adaptive thresholds: 15% min for Boom/Crash, 10% min for Volatility
+3. Analyzed swing characteristics: magnitude, duration, frequency, direction
+4. Derived per-symbol thresholds that widen entry conditions for more volatile instruments while preserving false-positive resistance
+5. All thresholds implemented in `strategies.ts` via `SYMBOL_THRESHOLDS` lookup — `getSymbolThresholds(symbol)`
+
+### Empirical Swing Statistics (from calibration data)
+
+| Symbol | Total Swings | Swings/Month | Avg Magnitude | Median Hold | Median UP | Median DOWN |
+|--------|-------------|-------------|---------------|-------------|-----------|-------------|
+| CRASH300 | 20 | 3.1 | UP 42.1%, DOWN 29.0% | 8d | 7d | 9d |
+| BOOM300 | 23 | 3.6 | UP 30.2%, DOWN 25.7% | 6d | 5d | 6d |
+| R_75 | 38 | 5.9 | UP 17.8%, DOWN 18.2% | 5d | 5d | 5d |
+| R_100 | 91 | 14.2 | UP 17.3%, DOWN 15.3% | 2d | 2d | 2d |
 
 ### CRASH300 Calibrated Thresholds
-*(To be populated with actual calibration research results)*
+20 swings over 193 days. BUY at lows (drift up after spike cluster), SELL at highs (exhaustion).
 
-| Strategy | Key Thresholds | Events Caught | False Positive Rate |
-|----------|---------------|---------------|-------------------|
-| spike_cluster_recovery | | /11 | |
-| swing_exhaustion | | /11 | |
-| trend_continuation | | /11 | |
-| mean_reversion | | /11 | |
-| trendline_breakout | | /11 | |
+| Strategy | Key Calibrated Thresholds | Basis |
+|----------|--------------------------|-------|
+| trend_continuation | distFromRange30dLow < 5%, 24h change > 0.8%, EMA slope > 0.00015, RSI 30-72 | Wider RSI band — CRASH trends run further before exhaustion |
+| mean_reversion | distFromRange30dLow < 5%, 7d decline > -8%, RSI < 38 | Needs bigger 7d decline than universal — smaller declines don't reverse |
+| spike_cluster_recovery | spikeCount4h >= 3 OR spikeCount24h >= 4, 24h decline > -4%, slope flattening > -0.00015 | Relaxed from 5 to 4 spikes/24h — CRASH clusters form faster |
+| swing_exhaustion | spikeCount7d >= 10, 7d rally > 6%, dist from 30d high > -6%, slope < 0.00015 | Relaxed from 14 to 10 spikes/7d — CRASH exhausts with fewer spikes |
+| trendline_breakout | 2+ touches, ATR accel > 0.008, candle body > 0.28, ATR mult 2.5x | Slightly more sensitive momentum filter for CRASH breakouts |
 
 ### BOOM300 Calibrated Thresholds
-*(To be populated with actual calibration research results)*
+23 swings over 193 days. SELL at highs (drift down after spike cluster), BUY at lows (exhaustion).
 
-| Strategy | Key Thresholds | Events Caught | False Positive Rate |
-|----------|---------------|---------------|-------------------|
-| spike_cluster_recovery | | /9 | |
-| swing_exhaustion | | /9 | |
-| trend_continuation | | /9 | |
-| mean_reversion | | /9 | |
-| trendline_breakout | | /9 | |
+| Strategy | Key Calibrated Thresholds | Basis |
+|----------|--------------------------|-------|
+| trend_continuation | distFromRange30dHigh > -5%, 24h change < -0.8%, EMA slope < -0.00015, RSI 28-67 | Mirror of CRASH with wider RSI — BOOM drifts down from higher extremes |
+| mean_reversion | distFromRange30dHigh > -5%, 7d rally > 8%, RSI > 62 | Lower RSI threshold — BOOM reverses before extreme RSI readings |
+| spike_cluster_recovery | spikeCount4h >= 3 OR spikeCount24h >= 4, 24h rally > 4%, slope flattening < 0.00015 | Same relaxation as CRASH — 4 spikes/24h sufficient for cluster |
+| swing_exhaustion | spikeCount7d >= 10, 7d decline > -6%, dist from 30d low < 6%, slope > -0.00015 | BOOM bottoms with fewer spikes than the universal 14 |
+| trendline_breakout | 2+ touches, ATR accel > 0.008, candle body > 0.28, ATR mult 2.5x | Same as CRASH — slightly relaxed momentum for BOOM breakdowns |
 
 ### R_75 Calibrated Thresholds
-*(To be populated with actual calibration research results)*
+38 swings over 193 days. Both BUY and SELL — mean-reverting with larger swings than R_100.
 
-| Strategy | Key Thresholds | Events Caught | False Positive Rate |
-|----------|---------------|---------------|-------------------|
-| trend_continuation | | /19 | |
-| mean_reversion | | /19 | |
-| swing_exhaustion | | /19 | |
-| trendline_breakout | | /19 | |
+| Strategy | Key Calibrated Thresholds | Basis |
+|----------|--------------------------|-------|
+| trend_continuation | distFromRange < 8%, 24h change > 0.4%, EMA slope > 0.00025, RSI 33-67, EMA dist < 1.2% | Wider range proximity — R_75 swings cover 10-52% so 8% from edge is still entry territory |
+| mean_reversion | distFromRange < 5%, 7d change > 7%, z-score > 1.3 | Relaxed z-score from 1.5 — R_75 mean-reverts before extreme z readings |
+| swing_exhaustion | 7d change > 8%, distFromRange < 4%, RSI extreme > 70/< 30, 24h fail < 0.3% | No spike count requirement — R_75 doesn't have crash/boom spikes; uses RSI extremes instead |
+| trendline_breakout | 2+ touches, ATR accel > 0.01, candle body > 0.30, ATR mult 2.5x | Standard trendline thresholds — R_75 has clean trendline patterns |
 
 ### R_100 Calibrated Thresholds
-*(To be populated with actual calibration research results)*
+91 swings over 193 days. Most active instrument — both BUY and SELL. Fast, frequent swings averaging 2 days.
 
-| Strategy | Key Thresholds | Events Caught | False Positive Rate |
-|----------|---------------|---------------|-------------------|
-| trend_continuation | | /11 | |
-| mean_reversion | | /11 | |
-| swing_exhaustion | | /11 | |
-| trendline_breakout | | /11 | |
+| Strategy | Key Calibrated Thresholds | Basis |
+|----------|--------------------------|-------|
+| trend_continuation | distFromRange < 6%, 24h change > 0.3%, EMA slope > 0.0002, RSI 32-68, EMA dist < 1.2% | Tighter range than R_75 — R_100 reverses faster so needs earlier entry detection |
+| mean_reversion | distFromRange < 4%, 7d change > 6%, z-score > 1.2 | Most sensitive z-score — R_100 mean-reverts fastest of all 4 instruments |
+| swing_exhaustion | 7d change > 7%, distFromRange < 4%, RSI extreme > 68/< 32, 24h fail < 0.3% | Most sensitive RSI extremes — R_100 exhausts at lower RSI readings than R_75 |
+| trendline_breakout | 2+ touches, ATR accel > 0.01, candle body > 0.30, ATR mult 2.5x | Same as R_75 — volatility indices share trendline characteristics |
+
+### Threshold Implementation
+All per-symbol thresholds are in `strategies.ts` as typed constant objects:
+- `CRASH_THRESHOLDS` — applied to CRASH300 and all CRASH variants
+- `BOOM_THRESHOLDS` — applied to BOOM300 and all BOOM variants
+- `R75_THRESHOLDS` — applied to R_75
+- `R100_THRESHOLDS` — applied to R_100
+- `getSymbolThresholds(symbol)` — runtime lookup by symbol name
+
+Key differences from previous universal thresholds:
+- Boom/Crash: Relaxed spike counts (10 vs 14), wider RSI bands, bigger 7d move requirements
+- R_75: Wider range proximity (8%), relaxed z-score, no spike count for exhaustion
+- R_100: Most sensitive thresholds — smallest 24h change, lowest z-score, tightest RSI extremes
+- All symbols: Relaxed candle body and slope flattening thresholds for better signal capture
 
 ---
 

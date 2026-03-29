@@ -3,6 +3,228 @@ import { computeBigMoveReadiness } from "./model.js";
 import { computeScoringDimensions, computeCompositeScore, type ScoringWeights } from "./scoring.js";
 import { classifyRegime, getCachedRegime, cacheRegime, getHourlyAveragedFeatures, type StrategyFamily, type RegimeClassification } from "./regimeEngine.js";
 
+interface TrendContinuationThresholds {
+  distFromRangeLow: number;
+  distFromRangeHigh: number;
+  priceChange24hEntry: number;
+  priceChange24hConfirm: number;
+  emaSlope: number;
+  rsiLow: number;
+  rsiHigh: number;
+  notOverextended: number;
+  emaDist?: number;
+}
+
+interface MeanReversionThresholds {
+  distFromRange: number;
+  priceChange7d: number;
+  rsi: number;
+  zScore?: number;
+}
+
+interface SpikeClusterThresholds {
+  spikeCount4h: number;
+  spikeCount24h: number;
+  priceChange24h: number;
+  emaSlopeFlattening: number;
+  candleBody: number;
+}
+
+interface SwingExhaustionThresholds {
+  spikeCount7d: number;
+  priceChange7d: number;
+  distFromRange: number;
+  priceChange24hFail: number;
+  emaSlopeTurning: number;
+  rsiExtreme?: number;
+}
+
+interface TrendlineBreakoutThresholds {
+  minTouches: number;
+  atrAccel: number;
+  candleBody: number;
+  atrMultiplier: number;
+}
+
+interface SymbolThresholds {
+  trend_continuation: TrendContinuationThresholds;
+  mean_reversion: MeanReversionThresholds;
+  spike_cluster_recovery: SpikeClusterThresholds;
+  swing_exhaustion: SwingExhaustionThresholds;
+  trendline_breakout: TrendlineBreakoutThresholds;
+}
+
+const CRASH_THRESHOLDS: SymbolThresholds = {
+  trend_continuation: {
+    distFromRangeLow: 0.05,
+    distFromRangeHigh: -0.03,
+    priceChange24hEntry: 0.008,
+    priceChange24hConfirm: 0.008,
+    emaSlope: 0.00015,
+    rsiLow: 30,
+    rsiHigh: 72,
+    notOverextended: -0.03,
+  },
+  mean_reversion: {
+    distFromRange: 0.05,
+    priceChange7d: -0.08,
+    rsi: 38,
+  },
+  spike_cluster_recovery: {
+    spikeCount4h: 3,
+    spikeCount24h: 4,
+    priceChange24h: -0.04,
+    emaSlopeFlattening: -0.00015,
+    candleBody: 0.45,
+  },
+  swing_exhaustion: {
+    spikeCount7d: 10,
+    priceChange7d: 0.06,
+    distFromRange: -0.06,
+    priceChange24hFail: 0.003,
+    emaSlopeTurning: 0.00015,
+  },
+  trendline_breakout: {
+    minTouches: 2,
+    atrAccel: 0.008,
+    candleBody: 0.28,
+    atrMultiplier: 2.5,
+  },
+};
+
+const BOOM_THRESHOLDS: SymbolThresholds = {
+  trend_continuation: {
+    distFromRangeLow: 0.03,
+    distFromRangeHigh: -0.05,
+    priceChange24hEntry: -0.008,
+    priceChange24hConfirm: -0.008,
+    emaSlope: -0.00015,
+    rsiLow: 28,
+    rsiHigh: 67,
+    notOverextended: 0.03,
+  },
+  mean_reversion: {
+    distFromRange: -0.05,
+    priceChange7d: 0.08,
+    rsi: 62,
+  },
+  spike_cluster_recovery: {
+    spikeCount4h: 3,
+    spikeCount24h: 4,
+    priceChange24h: 0.04,
+    emaSlopeFlattening: 0.00015,
+    candleBody: 0.45,
+  },
+  swing_exhaustion: {
+    spikeCount7d: 10,
+    priceChange7d: -0.06,
+    distFromRange: 0.06,
+    priceChange24hFail: -0.003,
+    emaSlopeTurning: -0.00015,
+  },
+  trendline_breakout: {
+    minTouches: 2,
+    atrAccel: 0.008,
+    candleBody: 0.28,
+    atrMultiplier: 2.5,
+  },
+};
+
+const R75_THRESHOLDS: SymbolThresholds = {
+  trend_continuation: {
+    distFromRangeLow: 0.08,
+    distFromRangeHigh: -0.08,
+    priceChange24hEntry: 0.004,
+    priceChange24hConfirm: 0.004,
+    emaSlope: 0.00025,
+    rsiLow: 33,
+    rsiHigh: 67,
+    notOverextended: -0.08,
+    emaDist: 0.012,
+  },
+  mean_reversion: {
+    distFromRange: 0.05,
+    priceChange7d: -0.07,
+    rsi: 33,
+    zScore: -1.3,
+  },
+  spike_cluster_recovery: {
+    spikeCount4h: 3,
+    spikeCount24h: 5,
+    priceChange24h: -0.05,
+    emaSlopeFlattening: -0.0002,
+    candleBody: 0.40,
+  },
+  swing_exhaustion: {
+    spikeCount7d: 0,
+    priceChange7d: 0.08,
+    distFromRange: -0.04,
+    priceChange24hFail: 0.003,
+    emaSlopeTurning: 0.0001,
+    rsiExtreme: 70,
+  },
+  trendline_breakout: {
+    minTouches: 2,
+    atrAccel: 0.01,
+    candleBody: 0.30,
+    atrMultiplier: 2.5,
+  },
+};
+
+const R100_THRESHOLDS: SymbolThresholds = {
+  trend_continuation: {
+    distFromRangeLow: 0.06,
+    distFromRangeHigh: -0.06,
+    priceChange24hEntry: 0.003,
+    priceChange24hConfirm: 0.003,
+    emaSlope: 0.0002,
+    rsiLow: 32,
+    rsiHigh: 68,
+    notOverextended: -0.06,
+    emaDist: 0.012,
+  },
+  mean_reversion: {
+    distFromRange: 0.04,
+    priceChange7d: -0.06,
+    rsi: 32,
+    zScore: -1.2,
+  },
+  spike_cluster_recovery: {
+    spikeCount4h: 3,
+    spikeCount24h: 5,
+    priceChange24h: -0.05,
+    emaSlopeFlattening: -0.0002,
+    candleBody: 0.40,
+  },
+  swing_exhaustion: {
+    spikeCount7d: 0,
+    priceChange7d: 0.07,
+    distFromRange: -0.04,
+    priceChange24hFail: 0.003,
+    emaSlopeTurning: 0.0001,
+    rsiExtreme: 68,
+  },
+  trendline_breakout: {
+    minTouches: 2,
+    atrAccel: 0.01,
+    candleBody: 0.30,
+    atrMultiplier: 2.5,
+  },
+};
+
+const DEFAULT_VOL_THRESHOLDS: SymbolThresholds = R75_THRESHOLDS;
+
+function getSymbolThresholds(symbol: string): SymbolThresholds {
+  if (symbol === "CRASH300") return CRASH_THRESHOLDS;
+  if (symbol === "BOOM300") return BOOM_THRESHOLDS;
+  if (symbol === "R_75") return R75_THRESHOLDS;
+  if (symbol === "R_100") return R100_THRESHOLDS;
+  if (symbol.startsWith("CRASH")) return CRASH_THRESHOLDS;
+  if (symbol.startsWith("BOOM")) return BOOM_THRESHOLDS;
+  if (symbol.startsWith("R_")) return DEFAULT_VOL_THRESHOLDS;
+  return R75_THRESHOLDS;
+}
+
 export interface SignalCandidate {
   symbol: string;
   strategyName: string;
@@ -113,42 +335,44 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
   const isBoom = features.symbol.startsWith("BOOM");
   const isCrash = features.symbol.startsWith("CRASH");
   const isVol = features.symbol.startsWith("R_");
+  const th = getSymbolThresholds(features.symbol).trend_continuation;
 
   let direction: "buy" | "sell" | null = null;
   let reason = "";
 
   if (isCrash) {
-    const confirmedSwingLow = features.distFromRange30dLowPct < 0.03 && features.priceChange24hPct > 0.005;
-    const driftUp = features.emaSlope > 0.0002;
-    const notExhausted = features.rsi14 > 35 && features.rsi14 < 70;
-    const trendConfirmed = features.priceChange24hPct > 0.01;
-    const notOverextended = features.distFromRange30dHighPct < -0.02;
+    const confirmedSwingLow = features.distFromRange30dLowPct < th.distFromRangeLow && features.priceChange24hPct > Math.abs(th.priceChange24hEntry);
+    const driftUp = features.emaSlope > Math.abs(th.emaSlope);
+    const notExhausted = features.rsi14 > th.rsiLow && features.rsi14 < th.rsiHigh;
+    const trendConfirmed = features.priceChange24hPct > Math.abs(th.priceChange24hConfirm);
+    const notOverextended = features.distFromRange30dHighPct < th.notOverextended;
 
     if (confirmedSwingLow && driftUp && notExhausted && trendConfirmed && notOverextended) {
       direction = "buy";
       reason = `Crash drift up after swing low: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, dist_30d_low=${(features.distFromRange30dLowPct*100).toFixed(2)}%`;
     }
   } else if (isBoom) {
-    const confirmedSwingHigh = features.distFromRange30dHighPct > -0.03 && features.priceChange24hPct < -0.005;
-    const driftDown = features.emaSlope < -0.0002;
-    const notExhausted = features.rsi14 > 30 && features.rsi14 < 65;
-    const trendConfirmed = features.priceChange24hPct < -0.01;
-    const notOverextended = features.distFromRange30dLowPct > 0.02;
+    const confirmedSwingHigh = features.distFromRange30dHighPct > th.distFromRangeHigh && features.priceChange24hPct < th.priceChange24hEntry;
+    const driftDown = features.emaSlope < th.emaSlope;
+    const notExhausted = features.rsi14 > th.rsiLow && features.rsi14 < th.rsiHigh;
+    const trendConfirmed = features.priceChange24hPct < th.priceChange24hConfirm;
+    const notOverextended = features.distFromRange30dLowPct > th.notOverextended;
 
     if (confirmedSwingHigh && driftDown && notExhausted && trendConfirmed && notOverextended) {
       direction = "sell";
       reason = `Boom drift down after swing high: slope=${features.emaSlope.toFixed(5)}, 24h_change=${(features.priceChange24hPct*100).toFixed(2)}%, dist_30d_high=${(features.distFromRange30dHighPct*100).toFixed(2)}%`;
     }
   } else if (isVol) {
-    const confirmedReversalUp = features.priceChange24hPct > 0.005 && features.distFromRange30dLowPct < 0.10;
-    const confirmedReversalDown = features.priceChange24hPct < -0.005 && features.distFromRange30dHighPct > -0.10;
-    const pulledBack = Math.abs(features.emaDist) < 0.01;
-    const rsiNeutral = features.rsi14 > 35 && features.rsi14 < 65;
+    const maxEmaDist = th.emaDist ?? 0.01;
+    const confirmedReversalUp = features.priceChange24hPct > Math.abs(th.priceChange24hEntry) && features.distFromRange30dLowPct < th.distFromRangeLow;
+    const confirmedReversalDown = features.priceChange24hPct < -Math.abs(th.priceChange24hEntry) && features.distFromRange30dHighPct > th.distFromRangeHigh;
+    const pulledBack = Math.abs(features.emaDist) < maxEmaDist;
+    const rsiNeutral = features.rsi14 > th.rsiLow && features.rsi14 < th.rsiHigh;
 
-    if (confirmedReversalUp && features.emaSlope > 0.0003 && pulledBack && rsiNeutral) {
+    if (confirmedReversalUp && features.emaSlope > Math.abs(th.emaSlope) && pulledBack && rsiNeutral) {
       direction = "buy";
       reason = `Vol continuation after swing low reversal: slope=${features.emaSlope.toFixed(5)}, pullback=${(features.emaDist*100).toFixed(3)}%, dist_30d_low=${(features.distFromRange30dLowPct*100).toFixed(2)}%`;
-    } else if (confirmedReversalDown && features.emaSlope < -0.0003 && pulledBack && rsiNeutral) {
+    } else if (confirmedReversalDown && features.emaSlope < -Math.abs(th.emaSlope) && pulledBack && rsiNeutral) {
       direction = "sell";
       reason = `Vol continuation after swing high reversal: slope=${features.emaSlope.toFixed(5)}, pullback=${(features.emaDist*100).toFixed(3)}%, dist_30d_high=${(features.distFromRange30dHighPct*100).toFixed(2)}%`;
     }
@@ -164,30 +388,36 @@ function trendContinuation(features: FeatureVector, regime: RegimeClassification
 function meanReversion(features: FeatureVector, regime: RegimeClassification): SignalCandidate | null {
   const isBoom = features.symbol.startsWith("BOOM");
   const isCrash = features.symbol.startsWith("CRASH");
+  const th = getSymbolThresholds(features.symbol).mean_reversion;
 
   let direction: "buy" | "sell" | null = null;
   let reason = "";
 
-  const nearRange30dLow = features.distFromRange30dLowPct < 0.03;
-  const nearRange30dHigh = features.distFromRange30dHighPct > -0.03;
-  const multiDayDecline = features.priceChange7dPct < -0.05;
-  const multiDayRally = features.priceChange7dPct > 0.05;
-
   if (isCrash) {
-    if (nearRange30dLow && multiDayDecline && features.rsi14 < 35) {
+    const nearRange30dLow = features.distFromRange30dLowPct < th.distFromRange;
+    const multiDayDecline = features.priceChange7dPct < th.priceChange7d;
+    if (nearRange30dLow && multiDayDecline && features.rsi14 < th.rsi) {
       direction = "buy";
       reason = `Crash range low reversal: dist_from_30d_low=${(features.distFromRange30dLowPct*100).toFixed(2)}%, 7d_change=${(features.priceChange7dPct*100).toFixed(2)}%, RSI=${features.rsi14.toFixed(1)}`;
     }
   } else if (isBoom) {
-    if (nearRange30dHigh && multiDayRally && features.rsi14 > 65) {
+    const nearRange30dHigh = features.distFromRange30dHighPct > th.distFromRange;
+    const multiDayRally = features.priceChange7dPct > Math.abs(th.priceChange7d);
+    if (nearRange30dHigh && multiDayRally && features.rsi14 > th.rsi) {
       direction = "sell";
       reason = `Boom range high reversal: dist_from_30d_high=${(features.distFromRange30dHighPct*100).toFixed(2)}%, 7d_change=${(features.priceChange7dPct*100).toFixed(2)}%, RSI=${features.rsi14.toFixed(1)}`;
     }
   } else {
-    if (nearRange30dLow && multiDayDecline && features.zScore < -1.5) {
+    const zThreshold = th.zScore ?? -1.5;
+    const nearRange30dLow = features.distFromRange30dLowPct < th.distFromRange;
+    const nearRange30dHigh = features.distFromRange30dHighPct > -th.distFromRange;
+    const multiDayDecline = features.priceChange7dPct < th.priceChange7d;
+    const multiDayRally = features.priceChange7dPct > Math.abs(th.priceChange7d);
+
+    if (nearRange30dLow && multiDayDecline && features.zScore < zThreshold) {
       direction = "buy";
       reason = `Range low mean reversion: dist_from_30d_low=${(features.distFromRange30dLowPct*100).toFixed(2)}%, 7d_change=${(features.priceChange7dPct*100).toFixed(2)}%, z=${features.zScore.toFixed(2)}`;
-    } else if (nearRange30dHigh && multiDayRally && features.zScore > 1.5) {
+    } else if (nearRange30dHigh && multiDayRally && features.zScore > Math.abs(zThreshold)) {
       direction = "sell";
       reason = `Range high mean reversion: dist_from_30d_high=${(features.distFromRange30dHighPct*100).toFixed(2)}%, 7d_change=${(features.priceChange7dPct*100).toFixed(2)}%, z=${features.zScore.toFixed(2)}`;
     }
@@ -220,8 +450,10 @@ function spikeClusterRecovery(features: FeatureVector, regime: RegimeClassificat
 
   if (!isBoom && !isCrash) return null;
 
-  const hasCluster4h = features.spikeCount4h >= 3;
-  const hasModerateCluster = features.spikeCount24h >= 5;
+  const th = getSymbolThresholds(features.symbol).spike_cluster_recovery;
+
+  const hasCluster4h = features.spikeCount4h >= th.spikeCount4h;
+  const hasModerateCluster = features.spikeCount24h >= th.spikeCount24h;
 
   if (!hasCluster4h && !hasModerateCluster) return null;
 
@@ -229,20 +461,20 @@ function spikeClusterRecovery(features: FeatureVector, regime: RegimeClassificat
   let reason: string = "";
 
   if (isCrash) {
-    const priceDeclined24h = features.priceChange24hPct < -0.05;
+    const priceDeclined24h = features.priceChange24hPct < th.priceChange24h;
     const reversalCandle = features.latestClose > features.latestOpen;
-    const candleSmall = features.candleBody < 0.40;
-    const slopeFlattening = features.emaSlope > -0.0002;
+    const candleSmall = features.candleBody < th.candleBody;
+    const slopeFlattening = features.emaSlope > th.emaSlopeFlattening;
 
     if (priceDeclined24h && reversalCandle && candleSmall && slopeFlattening) {
       direction = "buy";
       reason = `Crash spike cluster → BUY: ${features.spikeCount4h} spikes/4h, ${features.spikeCount24h}/24h, 24h_decline=${(features.priceChange24hPct*100).toFixed(2)}%, green reversal candle, slope=${features.emaSlope.toFixed(5)}`;
     }
   } else {
-    const priceRallied24h = features.priceChange24hPct > 0.05;
+    const priceRallied24h = features.priceChange24hPct > Math.abs(th.priceChange24h);
     const reversalCandle = features.latestClose < features.latestOpen;
-    const candleSmall = features.candleBody < 0.40;
-    const slopeFlattening = features.emaSlope < 0.0002;
+    const candleSmall = features.candleBody < th.candleBody;
+    const slopeFlattening = features.emaSlope < Math.abs(th.emaSlopeFlattening);
 
     if (priceRallied24h && reversalCandle && candleSmall && slopeFlattening) {
       direction = "sell";
@@ -261,45 +493,48 @@ function swingExhaustion(features: FeatureVector, regime: RegimeClassification):
   const isBoom = features.symbol.startsWith("BOOM");
   const isCrash = features.symbol.startsWith("CRASH");
   const isVol = features.symbol.startsWith("R_");
+  const th = getSymbolThresholds(features.symbol).swing_exhaustion;
 
   let direction: "buy" | "sell" | null = null;
   let reason = "";
 
   if (isCrash) {
-    const highSpikeCount7d = features.spikeCount7d >= 14;
-    const priceUp7d = features.priceChange7dPct > 0.08;
-    const nearRangeHigh = features.distFromRange30dHighPct > -0.05;
-    const failedNewHigh24h = features.priceChange24hPct < 0.005;
-    const turningDown = features.emaSlope < 0.0001;
+    const highSpikeCount7d = th.spikeCount7d > 0 ? features.spikeCount7d >= th.spikeCount7d : true;
+    const priceUp7d = features.priceChange7dPct > th.priceChange7d;
+    const nearRangeHigh = features.distFromRange30dHighPct > th.distFromRange;
+    const failedNewHigh24h = features.priceChange24hPct < th.priceChange24hFail;
+    const turningDown = features.emaSlope < th.emaSlopeTurning;
 
     if (highSpikeCount7d && priceUp7d && nearRangeHigh && failedNewHigh24h && turningDown) {
       direction = "sell";
       reason = `Crash topping exhaustion: ${features.spikeCount7d} spikes/7d, up ${(features.priceChange7dPct*100).toFixed(1)}%/7d, failed new high 24h (${(features.priceChange24hPct*100).toFixed(2)}%), slope turning (${features.emaSlope.toFixed(5)})`;
     }
   } else if (isBoom) {
-    const highSpikeCount7d = features.spikeCount7d >= 14;
-    const priceDown7d = features.priceChange7dPct < -0.08;
-    const nearRangeLow = features.distFromRange30dLowPct < 0.05;
-    const failedNewLow24h = features.priceChange24hPct > -0.005;
-    const turningUp = features.emaSlope > -0.0001;
+    const highSpikeCount7d = th.spikeCount7d > 0 ? features.spikeCount7d >= th.spikeCount7d : true;
+    const priceDown7d = features.priceChange7dPct < th.priceChange7d;
+    const nearRangeLow = features.distFromRange30dLowPct < Math.abs(th.distFromRange);
+    const failedNewLow24h = features.priceChange24hPct > th.priceChange24hFail;
+    const turningUp = features.emaSlope > th.emaSlopeTurning;
 
     if (highSpikeCount7d && priceDown7d && nearRangeLow && failedNewLow24h && turningUp) {
       direction = "buy";
       reason = `Boom bottoming exhaustion: ${features.spikeCount7d} spikes/7d, down ${(features.priceChange7dPct*100).toFixed(1)}%/7d, failed new low 24h (${(features.priceChange24hPct*100).toFixed(2)}%), slope turning (${features.emaSlope.toFixed(5)})`;
     }
   } else if (isVol) {
-    const bigRally = features.priceChange7dPct > 0.10 && features.distFromRange30dHighPct > -0.03;
-    const bigDecline = features.priceChange7dPct < -0.10 && features.distFromRange30dLowPct < 0.03;
-    const rsiExtreme = features.rsi14 > 72 || features.rsi14 < 28;
+    const rsiExtremeHigh = th.rsiExtreme ?? 72;
+    const rsiExtremeLow = 100 - rsiExtremeHigh;
+    const bigRally = features.priceChange7dPct > th.priceChange7d && features.distFromRange30dHighPct > th.distFromRange;
+    const bigDecline = features.priceChange7dPct < -th.priceChange7d && features.distFromRange30dLowPct < Math.abs(th.distFromRange);
+    const rsiExtreme = features.rsi14 > rsiExtremeHigh || features.rsi14 < rsiExtremeLow;
 
     if (bigRally && rsiExtreme) {
-      const failedNewHigh = features.priceChange24hPct < 0.005;
+      const failedNewHigh = features.priceChange24hPct < th.priceChange24hFail;
       if (failedNewHigh) {
         direction = "sell";
         reason = `Vol rally exhaustion: 7d=${(features.priceChange7dPct*100).toFixed(1)}%, RSI=${features.rsi14.toFixed(1)}, 24h reversal confirmed (${(features.priceChange24hPct*100).toFixed(2)}%)`;
       }
     } else if (bigDecline && rsiExtreme) {
-      const failedNewLow = features.priceChange24hPct > -0.005;
+      const failedNewLow = features.priceChange24hPct > -th.priceChange24hFail;
       if (failedNewLow) {
         direction = "buy";
         reason = `Vol decline exhaustion: 7d=${(features.priceChange7dPct*100).toFixed(1)}%, RSI=${features.rsi14.toFixed(1)}, 24h reversal confirmed (${(features.priceChange24hPct*100).toFixed(2)}%)`;
@@ -319,6 +554,8 @@ function trendlineBreakout(features: FeatureVector, regime: RegimeClassification
   const atrNorm = features.atr14;
   if (price <= 0 || atrNorm <= 0) return null;
 
+  const th = getSymbolThresholds(features.symbol).trendline_breakout;
+
   const resTouches = features.trendlineResistanceTouches ?? 0;
   const supTouches = features.trendlineSupportTouches ?? 0;
   const resLevel = features.trendlineResistanceLevel ?? 0;
@@ -326,19 +563,19 @@ function trendlineBreakout(features: FeatureVector, regime: RegimeClassification
   const resSlope = features.trendlineResistanceSlope ?? 0;
   const supSlope = features.trendlineSupportSlope ?? 0;
 
-  const hasResistanceTrendline = resTouches >= 2 && resLevel > 0;
-  const hasSupportTrendline = supTouches >= 2 && supLevel > 0;
+  const hasResistanceTrendline = resTouches >= th.minTouches && resLevel > 0;
+  const hasSupportTrendline = supTouches >= th.minTouches && supLevel > 0;
 
   if (!hasResistanceTrendline && !hasSupportTrendline) return null;
 
-  const momentumConfirm = features.atrAccel > 0.01 && features.candleBody > 0.30;
+  const momentumConfirm = features.atrAccel > th.atrAccel && features.candleBody > th.candleBody;
 
   let direction: "buy" | "sell" | null = null;
   let reason = "";
 
   if (hasResistanceTrendline) {
     const breakDistPct = (price - resLevel) / price;
-    const breakAbove = breakDistPct > 0 && breakDistPct < atrNorm * 2.5 && momentumConfirm && features.emaSlope > 0;
+    const breakAbove = breakDistPct > 0 && breakDistPct < atrNorm * th.atrMultiplier && momentumConfirm && features.emaSlope > 0;
 
     if (breakAbove) {
       direction = "buy";
@@ -348,7 +585,7 @@ function trendlineBreakout(features: FeatureVector, regime: RegimeClassification
 
   if (!direction && hasSupportTrendline) {
     const breakDistPct = (supLevel - price) / price;
-    const breakBelow = breakDistPct > 0 && breakDistPct < atrNorm * 2.5 && momentumConfirm && features.emaSlope < 0;
+    const breakBelow = breakDistPct > 0 && breakDistPct < atrNorm * th.atrMultiplier && momentumConfirm && features.emaSlope < 0;
 
     if (breakBelow) {
       direction = "sell";
