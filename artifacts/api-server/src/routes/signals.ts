@@ -4,7 +4,7 @@ import { db, signalLogTable, platformStateTable } from "@workspace/db";
 import { computeFeatures } from "../lib/features.js";
 import { runAllStrategies } from "../lib/strategies.js";
 import { routeSignals, logSignalDecisions } from "../lib/signalRouter.js";
-import type { ScoringWeights } from "../lib/scoring.js";
+import { type ScoringWeights, DEFAULT_SCORING_WEIGHTS } from "../lib/scoring.js";
 import { getPendingSignalStatus } from "../lib/pendingSignals.js";
 
 async function loadScoringWeights(): Promise<ScoringWeights | undefined> {
@@ -22,7 +22,7 @@ async function loadScoringWeights(): Promise<ScoringWeights | undefined> {
   const hasAny = keys.some(k => m[map[k]] !== undefined);
   if (!hasAny) return undefined;
   const w = {} as ScoringWeights;
-  for (const k of keys) w[k] = parseFloat(m[map[k]] || "0.20");
+  for (const k of keys) w[k] = parseFloat(m[map[k]] || String(DEFAULT_SCORING_WEIGHTS[k]));
   return w;
 }
 

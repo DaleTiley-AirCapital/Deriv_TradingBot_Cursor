@@ -1,7 +1,7 @@
 import { computeFeatures } from "./features.js";
 import { runAllStrategies } from "./strategies.js";
 import { routeSignals, logSignalDecisions } from "./signalRouter.js";
-import type { ScoringWeights } from "./scoring.js";
+import { type ScoringWeights, DEFAULT_SCORING_WEIGHTS } from "./scoring.js";
 import { openPosition, manageOpenPositions } from "./tradeEngine.js";
 import { verifySignal } from "./openai.js";
 import { classifyRegime, classifyRegimeFromHTF, classifyInstrument, getCachedRegime, cacheRegime, accumulateHourlyFeatures } from "./regimeEngine.js";
@@ -62,7 +62,7 @@ function parseScoringWeights(stateMap: Record<string, string>): ScoringWeights |
   if (!hasAny) return undefined;
   const weights: ScoringWeights = {} as ScoringWeights;
   for (const k of keys) {
-    weights[k] = parseFloat(stateMap[stateKeys[k]] || "0.20");
+    weights[k] = parseFloat(stateMap[stateKeys[k]] || String(DEFAULT_SCORING_WEIGHTS[k]));
   }
   return weights;
 }
