@@ -137,7 +137,7 @@ export function get30MinWindowTs(): number {
 
 const lastWindowEvaluated = new Map<string, number>();
 
-export function shouldEvaluateWindow(symbol: string): boolean {
+export function shouldEvaluateWindow(symbol: string, latestCandleCloseMs?: number): boolean {
   const currentWindow = get30MinWindowTs();
   const lastWindow = lastWindowEvaluated.get(symbol);
 
@@ -145,8 +145,21 @@ export function shouldEvaluateWindow(symbol: string): boolean {
     return false;
   }
 
+  if (latestCandleCloseMs !== undefined && latestCandleCloseMs < currentWindow) {
+    return false;
+  }
+
   lastWindowEvaluated.set(symbol, currentWindow);
   return true;
+}
+
+export function invalidateUnconfirmedPending(symbol: string, confirmedKeys: Set<string>): void {
+  for (const [key, entry] of pendingSignals) {
+    if (entry.symbol === symbol && !entry.promoted && !confirmedKeys.has(key)) {
+      console.log(`[Confirm] ${symbol} | ${entry.strategyName} | dir=${entry.direction} | INVALIDATED — not re-confirmed in current window (${entry.confirmCount}/${entry.requiredConfirmations})`);
+      pendingSignals.delete(key);
+    }
+  }
 }
 
 export function getPendingSignalStatus() {

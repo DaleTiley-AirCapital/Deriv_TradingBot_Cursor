@@ -11,7 +11,7 @@ import { runBacktestSimulation } from "./backtestEngine.js";
 import { getActiveModes, isAnyModeActive } from "./deriv.js";
 import type { TradingMode } from "./deriv.js";
 import type { AllocationDecision } from "./signalRouter.js";
-import { confirmSignal, removePendingSignal, expireStaleSignals, shouldEvaluateWindow, get30MinWindowTs } from "./pendingSignals.js";
+import { confirmSignal, removePendingSignal, expireStaleSignals, shouldEvaluateWindow, get30MinWindowTs, invalidateUnconfirmedPending } from "./pendingSignals.js";
 
 import { ACTIVE_TRADING_SYMBOLS } from "./deriv.js";
 
@@ -87,13 +87,24 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
     await cacheRegime(symbol, regime);
   }
 
+  const latestCandleCloseMs = features.latestCandleCloseTs ? new Date(features.latestCandleCloseTs).getTime() : undefined;
+  const isNewWindow = shouldEvaluateWindow(symbol, latestCandleCloseMs);
+
+  if (!isNewWindow) {
+    return;
+  }
+
+  expireStaleSignals();
+
   if (regime.regime === "no_trade") {
     console.log(`[Scan] ${symbol} | regime=${regime.regime} | conf=${regime.confidence.toFixed(2)} | SKIP=no_trade_regime`);
+    invalidateUnconfirmedPending(symbol, new Set());
     return;
   }
 
   if (regime.allowedFamilies.length === 0) {
     console.log(`[Scan] ${symbol} | regime=${regime.regime} | SKIP=no_allowed_families`);
+    invalidateUnconfirmedPending(symbol, new Set());
     return;
   }
 
@@ -101,14 +112,12 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
   const candidates = runAllStrategies(features, weights, regime);
   if (candidates.length === 0) {
     console.log(`[Scan] ${symbol} | regime=${regime.regime} | families=[${regime.allowedFamilies.join(",")}] | candidates=0 | SKIP=no_signals`);
+    invalidateUnconfirmedPending(symbol, new Set());
     return;
   }
 
   console.log(`[Intel] ${symbol} | regime=${regime.regime} | families=[${regime.allowedFamilies.join(",")}] | candidates=${candidates.length} | top=${candidates[0].strategyFamily}(${candidates[0].score.toFixed(3)}, EV=${candidates[0].expectedValue.toFixed(4)})`);
 
-  expireStaleSignals();
-
-  const isNewWindow = shouldEvaluateWindow(symbol);
   const windowTs = get30MinWindowTs();
 
   const openSymbolTrades = await db.select().from(tradesTable)
@@ -116,15 +125,13 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
   const existingPositionCount = openSymbolTrades.length;
 
   const promotedCandidates: { candidate: typeof candidates[0]; atr: number }[] = [];
+  const confirmedKeysThisWindow = new Set<string>();
 
   for (const candidate of candidates) {
-    if (!isNewWindow) {
-      console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | SKIP=same_30min_window`);
-      continue;
-    }
-
     const currentPrice = features.latestClose ?? 0;
     const result = confirmSignal(candidate, windowTs, currentPrice, existingPositionCount);
+    const candidateKey = `${candidate.symbol}|${candidate.strategyName}|${candidate.direction}`;
+    confirmedKeysThisWindow.add(candidateKey);
 
     if (result.promoted) {
       console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | PROMOTED after ${result.pending.confirmCount}/${result.pending.requiredConfirmations} windows | pyramid=${result.pending.pyramidLevel}`);
@@ -134,6 +141,8 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
       console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | window=${result.pending.confirmCount}/${result.pending.requiredConfirmations} | score=${candidate.compositeScore} | EV=${candidate.expectedValue.toFixed(4)}`);
     }
   }
+
+  invalidateUnconfirmedPending(symbol, confirmedKeysThisWindow);
 
   const aiEnabled = stateMap["ai_verification_enabled"] === "true";
   const allCandidates = candidates.map(c => ({ candidate: c, atr: features.atr14 }));

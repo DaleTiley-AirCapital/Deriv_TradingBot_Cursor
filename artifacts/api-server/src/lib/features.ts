@@ -90,6 +90,7 @@ export interface FeatureVector {
   priceChange7dPct: number;
   distFromRange30dHighPct: number;
   distFromRange30dLowPct: number;
+  latestCandleCloseTs: number;
 }
 
 function ema(values: number[], period: number): number[] {
@@ -739,6 +740,7 @@ export async function computeFeatures(symbol: string, lookback = STRUCTURAL_LOOK
   return {
     symbol,
     ts: last.closeTs,
+    latestCandleCloseTs: last.closeTs * 1000,
     emaSlope,
     emaDist,
     priceVsEma20: emaDist,
