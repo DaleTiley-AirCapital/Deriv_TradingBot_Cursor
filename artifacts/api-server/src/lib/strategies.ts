@@ -53,11 +53,11 @@ export interface SignalCandidate {
 const FAMILY_CONFIG: Record<StrategyFamily, {
   minModelScore: number;
 }> = {
-  trend_continuation: { minModelScore: 0.55 },
-  mean_reversion: { minModelScore: 0.55 },
-  spike_cluster_recovery: { minModelScore: 0.50 },
-  swing_exhaustion: { minModelScore: 0.50 },
-  trendline_breakout: { minModelScore: 0.52 },
+  trend_continuation: { minModelScore: 0.60 },
+  mean_reversion: { minModelScore: 0.60 },
+  spike_cluster_recovery: { minModelScore: 0.58 },
+  swing_exhaustion: { minModelScore: 0.58 },
+  trendline_breakout: { minModelScore: 0.65 },
 };
 
 function buildCandidate(

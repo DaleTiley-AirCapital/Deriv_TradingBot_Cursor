@@ -1,352 +1,375 @@
-# V2 Specification — Dynamic Trade Management
+# V2 Specification — Deriv Capital Extraction App
 
-> This document describes all V2 changes implemented on top of V1. V1_SPECIFICATION.md is preserved unchanged.
+> Complete specification of the V2 trading system. Covers all strategy logic, scoring calibration, trade management, active symbol policy, and AI integration.
 
 ---
 
 ## Table of Contents
 
 1. [Design Philosophy](#1-design-philosophy)
-2. [TP/SL: S/R + Fibonacci Confluence](#2-tpsl-sr--fibonacci-confluence)
-3. [Trailing Stop: Profit-Based](#3-trailing-stop-profit-based)
-4. [Exit Policy: No Time Exits](#4-exit-policy-no-time-exits)
-5. [Regime Engine: Hourly Caching + Ranging](#5-regime-engine-hourly-caching--ranging)
-6. [Scoring Updates](#6-scoring-updates)
-7. [Entry Simplification](#7-entry-simplification)
-8. [Removed V1 Concepts](#8-removed-v1-concepts)
-9. [Settings Inventory (V2)](#9-settings-inventory-v2)
-10. [Backtest Engine Alignment](#10-backtest-engine-alignment)
-11. [AI Integration Updates](#11-ai-integration-updates)
-12. [File-by-File Change Summary](#12-file-by-file-change-summary)
+2. [Symbol Tiers & Active Trading Policy](#2-symbol-tiers--active-trading-policy)
+3. [The Five Strategy Families](#3-the-five-strategy-families)
+4. [Feature Vector](#4-feature-vector)
+5. [Market Regime Engine](#5-market-regime-engine)
+6. [Scoring System](#6-scoring-system)
+7. [Signal Pipeline](#7-signal-pipeline)
+8. [Trade Management — TP/SL](#8-trade-management--tpsl)
+9. [Trailing Stop & Exit Policy](#9-trailing-stop--exit-policy)
+10. [Position Sizing & Risk Management](#10-position-sizing--risk-management)
+11. [Capital Extraction Cycle](#11-capital-extraction-cycle)
+12. [AI Integration](#12-ai-integration)
+13. [Backtest Engine](#13-backtest-engine)
+14. [Settings Inventory](#14-settings-inventory)
 
 ---
 
 ## 1. Design Philosophy
 
-V2 replaces V1's static ATR-multiplier trade management with dynamic, market-structure-aware logic. The core principles:
-
 - **Large capital, long hold, max profit.** Swing trades on highest-probability signals only.
 - **TP targets full spike magnitude (50-200%+).** TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. Never scalp 1-5% moves.
-- **TP/SL derived from actual market structure + spike magnitude analysis** — never from ATR multiples.
-- **Rolling 60-90 day spike magnitude analysis** from `spike_events` table drives TP distance for Boom/Crash indices.
-- **1500+ candle structural window** for swing levels, VWAP, pivots, Fibonacci — never just 100 one-minute candles.
-- **Boom/Crash and Volatility indices treated differently** — spike-magnitude TP for Boom/Crash, multi-day S/R for Volatility.
-- **Trailing stop protects realized profit** — trails at 30% below peak unrealized profit percentage, not price.
-- **No time exits** — trades hold until TP, SL, or trailing stop. Long-hold strategy.
+- **TP/SL derived from market structure + spike magnitude analysis** — never from ATR multiples.
+- **Active trading restricted to 4 high-performance symbols** — CRASH300, BOOM300, R_75, R_100.
+- **Boom/Crash and Volatility indices treated differently** — spike-magnitude TP for Boom/Crash, structural S/R for Volatility.
+- **Trailing stop protects realized profit** — trails at 30% below peak unrealized profit, activates after reaching 30% of TP target.
+- **72h profitable exit** — capital efficiency backstop. Losing trades stay open.
 - **Up to 2 positions per symbol** (different strategy families). No multi-stage building.
-- **AI never auto-changes settings.** Blocked signals get `aiVerdict="skipped"`.
+- **AI verification as strict gate** — disagree unless all 5 criteria met.
 
 ### CRITICAL DESIGN MANDATES — DO NOT VIOLATE
-1. **TP is PRIMARY exit** targeting full spike magnitude (50-200%+). Trailing stop is SAFETY NET ONLY.
-2. **Never use ATR-based TP/SL exits.** All exits from market structure and spike magnitude analysis.
-3. **Never compute structural indicators from only 100 one-minute candles.** Use 1500+ candles for structure, 100 for fast indicators.
-4. **Use rolling 60-90 day windows** (not static all-time levels) for spike magnitude analysis.
+
+1. **TP is PRIMARY exit** targeting full spike magnitude (50-200%+). NEVER reduce TP targets.
+2. **Trailing stop is SAFETY NET ONLY** — activates after reaching 30% of TP target.
+3. **Never use ATR-based TP/SL exits.** All exits from market structure and spike magnitude.
+4. **Use 1500+ candle structural windows** for swing levels, VWAP, pivots, Fibonacci.
+5. **Strategy directionality**: CRASH → BUY after swing low exhaustion. BOOM → SELL after swing high exhaustion.
 
 ---
 
-## 2. TP/SL: S/R + Fibonacci Confluence
+## 2. Symbol Tiers & Active Trading Policy
 
-### Feature Vector Additions (`features.ts`)
+Data is downloaded for all 12 symbols; **active trading is restricted to 4 symbols**.
 
-New fields computed in `computeFeatures()` (1500-candle structural window, 100-candle fast window):
+| Tier | Symbols | Characteristics | Trading Status |
+|------|---------|----------------|----------------|
+| **High Movers** | CRASH300, BOOM300, R_100 | Largest spike magnitudes, widest ranges, best TP potential | **ACTIVE** |
+| **Mid Movers** | CRASH500/600, BOOM500/600, R_75 | Moderate ranges | R_75 **ACTIVE**; others data-only |
+| **Slow Movers** | BOOM900/1000, CRASH900/1000 | Smallest moves, lowest TP potential | Data-only |
 
-| Field | Type | Description |
-|---|---|---|
-| `swingHigh` | `number` | Highest high in lookback window (50 candles) |
-| `swingLow` | `number` | Lowest low in lookback window |
-| `majorSwingHigh` | `number` | 20-bar major swing high from 1500+ candle window |
-| `majorSwingLow` | `number` | 20-bar major swing low from 1500+ candle window |
-| `spikeMagnitude` | `SpikeMagnitudeStats \| null` | Rolling 60-90 day spike stats: `{ median, p75, p90, count }` (absolute price change) |
-| `fibRetraceLevels` | `number[]` | Fibonacci retracement levels: 23.6%, 38.2%, 50%, 61.8%, 78.6% between swing low and swing high |
-| `fibExtensionLevels` | `number[]` | Fibonacci extension levels: 127.2%, 161.8%, 200% projected beyond swing range |
-| `bbUpper` | `number` | Upper Bollinger Band value (fast 100-candle window) |
-| `bbLower` | `number` | Lower Bollinger Band value (fast 100-candle window) |
-| `vwap` | `number` | Volume-Weighted Average Price (range-proxy) |
-| `pivotPoint` | `number` | Classic pivot point from previous session H/L/C |
-| `pivotR1`–`pivotR3` | `number` | Classic pivot resistance levels |
-| `pivotS1`–`pivotS3` | `number` | Classic pivot support levels |
-| `camarillaH3`/`camarillaH4` | `number` | Camarilla resistance levels |
-| `camarillaL3`/`camarillaL4` | `number` | Camarilla support levels |
-| `psychRound` | `number` | Nearest psychological round number |
-| `prevSessionHigh` | `number` | Previous session high |
-| `prevSessionLow` | `number` | Previous session low |
-| `prevSessionClose` | `number` | Previous session close |
+**Active Trading Set** (`ACTIVE_TRADING_SYMBOLS`): `CRASH300`, `BOOM300`, `R_75`, `R_100`
 
-### `calculateSRFibTP()` (`tradeEngine.ts`)
+All other symbols (`V1_DEFAULT_SYMBOLS`, 12 total) have data downloaded for research/backtesting but do NOT generate live trades.
 
-**TP is calculated from full available price history** — not from the 1-minute candle that triggered the signal.
+### Instrument Family Directionality
 
-**Boom/Crash indices** (spike-magnitude primary):
-1. Primary TP = 50% of `longTermRangePct` from rolling 60-90 day spike analysis (minimum 10% of entry price).
-2. `longTermRangePct` represents the full multi-week/multi-month price range from `spike_events` table.
-3. No structural S/R confluence filtering — TP targets the full expected market move directly.
-4. No ATR fallback ever.
+| Family | Spike Behaviour | Primary Trade Direction |
+|--------|----------------|----------------------|
+| Crash | Price drops periodically via spikes | **BUY** after swing low / spike cluster exhaustion |
+| Boom | Price spikes upward periodically | **SELL** after swing high / spike cluster exhaustion |
+| Volatility | Continuous random walk | BUY or SELL based on trend/reversal signals |
 
-**Volatility indices** (major swing range primary):
-1. Compute full swing range from `majorSwingHigh - majorSwingLow` (from 1500+ candle window, covering multi-day/multi-week history).
-2. Buy TP: entry + 70% of swing range. Sell TP: entry - 70% of swing range.
-3. Minimum range floor: 2% of entry price.
-4. No ATR fallback ever.
+### Spike Counting
 
-For **sell** trades: mirror logic in both cases.
+Both live (`features.ts`) and backtest (`backtestEngine.ts`) use directional candle moves >1%:
+- CRASH: `rawMove < -0.01` (price drops are spikes)
+- BOOM: `rawMove > 0.01` (price rises are spikes)
 
-### `calculateSRFibSL()` (`tradeEngine.ts`)
+### Spike Cluster Recovery 24h Exhaustion Gate
 
-**SL is derived from TP using a fixed 1:5 R:R ratio.** No independent SL calculation.
-
-1. SL distance = TP distance / 5 (1:5 R:R ratio). Example: 80% TP → 16% SL.
-2. Safety cap: max loss 10% of equity per position.
-3. No structural S/R-based SL logic — the old approach produced 0.13% SL distances which were immediately hit.
-4. No ATR fallback ever.
-
-### Strategy-Level Integration (`strategies.ts`)
-
-Strategy functions (`trendContinuation`, `meanReversion`, `breakoutExpansion`, `spikeEvent`) set `suggestedTp` and `suggestedSl` to `null` — TP/SL are computed later at execution time by `calculateSRFibTP`/`calculateSRFibSL` in the trade engine and backtest engine, where the entry price and position size are known.
+- CRASH: `priceChange24hPct < -0.05` (5%+ decline in 24h)
+- BOOM: `priceChange24hPct > 0.05` (5%+ rally in 24h)
 
 ---
 
-## 3. Trailing Stop: Profit-Based
+## 3. The Five Strategy Families
 
-### `calculateProfitTrailingStop()` (`tradeEngine.ts`)
+### 3.1 Trend Continuation (`minModelScore: 0.60`)
 
-Replaces the old price-based trailing stop with profit-percentage trailing:
+**Crash (BUY)**:
+- Confirmed swing low: `distFromRange30dLowPct < 0.03` AND `priceChange24hPct > 0.005`
+- Drift up: `emaSlope > 0.0002`
+- RSI 35-70, trend confirmed (24h change > 1%), not overextended
 
-- **Peak tracking:** Tracks the highest unrealized profit percentage reached.
-- **Activation:** Only activates when trade is **in profit** (unrealized P&L > 0).
-- **Drawdown threshold:** 30% drawdown from peak profit triggers close.
-  - Example: Peak profit was 10%. Current profit drops to 7% → drawdown = 30% → close.
-- **Below breakeven:** If current price is at or below breakeven, returns the original S/R-based SL (no trailing).
+**Boom (SELL)**:
+- Confirmed swing high: `distFromRange30dHighPct > -0.03` AND `priceChange24hPct < -0.005`
+- Drift down: `emaSlope < -0.0002`
+- RSI 30-65, trend confirmed (24h change < -1%), not overextended
+
+**Volatility (BUY/SELL)**:
+- Confirmed reversal with EMA slope alignment (>0.0003 or <-0.0003)
+- Pullback to EMA (`|emaDist| < 0.01`), RSI 35-65
+
+### 3.2 Mean Reversion (`minModelScore: 0.60`)
+
+**Crash (BUY)**: Near 30d low (`< 3%`), 7d decline > 5%, RSI < 35
+**Boom (SELL)**: Near 30d high (`> -3%`), 7d rally > 5%, RSI > 65
+**Volatility**: z-score extremes (±1.5) with multi-day moves
+
+Also triggers on **liquidity sweep** setup: swing breached AND reclaimed within 3 candles, small candle body < 0.35.
+
+### 3.3 Spike Cluster Recovery (`minModelScore: 0.58`)
+
+**Boom/Crash only** (returns null for Volatility indices).
+
+Entry conditions:
+- 3+ spikes in 4h OR 5+ spikes in 24h
+- 5%+ 24h exhaustion move (CRASH: decline, BOOM: rally)
+- Reversal candle (CRASH: green, BOOM: red), small body < 0.40
+- EMA slope flattening toward zero
+
+Scoring uses cluster density and spike hazard score.
+
+### 3.4 Swing Exhaustion (`minModelScore: 0.58`)
+
+**Crash (SELL — counter-trend)**: 14+ spikes/7d, price up 8%+, near 30d high, failed new high in 24h, slope turning down
+**Boom (BUY — counter-trend)**: 14+ spikes/7d, price down 8%+, near 30d low, failed new low in 24h, slope turning up
+**Volatility**: 10%+ 7d move near range extremes, RSI extreme (>72/<28), failed continuation in 24h
+
+### 3.5 Trendline Breakout (`minModelScore: 0.65`)
+
+Entry conditions:
+- 2+ trendline touches (resistance or support)
+- Price breaks through with momentum confirmation (`atrAccel > 0.01`, `candleBody > 0.30`)
+- Break distance within 2.5x ATR
+- EMA slope aligned with breakout direction
+
+---
+
+## 4. Feature Vector
+
+40+ technical features computed from two windows:
+
+**Structural Window (1500+ candles)**: `majorSwingHigh`, `majorSwingLow`, `swingHigh`, `swingLow`, `fibRetraceLevels`, `fibExtensionLevels`, `fibExtensionLevelsDown`, `vwap`, `pivotPoint`, `pivotR1-R3`, `pivotS1-S3`, `camarillaH3/H4/L3/L4`, `psychRound`, `prevSessionHigh/Low/Close`, `spikeMagnitude`
+
+**Fast Window (100 candles)**: `ema20`, `emaSlope`, `emaDist`, `rsi14`, `atr14`, `atrRank`, `atrAccel`, `bbWidth`, `bbUpper`, `bbLower`, `zScore`, `consecutive`, `candleBody`, `spikeCount4h/24h/7d`, `spikeHazardScore`, `priceChange24hPct`, `priceChange7dPct`, `distFromRange30dHighPct`, `distFromRange30dLowPct`, `regimeLabel`, `trendlineSupportLevel/Slope/Touches`, `trendlineResistanceLevel/Slope/Touches`, `swingBreached/Reclaimed/BreachCandles/BreachDirection`
+
+---
+
+## 5. Market Regime Engine
+
+Regime is computed once per symbol per hour and cached in `platform_state`.
+
+| Regime | Detection Criteria | Allowed Strategies |
+|--------|-------------------|-------------------|
+| `trend_up` | Sustained positive EMA slope, consistent candles | trend_continuation, swing_exhaustion |
+| `trend_down` | Sustained negative EMA slope | trend_continuation, swing_exhaustion |
+| `mean_reversion` | Price overstretched from mean | mean_reversion, spike_cluster_recovery, swing_exhaustion |
+| `ranging` | Flat EMA slope, moderate BB width, no spike hazard | mean_reversion, spike_cluster_recovery, trendline_breakout |
+| `compression` | Low BB width, flat slope | trendline_breakout, spike_cluster_recovery |
+| `breakout_expansion` | Expanding volatility | trend_continuation, trendline_breakout, swing_exhaustion |
+| `spike_zone` | Active Boom/Crash spike cluster | spike_cluster_recovery, swing_exhaustion |
+| `no_trade` | Unclear/conflicting signals | NONE — system waits |
+
+---
+
+## 6. Scoring System
+
+### 6.1 Model Score
+
+Per-family logistic regression model scores features 0-1. Must exceed `minModelScore` threshold:
+
+| Family | minModelScore |
+|--------|-------------|
+| trend_continuation | 0.60 |
+| mean_reversion | 0.60 |
+| spike_cluster_recovery | 0.58 |
+| swing_exhaustion | 0.58 |
+| trendline_breakout | 0.65 |
+
+### 6.2 Composite Score (6 Dimensions, 0-100)
+
+| Dimension | Weight | What It Measures |
+|-----------|--------|-----------------|
+| Setup Quality | **25%** | Model score margin, expected value strength, regime compatibility, confidence |
+| Reward/Risk | **20%** | R:R ratio from nearest structural TP/SL levels |
+| Regime Fit | **20%** | Strategy-to-regime alignment, regime confidence |
+| Trend Alignment | **13%** | EMA slope direction, price vs EMA, consecutive candle alignment |
+| Volatility Condition | **12%** | ATR within ideal range for strategy family, BB width, ATR rank |
+| Probability of Success | **10%** | Direct model score mapping |
+
+### 6.3 Composite Score Thresholds
+
+| Mode | Min Composite Score |
+|------|-------------------|
+| Paper | **85** |
+| Demo | **90** |
+| Real | **92** |
+
+Additional filters: EV ≥ 0.001, R:R ≥ 1.5
+
+---
+
+## 7. Signal Pipeline
+
+1. **Tick Streaming** → Live price ticks from Deriv WebSocket
+2. **Feature Extraction** → 40+ features from 1500+100 candle windows
+3. **Regime Classification** → Cached hourly per symbol
+4. **Strategy Evaluation** → Only regime-permitted strategies run
+5. **ML Scoring** → Per-family logistic regression (minModelScore gate)
+6. **Composite Scoring** → 6-dimension weighted score (setupQuality 25%, rewardRisk 20%, regimeFit 20%, etc.)
+7. **Quality Filtering** → composite ≥ 85/90/92, EV ≥ 0.001, R:R ≥ 1.5
+8. **AI Verification** → Strict 5-criterion evaluation with strategy-specific checks
+9. **Portfolio Allocation** → Daily/weekly loss limits, max drawdown, max open trades, correlated exposure cap
+10. **Position Sizing** → equity × pct_per_trade × confidence factor
+11. **Execution** → S/R+Fib TP/SL computed, trade opened
+
+---
+
+## 8. Trade Management — TP/SL
+
+### Take-Profit — Boom/Crash Indices (Spike-Magnitude-Aware)
+
+1. Primary TP = 50% of `longTermRangePct` from rolling 60-90 day spike analysis
+2. Minimum TP floor = 10% of entry price
+3. Targets full spike travel (50-200%+ moves). Never scalp.
+
+### Take-Profit — Volatility Indices (Structural S/R)
+
+1. TP = entry ± 70% of major swing range (from 1500+ candle structural levels)
+2. Minimum range floor = 2% of entry price
+
+### Stop-Loss — All Instruments
+
+1. SL distance = TP distance / 5 (**1:5 R:R ratio**)
+2. Safety cap: max loss = 10% of equity per position
+3. No independent SL calculation — derived from TP
 
 ### Constants
 
-| Constant | Value | Description |
-|---|---|---|
-| `PROFIT_TRAIL_DRAWDOWN_PCT` | 0.30 | 30% drawdown from peak profit |
-
----
-
-## 4. Exit Policy
-
-Trades exit ONLY via:
-1. **TP hit** (primary exit) — targeting full spike magnitude (50-200%+ moves)
-2. **SL hit** — structural S/R confluence placement
-3. **30% trailing stop** — safety net, activates only in profit
-4. **72h profitable exit** — capital efficiency backstop: if trade is open 72+ hours AND in profit, close it to redeploy capital. Trades at a loss remain open until TP/SL/trailing.
-
-### Removed (V2.1)
-
-- `TIME_EXIT_HARD_CAP_HOURS` (168h) constant — deleted. No forced closure of losing trades.
-- `INITIAL_EXIT_HOURS`, `EXTENSION_HOURS`, `MAX_EXIT_HOURS` constants.
-- Extension logic for near-breakeven trades.
-- Per-family hold profiles (`FAMILY_HOLD_PROFILE`).
-
----
-
-## 5. Regime Engine: Hourly Caching + Ranging
-
-### Hourly Caching (`regimeEngine.ts` + `scheduler.ts`)
-
-- Regime is computed once per symbol per hour and cached in `platform_state` with key `regime_cache_{symbol}`.
-- Cache includes: `regime`, `confidence`, `timestamp`.
-- `getCachedRegime(symbol)` returns cached regime if < 1 hour old; otherwise returns `null`.
-- `cacheRegime(symbol, regime, confidence)` stores the result.
-- The scanner loop in `scheduler.ts` calls `getCachedRegime()` first and only computes regime fresh on cache miss.
-
-### "Ranging" Regime
-
-Added `"ranging"` to the `RegimeType` union. Detected when:
-- EMA slope is flat (< 0.0003 absolute).
-- BB width is moderate (0.005–0.015).
-- No spike hazard (< 0.50).
-- Z-score is moderate (< 1.5 absolute).
-
-### Trendline Breakout Strategy (`strategies.ts`)
-
-New `trendline_breakout` family added. Uses `scoreFeaturesForFamily("breakout_expansion")` scoring. Entry conditions:
-- BB width expansion (bbWidth > 0.008)
-- Price breaking above/below trendline with ATR confirmation
-- Allowed in regimes: `compression`, `ranging`, `breakout_expansion`, `trend_up`, `trend_down`
-
-### Strategy Permission Matrix
-
-`STRATEGY_PERMISSION_MATRIX` updated:
-- `mean_reversion` and `spike_event` strategies are now also allowed in `"ranging"` regime.
-- `trend_continuation` allowed in: `trend_up`, `trend_down`, `breakout_expansion`.
-- `breakout_expansion` allowed in: `compression`, `breakout_expansion`, `high_volatility`.
-- `trendline_breakout` allowed in: `compression`, `ranging`, `breakout_expansion`, `trend_up`, `trend_down`.
-
----
-
-## 6. Scoring Updates
-
-### `FAMILY_IDEAL_REGIMES` (`scoring.ts`)
-
-Updated to include `"ranging"` for families that benefit from it:
-
-| Family | Ideal Regimes |
-|---|---|
-| `trend_continuation` | `trend_up`, `trend_down`, `breakout_expansion` |
-| `mean_reversion` | `mean_reversion`, `ranging` |
-| `breakout_expansion` | `compression`, `breakout_expansion`, `trend_up`, `trend_down` |
-| `spike_event` | `spike_zone`, `ranging` |
-| `trendline_breakout` | `compression`, `ranging`, `breakout_expansion`, `trend_up`, `trend_down` |
-
-### Regime Data Source
-
-Regime fit, trend alignment, and volatility condition scores use the hourly-cached regime from `platform_state`. Setup quality, reward/risk, and probability of success are computed per-signal in real time.
-
----
-
-## 7. Entry Simplification
-
-### Two Positions Per Symbol (Different Strategies)
-
-- No more probe/confirmation/momentum stages.
-- Each symbol allows up to **2 concurrent positions** from different strategy families.
-- Same strategy family blocked on same symbol if already open.
-- Position size = `equity_pct_per_trade` (from settings) × equity.
-
-### Signal Quality Gates
-
-Signals must pass these minimum thresholds (configurable per mode in settings):
-
-| Setting | Paper | Demo | Real |
-|---|---|---|---|
-| `min_composite_score` | 80 | 85 | 90 |
-| `min_ev_threshold` | 0.001 | 0.001 | 0.001 |
-| `min_rr_ratio` | 1.5 | 1.5 | 1.5 |
-
-### Trade Frequency Target
-
-8-15 trades per symbol per month. Thresholds calibrated for Boom/Crash/Volatility synthetic indices.
-
----
-
-## 8. Removed V1 Concepts
-
-### Settings Removed
-
-| Setting | Reason |
-|---|---|
-| `tp_multiplier_strong/medium/weak` | Replaced by S/R + Fib TP |
-| `sl_ratio` | Replaced by S/R + Fib SL |
-| `tp_capture_ratio` | No longer applicable |
-| `min_sl_atr_multiplier` | SL uses spike drift (Boom/Crash) or structural S/R (Volatility) |
-| `trailing_stop_pct` | Replaced by 30% profit trailing |
-| `peak_drawdown_exit_pct` | Replaced by profit trailing |
-| `min_peak_profit_pct` | Removed (trailing activates on any profit) |
-| `large_peak_threshold_pct` | Removed |
-| `time_exit_window_hours` | Removed — no time exits |
-| `probe_threshold` | No entry stages |
-| `confirmation_threshold` | No entry stages |
-| `momentum_threshold` | No entry stages |
-| `stage_multiplier_probe/confirmation/momentum` | No entry stages |
-| All per-family overrides (`*_tp_atr_multiplier`, `*_sl_atr_multiplier`, `*_initial_exit_hours`, `*_extension_hours`, `*_max_exit_hours`, `*_harvest_sensitivity`) | Trade management is now universal |
-
-### Code Removed
-
-| Concept | Files Affected |
-|---|---|
-| `evaluateProfitHarvest()` | `tradeEngine.ts` |
-| `calculateTrailingStop()` (price-based) | `tradeEngine.ts` |
-| `calculateDynamicTP()` / `calculateInitialSL()` | `tradeEngine.ts` |
-| `FAMILY_HOLD_PROFILE` | `tradeEngine.ts` |
-| Entry stage logic (probe/confirmation/momentum) | `signalRouter.ts`, `extractionEngine.ts` |
-| `FamilyProfileSection` UI component | `settings.tsx` |
-| Per-family config sections in UI | `settings.tsx` |
-
----
-
-## 9. Settings Inventory (V2)
-
-### Configurable Settings (Per Mode)
-
-| Setting | Paper Default | Demo Default | Real Default | Description |
-|---|---|---|---|---|
-| `capital` | 10000 | 600 | 600 | Starting capital |
-| `equity_pct_per_trade` | 30 | 20 | 15 | % of equity per position |
-| `max_open_trades` | 4 | 3 | 3 | Max simultaneous positions |
-| `allocation_mode` | aggressive | balanced | balanced | Capital deployment aggressiveness |
-| `min_composite_score` | 80 | 85 | 90 | Min composite score for entry |
-| `min_ev_threshold` | 0.001 | 0.001 | 0.001 | Min expected value |
-| `min_rr_ratio` | 1.5 | 1.5 | 1.5 | Min reward-to-risk ratio |
-| `max_daily_loss_pct` | 8 | 5 | 3 | Daily loss limit |
-| `max_weekly_loss_pct` | 15 | 10 | 6 | Weekly loss limit |
-| `max_drawdown_pct` | 25 | 18 | 12 | Kill switch drawdown |
-| `extraction_target_pct` | 50 | 50 | 50 | Profit extraction target |
-| `auto_extraction` | false | false | false | Auto-extract toggle |
-| `correlated_family_cap` | 4 | 3 | 3 | Max trades per instrument family |
-
-### Non-Configurable Constants (Hardcoded in V2)
-
 | Constant | Value | Location |
-|---|---|---|
-| `PROFIT_TRAIL_DRAWDOWN_PCT` | 0.30 | `tradeEngine.ts` |
-| Boom/Crash TP target | 50% of 90-day price range (min 10%) | `calculateSRFibTP` |
-| Boom/Crash TP floor | 10% of entry price | `calculateSRFibTP` |
-| Volatility TP | 70% of major swing range (min 2% of entry) | `calculateSRFibTP` |
-| SL derivation | TP distance / 5 (1:5 R:R ratio) | `calculateSRFibSL` |
-| Safety floor SL | 10% equity | `calculateSRFibSL` |
-| Spike rolling window | 60-90 days | `getSpikeMagnitudeStats` |
-| Structural candle window | 1500 candles | `computeFeatures` |
-| Fast indicator window | 100 candles | `computeFeatures` |
-| Regime cache TTL | 1 hour | `regimeEngine.ts` |
+|----------|-------|---------|
+| R:R Ratio | 5 | `tradeEngine.ts` |
+| Boom/Crash TP target | 50% of 90-day range | `calculateSRFibTP` |
+| Boom/Crash TP floor | 10% of entry | `calculateSRFibTP` |
+| Vol TP | 70% of major swing range | `calculateSRFibTP` |
+| Vol TP floor | 2% of entry | `calculateSRFibTP` |
+| Equity safety cap | 10% per position | `calculateSRFibSL` |
 
 ---
 
-## 10. Backtest Engine Alignment
+## 9. Trailing Stop & Exit Policy
+
+### 30% Peak-Profit Trailing (SAFETY NET ONLY)
+
+- **Activation**: Only after trade reaches 30% of TP target (e.g., TP = 50% → activates at +15%)
+- **Before activation**: Only fixed SL protects downside
+- **After activation**: Tracks peak unrealized profit %
+- **Trigger**: Profit drops 30% from peak (e.g., peak 10% → exit at 7%)
+- Constant: `PROFIT_TRAILING_DRAWDOWN_PCT = 0.30`
+
+### Exit Priority
+
+1. **TP hit** (primary exit) — targeting full 50-200%+ moves
+2. **SL hit** — 1:5 R:R derived from TP
+3. **30% trailing stop** — safety net, activates only after 30% of TP target reached
+4. **72h profitable exit** — capital efficiency backstop (open 72h+ AND in profit)
+
+Losing trades after 72h remain open. No forced closure.
+
+---
+
+## 10. Position Sizing & Risk Management
+
+### Position Sizing
+
+- Size = equity × `equity_pct_per_trade` × clamp(confidence, 0.5, 1.0) × allocation_mode multiplier
+- Minimum: 5% of equity
+- Maximum: remaining capacity within 80% equity deployment cap
+- Max open trades: 3 (default), configurable per mode
+- Max per symbol: 2 (different strategy families)
+
+### Risk Controls
+
+| Control | Description |
+|---------|------------|
+| Max equity deployed | 80% (`MAX_EQUITY_DEPLOYED_PCT`) |
+| Max open trades | 3 per mode (default) |
+| Max per symbol | 2 positions (different strategies) |
+| Daily loss limit | Configurable per mode (paper 8%, demo 5%, real 3%) |
+| Weekly loss limit | Configurable per mode (paper 15%, demo 10%, real 6%) |
+| Max drawdown | Kill switch (paper 25%, demo 18%, real 12%) |
+| Correlated family cap | Limits positions in same instrument family |
+| Kill switch | Emergency halt — blocks all new trades |
+
+---
+
+## 11. Capital Extraction Cycle
+
+1. Start with base capital
+2. Trade until capital grows by `extraction_target_pct` (default 50%)
+3. Extract profits (auto or manual), reset to base capital
+4. Prevents compound risk
+
+---
+
+## 12. AI Integration
+
+### Signal Verification (`openai.ts`)
+
+AI uses strict 5-criterion evaluation — **disagree unless ALL conditions met**:
+
+1. Direction matches instrument family (CRASH=BUY, BOOM=SELL, Vol=either)
+2. Multi-day structural setup confirmed (not intraday noise)
+3. Price at genuine exhaustion/reversal point with structural confluence
+4. Sufficient room for 50%+ move to TP target
+5. Recent candles show genuine reversal/continuation pattern
+
+Each strategy family has additional specific checks (trend strength, overstretch genuineness, spike density, exhaustion significance, trendline validity).
+
+### AI Advisor (`aiChat.ts`)
+
+- ADVISOR only — never auto-changes settings
+- Reads settings, writes suggestions (ai_suggest_ keys) for user review
+- Updated knowledge base with:
+  - Active symbol tiers (4 active, 8 data-only)
+  - Recalibrated scoring weights and thresholds
+  - Strategy directionality per instrument family
+  - Recalibrated composite score defaults (85/90/92)
+
+---
+
+## 13. Backtest Engine
 
 The backtest engine (`backtestEngine.ts`) mirrors all V2 logic:
 
-- Uses `calculateSRFibTP` and `calculateSRFibSL` for entry TP/SL (spike-magnitude-aware).
-- Passes `spikeMagnitudeBySymbol` from `getSpikeMagnitudeStats()` with `beforeTs` anchor to prevent lookahead bias.
-- Uses `calculateProfitTrailingStop` for trailing.
-- No time exits — trades hold until TP, SL, or trailing stop.
-- Feature computation with 1500-candle LOOKBACK includes `swingHigh`, `swingLow`, `majorSwingHigh`, `majorSwingLow`, `spikeMagnitude`, `fibRetraceLevels`, `fibExtensionLevels`, `bbUpper`, `bbLower`, `vwap`, `pivotPoint`, `pivotR1`–`R3`, `pivotS1`–`S3`, `camarillaH3/H4/L3/L4`, `psychRound`, `prevSessionHigh/Low/Close`.
-- Default thresholds raised: minComposite 80 (paper), minEv 0.001, minRr 1.5.
-- Multi-position: up to 2 positions per symbol (different strategies).
-- Removed: old ATR-based SL/TP, `calculateTrailingStop`, `INITIAL_EXIT_HOURS`/`EXTENSION_HOURS`/`MAX_EXIT_HOURS`.
+- Uses `calculateSRFibTP` and `calculateSRFibSL` for entry TP/SL
+- Passes `spikeMagnitudeBySymbol` with `beforeTs` anchor (no lookahead bias)
+- Uses `calculateProfitTrailingStop` for trailing
+- 72h profitable exit for capital efficiency
+- 1500-candle structural window for features
+- Active trading symbols for research routes (data-status, download-simulate, rerun-backtest, grouped-results)
 
 ---
 
-## 11. AI Integration Updates
+## 14. Settings Inventory
 
-### Signal Verification Prompt (`openai.ts`)
+### Configurable Per-Mode Settings
 
-- Removed `entryStage` from the `SignalContext` interface.
-- AI prompt updated to reflect V2 spike-magnitude-aware trade management:
-  - Boom/Crash TP from spike p75, SL from 30% median drift.
-  - Volatility TP from 70% major swing range, SL from structural confluence.
-  - References 30% profit trailing stop (safety net only).
-  - Explicitly states NO time exits — trades hold until TP/SL/trailing.
-  - No ATR-based TP/SL references.
-  - No longer mentions entry stages or profit harvesting.
+| Setting | Paper | Demo | Real |
+|---------|-------|------|------|
+| `capital` | 10000 | 600 | 600 |
+| `equity_pct_per_trade` | 30 | 20 | 15 |
+| `max_open_trades` | 4 | 3 | 3 |
+| `allocation_mode` | aggressive | balanced | balanced |
+| `min_composite_score` | **85** | **90** | **92** |
+| `min_ev_threshold` | 0.001 | 0.001 | 0.001 |
+| `min_rr_ratio` | 1.5 | 1.5 | 1.5 |
+| `max_daily_loss_pct` | 8 | 5 | 3 |
+| `max_weekly_loss_pct` | 15 | 10 | 6 |
+| `max_drawdown_pct` | 25 | 18 | 12 |
+| `extraction_target_pct` | 50 | 50 | 50 |
 
-### AI Mandate
+### Hardcoded Constants
 
-- AI **never** auto-changes settings.
-- Blocked signals receive `aiVerdict="skipped"`.
-- AI provides analysis and recommendations only.
-
----
-
-## 12. File-by-File Change Summary
-
-| File | Changes |
-|---|---|
-| `features.ts` | Added `swingHigh`, `swingLow`, `fibRetraceLevels`, `fibExtensionLevels`, `bbUpper`, `bbLower`, `vwap`, pivots (classic + Camarilla), `psychRound`, `prevSessionHigh/Low/Close` to `FeatureVector`; added `computeVWAP`, `computePivotPoints`, `computePsychologicalRound`, `getPreviousSession` helpers |
-| `regimeEngine.ts` | Added `"ranging"` regime, `"trendline_breakout"` family, hourly caching via `getCachedRegime`/`cacheRegime`, updated `STRATEGY_PERMISSION_MATRIX` |
-| `strategies.ts` | Widened entry thresholds for synthetics; added `trendlineBreakout()` strategy; replaced ATR-based SL/TP with `calculateSRFibTP`/`calculateSRFibSL` calls |
-| `tradeEngine.ts` | Added `calculateSRFibTP`, `calculateSRFibSL` with pivot/VWAP/psychRound/prevSession confluence; added `calculateProfitTrailingStop`; removed legacy SL/TP functions |
-| `signalRouter.ts` | Removed entry stage logic; allows 2 positions per symbol (blocks same strategy on same symbol); lowered composite/EV/RR defaults |
-| `scoring.ts` | Widened volatility ranges (0.015-0.030); raised non-ideal regime score 15→40 |
-| `model.ts` | Added `trendline_breakout` family weights and rule configs |
-| `extractionEngine.ts` | Removed entry stage references |
-| `scoring.ts` | Updated `FAMILY_IDEAL_REGIMES` to include `"ranging"` |
-| `backtestEngine.ts` | Mirrored all V2 changes: S/R+Fib TP/SL, profit trailing, no time exits |
-| `scheduler.ts` | Integrated regime caching in scanner; removed V1 setting references |
-| `openai.ts` | Updated `SignalContext` interface and AI prompt for V2 |
-| `settings.tsx` | Removed V1 settings from defaults and UI; added Signal Quality Thresholds and Trade Management info card |
+| Constant | Value | File |
+|----------|-------|------|
+| `PROFIT_TRAILING_DRAWDOWN_PCT` | 0.30 | `tradeEngine.ts` |
+| `MAX_EQUITY_DEPLOYED_PCT` | 0.80 | `tradeEngine.ts` |
+| `MAX_OPEN_TRADES` | 3 | `tradeEngine.ts` |
+| `RR_RATIO` | 5 | `tradeEngine.ts` |
+| `TIME_EXIT_PROFIT_HOURS` | 72 | `tradeEngine.ts` |
+| Structural candle window | 1500 | `features.ts` |
+| Fast indicator window | 100 | `features.ts` |
+| Regime cache TTL | 1 hour | `regimeEngine.ts` |
 
 ---
 

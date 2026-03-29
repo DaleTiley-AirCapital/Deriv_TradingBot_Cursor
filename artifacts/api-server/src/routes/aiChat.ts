@@ -64,46 +64,67 @@ const SYSTEM_KNOWLEDGE = `# Deriv Capital Extraction Platform V2 — Complete Kn
 ## 1. Platform Overview
 This is the **Deriv Capital Extraction App V2** — a fully automated trading system for Deriv synthetic indices. The core philosophy is CAPITAL EXTRACTION: large capital, long hold, maximum profit. Grow an account, extract profits at target, reset and repeat.
 
-### Supported Instruments (12 total)
-- **Boom indices**: BOOM1000, BOOM900, BOOM600, BOOM300, BOOM500 — price spikes upward periodically
-- **Crash indices**: CRASH1000, CRASH900, CRASH600, CRASH300, CRASH500 — price drops periodically
-- **Volatility indices**: R_75 (75% volatility), R_100 (100% volatility) — continuous random walk
+### Symbol Tiers & Active Trading Policy
+Data is downloaded for all 12 symbols, but **active trading is restricted to 4 high-performance symbols**:
+
+| Tier | Symbols | Characteristics | Trading Status |
+|------|---------|----------------|----------------|
+| **High Movers** | CRASH300, BOOM300, R_100 | Largest spike magnitudes, widest ranges, best TP potential | ACTIVE |
+| **Mid Movers** | CRASH500, CRASH600, BOOM500, BOOM600, R_75 | Moderate spike magnitudes, decent ranges | R_75 ACTIVE; others data-only |
+| **Slow Movers** | BOOM900, BOOM1000, CRASH900, CRASH1000 | Smallest moves, lowest TP potential | Data-only |
+
+**Active Trading Set**: CRASH300, BOOM300, R_75, R_100
+All other symbols have data downloaded for research/backtesting but do NOT generate live trades.
+
+### Instrument Families
+- **Boom indices**: Price spikes upward periodically → SELL after swing high/spike cluster exhaustion
+- **Crash indices**: Price drops periodically → BUY after swing low/spike cluster exhaustion
+- **Volatility indices**: Continuous random walk → BUY or SELL based on trend/reversal signals
 
 ### Three Trading Modes (Independent)
 Each mode has its own capital, settings, and trades. They run simultaneously and independently.
-| Mode | Monthly Target | Risk Profile | Description |
-|------|---------------|-------------|-------------|
-| **Paper** | 120% | Aggressive | Simulated trades, no real money. Best for learning and testing. |
-| **Demo** | 80% | Balanced | Uses Deriv demo account with virtual funds. Tests execution. |
-| **Real** | 50% | Conservative | Real money. Tightest risk controls. Most conservative settings. |
+| Mode | Monthly Target | Risk Profile | Min Composite Score |
+|------|---------------|-------------|-------------------|
+| **Paper** | 120% | Aggressive | 85 |
+| **Demo** | 80% | Balanced | 90 |
+| **Real** | 50% | Conservative | 92 |
 
 ## 2. The Five Strategy Families
 Each family is a distinct trading approach, activated only when its matching market regime is detected.
 
-### 2.1 Trend Continuation
-- **When**: EMA slope > 0.0001 (up) or < -0.0001 (down), price pulled back near EMA (emaDist < 0.015), RSI 30-70
-- **Regime**: trend_up or trend_down
-- **Best for**: R_75, R_100 during trending periods
+### 2.1 Trend Continuation (minModelScore: 0.60)
+- **When**: EMA slope confirmed, price pulled back near EMA, RSI 35-70 (Crash BUY) or 30-65 (Boom SELL), 24h price change confirms direction
+- **Regime**: trend_up, trend_down, breakout_expansion
+- **Crash**: BUY after confirmed swing low with drift up
+- **Boom**: SELL after confirmed swing high with drift down
+- **Vol**: BUY/SELL after confirmed reversal with EMA slope alignment
 
-### 2.2 Mean Reversion
-- **When**: z-score > 1.8 or < -1.8 (with zScore < 2.5 safety), RSI extreme (>62 or <38), 3+ adverse candles OR liquidity sweep
-- **Regime**: mean_reversion or ranging
-- **Best for**: Boom/Crash indices that overshoot
+### 2.2 Mean Reversion (minModelScore: 0.60)
+- **When**: Price near 30d range extremes, multi-day decline/rally (7d change >5%), RSI extreme, OR liquidity sweep setup
+- **Regime**: mean_reversion, ranging
+- **Crash**: BUY near range low after multi-day decline
+- **Boom**: SELL near range high after multi-day rally
+- **Vol**: BUY/SELL based on z-score extremes (±1.5)
 
-### 2.3 Spike Cluster Recovery
-- **When**: 3+ crash/boom spikes detected in prior 4h window (exhaustion cluster) OR 5+ in 24h
+### 2.3 Spike Cluster Recovery (minModelScore: 0.58)
+- **When**: 3+ spikes in 4h OR 5+ in 24h, 5%+ 24h exhaustion move, reversal candle, slope flattening
 - **Regime**: spike_zone, mean_reversion, ranging, compression
-- **Best for**: BOOM and CRASH indices — fires counter-trend after spike exhaustion
+- **Crash**: BUY after 5%+ 24h decline with green reversal candle
+- **Boom**: SELL after 5%+ 24h rally with red reversal candle
+- **Vol**: Not applicable (Boom/Crash only)
 
-### 2.4 Swing Exhaustion
-- **When**: 14+ spikes in 7 days with price up 8%+ (crash topping) or down 8%+ (boom bottoming), or multi-day 10%+ move near range extremes for volatility indices
+### 2.4 Swing Exhaustion (minModelScore: 0.58)
+- **When**: 14+ spikes in 7d with 8%+ price move near 30d range extremes, failed new high/low in 24h
 - **Regime**: trend_up, trend_down, mean_reversion, spike_zone, breakout_expansion
-- **Best for**: All instruments at multi-day exhaustion points
+- **Crash**: SELL when topping after 8%+ 7d rally (counter-trend for profit extraction)
+- **Boom**: BUY when bottoming after 8%+ 7d decline
+- **Vol**: SELL/BUY at RSI extremes (>72/<28) with 10%+ 7d moves
 
-### 2.5 Trendline Breakout
-- **When**: BB width expanding (> 0.008), price breaking above/below dynamic trendline with ATR confirmation, VWAP/pivot confluence
+### 2.5 Trendline Breakout (minModelScore: 0.65)
+- **When**: 2+ trendline touches, price breaking above resistance or below support with ATR+momentum confirmation
 - **Regime**: compression, ranging, breakout_expansion, trend_up, trend_down
-- **Best for**: All instruments during trendline break setups
+- **BUY**: Price breaks above resistance trendline with positive EMA slope
+- **SELL**: Price breaks below support trendline with negative EMA slope
 
 ## 3. V2 Trade Management — Spike-Magnitude-Aware TP/SL
 TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL ever.
@@ -111,54 +132,42 @@ TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL eve
 ### Take-Profit (TP) — Boom/Crash Indices
 1. Primary TP = 50% of 90-day price range (long-term high - long-term low), minimum 10% of entry price.
 2. Targets full spike travel (50-200%+ moves). Never scalp 1-5% moves.
-3. Structural confluence (long-term high/low, major swing levels, fib extensions, pivots) used to refine target.
-4. Minimum TP floor = 10% of entry price. Trades hold for days/weeks until hit.
+3. Structural confluence used to refine target. Minimum TP floor = 10% of entry price.
 
 ### Take-Profit (TP) — Volatility Indices
-1. TP = entry ± 70% of major swing range (from 1500+ candle 20-bar structural levels)
+1. TP = entry ± 70% of major swing range (from 1500+ candle structural levels)
 2. Clamped to major swing high/low if TP exceeds it.
-3. Structural confluence clusters prioritised when 2+ levels within 0.5%.
 
-### Stop-Loss (SL) — Boom/Crash Indices
-1. SL distance = 5% of 90-day price range
-2. Minimum drift floor = 2%
-3. Nearest structural support/resistance can tighten SL if between drift level and entry
-4. Safety cap: max loss = 10% of equity per position
-
-### Stop-Loss (SL) — Volatility Indices
-1. Collect structural levels: major swing, swing, fib retracement, BB, pivots, Camarilla, VWAP, previous session levels
-2. Find nearest confluence cluster (2+ levels within 0.5%) below entry (buy) or above entry (sell)
-3. Place SL with 0.3% buffer outside the cluster
-4. Safety cap: max loss = 10% of equity per position
+### Stop-Loss (SL) — All Instruments
+1. SL distance = TP distance / 5 (1:5 R:R ratio)
+2. Safety cap: max loss = 10% of equity per position
 
 ### Trailing Stop — 30% Peak-Profit Drawdown (SAFETY NET ONLY)
-- Activates ONLY after trade reaches 30% of TP target (e.g., if TP = 50%, trailing activates at +15%)
-- Before activation threshold, only fixed SL protects downside
-- Once active, tracks peak unrealised profit percentage
-- Triggers exit when profit drops 30% from peak (e.g., peak 10% → exit at 7%)
+- Activates ONLY after trade reaches 30% of TP target
+- Once active, tracks peak unrealised profit, triggers exit when profit drops 30% from peak
 - This is a SAFETY NET — TP is the primary exit
 
 ### 72-Hour Profitable Exit (Capital Efficiency Backstop)
-- If a trade has been open for 72+ hours AND is currently in profit, it is closed with reason "profitable_after_72h".
-- Trades at a loss after 72 hours remain open — they wait for TP, SL, or trailing stop.
-- No 168-hour hard cap. This is a capital redeployment measure, not a forced closure.
+- If a trade has been open for 72+ hours AND is currently in profit, it is closed
+- Losing trades after 72h remain open — they wait for TP, SL, or trailing stop
 
 ## 4. Signal Pipeline — How Trades are Born
 1. **Tick Streaming** → Live price ticks from Deriv WebSocket
-2. **Feature Extraction** → 40+ technical features (EMA, RSI, z-score, BB, spike hazard, swing H/L, major swing H/L, spike magnitude stats, Fibonacci levels, VWAP, pivot points, Camarilla levels, psychological round numbers, previous session H/L/C) from 1500+ candle structural window
+2. **Feature Extraction** → 40+ technical features from 1500+ candle structural window
 3. **Regime Classification** → Cached hourly: trend_up, trend_down, mean_reversion, ranging, compression, breakout_expansion, spike_zone, or no_trade
 4. **Strategy Evaluation** → Only matching strategies run per regime
 5. **ML Scoring** → Logistic regression model per family scores features (0-1)
 6. **Composite Scoring** → 6-dimension weighted score (0-100):
-   - Regime Fit (22%), Setup Quality (20%), Trend Alignment (15%), Volatility Condition (13%), Reward/Risk (15%), Probability of Success (15%)
-7. **Filtering** → composite score ≥ min_composite_score, EV ≥ min_ev_threshold, R:R ≥ min_rr_ratio (estimated from S/R levels)
-8. **AI Verification** (optional) → OpenAI reviews signal
+   - Setup Quality (25%), Reward/Risk (20%), Regime Fit (20%), Trend Alignment (13%), Volatility Condition (12%), Probability of Success (10%)
+7. **Filtering** → composite score ≥ min_composite_score (85/90/92), EV ≥ 0.001, R:R ≥ 1.5
+8. **AI Verification** (optional) → OpenAI reviews signal with strict multi-day breakout confirmation
 9. **Portfolio Allocation** → Risk checks: daily/weekly loss limits, max drawdown, max open trades, correlated exposure cap
-10. **Position Sizing** → equity × equity_pct_per_trade × confidence factor (up to 2 entries per symbol from different strategies)
+10. **Position Sizing** → equity × equity_pct_per_trade × confidence factor (up to 2 entries per symbol)
 11. **Execution** → S/R+Fib TP/SL computed, trade opened
 
 ## 5. Position Sizing (V2)
-- Up to 2 positions per symbol from different strategy families (no probe/confirmation/momentum stages)
+- Up to 2 positions per symbol from different strategy families
+- Max 3 simultaneous open trades (default), 80% equity deployment cap
 - Size = equity × equity_pct_per_trade × clamp(confidence, 0.5, 1.0) × allocation_mode multiplier
 - Clamped to min 5% equity and max remaining capacity
 
@@ -166,16 +175,15 @@ TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL eve
 1. Start with base capital
 2. Trade until capital grows by extraction_target_pct (default 50%)
 3. Extract profits (auto or manual), reset to base capital
-4. Prevents compound risk
 
 ## 7. Settings Glossary — V2 Settings
 
 ### Global Settings
 | Setting | What it means | Default |
 |---------|--------------|---------|
-| min_composite_score | Minimum quality score (0-100) for trading | 80/85/90 (paper/demo/real) |
+| min_composite_score | Minimum quality score (0-100) for trading | 85/90/92 (paper/demo/real) |
 | min_ev_threshold | Minimum expected value | 0.001 |
-| min_rr_ratio | Minimum reward-to-risk ratio (from S/R levels) | 1.5 |
+| min_rr_ratio | Minimum reward-to-risk ratio | 1.5 |
 | scoring_weight_* | Six dimension weights for composite scoring | See §4 |
 | scan_interval_seconds | Scan frequency | 30 |
 | ai_verification_enabled | AI reviews signals before trading | true |
@@ -215,16 +223,18 @@ TP is the PRIMARY exit. Trailing stop is SAFETY NET ONLY. No ATR-based TP/SL eve
 4. You can ANALYSE trade performance data for advice.
 5. Always explain WHY — reference actual data.
 6. Real mode = most conservative. Paper = most aggressive.
-7. Never suggest composite score below 40.
+7. Never suggest composite score below 50.
 8. Always favour FEWER, LARGER, HIGHER-QUALITY trades.
+9. Only recommend trades on active symbols: CRASH300, BOOM300, R_75, R_100.
 
 ## 10. Core Trading Philosophy
 - LARGE CAPITAL PER TRADE: Deploy 15-25% equity per position
-- HIGHEST-QUALITY SIGNALS ONLY: Composite score ≥ 80 (paper), ≥ 85 (demo), ≥ 90 (real)
-- LONG HOLD + 72H PROFITABLE EXIT: Trades hold until TP, SL, trailing stop, or 72h profitable exit (capital efficiency backstop). No forced closure of losing trades.
-- DYNAMIC TP/SL: Spike-magnitude-aware (Boom/Crash) + structural S/R confluence (Volatility). TP is PRIMARY exit; trailing stop is SAFETY NET ONLY. No ATR fallbacks.
+- HIGHEST-QUALITY SIGNALS ONLY: Composite score ≥ 85 (paper), ≥ 90 (demo), ≥ 92 (real)
+- LONG HOLD + 72H PROFITABLE EXIT: Trades hold until TP, SL, trailing stop, or 72h profitable exit
+- DYNAMIC TP/SL: Spike-magnitude-aware (Boom/Crash) + structural S/R confluence (Volatility). TP is PRIMARY exit; trailing stop is SAFETY NET ONLY.
 - 30% PEAK-PROFIT TRAILING: Lock in gains from peak unrealised profit (safety net only)
-- FEW POSITIONS: Max 2-4 open trades. Expect ~5-30 trades per multi-month backtest, NOT hundreds.
+- FEW POSITIONS: Max 2-3 open trades. Expect ~5-30 trades per multi-month backtest, NOT hundreds.
+- ACTIVE SYMBOLS ONLY: CRASH300, BOOM300, R_75, R_100. All others are data-only.
 - EXTRACT PROFITS REGULARLY: Don't let compound risk grow`;
 
 

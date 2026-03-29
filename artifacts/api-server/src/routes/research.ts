@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { eq, and, count, min, max, desc, lt, asc, gte, lte, sql } from "drizzle-orm";
 import { db, candlesTable, backtestRunsTable, backtestTradesTable, platformStateTable } from "@workspace/db";
-import { getDerivClientWithDbToken, V1_DEFAULT_SYMBOLS } from "../lib/deriv.js";
+import { getDerivClientWithDbToken, ACTIVE_TRADING_SYMBOLS } from "../lib/deriv.js";
 import { getApiSymbol } from "../lib/symbolValidator.js";
 import { runSymbolBacktest } from "../lib/backtestEngine.js";
 import { isOpenAIConfigured } from "../lib/openai.js";
@@ -53,7 +53,7 @@ export async function pruneOldCandles(): Promise<number> {
 router.get("/research/data-status", async (_req, res): Promise<void> => {
   try {
     const symbolStatuses = await Promise.all(
-      V1_DEFAULT_SYMBOLS.map(async (symbol) => {
+      ACTIVE_TRADING_SYMBOLS.map(async (symbol) => {
         const [r1m] = await db.select({ n: count() }).from(candlesTable)
           .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")));
         const [r5m] = await db.select({ n: count() }).from(candlesTable)
@@ -104,7 +104,7 @@ router.get("/research/data-status", async (_req, res): Promise<void> => {
     res.json({
       symbols: symbolStatuses,
       totalStorage,
-      symbolCount: V1_DEFAULT_SYMBOLS.length,
+      symbolCount: ACTIVE_TRADING_SYMBOLS.length,
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
@@ -120,7 +120,7 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
   const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
   const { symbol } = req.body ?? {};
 
-  if (!symbol || !V1_DEFAULT_SYMBOLS.includes(symbol)) {
+  if (!symbol || !ACTIVE_TRADING_SYMBOLS.includes(symbol)) {
     send({ phase: "error", message: `Invalid symbol: ${symbol}` });
     res.end();
     return;
@@ -347,7 +347,7 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
 router.post("/research/rerun-backtest", async (req, res): Promise<void> => {
   const { symbol } = req.body ?? {};
 
-  if (!symbol || !V1_DEFAULT_SYMBOLS.includes(symbol)) {
+  if (!symbol || !ACTIVE_TRADING_SYMBOLS.includes(symbol)) {
     res.status(400).json({ error: `Invalid symbol: ${symbol}` });
     return;
   }
@@ -541,7 +541,7 @@ router.get("/research/grouped-results", async (_req, res): Promise<void> => {
 
     for (const run of results) {
       const sym = run.symbol;
-      if (!V1_DEFAULT_SYMBOLS.includes(sym)) continue;
+      if (!ACTIVE_TRADING_SYMBOLS.includes(sym)) continue;
 
       if (!grouped[sym]) {
         grouped[sym] = {
@@ -592,7 +592,7 @@ router.get("/research/grouped-results", async (_req, res): Promise<void> => {
       }
     }
 
-    const ordered = V1_DEFAULT_SYMBOLS
+    const ordered = ACTIVE_TRADING_SYMBOLS
       .filter(sym => grouped[sym])
       .map(sym => grouped[sym]);
     res.json({ symbols: ordered });

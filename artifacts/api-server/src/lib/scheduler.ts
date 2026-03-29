@@ -468,7 +468,7 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
     }
   }
 
-  const currentMinScore = parseFloat(stateMap["min_composite_score"] || "80");
+  const currentMinScore = parseFloat(stateMap["min_composite_score"] || "85");
   const currentMinEV = parseFloat(stateMap["min_ev_threshold"] || "0.001");
   const currentMinRR = parseFloat(stateMap["min_rr_ratio"] || "1.5");
 
@@ -480,7 +480,7 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
     suggestions["min_ev_threshold"] = String(Math.min(currentMinEV * 1.2, 0.01).toFixed(4));
     suggestions["min_rr_ratio"] = String(Math.min(currentMinRR * 1.1, 4.0).toFixed(2));
   } else if (allWinRate > 0.6 && closedTrades.length > 20) {
-    suggestions["min_composite_score"] = String(Math.max(currentMinScore - 1, 80).toFixed(0));
+    suggestions["min_composite_score"] = String(Math.max(currentMinScore - 1, 85).toFixed(0));
   }
 
   const exitReasons = closedTrades.map(t => t.exitReason || "");
@@ -635,7 +635,7 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
     ai_suggest_paper_equity_pct_per_trade: optEquityPct(bestPf, "paper"),
     ai_suggest_demo_equity_pct_per_trade: optEquityPct(bestPf, "demo"),
     ai_suggest_real_equity_pct_per_trade: optEquityPct(bestPf, "real"),
-    ai_suggest_paper_min_composite_score: String(Math.max(80, Math.round(85 - bestPf * 2))),
+    ai_suggest_paper_min_composite_score: String(Math.max(85, Math.round(88 - bestPf * 2))),
     ai_suggest_demo_min_composite_score: String(Math.max(85, Math.round(90 - bestPf * 2))),
     ai_suggest_real_min_composite_score: String(Math.max(90, Math.round(95 - bestPf * 2))),
     ai_optimised_at: nowIso,

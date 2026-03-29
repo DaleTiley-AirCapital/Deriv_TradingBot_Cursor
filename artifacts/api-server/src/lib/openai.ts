@@ -95,7 +95,10 @@ export async function verifySignal(ctx: SignalContext): Promise<AIVerdict> {
 
   const prompt = `You are a quantitative trading AI for a LOW-FREQUENCY, HIGH-PROBABILITY capital extraction system on Deriv synthetic indices.
 
-This system trades RARELY and holds for HOURS/DAYS. Only approve signals with genuine edge.
+This system trades RARELY and holds for HOURS/DAYS targeting 50-200%+ moves. Only approve signals with genuine multi-day breakout edge. NEVER approve scalp setups or weak signals.
+
+ACTIVE TRADING SYMBOLS: CRASH300, BOOM300, R_75, R_100 only.
+CRITICAL DIRECTIONALITY: CRASH indices → BUY after swing low exhaustion. BOOM indices → SELL after swing high exhaustion. Verify direction matches instrument family.
 
 CONTEXT:
 - Strategy Family: ${ctx.strategyFamily}
@@ -108,8 +111,8 @@ REGIME:
 - Regime Gate: Active (strategy must match regime permissions)
 
 SCORES:
-- Composite Score: ${ctx.compositeScore.toFixed(0)}/100
-- Model Score: ${(ctx.score * 100).toFixed(1)}%
+- Composite Score: ${ctx.compositeScore.toFixed(0)}/100 (min thresholds: paper≥85, demo≥90, real≥92)
+- Model Score: ${(ctx.score * 100).toFixed(1)}% (min: 0.58-0.65 depending on family)
 - Confidence: ${(ctx.confidence * 100).toFixed(1)}%
 - Expected Value: ${(ctx.expectedValue * 100).toFixed(3)}%
 
@@ -120,12 +123,10 @@ TRADE MANAGEMENT (V2 Spike-Magnitude-Aware TP/SL):
 - Fib Retrace Levels: ${ctx.fibRetraceLevels?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
 - Fib Extensions (up): ${ctx.fibExtensionLevels?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
 - Fib Extensions (down): ${ctx.fibExtensionLevelsDown?.map(l => l.toFixed(4)).join(", ") ?? "N/A"}
-- TP: PRIMARY exit. Boom/Crash: 50% of 90-day price range (min 10% of entry). Volatility: 70% major swing range.
-- SL: Boom/Crash: 5% of 90-day range (min 2%). Volatility: structural S/R confluence with 0.3% buffer.
-- No ATR-based TP/SL. All exits from market structure + spike magnitude analysis.
-- Trailing: 30% peak-profit drawdown stop (SAFETY NET ONLY, activates in-profit)
-- 72h profitable exit: if trade is 72h+ old AND in profit, close to redeploy capital. Losing trades stay open.
-- Expect few trades (5-30 per multi-month period), long hold times (hours/days).
+- TP: PRIMARY exit targeting 50-200%+ moves. Boom/Crash: 50% of 90-day range (min 10%). Vol: 70% major swing range.
+- SL: TP distance / 5 (1:5 R:R). Safety cap: 10% equity max loss.
+- Trailing: 30% peak-profit drawdown (SAFETY NET ONLY, activates after reaching 30% of TP target)
+- 72h profitable exit: capital efficiency backstop.
 
 TECHNICAL INDICATORS:
 - RSI(14): ${ctx.rsi14.toFixed(2)}
@@ -134,8 +135,14 @@ TECHNICAL INDICATORS:
 - BB Width: ${ctx.bbWidth.toFixed(6)}
 - Z-Score: ${ctx.zScore.toFixed(3)}
 
-STRATEGY-SPECIFIC EVALUATION:
-${ctx.strategyFamily === "trend_continuation" ? "- Is the trend strong enough to justify a continuation entry?\n- Is pullback depth appropriate (not too deep/shallow)?\n- Does momentum support the trend?" : ""}${ctx.strategyFamily === "mean_reversion" ? "- Is the overstretch genuine (not a trend continuation)?\n- Are reversal signals present (rejection candles, volume)?\n- Is smart money sweep confirmed?" : ""}${ctx.strategyFamily === "spike_cluster_recovery" ? "- Is the spike cluster dense enough (3+ in 4h)?\n- Is this a genuine exhaustion point?\n- Is counter-trend entry at a favorable price level?" : ""}${ctx.strategyFamily === "swing_exhaustion" ? "- Has the multi-day move been significant enough (>8% in 7d)?\n- Is the price near range extremes (30d high/low)?\n- Are reversal signals present?" : ""}
+STRICT EVALUATION CRITERIA — DISAGREE unless ALL conditions met:
+1. Direction matches instrument family (CRASH=BUY, BOOM=SELL, Vol=either with trend confirmation)
+2. Multi-day structural setup confirmed (not just intraday noise)
+3. Price at genuine exhaustion/reversal point with structural confluence
+4. Sufficient room for 50%+ move to TP target
+5. Recent candles show genuine reversal/continuation pattern (not choppy noise)
+
+${ctx.strategyFamily === "trend_continuation" ? "TREND CONTINUATION CHECK:\n- Is EMA slope strong and sustained (not just a blip)?\n- Has price pulled back to EMA without breaking structure?\n- Is 24h price change confirming trend direction (>1%)?\n- Is there room for continuation to major swing target?" : ""}${ctx.strategyFamily === "mean_reversion" ? "MEAN REVERSION CHECK:\n- Is price genuinely at 30d range extreme (within 3%)?\n- Has there been a sustained multi-day move (7d change >5%)?\n- Are RSI and z-score at genuine extremes?\n- Is liquidity sweep confirmed (if applicable)?" : ""}${ctx.strategyFamily === "spike_cluster_recovery" ? "SPIKE CLUSTER RECOVERY CHECK:\n- Is spike cluster dense enough (3+ in 4h window)?\n- Has 24h exhaustion move exceeded 5%?\n- Is reversal candle genuine (not just a pause)?\n- Is EMA slope flattening/reversing?" : ""}${ctx.strategyFamily === "swing_exhaustion" ? "SWING EXHAUSTION CHECK:\n- Has multi-day move exceeded 8% in 7 days?\n- Is price within 5% of 30d range extreme?\n- Has 24h momentum failed (no new high/low)?\n- Is EMA slope turning against the prior trend?" : ""}${ctx.strategyFamily === "trendline_breakout" ? "TRENDLINE BREAKOUT CHECK:\n- Does the trendline have 2+ confirmed touches?\n- Is breakout distance within 2.5x ATR (not too extended)?\n- Is momentum confirmed (candle body >30%, ATR accelerating)?\n- Is EMA slope aligned with breakout direction?" : ""}
 
 REASON: ${ctx.reason}
 
@@ -146,7 +153,7 @@ Respond with ONLY valid JSON:
 {
   "verdict": "agree" | "disagree" | "uncertain",
   "confidenceAdjustment": <number between -20 and +10>,
-  "reasoning": "<1-2 sentence strategy-specific explanation>"
+  "reasoning": "<1-2 sentence explanation. If disagreeing, state which specific criterion failed.>"
 }`;
 
   const response = await client.chat.completions.create({

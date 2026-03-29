@@ -21,12 +21,12 @@ export interface ScoringWeights {
 }
 
 export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
-  regimeFit: 0.22,
-  setupQuality: 0.20,
-  trendAlignment: 0.15,
-  volatilityCondition: 0.13,
-  rewardRisk: 0.15,
-  probabilityOfSuccess: 0.15,
+  regimeFit: 0.20,
+  setupQuality: 0.25,
+  trendAlignment: 0.13,
+  volatilityCondition: 0.12,
+  rewardRisk: 0.20,
+  probabilityOfSuccess: 0.10,
 };
 
 const FAMILY_IDEAL_REGIMES: Record<string, string[]> = {
