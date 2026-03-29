@@ -148,25 +148,25 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
     for (const candidate of candidates) {
       const currentPrice = features.latestClose ?? 0;
       const family = candidate.strategyFamily || candidate.strategyName;
-      const result = confirmSignal(candidate, windowTs, currentPrice, existingPositionCount);
-      const candidateKey = `${candidate.symbol}|${family}|${candidate.direction}`;
+      const result = confirmSignal(candidate, windowTs, currentPrice, existingPositionCount, effectiveMode);
+      const candidateKey = `${candidate.symbol}|${family}|${candidate.direction}|${effectiveMode}`;
       confirmedKeysThisWindow.add(candidateKey);
 
       if (result.promoted) {
         console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | PROMOTED after ${result.pending.confirmCount}/${result.pending.requiredConfirmations} windows | pyramid=${result.pending.pyramidLevel} | mode=${effectiveMode}`);
         promotedCandidates.push({ candidate, atr: features.atr14 });
-        removePendingSignal(symbol, family, candidate.direction);
+        removePendingSignal(symbol, family, candidate.direction, effectiveMode);
       } else {
         console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | window=${result.pending.confirmCount}/${result.pending.requiredConfirmations} | score=${candidate.compositeScore} | EV=${candidate.expectedValue.toFixed(4)}`);
       }
     }
 
-    invalidateUnconfirmedPending(symbol, confirmedKeysThisWindow);
+    invalidateUnconfirmedPending(symbol, confirmedKeysThisWindow, effectiveMode);
 
     const promotedCandidateSignals = promotedCandidates.map(c => c.candidate);
     const promotedSet = new Set(promotedCandidateSignals.map(c => {
       const family = c.strategyFamily || c.strategyName;
-      return `${c.symbol}|${family}|${c.direction}`;
+      return `${c.symbol}|${family}|${c.direction}|${effectiveMode}`;
     }));
 
     const execDecisions = promotedCandidateSignals.length > 0
@@ -264,7 +264,7 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
 
     for (const candidate of candidates) {
       const family = candidate.strategyFamily || candidate.strategyName;
-      const candidateKey = `${candidate.symbol}|${family}|${candidate.direction}`;
+      const candidateKey = `${candidate.symbol}|${family}|${candidate.direction}|${effectiveMode}`;
       const isPromoted = promotedSet.has(candidateKey);
 
       const execMatch = execDecisions.find(d => {

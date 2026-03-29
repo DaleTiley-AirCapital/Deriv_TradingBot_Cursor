@@ -450,9 +450,14 @@ export default function Signals() {
                         </span>
                       </div>
                       <div>
-                        <span className="text-muted-foreground block text-[10px]">First Seen</span>
+                        <span className="text-muted-foreground block text-[10px]">Tracking</span>
                         <span className="mono-num text-foreground text-[11px]">
-                          {new Date(ps.firstDetectedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                          {(() => {
+                            const mins = Math.floor((Date.now() - new Date(ps.firstDetectedAt).getTime()) / 60000);
+                            if (mins < 1) return "<1m";
+                            if (mins < 60) return `${mins}m`;
+                            return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+                          })()}
                         </span>
                       </div>
                     </div>

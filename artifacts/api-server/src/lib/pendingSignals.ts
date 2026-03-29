@@ -28,8 +28,8 @@ const PYRAMID_EXTRA_CONFIRMATIONS = 3;
 
 const pendingSignals = new Map<string, PendingSignal>();
 
-function makeKey(symbol: string, familyOrStrategy: string, direction: string): string {
-  return `${symbol}|${familyOrStrategy}|${direction}`;
+function makeKey(symbol: string, familyOrStrategy: string, direction: string, mode: string = "paper"): string {
+  return `${symbol}|${familyOrStrategy}|${direction}|${mode}`;
 }
 
 export function confirmSignal(
@@ -37,9 +37,10 @@ export function confirmSignal(
   windowTs: number,
   currentPrice: number,
   existingPositionCount: number = 0,
+  mode: string = "paper",
 ): { promoted: boolean; pending: PendingSignal } {
   const family = candidate.strategyFamily || candidate.strategyName;
-  const key = makeKey(candidate.symbol, family, candidate.direction);
+  const key = makeKey(candidate.symbol, family, candidate.direction, mode);
   const now = Date.now();
 
   let entry = pendingSignals.get(key);
@@ -109,8 +110,8 @@ export function confirmSignal(
   return { promoted: false, pending: entry };
 }
 
-export function removePendingSignal(symbol: string, familyOrStrategy: string, direction: string): void {
-  const key = makeKey(symbol, familyOrStrategy, direction);
+export function removePendingSignal(symbol: string, familyOrStrategy: string, direction: string, mode: string = "paper"): void {
+  const key = makeKey(symbol, familyOrStrategy, direction, mode);
   pendingSignals.delete(key);
 }
 
@@ -156,10 +157,11 @@ export function shouldEvaluateWindow(symbol: string, latestCandleCloseMs?: numbe
   return true;
 }
 
-export function invalidateUnconfirmedPending(symbol: string, confirmedKeys: Set<string>): void {
+export function invalidateUnconfirmedPending(symbol: string, confirmedKeys: Set<string>, mode: string = "paper"): void {
+  const modeTag = `|${mode}`;
   for (const [key, entry] of pendingSignals) {
-    if (entry.symbol === symbol && !entry.promoted && !confirmedKeys.has(key)) {
-      console.log(`[Confirm] ${symbol} | ${entry.strategyName} | dir=${entry.direction} | INVALIDATED — not re-confirmed in current window (${entry.confirmCount}/${entry.requiredConfirmations})`);
+    if (entry.symbol === symbol && !entry.promoted && key.endsWith(modeTag) && !confirmedKeys.has(key)) {
+      console.log(`[Confirm] ${symbol} | ${entry.strategyName} | dir=${entry.direction} | mode=${mode} | INVALIDATED — not re-confirmed in current window (${entry.confirmCount}/${entry.requiredConfirmations})`);
       pendingSignals.delete(key);
     }
   }
