@@ -878,7 +878,7 @@ function simulateOnCandles(
         ? signals.filter(s => strategies.includes(s.strategyName))
         : signals;
 
-      const modeDefaultComposite = config.mode === "live" ? 90 : 80;
+      const modeDefaultComposite = config.mode === "live" ? 92 : 85;
       const minComposite = config.minCompositeScore ?? modeDefaultComposite;
       const minEv = config.minEvThreshold ?? 0.001;
       const minRr = config.minRrRatio ?? 1.5;
