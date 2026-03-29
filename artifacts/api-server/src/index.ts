@@ -279,6 +279,13 @@ async function initDb(): Promise<void> {
     WHERE NOT EXISTS (SELECT 1 FROM platform_state ps WHERE ps.key = defaults.key);
   `);
 
+  await db.execute(sql`
+    UPDATE platform_state SET value = '85' WHERE key = 'min_composite_score' AND CAST(value AS INTEGER) < 85;
+    UPDATE platform_state SET value = '85' WHERE key = 'paper_min_composite_score' AND CAST(value AS INTEGER) < 85;
+    UPDATE platform_state SET value = '90' WHERE key = 'demo_min_composite_score' AND CAST(value AS INTEGER) < 90;
+    UPDATE platform_state SET value = '92' WHERE key = 'real_min_composite_score' AND CAST(value AS INTEGER) < 92;
+  `);
+
   console.log("[DB] Schema ready.");
 }
 
