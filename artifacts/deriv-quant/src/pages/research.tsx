@@ -414,6 +414,8 @@ function DataStatusSection({ onBacktestComplete }: { onBacktestComplete?: () => 
             <a
               href={api(`/research/export-candles?symbol=${encodeURIComponent(sym.symbol)}&format=excel`)}
               download
+              target="_blank"
+              rel="noreferrer"
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
             >
               <Table className="w-3 h-3" />
@@ -422,6 +424,8 @@ function DataStatusSection({ onBacktestComplete }: { onBacktestComplete?: () => 
             <a
               href={api(`/research/export-candles?symbol=${encodeURIComponent(sym.symbol)}&format=json`)}
               download
+              target="_blank"
+              rel="noreferrer"
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 hover:bg-blue-500/20 transition-colors"
             >
               <FileDown className="w-3 h-3" />
