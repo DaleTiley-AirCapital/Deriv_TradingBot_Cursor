@@ -73,6 +73,12 @@ interface SSEProgress {
   symbol?: string;
   message?: string;
   candles?: number;
+  pct?: number;
+  strategyName?: string;
+  direction?: string;
+  score?: number;
+  dateLabel?: string;
+  openPositions?: number;
   profitableStrategies?: Array<{ strategyName: string; winRate: number; netProfit: number; tradeCount: number }>;
 }
 
@@ -222,6 +228,7 @@ function DataStatusSection({ onBacktestComplete }: { onBacktestComplete?: () => 
   const [loading, setLoading] = useState(true);
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
   const [sseProgress, setSSEProgress] = useState<Record<string, SSEProgress>>({});
+  const [backtestLog, setBacktestLog] = useState<Record<string, string[]>>({});
   const [runningSymbol, setRunningSymbol] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [pruning, setPruning] = useState(false);
@@ -279,6 +286,7 @@ function DataStatusSection({ onBacktestComplete }: { onBacktestComplete?: () => 
 
   const handleRerunBacktest = useCallback(async (symbol: string) => {
     setRerunning(symbol);
+    setBacktestLog(prev => ({ ...prev, [symbol]: [] }));
     try {
       const res = await fetch(api("/research/rerun-backtest"), {
         method: "POST",
@@ -309,6 +317,27 @@ function DataStatusSection({ onBacktestComplete }: { onBacktestComplete?: () => 
             lastJson = parsed;
             if (parsed.phase === "error") {
               setSSEProgress(prev => ({ ...prev, [symbol]: { phase: "error", symbol, message: String(parsed.error ?? "Unknown error") } }));
+            } else if (parsed.phase === "progress") {
+              const msg = String(parsed.message ?? "");
+              setSSEProgress(prev => ({
+                ...prev,
+                [symbol]: {
+                  phase: "progress",
+                  symbol,
+                  message: msg,
+                  pct: parsed.pct as number | undefined,
+                  strategyName: parsed.strategyName as string | undefined,
+                  direction: parsed.direction as string | undefined,
+                  score: parsed.score as number | undefined,
+                  openPositions: parsed.openPositions as number | undefined,
+                },
+              }));
+              if (msg) {
+                setBacktestLog(prev => ({
+                  ...prev,
+                  [symbol]: [...(prev[symbol] ?? []).slice(-29), msg],
+                }));
+              }
             } else if (parsed.phase !== "done") {
               setSSEProgress(prev => ({ ...prev, [symbol]: { phase: parsed.phase as string, symbol, message: String(parsed.message ?? "") } }));
             }
@@ -511,10 +540,36 @@ function DataStatusSection({ onBacktestComplete }: { onBacktestComplete?: () => 
               )}
               {isRerunning && (
                 <div className="space-y-1.5">
-                  <div className="w-full h-1.5 bg-muted/30 rounded-full overflow-hidden">
-                    <div className="h-full bg-amber-500 rounded-full animate-[progress-indeterminate_1.5s_ease-in-out_infinite]" style={{ width: "40%" }} />
+                  <div className="relative h-1.5 w-full bg-muted/30 rounded-full overflow-hidden">
+                    <div
+                      className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 to-violet-500 rounded-full transition-all duration-500"
+                      style={{ width: `${Math.max(progress?.pct ?? 0, 3)}%` }}
+                    />
                   </div>
-                  <p className="text-[10px] text-amber-300">Running backtest simulation...</p>
+                  <p className="text-[10px] text-blue-300">
+                    {progress?.phase === "progress" && progress.pct != null
+                      ? `${progress.pct}% — ${progress.message || "scanning…"}`
+                      : (progress?.message || "Starting simulation…")}
+                  </p>
+                  {(backtestLog[sym.symbol]?.length ?? 0) > 0 && (
+                    <div
+                      ref={el => { if (el) el.scrollTop = el.scrollHeight; }}
+                      className="max-h-28 overflow-y-auto space-y-0.5 rounded bg-black/20 border border-white/5 px-2 py-1.5 font-mono"
+                    >
+                      {(backtestLog[sym.symbol] ?? []).map((line, i) => (
+                        <p
+                          key={i}
+                          className={`text-[9px] ${
+                            line.includes("Signal:") ? "text-violet-300" :
+                            line.includes("open position") ? "text-blue-300" :
+                            "text-slate-500"
+                          }`}
+                        >
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </motion.div>

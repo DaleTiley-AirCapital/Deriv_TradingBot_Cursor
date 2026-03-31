@@ -725,12 +725,24 @@ export async function loadCandles(
   }));
 }
 
-function simulateOnCandles(
+export type ProgressCallback = (event: {
+  pct: number;
+  candlesProcessed: number;
+  totalCandles: number;
+  openPositions: number;
+  dateLabel: string;
+  strategyName?: string;
+  direction?: string;
+  score?: number;
+}) => void;
+
+async function simulateOnCandles(
   allCandlesBySymbol: Record<string, CandleData[]>,
   config: BacktestConfig,
   strategies?: string[],
   spikeMagnitudeBySymbol?: Record<string, SpikeMagnitudeStats | null>,
-): { trades: BacktestTrade[]; equityCurve: { ts: string; equity: number }[] } {
+  onProgress?: ProgressCallback,
+): Promise<{ trades: BacktestTrade[]; equityCurve: { ts: string; equity: number }[] }> {
   const maxConcurrent = config.maxConcurrentPositions ??
     (config.mode === "live" ? DEFAULT_MAX_CONCURRENT_LIVE : DEFAULT_MAX_CONCURRENT_PAPER);
   const basePct = config.basePct ??
@@ -771,6 +783,20 @@ function simulateOnCandles(
 
   for (let tsIdx = 0; tsIdx < sortedTimestamps.length; tsIdx++) {
     const ts = sortedTimestamps[tsIdx];
+
+    if (tsIdx > 0 && tsIdx % 5000 === 0) {
+      await new Promise<void>(r => setImmediate(r));
+      if (onProgress) {
+        onProgress({
+          pct: Math.floor((tsIdx / sortedTimestamps.length) * 100),
+          candlesProcessed: tsIdx,
+          totalCandles: sortedTimestamps.length,
+          openPositions: openPositions.length,
+          dateLabel: new Date(ts * 1000).toISOString().slice(0, 10),
+        });
+      }
+    }
+
     for (const sym of Object.keys(allCandlesBySymbol)) {
       const candles = allCandlesBySymbol[sym];
       while (candleIndexBySymbol[sym] < candles.length && candles[candleIndexBySymbol[sym]].openTs < ts) {
@@ -988,6 +1014,19 @@ function simulateOnCandles(
           extended: false,
           adverseCandleCount: 0,
         });
+
+        if (onProgress) {
+          onProgress({
+            pct: Math.floor((tsIdx / sortedTimestamps.length) * 100),
+            candlesProcessed: tsIdx,
+            totalCandles: sortedTimestamps.length,
+            openPositions: openPositions.length,
+            dateLabel: new Date(ts * 1000).toISOString().slice(0, 10),
+            strategyName: signal.strategyName,
+            direction: signal.direction,
+            score: Math.round(signal.compositeScore),
+          });
+        }
       }
     }
 
@@ -1077,7 +1116,7 @@ function tagRegimes(
   }
 }
 
-export async function runFullBacktest(config: BacktestConfig): Promise<BacktestResult> {
+export async function runFullBacktest(config: BacktestConfig, onProgress?: ProgressCallback): Promise<BacktestResult> {
   const symbols = config.symbols || (config.symbol ? [config.symbol] : []);
   if (symbols.length === 0) throw new Error("No symbols specified for backtest");
 
@@ -1107,7 +1146,7 @@ export async function runFullBacktest(config: BacktestConfig): Promise<BacktestR
     spikeMagnitudeBySymbol[sym] = await getSpikeMagnitudeStats(sym, 90, backtestAnchorTs);
   }
 
-  const { trades, equityCurve } = simulateOnCandles(allCandlesBySymbol, config, strategies, spikeMagnitudeBySymbol);
+  const { trades, equityCurve } = await simulateOnCandles(allCandlesBySymbol, config, strategies, spikeMagnitudeBySymbol, onProgress);
 
   const portfolioMetrics = computeMetrics(trades, config.initialCapital, equityCurve);
   tagRegimes(trades, allCandlesBySymbol, portfolioMetrics);
@@ -1210,8 +1249,8 @@ async function runWalkForward(
 
     const strategies = config.strategyName ? [config.strategyName] : undefined;
 
-    const trainResult = simulateOnCandles(trainCandles, config, strategies, spikeMagnitudeBySymbol);
-    const testResult = simulateOnCandles(testCandles, config, strategies, spikeMagnitudeBySymbol);
+    const trainResult = await simulateOnCandles(trainCandles, config, strategies, spikeMagnitudeBySymbol);
+    const testResult = await simulateOnCandles(testCandles, config, strategies, spikeMagnitudeBySymbol);
 
     const isMet = computeMetrics(trainResult.trades, config.initialCapital, trainResult.equityCurve);
     const oosMet = computeMetrics(testResult.trades, config.initialCapital, testResult.equityCurve);
@@ -1447,6 +1486,7 @@ export async function runSymbolBacktest(
   symbol: string,
   initialCapital: number,
   allocationMode: string,
+  onProgress?: ProgressCallback,
 ): Promise<SymbolBacktestResult> {
   const mode = allocationMode === "aggressive" ? "live" as const : "paper" as const;
   const basePct = allocationMode === "aggressive" ? 0.25
@@ -1483,7 +1523,7 @@ export async function runSymbolBacktest(
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
     minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
     scoringWeights,
-  });
+  }, onProgress);
 
   const strategies = ["trend_continuation", "mean_reversion", "spike_cluster_recovery", "swing_exhaustion", "trendline_breakout"];
   const allStrategies: SymbolBacktestResult["profitableStrategies"] = [];

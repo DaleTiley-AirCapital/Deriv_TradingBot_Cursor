@@ -361,9 +361,29 @@ router.post("/research/rerun-backtest", async (req, res): Promise<void> => {
     for (const s of states) stateMap[s.key] = s.value;
     const initialCapital = parseFloat(stateMap["total_capital"] || String(DEFAULT_CAPITAL));
 
-    send({ phase: "running", symbol, message: "Running backtest (this may take 30-60 s)…" });
+    send({ phase: "running", symbol, message: "Starting simulation…", pct: 0 });
 
-    const btResult = await runSymbolBacktest(symbol, initialCapital, "balanced");
+    const btResult = await runSymbolBacktest(
+      symbol,
+      initialCapital,
+      "balanced",
+      (evt) => {
+        const msg = evt.strategyName
+          ? `[${evt.dateLabel}] Signal: ${evt.strategyName} ${evt.direction ?? ""} score=${evt.score}`
+          : `[${evt.dateLabel}] ${evt.pct}% — ${evt.openPositions} open position${evt.openPositions !== 1 ? "s" : ""}`;
+        send({
+          phase: "progress",
+          symbol,
+          pct: evt.pct,
+          message: msg,
+          strategyName: evt.strategyName,
+          direction: evt.direction,
+          score: evt.score,
+          openPositions: evt.openPositions,
+          dateLabel: evt.dateLabel,
+        });
+      },
+    );
 
     send({ phase: "saving", symbol, message: "Saving results to database…" });
 
