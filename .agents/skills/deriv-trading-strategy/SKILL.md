@@ -20,7 +20,7 @@ description: Complete trading strategy research, philosophy, and calibration dat
 ### Exit Hierarchy (NO time-based exits)
 1. **TP hit** — primary exit, targeting full 50-200%+ moves
 2. **SL hit** — 1:5 R:R derived from TP
-3. **30% trailing stop** — safety net, activates only after reaching 30% of TP target distance
+3. **ATR-proportional trailing stop** — safety net, activates only after reaching 30% of TP target distance; trail distance is instrument-aware and phase-scaled (not a fixed % of profit)
 
 There is **NO 72-hour time exit**. Research shows trades hold 9-44 days. The trailing stop handles profit protection. Trades stay open until TP, SL, or trailing stop closes them.
 
@@ -43,7 +43,7 @@ All other symbols are for data collection and research only.
 
 ### Critical Mandates — NEVER VIOLATE
 1. TP targets 50-200%+ full spike magnitude — NEVER reduce
-2. Trailing stop is SAFETY NET ONLY — activates after 30% of TP target reached
+2. Trailing stop is SAFETY NET ONLY — activates after 30% of TP target reached; trail uses ATR×multiplier (not fixed % of profit)
 3. Never use ATR-based TP/SL exits — all exits from market structure and spike magnitude
 4. Use 1500+ candle structural windows for swing levels, VWAP, pivots, Fibonacci
 5. Strategy directionality: **CRASH → BUY** after swing low. **BOOM → SELL** after swing high.
@@ -233,17 +233,41 @@ Entry conditions:
 2. Safety cap: max loss = 10% of equity per position
 3. No independent SL calculation — derived from TP
 
-### 30% Peak-Profit Trailing Stop (PRIMARY PROFIT PROTECTION)
-- **Activation**: Only after trade reaches 30% of TP target distance
+### ATR-Proportional Adaptive Trailing Stop (PRIMARY PROFIT PROTECTION)
+
+Implemented in `calculateAdaptiveTrailingStop` in `tradeEngine.ts`. Replaces the old fixed 30% drawdown trail.
+
+- **Activation gate**: Only after `progress = currentPnlPct / tpPct >= 0.30` (same 30% gate)
 - **Before activation**: Only fixed SL protects downside
-- **After activation**: Tracks peak unrealized profit
-- **Trigger**: Profit drops 30% from peak (e.g., peak 10% → exit at 7%)
-- Constant: `PROFIT_TRAILING_DRAWDOWN_PCT = 0.30`
+- **After activation**: Ratchet mechanism — SL only moves in profitable direction
+
+#### Phase-Based ATR Multiplier Table
+| Phase (progress) | crash/boom multiplier | volatility multiplier |
+|------------------|-----------------------|-----------------------|
+| 0.30–0.60 (mid)  | 3.0× ATR14            | 2.0× ATR14            |
+| 0.60–0.85 (late) | 2.0× ATR14            | 1.5× ATR14            |
+| > 0.85 (near TP) | 1.5× ATR14            | 1.0× ATR14            |
+
+Minimum multiplier: **2.0× ATR** (breathing room — never strangle the trade)
+
+#### Reversal Signal Tightening
+If reversal signals detected, multiplier is reduced by 0.5× per signal (min 1.0×):
+- `adverseCandleCount >= 3` (3+ consecutive adverse closes)
+- `emaSlope` flipped (buy: < -0.0002; sell: > 0.0002)
+- `spikeCountAdverse4h >= 3` (new spike cluster against direction)
+- If **all three** conditions true → multiplier forced to 1.0× ATR (tight, reversal likely)
+
+#### Trail Calculation
+```
+peakPnlPct = (peakPrice - entry) / entry    # for buy
+trailPct = peakPnlPct - (atr14Pct × multiplier)
+trailingSL = entry × (1 + trailPct)         # for buy
+```
 
 ### Exit Priority (NO time exits)
 1. **TP hit** (primary) — targeting full 50-200%+ moves
 2. **SL hit** — 1:5 R:R derived from TP
-3. **30% trailing stop** — activates after 30% of TP target reached
+3. **ATR-proportional trailing stop** — activates after 30% of TP target reached
 
 ### Position Sizing
 - Size = equity × `equity_pct_per_trade` × clamp(confidence, 0.5, 1.0)
@@ -261,8 +285,8 @@ Entry conditions:
 | Vol TP | 70% of major swing range | `calculateSRFibTP` |
 | Vol TP floor | 2% of entry | `calculateSRFibTP` |
 | Equity safety cap | 10% per position | `calculateSRFibSL` |
-| Trailing drawdown | 30% | `PROFIT_TRAILING_DRAWDOWN_PCT` |
-| Trailing activation | 30% of TP target | `calculateProfitTrailingStop` |
+| Trailing activation gate | 30% of TP progress | `calculateAdaptiveTrailingStop` |
+| Trail min breathing room | 2× ATR14 | `calculateAdaptiveTrailingStop` |
 
 ---
 
@@ -538,7 +562,7 @@ Key differences from previous universal thresholds:
 ### Hardcoded Constants
 | Constant | Value | File |
 |----------|-------|------|
-| `PROFIT_TRAILING_DRAWDOWN_PCT` | 0.30 | `tradeEngine.ts` |
+| `PROFIT_TRAILING_DRAWDOWN_PCT` | 0.30 | `tradeEngine.ts` (fallback only — adaptive ATR trail is primary) |
 | `MAX_EQUITY_DEPLOYED_PCT` | 0.80 | `tradeEngine.ts` |
 | `MAX_OPEN_TRADES` | 6 | `tradeEngine.ts` |
 | `RR_RATIO` | 5 | `tradeEngine.ts` |

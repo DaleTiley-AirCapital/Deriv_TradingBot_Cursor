@@ -1,7 +1,7 @@
 import { db, candlesTable, platformStateTable } from "@workspace/db";
 import { eq, and, asc, gte, lte } from "drizzle-orm";
 import { runAllStrategies, type SignalCandidate } from "./strategies.js";
-import { calculateProfitTrailingStop, calculateSRFibTP, calculateSRFibSL } from "./tradeEngine.js";
+import { calculateAdaptiveTrailingStop, calculateSRFibTP, calculateSRFibSL } from "./tradeEngine.js";
 import { classifyRegime, type RegimeClassification } from "./regimeEngine.js";
 import type { FeatureVector, SpikeMagnitudeStats } from "./features.js";
 import { findSwingLevels, findMultiSwingTrendlines, findMajorSwingLevels, getSymbolIndicatorTimeframeMins, aggregateCandles } from "./features.js";
@@ -131,6 +131,7 @@ interface OpenPosition {
   confidence: number;
   positionSize: number;
   extended: boolean;
+  adverseCandleCount: number;
 }
 
 export interface BacktestTrade {
@@ -740,6 +741,7 @@ function simulateOnCandles(
   const completedTrades: BacktestTrade[] = [];
   const equityCurve: { ts: string; equity: number }[] = [];
   const htfAccumulators: Record<string, HourlyAccumulator> = {};
+  const latestFeaturesBySymbol: Record<string, FeatureVector> = {};
 
   const regimeByTrade: Map<BacktestTrade, string> = new Map();
 
@@ -813,16 +815,38 @@ function simulateOnCandles(
       if (!exitPrice) {
         if (pos.direction === "buy") {
           pos.peakPrice = Math.max(pos.peakPrice, candle.high);
+          if (candle.close < candle.open) {
+            pos.adverseCandleCount++;
+          } else {
+            pos.adverseCandleCount = 0;
+          }
         } else {
           pos.peakPrice = Math.min(pos.peakPrice, candle.low);
+          if (candle.close > candle.open) {
+            pos.adverseCandleCount++;
+          } else {
+            pos.adverseCandleCount = 0;
+          }
         }
-        const trailResult = calculateProfitTrailingStop({
+
+        const posFeatures = latestFeaturesBySymbol[pos.symbol];
+        const atr14Pct = posFeatures ? Math.max(posFeatures.atr14, 0.001) : (pos.symbol.startsWith("BOOM") || pos.symbol.startsWith("CRASH") ? 0.008 : 0.005);
+        const emaSlope = posFeatures?.emaSlope ?? 0;
+        const spikeCount4h = posFeatures?.spikeCount4h ?? 0;
+        const instrFamily: "crash" | "boom" | "volatility" = pos.symbol.startsWith("BOOM") ? "boom" : pos.symbol.startsWith("CRASH") ? "crash" : "volatility";
+
+        const trailResult = calculateAdaptiveTrailingStop({
           entryPrice: pos.entryPrice,
           currentPrice: candle.close,
           peakPrice: pos.peakPrice,
           direction: pos.direction,
           currentSl: pos.currentSl,
           tpPrice: pos.tp,
+          atr14Pct,
+          instrumentFamily: instrFamily,
+          adverseCandleCount: pos.adverseCandleCount,
+          emaSlope,
+          spikeCountAdverse4h: spikeCount4h,
         });
         if (trailResult.updated) {
           pos.currentSl = trailResult.newSl;
@@ -868,6 +892,8 @@ function simulateOnCandles(
       const symSpikeMag = spikeMagnitudeBySymbol?.[sym] ?? null;
       const features = computeFeaturesFromCandles(window, sym, symSpikeMag);
       if (!features) continue;
+
+      latestFeaturesBySymbol[sym] = features;
 
       backtestAccumulateHourly(htfAccumulators, features, ts);
       const cachedRegime = backtestClassifyRegimeHTF(htfAccumulators, features);
@@ -960,6 +986,7 @@ function simulateOnCandles(
           confidence: signal.confidence,
           positionSize,
           extended: false,
+          adverseCandleCount: 0,
         });
       }
     }

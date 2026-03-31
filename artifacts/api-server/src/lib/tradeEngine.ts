@@ -9,6 +9,17 @@ const MAX_OPEN_TRADES = 6;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
 const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
 
+function classifyInstrumentFamily(symbol: string): "crash" | "boom" | "volatility" {
+  if (symbol.startsWith("BOOM")) return "boom";
+  if (symbol.startsWith("CRASH")) return "crash";
+  return "volatility";
+}
+
+function getDefaultAtr14Pct(symbol: string): number {
+  if (symbol.startsWith("BOOM") || symbol.startsWith("CRASH")) return 0.008;
+  return 0.005;
+}
+
 
 interface PositionSizing {
   size: number;
@@ -144,6 +155,102 @@ export function calculateSRFibSL(params: {
   }
 
   return sl;
+}
+
+export function calculateAdaptiveTrailingStop(params: {
+  entryPrice: number;
+  currentPrice: number;
+  peakPrice: number;
+  direction: "buy" | "sell";
+  currentSl: number;
+  tpPrice: number;
+  atr14Pct: number;
+  instrumentFamily: "crash" | "boom" | "volatility";
+  adverseCandleCount: number;
+  emaSlope: number;
+  spikeCountAdverse4h?: number;
+}): { newSl: number; updated: boolean; reason?: string } {
+  const {
+    entryPrice, currentPrice, peakPrice, direction, currentSl, tpPrice,
+    atr14Pct, instrumentFamily, adverseCandleCount, emaSlope, spikeCountAdverse4h,
+  } = params;
+
+  const currentPnlPct = direction === "buy"
+    ? (currentPrice - entryPrice) / entryPrice
+    : (entryPrice - currentPrice) / entryPrice;
+
+  if (currentPnlPct <= 0) {
+    return { newSl: currentSl, updated: false };
+  }
+
+  const tpPct = direction === "buy"
+    ? (tpPrice - entryPrice) / entryPrice
+    : (entryPrice - tpPrice) / entryPrice;
+
+  if (tpPct <= 0) {
+    return { newSl: currentSl, updated: false };
+  }
+
+  const progress = currentPnlPct / tpPct;
+
+  if (progress < 0.30) {
+    return { newSl: currentSl, updated: false };
+  }
+
+  const isCrashBoom = instrumentFamily === "crash" || instrumentFamily === "boom";
+
+  let multiplier: number;
+  if (progress < 0.60) {
+    multiplier = isCrashBoom ? 3.0 : 2.0;
+  } else if (progress < 0.85) {
+    multiplier = isCrashBoom ? 2.0 : 1.5;
+  } else {
+    multiplier = isCrashBoom ? 1.5 : 1.0;
+  }
+
+  const emaFlipped = direction === "buy" ? emaSlope < -0.0002 : emaSlope > 0.0002;
+  const adverseCandles = adverseCandleCount >= 3;
+  const adverseSpikes = (spikeCountAdverse4h ?? 0) >= 3;
+
+  const reversalCount = [adverseCandles, emaFlipped, adverseSpikes].filter(Boolean).length;
+  if (reversalCount === 3) {
+    multiplier = 1.0;
+  } else if (reversalCount >= 1) {
+    multiplier = Math.max(1.0, multiplier - 0.5);
+  }
+
+  const minMultiplier = 2.0;
+  multiplier = Math.max(multiplier, minMultiplier);
+
+  const peakPnlPct = direction === "buy"
+    ? (peakPrice - entryPrice) / entryPrice
+    : (entryPrice - peakPrice) / entryPrice;
+
+  if (peakPnlPct <= 0) {
+    return { newSl: currentSl, updated: false };
+  }
+
+  const atr = Math.max(atr14Pct, 0.001);
+  const trailPct = peakPnlPct - (atr * multiplier);
+
+  if (trailPct <= 0) {
+    return { newSl: currentSl, updated: false };
+  }
+
+  let trailingSl: number;
+  if (direction === "buy") {
+    trailingSl = entryPrice * (1 + trailPct);
+    if (trailingSl > currentSl) {
+      return { newSl: trailingSl, updated: true, reason: `ATR×${multiplier.toFixed(1)} trail (progress=${(progress * 100).toFixed(0)}%, reversals=${reversalCount})` };
+    }
+  } else {
+    trailingSl = entryPrice * (1 - trailPct);
+    if (trailingSl < currentSl) {
+      return { newSl: trailingSl, updated: true, reason: `ATR×${multiplier.toFixed(1)} trail (progress=${(progress * 100).toFixed(0)}%, reversals=${reversalCount})` };
+    }
+  }
+
+  return { newSl: currentSl, updated: false };
 }
 
 export function calculateProfitTrailingStop(params: {
@@ -442,13 +549,21 @@ export async function manageOpenPositions(): Promise<void> {
         ? Math.max(trade.peakPrice ?? trade.entryPrice, currentPrice)
         : Math.min(trade.peakPrice ?? trade.entryPrice, currentPrice);
 
-      const trailingResult = calculateProfitTrailingStop({
+      const instrumentFamily = classifyInstrumentFamily(trade.symbol);
+      const atr14Pct = getDefaultAtr14Pct(trade.symbol);
+
+      const trailingResult = calculateAdaptiveTrailingStop({
         entryPrice: trade.entryPrice,
         currentPrice,
         peakPrice: newPeak,
         direction,
         currentSl: trade.sl,
         tpPrice: trade.tp,
+        atr14Pct,
+        instrumentFamily,
+        adverseCandleCount: 0,
+        emaSlope: 0,
+        spikeCountAdverse4h: 0,
       });
 
       let activeSl = trade.sl;
@@ -462,7 +577,7 @@ export async function manageOpenPositions(): Promise<void> {
         if ((tradeMode === "demo" || tradeMode === "real") && trade.brokerTradeId && modeClient) {
           await modeClient.updateStopLoss(parseInt(trade.brokerTradeId), Math.abs(trailingResult.newSl - trade.entryPrice));
         }
-        console.log(`[TradeEngine] Updated profit-trailing SL for trade #${trade.id}: ${trailingResult.newSl.toFixed(4)} (peak profit trail)`);
+        console.log(`[TradeEngine] Updated adaptive trailing SL for trade #${trade.id}: ${trailingResult.newSl.toFixed(4)} (${trailingResult.reason ?? "ATR trail"})`);
       } else {
         await db.update(tradesTable)
           .set({ peakPrice: newPeak })
