@@ -155,6 +155,9 @@ async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>
     const confirmedKeysThisWindow = new Set<string>();
 
     for (const candidate of candidates) {
+      if ((candidate.compositeScore ?? 0) < 75) {
+        continue;
+      }
       const currentPrice = features.latestClose ?? 0;
       const family = candidate.strategyFamily || candidate.strategyName;
       const result = confirmSignal(candidate, windowTs, currentPrice, existingPositionCount, effectiveMode);
