@@ -568,7 +568,7 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
     }
   }
 
-  const currentMinScore = parseFloat(stateMap["min_composite_score"] || "85");
+  const currentMinScore = parseFloat(stateMap["min_composite_score"] || "80");
   const currentMinEV = parseFloat(stateMap["min_ev_threshold"] || "0.001");
   const currentMinRR = parseFloat(stateMap["min_rr_ratio"] || "1.5");
 
@@ -580,7 +580,7 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
     suggestions["min_ev_threshold"] = String(Math.min(currentMinEV * 1.2, 0.01).toFixed(4));
     suggestions["min_rr_ratio"] = String(Math.min(currentMinRR * 1.1, 4.0).toFixed(2));
   } else if (allWinRate > 0.6 && closedTrades.length > 20) {
-    suggestions["min_composite_score"] = String(Math.max(currentMinScore - 1, 85).toFixed(0));
+    suggestions["min_composite_score"] = String(Math.max(currentMinScore - 1, 80).toFixed(0));
   }
 
   const exitReasons = closedTrades.map(t => t.exitReason || "");

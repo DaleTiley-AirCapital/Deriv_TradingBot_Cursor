@@ -878,7 +878,7 @@ function simulateOnCandles(
         ? signals.filter(s => strategies.includes(s.strategyName))
         : signals;
 
-      const modeDefaultComposite = config.mode === "live" ? 92 : 85;
+      const modeDefaultComposite = config.mode === "live" ? 90 : 80;
       const minComposite = config.minCompositeScore ?? modeDefaultComposite;
       const minEv = config.minEvThreshold ?? 0.001;
       const minRr = config.minRrRatio ?? 1.5;
@@ -1360,7 +1360,7 @@ export async function runBacktestSimulation(
     initialCapital,
     mode,
     basePct,
-    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "85"),
+    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "80"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
     minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
     scoringWeights,
@@ -1452,7 +1452,7 @@ export async function runSymbolBacktest(
     initialCapital,
     mode,
     basePct,
-    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "85"),
+    minCompositeScore: parseFloat(stateMap["min_composite_score"] || "80"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
     minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),
     scoringWeights,

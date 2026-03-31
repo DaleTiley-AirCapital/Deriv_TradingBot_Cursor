@@ -41,7 +41,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   scan_stagger_seconds: "10",
   ai_verification_enabled: "false",
   enabled_symbols: ACTIVE_TRADING_SYMBOLS_DEFAULT,
-  min_composite_score: "85",
+  min_composite_score: "80",
   min_ev_threshold: "0.001",
   min_rr_ratio: "1.5",
   scoring_weight_range_position: "25",

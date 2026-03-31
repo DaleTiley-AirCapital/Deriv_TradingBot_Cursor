@@ -247,10 +247,10 @@ async function initDb(): Promise<void> {
       ('kill_switch',         'false'),
       ('streaming',           'false'),
       ('disabled_strategies', ''),
-      ('min_composite_score', '85'),
-      ('paper_min_composite_score', '85'),
-      ('demo_min_composite_score',  '90'),
-      ('real_min_composite_score',  '92'),
+      ('min_composite_score', '80'),
+      ('paper_min_composite_score', '80'),
+      ('demo_min_composite_score',  '85'),
+      ('real_min_composite_score',  '90'),
       ('min_ev_threshold',    '0.001'),
       ('min_rr_ratio',        '1.5'),
 
@@ -288,13 +288,13 @@ async function initDb(): Promise<void> {
   `);
 
   await db.execute(sql`
-    UPDATE platform_state SET value = '85' WHERE key = 'min_composite_score' AND CAST(value AS INTEGER) < 85;
-    UPDATE platform_state SET value = '85' WHERE key = 'paper_min_composite_score' AND CAST(value AS INTEGER) < 85;
-    UPDATE platform_state SET value = '90' WHERE key = 'demo_min_composite_score' AND CAST(value AS INTEGER) < 90;
-    UPDATE platform_state SET value = '92' WHERE key = 'real_min_composite_score' AND CAST(value AS INTEGER) < 92;
-    UPDATE platform_state SET value = '85' WHERE key = 'ai_suggest_paper_min_composite_score' AND CAST(value AS INTEGER) < 85;
-    UPDATE platform_state SET value = '90' WHERE key = 'ai_suggest_demo_min_composite_score' AND CAST(value AS INTEGER) < 90;
-    UPDATE platform_state SET value = '92' WHERE key = 'ai_suggest_real_min_composite_score' AND CAST(value AS INTEGER) < 92;
+    INSERT INTO platform_state (key, value) VALUES ('min_composite_score', '80') ON CONFLICT (key) DO UPDATE SET value = '80';
+    UPDATE platform_state SET value = '80' WHERE key = 'paper_min_composite_score' AND CAST(value AS INTEGER) < 80;
+    UPDATE platform_state SET value = '85' WHERE key = 'demo_min_composite_score' AND CAST(value AS INTEGER) < 85;
+    UPDATE platform_state SET value = '90' WHERE key = 'real_min_composite_score' AND CAST(value AS INTEGER) < 90;
+    UPDATE platform_state SET value = '80' WHERE key = 'ai_suggest_paper_min_composite_score' AND CAST(value AS INTEGER) < 80;
+    UPDATE platform_state SET value = '85' WHERE key = 'ai_suggest_demo_min_composite_score' AND CAST(value AS INTEGER) < 85;
+    UPDATE platform_state SET value = '90' WHERE key = 'ai_suggest_real_min_composite_score' AND CAST(value AS INTEGER) < 90;
   `);
 
   console.log("[DB] Schema ready.");

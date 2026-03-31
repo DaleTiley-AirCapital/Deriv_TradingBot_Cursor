@@ -346,13 +346,25 @@ router.post("/research/rerun-backtest", async (req, res): Promise<void> => {
     return;
   }
 
+  res.setHeader("Content-Type", "application/x-ndjson");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Transfer-Encoding", "chunked");
+
+  const send = (obj: Record<string, unknown>) => res.write(JSON.stringify(obj) + "\n");
+
   try {
+    send({ phase: "starting", symbol, message: "Loading platform state…" });
+
     const states = await db.select().from(platformStateTable);
     const stateMap: Record<string, string> = {};
     for (const s of states) stateMap[s.key] = s.value;
     const initialCapital = parseFloat(stateMap["total_capital"] || String(DEFAULT_CAPITAL));
 
+    send({ phase: "running", symbol, message: "Running backtest (this may take 30-60 s)…" });
+
     const btResult = await runSymbolBacktest(symbol, initialCapital, "balanced");
+
+    send({ phase: "saving", symbol, message: "Saving results to database…" });
 
     const [row] = await db.insert(backtestRunsTable).values({
         strategyName: "all_strategies",
@@ -399,7 +411,8 @@ router.post("/research/rerun-backtest", async (req, res): Promise<void> => {
       }
 
       const profitableCount = btResult.profitableStrategies.filter(s => s.netProfit > 0).length;
-      res.json({
+      send({
+        phase: "done",
         success: true,
         symbol,
         backtestId: row?.id,
@@ -412,8 +425,10 @@ router.post("/research/rerun-backtest", async (req, res): Promise<void> => {
         },
         message: `${profitableCount} profitable strategies, ${btResult.portfolioMetrics.tradeCount} total trades`,
       });
+      res.end();
   } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
+    send({ phase: "error", error: err instanceof Error ? err.message : "Unknown error" });
+    res.end();
   }
 });
 

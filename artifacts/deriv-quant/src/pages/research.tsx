@@ -285,20 +285,51 @@ function DataStatusSection({ onBacktestComplete }: { onBacktestComplete?: () => 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ symbol }),
       });
-      const json = await res.json();
-      if (json.error) {
-        setSSEProgress(prev => ({ ...prev, [symbol]: { phase: "error", symbol, message: json.error } }));
-      } else {
-        const profitableCount = (json.profitableStrategies ?? []).filter((s: { netProfit: number }) => s.netProfit > 0).length;
+
+      if (!res.ok || !res.body) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let lastJson: Record<string, unknown> | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+            lastJson = parsed;
+            if (parsed.phase === "error") {
+              setSSEProgress(prev => ({ ...prev, [symbol]: { phase: "error", symbol, message: String(parsed.error ?? "Unknown error") } }));
+            } else if (parsed.phase !== "done") {
+              setSSEProgress(prev => ({ ...prev, [symbol]: { phase: parsed.phase as string, symbol, message: String(parsed.message ?? "") } }));
+            }
+          } catch { /* malformed line — skip */ }
+        }
+      }
+
+      if (lastJson && lastJson.phase === "done") {
+        const json = lastJson;
+        const profitableCount = (json.profitableStrategies as { netProfit: number }[] ?? []).filter(s => s.netProfit > 0).length;
         setSSEProgress(prev => ({
           ...prev,
           [symbol]: {
             phase: "backtest_complete",
             symbol,
             profitableStrategies: json.profitableStrategies,
-            message: json.message || `Re-run complete: ${profitableCount} profitable strategies`,
+            message: String(json.message) || `Re-run complete: ${profitableCount} profitable strategies`,
           },
         }));
+      } else if (!lastJson || lastJson.phase !== "error") {
+        setSSEProgress(prev => ({ ...prev, [symbol]: { phase: "error", symbol, message: "No result received" } }));
       }
     } catch (err) {
       setSSEProgress(prev => ({ ...prev, [symbol]: { phase: "error", symbol, message: err instanceof Error ? err.message : "Failed" } }));
