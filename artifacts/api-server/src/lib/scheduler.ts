@@ -888,9 +888,12 @@ export function startScheduler(): void {
   positionMgmtHandle = setInterval(positionManagementCycle, POSITION_MGMT_INTERVAL_MS);
   setTimeout(positionManagementCycle, 8000);
 
-  console.log(`[Scheduler] Starting monthly re-optimisation check (hourly) — first check in 5 minutes`);
-  monthlyHandle = setInterval(monthlyOptimisationCycle, MONTHLY_CHECK_INTERVAL_MS);
-  setTimeout(monthlyOptimisationCycle, 5 * 60 * 1000);
+  // Monthly re-optimisation temporarily disabled — runs 20 sequential backtests against 275K-candle
+  // datasets which blocks the event loop, starves DB connections, and crashes the trading system.
+  // Re-enable once the backtest engine is made event-loop-safe (background job queue).
+  // console.log(`[Scheduler] Starting monthly re-optimisation check (hourly) — first check in 5 minutes`);
+  // monthlyHandle = setInterval(monthlyOptimisationCycle, MONTHLY_CHECK_INTERVAL_MS);
+  // setTimeout(monthlyOptimisationCycle, 5 * 60 * 1000);
 
   console.log(`[Scheduler] Starting weekly AI analysis check (hourly)`);
   weeklyHandle = setInterval(weeklyAnalysisCycle, WEEKLY_CHECK_INTERVAL_MS);
