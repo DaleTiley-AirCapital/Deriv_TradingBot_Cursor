@@ -593,9 +593,11 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
     const stateMap: Record<string, string> = {};
     for (const s of states) stateMap[s.key] = s.value;
 
-    const enabledSymbols = stateMap["enabled_symbols"]
-      ? stateMap["enabled_symbols"].split(",").filter(Boolean)
-      : ACTIVE_TRADING_SYMBOLS.filter(s => !uniqueFailedSymbols.includes(s));
+    const rawEnabled = stateMap["enabled_symbols"] ? stateMap["enabled_symbols"].split(",").filter(Boolean) : [];
+    const enabledSymbols = (rawEnabled.length > 0
+      ? rawEnabled.filter(s => ACTIVE_TRADING_SYMBOLS.includes(s))
+      : [...ACTIVE_TRADING_SYMBOLS]
+    ).filter(s => !uniqueFailedSymbols.includes(s));
     const initialCapital = parseFloat(stateMap["total_capital"] || String(DEFAULT_CAPITAL));
 
     const btTotal = enabledSymbols.length;
