@@ -1403,13 +1403,16 @@ export async function runBacktestSimulation(
     const [minRow] = await db.select({ minTs: sql<number>`min(${candlesTable.openTs})` })
       .from(candlesTable)
       .where(eq(candlesTable.symbol, symbol));
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
     if (minRow?.minTs) {
       const firstCandleDate = new Date(minRow.minTs * 1000);
-      const twelveMonthsAgo = new Date();
-      twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
       startDate = firstCandleDate > twelveMonthsAgo ? firstCandleDate : twelveMonthsAgo;
       const monthsAvail = Math.round((Date.now() - firstCandleDate.getTime()) / (30 * 24 * 3600 * 1000));
       console.log(`[Backtest] ${symbol}: ${monthsAvail} month(s) of data available — window from ${startDate.toISOString().slice(0, 10)}`);
+    } else {
+      startDate = twelveMonthsAgo;
+      console.log(`[Backtest] ${symbol}: no candle data found — defaulting to 12-month window from ${startDate.toISOString().slice(0, 10)}`);
     }
   }
 
