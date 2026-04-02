@@ -998,11 +998,11 @@ async function getEnabledSymbols(): Promise<string[]> {
   try {
     const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "enabled_symbols"));
     if (rows.length > 0 && rows[0].value) {
-      const symbols = rows[0].value.split(",").filter((s: string) => V1_DEFAULT_SYMBOLS.includes(s));
+      const symbols = rows[0].value.split(",").filter((s: string) => ACTIVE_TRADING_SYMBOLS.includes(s));
       if (symbols.length > 0) return symbols;
     }
   } catch {}
-  return [...V1_DEFAULT_SYMBOLS];
+  return [...ACTIVE_TRADING_SYMBOLS];
 }
 
 export function getActiveModes(stateMap: Record<string, string>): TradingMode[] {

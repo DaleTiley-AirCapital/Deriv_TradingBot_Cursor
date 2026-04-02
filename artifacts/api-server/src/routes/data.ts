@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { desc, eq, sql, and } from "drizzle-orm";
 import { db, ticksTable, candlesTable, spikeEventsTable, platformStateTable } from "@workspace/db";
-import { getDerivClientWithDbToken, V1_DEFAULT_SYMBOLS, getEnabledSymbols } from "../lib/deriv.js";
+import { getDerivClientWithDbToken, ACTIVE_TRADING_SYMBOLS, getEnabledSymbols } from "../lib/deriv.js";
 
 const router: IRouter = Router();
 
@@ -9,9 +9,9 @@ router.post("/data/stream/start", async (req, res): Promise<void> => {
   const enabledSymbols = await getEnabledSymbols();
   const { symbols = enabledSymbols } = req.body ?? {};
 
-  const validSymbols = (symbols as string[]).filter(s => V1_DEFAULT_SYMBOLS.includes(s));
+  const validSymbols = (symbols as string[]).filter(s => ACTIVE_TRADING_SYMBOLS.includes(s));
   if (validSymbols.length === 0) {
-    res.status(400).json({ error: `No valid symbols provided. Supported: ${V1_DEFAULT_SYMBOLS.join(", ")}` });
+    res.status(400).json({ error: `No valid symbols provided. Active symbols: ${ACTIVE_TRADING_SYMBOLS.join(", ")}` });
     return;
   }
 
@@ -66,7 +66,7 @@ router.get("/data/status", async (_req, res): Promise<void> => {
     streaming: isStreaming,
     lastSyncAt: stateMap["last_sync_at"] || null,
     tickCount: Number(tickCountResult[0]?.count || 0),
-    symbols: streamingSymbols.length > 0 ? streamingSymbols : V1_DEFAULT_SYMBOLS,
+    symbols: streamingSymbols.length > 0 ? streamingSymbols : ACTIVE_TRADING_SYMBOLS,
   });
 });
 

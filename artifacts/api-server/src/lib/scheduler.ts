@@ -452,6 +452,7 @@ const AI_LOCKABLE_KEYS = [
 ];
 let monthlyHandle: ReturnType<typeof setInterval> | null = null;
 let weeklyHandle: ReturnType<typeof setInterval> | null = null;
+let monthlyRunning = false;
 
 async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void> {
   const closedTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "closed"));
@@ -655,9 +656,10 @@ async function weeklyAnalysisCycle(): Promise<void> {
 }
 
 async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise<void> {
-  const enabledSymbols = stateMap["enabled_symbols"]
-    ? stateMap["enabled_symbols"].split(",").filter(Boolean)
-    : DEFAULT_SYMBOLS;
+  const rawSymbols = stateMap["enabled_symbols"] ? stateMap["enabled_symbols"].split(",").filter(Boolean) : [];
+  const enabledSymbols = rawSymbols.length > 0
+    ? rawSymbols.filter(s => ACTIVE_TRADING_SYMBOLS.includes(s))
+    : [...ACTIVE_TRADING_SYMBOLS];
   const initialCapital = parseFloat(stateMap["total_capital"] || "10000");
 
   const combinations: { strategy: string; symbol: string }[] = [];
@@ -668,7 +670,10 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
   }
 
   let ran = 0;
+  const comboResults: { strategy: string; symbol: string; pf: number; hold: number; score: number }[] = [];
+
   for (const { strategy, symbol } of combinations) {
+    console.log(`[Monthly] Backtest ${ran + 1}/${combinations.length}: ${strategy} × ${symbol}...`);
     try {
       const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced");
 
@@ -699,14 +704,7 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
         },
         status: "completed",
       });
-      ran++;
-    } catch { /* skip failed */ }
-  }
 
-  const comboResults: { strategy: string; symbol: string; pf: number; hold: number; score: number }[] = [];
-  for (const { strategy, symbol } of combinations) {
-    try {
-      const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced");
       if (result.tradeCount >= 3) {
         comboResults.push({
           strategy, symbol,
@@ -715,7 +713,10 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
           score: (result.sharpeRatio * 0.4) + (result.winRate * 0.25) + (result.profitFactor * 0.2) + (result.expectancy * 0.15),
         });
       }
-    } catch { /* skip */ }
+      ran++;
+    } catch { /* skip failed */ }
+
+    await new Promise<void>(r => setTimeout(r, 500));
   }
 
   const sortedCombos = [...comboResults].sort((a, b) => b.score - a.score);
@@ -752,6 +753,10 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
 }
 
 async function monthlyOptimisationCycle(): Promise<void> {
+  if (monthlyRunning) {
+    console.log("[Scheduler] Monthly re-opt already in progress — skipping this check");
+    return;
+  }
   try {
     const states = await db.select().from(platformStateTable);
     const stateMap: Record<string, string> = {};
@@ -763,9 +768,15 @@ async function monthlyOptimisationCycle(): Promise<void> {
     const currentMonthKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
     if (stateMap["last_monthly_optimise_month"] === currentMonthKey) return;
 
-    console.log(`[Scheduler] New month detected (${currentMonthKey}) — starting rolling re-optimisation...`);
-    await runMonthlyOptimisation(stateMap);
+    console.log(`[Scheduler] New month detected (${currentMonthKey}) — starting rolling re-optimisation on ${ACTIVE_TRADING_SYMBOLS.length} symbols...`);
+    monthlyRunning = true;
+    try {
+      await runMonthlyOptimisation(stateMap);
+    } finally {
+      monthlyRunning = false;
+    }
   } catch (err) {
+    monthlyRunning = false;
     console.error("[Scheduler] Monthly optimisation error:", err instanceof Error ? err.message : err);
   }
 }

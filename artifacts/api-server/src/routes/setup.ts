@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { eq, and, inArray, count, sql } from "drizzle-orm";
 import { db, candlesTable, backtestRunsTable, backtestTradesTable, platformStateTable, tradesTable, signalLogTable, ticksTable, spikeEventsTable, featuresTable, modelRunsTable } from "@workspace/db";
-import { getDerivClientWithDbToken, getDbApiToken, getDbApiTokenForMode, V1_DEFAULT_SYMBOLS } from "../lib/deriv.js";
+import { getDerivClientWithDbToken, getDbApiToken, getDbApiTokenForMode, ACTIVE_TRADING_SYMBOLS } from "../lib/deriv.js";
 import { checkOpenAiHealth, isOpenAIConfigured, analyseBacktest, type BacktestMetrics } from "../lib/openai.js";
 import { runBacktestSimulation, runSymbolBacktest } from "../lib/backtestEngine.js";
 import { getApiSymbol, validateActiveSymbols } from "../lib/symbolValidator.js";
@@ -124,7 +124,7 @@ router.get("/setup/status", async (_req, res): Promise<void> => {
     const hasToken = tokenRows.some(r => !!r.value);
 
     const symbolCounts = await Promise.all(
-      V1_DEFAULT_SYMBOLS.map(async (symbol) => {
+      ACTIVE_TRADING_SYMBOLS.map(async (symbol) => {
         const [r1m] = await db.select({ n: count() }).from(candlesTable)
           .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")));
         const [r5m] = await db.select({ n: count() }).from(candlesTable)
@@ -135,11 +135,11 @@ router.get("/setup/status", async (_req, res): Promise<void> => {
 
     const [btResult] = await db.select({ n: count() }).from(backtestRunsTable);
     const backtestCount = btResult?.n ?? 0;
-    const expectedBacktests = V1_DEFAULT_SYMBOLS.length * STRATEGIES.length;
+    const expectedBacktests = ACTIVE_TRADING_SYMBOLS.length * STRATEGIES.length;
 
     const totalCandles = symbolCounts.reduce((s, r) => s + r.count, 0);
-    const hasEnoughData = symbolCounts.filter(r => r.count >= 100).length >= Math.ceil(V1_DEFAULT_SYMBOLS.length * 0.5);
-    const hasInitialBacktests = backtestCount >= Math.ceil(V1_DEFAULT_SYMBOLS.length * 0.5);
+    const hasEnoughData = symbolCounts.filter(r => r.count >= 100).length >= Math.ceil(ACTIVE_TRADING_SYMBOLS.length * 0.5);
+    const hasInitialBacktests = backtestCount >= Math.ceil(ACTIVE_TRADING_SYMBOLS.length * 0.5);
 
     const setupRow = await db.select().from(platformStateTable)
       .where(eq(platformStateTable.key, "initial_setup_complete")).limit(1);
@@ -238,23 +238,23 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
     const expected1m = Math.ceil(SIX_MONTHS_SECONDS / 60);
     const expected5m = Math.ceil(SIX_MONTHS_SECONDS / 300);
     const perSymbolExpected = expected1m + expected5m;
-    const grandTotalExpected = perSymbolExpected * V1_DEFAULT_SYMBOLS.length;
+    const grandTotalExpected = perSymbolExpected * ACTIVE_TRADING_SYMBOLS.length;
 
     send({
       phase: "backfill_probing",
       stage: "backfill",
       message: "Preparing symbols and connecting to Deriv API...",
-      totalSymbols: V1_DEFAULT_SYMBOLS.length,
+      totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
     });
 
-    for (let si = 0; si < V1_DEFAULT_SYMBOLS.length; si++) {
-      const symbol = V1_DEFAULT_SYMBOLS[si];
+    for (let si = 0; si < ACTIVE_TRADING_SYMBOLS.length; si++) {
+      const symbol = ACTIVE_TRADING_SYMBOLS[si];
       send({
         phase: "backfill_probe_result",
         stage: "backfill",
         symbol,
         symbolIndex: si,
-        totalSymbols: V1_DEFAULT_SYMBOLS.length,
+        totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
         connected: true,
         oldestAvailableDate: new Date(oneYearAgoEpoch * 1000).toISOString().slice(0, 10),
         oldestEpoch: oneYearAgoEpoch,
@@ -269,10 +269,10 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       phase: "backfill_start",
       stage: "backfill",
       message: `Clearing old data and connecting to Deriv...`,
-      totalSymbols: V1_DEFAULT_SYMBOLS.length,
-      connectedCount: V1_DEFAULT_SYMBOLS.length,
+      totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
+      connectedCount: ACTIVE_TRADING_SYMBOLS.length,
       grandTotalExpected,
-      symbols: V1_DEFAULT_SYMBOLS.map(s => ({
+      symbols: ACTIVE_TRADING_SYMBOLS.map(s => ({
         symbol: s,
         status: "waiting",
         candles: 0,
@@ -303,11 +303,11 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
     send({
       phase: "backfill_start",
       stage: "backfill",
-      message: `Step 1 of 6: Downloading history for ${V1_DEFAULT_SYMBOLS.length} symbols (~${grandTotalExpected.toLocaleString()} total records)...`,
-      totalSymbols: V1_DEFAULT_SYMBOLS.length,
-      connectedCount: V1_DEFAULT_SYMBOLS.length,
+      message: `Step 1 of 6: Downloading history for ${ACTIVE_TRADING_SYMBOLS.length} symbols (~${grandTotalExpected.toLocaleString()} total records)...`,
+      totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
+      connectedCount: ACTIVE_TRADING_SYMBOLS.length,
       grandTotalExpected,
-      symbols: V1_DEFAULT_SYMBOLS.map(s => ({
+      symbols: ACTIVE_TRADING_SYMBOLS.map(s => ({
         symbol: s,
         status: "waiting",
         candles: 0,
@@ -323,24 +323,24 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       { tf: "1m", granularity: GRANULARITY_1M },
       { tf: "5m", granularity: GRANULARITY_5M },
     ];
-    const totalJobs = V1_DEFAULT_SYMBOLS.length * timeframes.length;
+    const totalJobs = ACTIVE_TRADING_SYMBOLS.length * timeframes.length;
 
     let jobsDone = 0;
     const failedSymbols: { symbol: string; error: string; timeframe: string }[] = [];
 
-    for (let si = 0; si < V1_DEFAULT_SYMBOLS.length; si++) {
-      const symbol = V1_DEFAULT_SYMBOLS[si];
+    for (let si = 0; si < ACTIVE_TRADING_SYMBOLS.length; si++) {
+      const symbol = ACTIVE_TRADING_SYMBOLS[si];
       const apiSymbol = getApiSymbol(symbol);
       let symbolTotalInserted = 0;
       let symbolFailed = false;
 
       send({
         phase: "backfill_symbol_start", stage: "backfill", symbol,
-        symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+        symbolIndex: si, totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
         status: "downloading", symbolPct: 0,
         apiSymbol,
         totalExpected: perSymbolExpected,
-        message: `Starting ${symbol} (${si + 1}/${V1_DEFAULT_SYMBOLS.length}) — ~${perSymbolExpected.toLocaleString()} records expected...`,
+        message: `Starting ${symbol} (${si + 1}/${ACTIVE_TRADING_SYMBOLS.length}) — ~${perSymbolExpected.toLocaleString()} records expected...`,
       });
 
       for (const { tf, granularity } of timeframes) {
@@ -405,7 +405,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
                 : "API_ERROR";
               send({
                 phase: "backfill_symbol_error", stage: "backfill", symbol,
-                symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+                symbolIndex: si, totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
                 status: "error", timeframe: tf,
                 errorCode,
                 error: `Failed after ${consecutiveErrors} retries: ${errMsg}`,
@@ -419,7 +419,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
             if (errMsg.includes("not connected") || errMsg.includes("timed out") || errMsg.includes("WebSocket")) {
               send({
                 phase: "backfill_retry", stage: "backfill", symbol,
-                symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+                symbolIndex: si, totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
                 timeframe: tf,
                 attempt: consecutiveErrors,
                 maxAttempts: MAX_CONSECUTIVE_ERRORS,
@@ -436,7 +436,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
             } else {
               send({
                 phase: "backfill_retry", stage: "backfill", symbol,
-                symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+                symbolIndex: si, totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
                 timeframe: tf,
                 attempt: consecutiveErrors,
                 maxAttempts: MAX_CONSECUTIVE_ERRORS,
@@ -453,7 +453,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
             if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
               send({
                 phase: "backfill_symbol_error", stage: "backfill", symbol,
-                symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+                symbolIndex: si, totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
                 status: "error", timeframe: tf,
                 errorCode: "NULL_RESPONSE",
                 error: `API returned null after ${consecutiveErrors} retries`,
@@ -509,7 +509,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
           const overallPct = Math.max(Math.round(jobFrac * 40), 1);
           send({
             phase: "backfill_progress", stage: "backfill", symbol,
-            symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+            symbolIndex: si, totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
             timeframe: tf,
             candlesForSymbol: symbolTotalInserted,
             candleTotal,
@@ -533,7 +533,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       if (symbolFailed) {
         send({
           phase: "backfill_symbol_failed", stage: "backfill", symbol,
-          symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+          symbolIndex: si, totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
           candlesForSymbol: symbolTotalInserted, candleTotal,
           status: "failed",
           message: `${symbol} failed — ${symbolTotalInserted.toLocaleString()} candles downloaded before error`,
@@ -544,7 +544,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       const overallPct = Math.round((jobsDone / totalJobs) * 40);
       send({
         phase: "backfill_symbol_done", stage: "backfill", symbol,
-        symbolIndex: si, totalSymbols: V1_DEFAULT_SYMBOLS.length,
+        symbolIndex: si, totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
         candlesForSymbol: symbolTotalInserted, candleTotal,
         overallPct, symbolPct: 100,
         totalExpected: perSymbolExpected,
@@ -554,14 +554,14 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
     }
 
     const uniqueFailedSymbols = [...new Set(failedSymbols.map(f => f.symbol))];
-    const successCount = V1_DEFAULT_SYMBOLS.length - uniqueFailedSymbols.length;
+    const successCount = ACTIVE_TRADING_SYMBOLS.length - uniqueFailedSymbols.length;
 
     if (successCount === 0) {
       send({
         phase: "error", stage: "backfill",
         errorCode: "ALL_SYMBOLS_FAILED",
         failedSymbols: failedSymbols.map(f => ({ symbol: f.symbol, error: f.error, timeframe: f.timeframe })),
-        message: `Setup failed: all ${V1_DEFAULT_SYMBOLS.length} symbols failed to download. Check your Deriv API connection and try again.`,
+        message: `Setup failed: all ${ACTIVE_TRADING_SYMBOLS.length} symbols failed to download. Check your Deriv API connection and try again.`,
       });
       setupProgress.running = false;
       setupProgress.completedAt = Date.now();
@@ -574,7 +574,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
         successCount,
         failedCount: uniqueFailedSymbols.length,
         failedSymbols: failedSymbols.map(f => ({ symbol: f.symbol, error: f.error, timeframe: f.timeframe })),
-        message: `Warning: Only ${successCount}/${V1_DEFAULT_SYMBOLS.length} symbols succeeded. Failed: ${uniqueFailedSymbols.join(", ")}. Proceeding with available data — fix failed symbols from Research > Data Status.`,
+        message: `Warning: Only ${successCount}/${ACTIVE_TRADING_SYMBOLS.length} symbols succeeded. Failed: ${uniqueFailedSymbols.join(", ")}. Proceeding with available data — fix failed symbols from Research > Data Status.`,
       });
     }
 
@@ -584,9 +584,9 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       successCount,
       failedCount: uniqueFailedSymbols.length,
       failedSymbols: failedSymbols.map(f => ({ symbol: f.symbol, error: f.error, timeframe: f.timeframe })),
-      message: successCount === V1_DEFAULT_SYMBOLS.length
-        ? `Step 1 complete — ${candleTotal.toLocaleString()} candles downloaded for all ${V1_DEFAULT_SYMBOLS.length} symbols (12-month history).`
-        : `Step 1 complete — ${candleTotal.toLocaleString()} candles downloaded (${successCount}/${V1_DEFAULT_SYMBOLS.length} symbols succeeded, ${uniqueFailedSymbols.length} failed: ${uniqueFailedSymbols.join(", ")}). Re-download failed symbols from Research > Data Status.`,
+      message: successCount === ACTIVE_TRADING_SYMBOLS.length
+        ? `Step 1 complete — ${candleTotal.toLocaleString()} candles downloaded for all ${ACTIVE_TRADING_SYMBOLS.length} symbols (12-month history).`
+        : `Step 1 complete — ${candleTotal.toLocaleString()} candles downloaded (${successCount}/${ACTIVE_TRADING_SYMBOLS.length} symbols succeeded, ${uniqueFailedSymbols.length} failed: ${uniqueFailedSymbols.join(", ")}). Re-download failed symbols from Research > Data Status.`,
     });
 
     const states = await db.select().from(platformStateTable);
@@ -595,7 +595,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
 
     const enabledSymbols = stateMap["enabled_symbols"]
       ? stateMap["enabled_symbols"].split(",").filter(Boolean)
-      : V1_DEFAULT_SYMBOLS.filter(s => !uniqueFailedSymbols.includes(s));
+      : ACTIVE_TRADING_SYMBOLS.filter(s => !uniqueFailedSymbols.includes(s));
     const initialCapital = parseFloat(stateMap["total_capital"] || String(DEFAULT_CAPITAL));
 
     const btTotal = enabledSymbols.length;
@@ -801,7 +801,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
     const realStrategies = [...new Set(topCombos.map(c => c.strategy))];
     const realSymbols = [...new Set(topCombos.map(c => c.symbol))];
     const allStrategies = STRATEGIES.join(",");
-    const allSymbols = V1_DEFAULT_SYMBOLS.join(",");
+    const allSymbols = ACTIVE_TRADING_SYMBOLS.join(",");
 
     const bestAvgHold = topCombos.length > 0
       ? topCombos.reduce((s, c) => s + c.avgHold, 0) / topCombos.length : 72;
@@ -852,10 +852,10 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
 
     try {
       const streamClient = await getDerivClientWithDbToken();
-      await streamClient.startStreaming(V1_DEFAULT_SYMBOLS);
+      await streamClient.startStreaming(ACTIVE_TRADING_SYMBOLS);
       await db.insert(platformStateTable).values({ key: "streaming", value: "true" })
         .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "true", updatedAt: new Date() } });
-      console.log(`[Setup] Streaming started for ${V1_DEFAULT_SYMBOLS.length} symbols after setup complete`);
+      console.log(`[Setup] Streaming started for ${ACTIVE_TRADING_SYMBOLS.length} symbols after setup complete`);
     } catch (streamErr) {
       const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
       console.error("[Setup] Streaming failed:", errMsg);
@@ -876,7 +876,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
 
     send({
       phase: "streaming_complete", stage: "streaming", overallPct: 95,
-      message: `Step 5 complete — streaming ${V1_DEFAULT_SYMBOLS.length} symbols.`,
+      message: `Step 5 complete — streaming ${ACTIVE_TRADING_SYMBOLS.length} symbols.`,
     });
 
     const totalSec = Math.round((Date.now() - globalStart) / 1000);

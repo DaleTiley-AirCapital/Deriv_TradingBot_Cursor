@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import { db, platformStateTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import app from "./app.js";
-import { getDerivClientWithDbToken, getEnabledSymbols, V1_DEFAULT_SYMBOLS } from "./lib/deriv.js";
+import { getDerivClientWithDbToken, getEnabledSymbols, ACTIVE_TRADING_SYMBOLS } from "./lib/deriv.js";
 import { startScheduler } from "./lib/scheduler.js";
 import { validateActiveSymbols } from "./lib/symbolValidator.js";
 
@@ -335,7 +335,7 @@ async function autoStartStreaming(): Promise<void> {
       return;
     }
     const enabledSymbols = await getEnabledSymbols();
-    const validSymbols = enabledSymbols.filter(s => V1_DEFAULT_SYMBOLS.includes(s));
+    const validSymbols = enabledSymbols.filter(s => ACTIVE_TRADING_SYMBOLS.includes(s));
     if (validSymbols.length === 0) {
       console.log("[AutoStart] No valid symbols to stream");
       return;
