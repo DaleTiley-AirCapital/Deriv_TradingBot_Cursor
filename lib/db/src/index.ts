@@ -31,7 +31,7 @@ export const backgroundPool = new Pool({
   keepAliveInitialDelayMillis: 10_000,
   idleTimeoutMillis: 60_000,
   connectionTimeoutMillis: 60_000,
-  max: 2,
+  max: 4,
 });
 
 backgroundPool.on("error", (err) => {

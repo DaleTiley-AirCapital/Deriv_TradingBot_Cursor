@@ -2,7 +2,7 @@
  * Feature Engineering Service
  * Computes technical indicators and regime features from candle/tick data
  */
-import { db, candlesTable, spikeEventsTable, featuresTable } from "@workspace/db";
+import { db, backgroundDb, candlesTable, spikeEventsTable, featuresTable } from "@workspace/db";
 import { desc, eq, and, gte, lte } from "drizzle-orm";
 
 export interface SpikeMagnitudeStats {
@@ -422,7 +422,18 @@ function classifyInstrumentForSpike(symbol: string): "boom" | "crash" | "volatil
   return "other_synthetic";
 }
 
+// Cache spike stats for 5 minutes to avoid hammering the DB on every scan cycle.
+// Only caches calls without a beforeTs (live scanner). Backtest calls bypass the cache.
+const spikeMagnitudeCache = new Map<string, { result: SpikeMagnitudeStats | null; expiresAt: number }>();
+const SPIKE_STATS_TTL_MS = 5 * 60 * 1000;
+
 export async function getSpikeMagnitudeStats(symbol: string, rollingDays = 90, beforeTs?: number): Promise<SpikeMagnitudeStats | null> {
+  // Return cached result for live scanner calls (no beforeTs)
+  if (beforeTs === undefined) {
+    const cached = spikeMagnitudeCache.get(symbol);
+    if (cached && Date.now() < cached.expiresAt) return cached.result;
+  }
+
   const anchorTs = beforeTs ?? Date.now() / 1000;
   const cutoffTs = anchorTs - rollingDays * 86400;
 
@@ -447,7 +458,8 @@ export async function getSpikeMagnitudeStats(symbol: string, rollingDays = 90, b
     candleConditions.push(lte(candlesTable.openTs, beforeTs));
   }
 
-  const rangeCandles = await db.select({
+  // Use backgroundDb for the 90-day range candle read (~129K rows) to protect the main pool
+  const rangeCandles = await backgroundDb.select({
     high: candlesTable.high,
     low: candlesTable.low,
   }).from(candlesTable)
@@ -466,8 +478,10 @@ export async function getSpikeMagnitudeStats(symbol: string, rollingDays = 90, b
 
   const longTermRangePct = longTermLow > 0 ? (longTermHigh - longTermLow) / longTermLow : 0;
 
+  let result: SpikeMagnitudeStats;
+
   if (spikes.length < 5) {
-    return {
+    result = {
       median: 0,
       p75: 0,
       p90: 0,
@@ -477,27 +491,34 @@ export async function getSpikeMagnitudeStats(symbol: string, rollingDays = 90, b
       longTermHigh,
       longTermLow,
     };
+  } else {
+    const sizes = spikes.map(s => Math.abs(s.spikeSize)).sort((a, b) => a - b);
+    const n = sizes.length;
+
+    const median = n % 2 === 0 ? (sizes[n / 2 - 1] + sizes[n / 2]) / 2 : sizes[Math.floor(n / 2)];
+    const p75Idx = Math.floor(n * 0.75);
+    const p90Idx = Math.floor(n * 0.90);
+    const p75 = sizes[Math.min(p75Idx, n - 1)];
+    const p90 = sizes[Math.min(p90Idx, n - 1)];
+
+    result = {
+      median,
+      p75,
+      p90,
+      count: n,
+      instrumentFamily: classifyInstrumentForSpike(symbol),
+      longTermRangePct,
+      longTermHigh,
+      longTermLow,
+    };
   }
 
-  const sizes = spikes.map(s => Math.abs(s.spikeSize)).sort((a, b) => a - b);
-  const n = sizes.length;
+  // Write to cache for live scanner calls only
+  if (beforeTs === undefined) {
+    spikeMagnitudeCache.set(symbol, { result, expiresAt: Date.now() + SPIKE_STATS_TTL_MS });
+  }
 
-  const median = n % 2 === 0 ? (sizes[n / 2 - 1] + sizes[n / 2]) / 2 : sizes[Math.floor(n / 2)];
-  const p75Idx = Math.floor(n * 0.75);
-  const p90Idx = Math.floor(n * 0.90);
-  const p75 = sizes[Math.min(p75Idx, n - 1)];
-  const p90 = sizes[Math.min(p90Idx, n - 1)];
-
-  return {
-    median,
-    p75,
-    p90,
-    count: n,
-    instrumentFamily: classifyInstrumentForSpike(symbol),
-    longTermRangePct,
-    longTermHigh,
-    longTermLow,
-  };
+  return result;
 }
 
 export function findMajorSwingLevels(
@@ -572,7 +593,8 @@ export async function computeFeatures(symbol: string, lookback?: number): Promis
   const indicatorLookback = INDICATOR_BARS_NEEDED * indicatorTfMins;
   const effectiveLookback = lookback ?? Math.max(STRUCTURAL_LOOKBACK, indicatorLookback);
 
-  const candles = await db.select().from(candlesTable)
+  // Use backgroundDb so large candle reads don't starve the trading-critical main pool
+  const candles = await backgroundDb.select().from(candlesTable)
     .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")))
     .orderBy(desc(candlesTable.openTs))
     .limit(effectiveLookback);
