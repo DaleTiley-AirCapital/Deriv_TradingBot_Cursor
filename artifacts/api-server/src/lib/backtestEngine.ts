@@ -1364,6 +1364,7 @@ export async function runBacktestSimulation(
   symbol: string,
   initialCapital: number,
   allocationMode: string,
+  startDate?: Date,
 ): Promise<{
   totalReturn: number;
   netProfit: number;
@@ -1426,6 +1427,7 @@ export async function runBacktestSimulation(
     initialCapital,
     mode,
     basePct,
+    startDate,
     minCompositeScore: parseFloat(stateMap["min_composite_score"] || "80"),
     minEvThreshold: parseFloat(stateMap["min_ev_threshold"] || "0.001"),
     minRrRatio: parseFloat(stateMap["min_rr_ratio"] || "1.5"),

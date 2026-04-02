@@ -5,8 +5,8 @@ import { type ScoringWeights, DEFAULT_SCORING_WEIGHTS } from "./scoring.js";
 import { openPosition, manageOpenPositions } from "./tradeEngine.js";
 import { verifySignal } from "./openai.js";
 import { classifyRegime, classifyRegimeFromHTF, classifyInstrument, getCachedRegime, cacheRegime, accumulateHourlyFeatures } from "./regimeEngine.js";
-import { db, platformStateTable, tradesTable, candlesTable, backtestRunsTable, backtestTradesTable } from "@workspace/db";
-import { eq, desc, and } from "drizzle-orm";
+import { db, platformStateTable, tradesTable, candlesTable, ticksTable, backtestRunsTable, backtestTradesTable } from "@workspace/db";
+import { eq, desc, and, lt, gte, asc } from "drizzle-orm";
 import { runBacktestSimulation } from "./backtestEngine.js";
 import { getActiveModes, isAnyModeActive } from "./deriv.js";
 import type { TradingMode } from "./deriv.js";
@@ -655,6 +655,81 @@ async function weeklyAnalysisCycle(): Promise<void> {
   }
 }
 
+async function runMonthlyTickBackflush(): Promise<void> {
+  const now = new Date();
+  const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+  const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  const prevMonthStartTs = Math.floor(prevMonthStart.getTime() / 1000);
+  const prevMonthEndTs = Math.floor(prevMonthEnd.getTime() / 1000);
+  const monthKey = `${prevMonthStart.getFullYear()}-${String(prevMonthStart.getMonth() + 1).padStart(2, "0")}`;
+
+  console.log(`[TickFlush] Starting tick→candle backflush for ${monthKey} (${ACTIVE_TRADING_SYMBOLS.length} symbols)...`);
+
+  for (const symbol of ACTIVE_TRADING_SYMBOLS) {
+    try {
+      const rawTicks = await db.select()
+        .from(ticksTable)
+        .where(and(
+          eq(ticksTable.symbol, symbol),
+          gte(ticksTable.epochTs, prevMonthStartTs),
+          lt(ticksTable.epochTs, prevMonthEndTs),
+        ))
+        .orderBy(asc(ticksTable.epochTs));
+
+      if (rawTicks.length === 0) {
+        console.log(`[TickFlush] ${symbol}: no ticks for ${monthKey} — skipping`);
+        continue;
+      }
+
+      const minuteMap = new Map<number, { open: number; high: number; low: number; close: number; count: number }>();
+      for (const tick of rawTicks) {
+        const minuteTs = Math.floor(tick.epochTs / 60) * 60;
+        const existing = minuteMap.get(minuteTs);
+        if (!existing) {
+          minuteMap.set(minuteTs, { open: tick.quote, high: tick.quote, low: tick.quote, close: tick.quote, count: 1 });
+        } else {
+          if (tick.quote > existing.high) existing.high = tick.quote;
+          if (tick.quote < existing.low) existing.low = tick.quote;
+          existing.close = tick.quote;
+          existing.count++;
+        }
+      }
+
+      const candleRows = [...minuteMap.entries()].map(([openTs, c]) => ({
+        symbol,
+        timeframe: "1m",
+        openTs,
+        closeTs: openTs + 59,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        tickCount: c.count,
+      }));
+
+      const BATCH_SIZE = 500;
+      let insertedCandles = 0;
+      for (let i = 0; i < candleRows.length; i += BATCH_SIZE) {
+        await db.insert(candlesTable).values(candleRows.slice(i, i + BATCH_SIZE)).onConflictDoNothing();
+        insertedCandles += candleRows.slice(i, i + BATCH_SIZE).length;
+      }
+
+      await db.delete(ticksTable)
+        .where(and(
+          eq(ticksTable.symbol, symbol),
+          gte(ticksTable.epochTs, prevMonthStartTs),
+          lt(ticksTable.epochTs, prevMonthEndTs),
+        ));
+
+      console.log(`[TickFlush] ${symbol}: ${rawTicks.length} ticks → ${minuteMap.size} candles (${insertedCandles} rows inserted), ticks deleted`);
+    } catch (err) {
+      console.error(`[TickFlush] ${symbol} error:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  console.log(`[TickFlush] Backflush complete for ${monthKey}`);
+}
+
 async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise<void> {
   const rawSymbols = stateMap["enabled_symbols"] ? stateMap["enabled_symbols"].split(",").filter(Boolean) : [];
   const enabledSymbols = rawSymbols.length > 0
@@ -669,13 +744,17 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
     }
   }
 
+  const twelveMonthsAgo = new Date();
+  twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+  console.log(`[Monthly] Using 12-month rolling window from ${twelveMonthsAgo.toISOString().slice(0, 10)}`);
+
   let ran = 0;
   const comboResults: { strategy: string; symbol: string; pf: number; hold: number; score: number }[] = [];
 
   for (const { strategy, symbol } of combinations) {
     console.log(`[Monthly] Backtest ${ran + 1}/${combinations.length}: ${strategy} × ${symbol}...`);
     try {
-      const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced");
+      const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced", twelveMonthsAgo);
 
       await db.insert(backtestRunsTable).values({
         strategyName: strategy,
@@ -716,7 +795,7 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
       ran++;
     } catch { /* skip failed */ }
 
-    await new Promise<void>(r => setTimeout(r, 500));
+    await new Promise<void>(r => setTimeout(r, 5000));
   }
 
   const sortedCombos = [...comboResults].sort((a, b) => b.score - a.score);
@@ -749,6 +828,11 @@ async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value, updatedAt: new Date() } });
   }
 
+  const completedAt = new Date().toISOString();
+  await db.insert(platformStateTable)
+    .values({ key: "monthly_reopt_completed_at", value: completedAt })
+    .onConflictDoUpdate({ target: platformStateTable.key, set: { value: completedAt, updatedAt: new Date() } });
+
   console.log(`[Scheduler] Monthly re-optimisation complete — ${ran} backtests, suggestions updated (no settings changed).`);
 }
 
@@ -768,9 +852,10 @@ async function monthlyOptimisationCycle(): Promise<void> {
     const currentMonthKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
     if (stateMap["last_monthly_optimise_month"] === currentMonthKey) return;
 
-    console.log(`[Scheduler] New month detected (${currentMonthKey}) — starting rolling re-optimisation on ${ACTIVE_TRADING_SYMBOLS.length} symbols...`);
+    console.log(`[Scheduler] New month detected (${currentMonthKey}) — starting tick backflush then rolling re-optimisation on ${ACTIVE_TRADING_SYMBOLS.length} symbols...`);
     monthlyRunning = true;
     try {
+      await runMonthlyTickBackflush();
       await runMonthlyOptimisation(stateMap);
     } finally {
       monthlyRunning = false;
@@ -791,9 +876,9 @@ export function startScheduler(): void {
   positionMgmtHandle = setInterval(positionManagementCycle, POSITION_MGMT_INTERVAL_MS);
   setTimeout(positionManagementCycle, 8000);
 
-  console.log(`[Scheduler] Starting monthly re-optimisation check (hourly)`);
+  console.log(`[Scheduler] Starting monthly re-optimisation check (hourly) — first check in 5 minutes`);
   monthlyHandle = setInterval(monthlyOptimisationCycle, MONTHLY_CHECK_INTERVAL_MS);
-  setTimeout(monthlyOptimisationCycle, 15000);
+  setTimeout(monthlyOptimisationCycle, 5 * 60 * 1000);
 
   console.log(`[Scheduler] Starting weekly AI analysis check (hourly)`);
   weeklyHandle = setInterval(weeklyAnalysisCycle, WEEKLY_CHECK_INTERVAL_MS);
