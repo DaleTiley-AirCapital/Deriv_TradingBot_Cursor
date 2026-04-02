@@ -355,7 +355,7 @@ initDb()
       console.log(`  Deriv Trading - Long Hold v2`);
       console.log(`  Port: ${port} | ENV: ${process.env.NODE_ENV || "development"}`);
       console.log(`  Health: /api/healthz`);
-      console.log(`  Deployable symbols: 12 (Boom/Crash + R_75/R_100)`);
+      console.log(`  Active trading symbols: ${ACTIVE_TRADING_SYMBOLS.length} (CRASH300, BOOM300, R_75, R_100)`);
       console.log(`  Strategy families: 5 (trend_continuation, mean_reversion, spike_cluster_recovery, swing_exhaustion, trendline_breakout)`);
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       startScheduler();

@@ -35,7 +35,7 @@ const MAX_CONSECUTIVE_ERRORS = 5;
 const DEFAULT_CAPITAL = 600;
 const API_RATE_DELAY_MS = 150;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
-const MIN_SYMBOLS_FOR_PROCEED = 8;
+const MIN_SYMBOLS_FOR_PROCEED = Math.ceil(ACTIVE_TRADING_SYMBOLS.length * 0.5);
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade",
   "demo_equity_pct_per_trade",
