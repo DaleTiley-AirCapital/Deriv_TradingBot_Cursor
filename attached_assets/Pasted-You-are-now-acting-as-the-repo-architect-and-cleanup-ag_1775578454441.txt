@@ -1,0 +1,174 @@
+You are now acting as the repo architect and cleanup agent for `DaleTiley-AirCapital/Forex-Bot-Deriv`.
+
+Your job is not to patch around the current system. Your job is to simplify it, remove dead weight, and rebuild the structure logically while preserving intended functionality.
+
+Critical operating rules
+
+1. Do not create parallel implementations.
+If a function/module is replaced, delete the old implementation after verifying references are updated.
+
+2. Do not keep legacy fallback code.
+No commented-out backups, no “just in case” alternate files, no silent fallback branches.
+
+3. Do not split trading logic across research/live/backtest separately.
+There must be one shared source of truth for:
+- strategy logic
+- signal scanning
+- entry rules
+- exit rules
+- TP/SL/trailing rules
+- risk logic
+- symbol-specific thresholds
+
+4. Research, paper, demo, and live must call the same core trading engine.
+Only runtime concerns may differ:
+- data source
+- execution mode
+- broker adapter
+- fill simulation
+- scheduling
+
+5. Organize code by responsibility, not by current UI tabs.
+
+Non-negotiable rule
+Never preserve old behavior through fallback logic. When behavior is intentionally changed, remove the previous path completely and update all callers to the new path.
+
+Target architecture
+
+- `core/`
+  - market models, indicators, features, regime logic
+  - strategy definitions
+  - signal pipeline
+  - entry logic
+  - exit logic
+  - TP/SL/trailing
+  - risk logic
+  - portfolio/trade state logic
+  - shared settings schemas
+
+- `runtimes/`
+  - research runner
+  - backtest runner
+  - paper runner
+  - demo runner
+  - live runner
+
+- `infrastructure/`
+  - db/storage
+  - broker/data adapters
+  - logging
+  - streaming infrastructure
+
+- `ui/`
+  - research
+  - live
+  - settings
+
+- `app/`
+  - wiring, routing, dependency composition
+
+UI intent
+
+Research
+- research tab only
+
+Live
+- overview
+- signals
+- trades
+- data
+
+Settings
+- settings
+- help/version/admin
+- risk configuration lives here in UI only
+
+Risk should not remain a confusing separate top-level UI area unless absolutely required. Risk logic remains in core.
+
+Mandatory workflow
+
+Phase 1 — full audit
+1. Enumerate all files in the repo.
+2. For each file, determine:
+   - what it does
+   - whether it is imported/used
+   - what imports it
+   - whether it duplicates another responsibility
+   - whether it belongs in core, runtime, infrastructure, ui, or app
+3. Produce:
+   - dead file list
+   - duplicate file list
+   - legacy/fallback code list
+   - mixed-responsibility file list
+   - UI route/component list
+   - backend endpoint/function list
+   - UI-to-endpoint mapping table
+
+Phase 2 — delete useless code
+4. Delete files that are unused, duplicated, obsolete, backup-like, temporary, or superseded.
+5. Remove commented-out legacy blocks and fallback branches.
+6. Do not leave “old”, “v2”, “temp”, “new”, “backup”, or alternate code paths.
+
+Phase 3 — consolidate engine logic
+7. Move all strategy, scanner, entry, exit, TP/SL/trailing, and risk logic into shared core modules.
+8. Ensure backtests and live trading both call those same modules.
+9. Eliminate separate logic paths for research/live if they make trading decisions differently.
+
+Phase 4 — runtime cleanup
+10. Make research, backtest, paper, demo, and live into thin runners/adapters only.
+11. They may load data differently or execute orders differently, but they must not contain separate trading decision logic.
+
+Phase 5 — UI/backend parity
+12. Walk through the UI item by item.
+13. For every visible UI action/button/page:
+   - identify its backend endpoint or local function path
+   - verify it is actually wired
+   - if missing and intended, add the missing plumbing
+   - if not supported and no backend exists, remove it from the UI
+14. For every backend feature intended to be user-facing but not connected in the UI, wire it properly.
+15. Completion is not allowed if backend exists but UI is not updated.
+
+Phase 6 — validate
+16. After refactor, produce a final report containing:
+   - deleted files
+   - consolidated files
+   - moved files
+   - new canonical source-of-truth files
+   - UI items removed
+   - UI items newly wired
+   - endpoints added/removed
+   - any remaining debt explicitly listed
+
+Naming and source-of-truth rules
+
+- One concern = one owning file/module.
+- No duplicate constants across files.
+- No duplicate threshold definitions.
+- No duplicate risk calculations.
+- No duplicate signal scoring implementations.
+- Any new logic must explicitly state:
+  - source-of-truth file
+  - callers
+  - replaced files deleted
+
+Guardrails
+
+- Do not do superficial edits across many files unless necessary.
+- Prefer deeper consolidation into fewer, clearer files.
+- If a refactor leaves both old and new paths alive, that refactor is incomplete.
+- If UI and backend are out of sync, the task is incomplete.
+- If research and live use different decision logic, the task is incomplete.
+- If dead code remains, the cleanup is incomplete.
+
+Current repo-specific concern to verify
+Recent backend additions must be checked against the UI. If backend functionality was added but the UI was not updated to call it, the task is incomplete until the UI is wired correctly or the unsupported UI affordance is removed.
+
+Output format required before making changes
+Start by returning:
+1. repo audit summary
+2. dead/duplicate file candidates
+3. proposed target tree
+4. UI-to-endpoint mismatch list
+5. deletion and consolidation plan
+
+Then execute the cleanup and refactor.

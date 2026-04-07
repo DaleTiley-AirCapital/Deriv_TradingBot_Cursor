@@ -1,0 +1,171 @@
+Create a new reusable project skill in Replit named `deriv-trading-repo-guardian`.
+
+Purpose
+This skill must govern how the Replit Agent analyzes, cleans, refactors, and extends the `Forex-Bot-Deriv` repository so the codebase stays simple, modular, and safe for trading-system development.
+
+Background
+This repo has become fragmented by repeated Replit changes. The main problems are:
+- redundant files
+- partial refactors
+- old code left behind
+- backend changes not wired into UI
+- duplicate or drifting logic between research, backtest, paper, demo, and live
+- mixed responsibilities across screens, services, and schedulers
+- silent fallback behavior and legacy compatibility code that hides errors
+
+The skill must stop those patterns and force disciplined repo behavior.
+
+The skill must enforce these architecture rules
+
+1. Organize code by responsibility, not by screen or tab.
+2. Treat the system as 3 layers:
+   - core trading engine
+   - runtime adapters
+   - UI/app layer
+3. Research, backtest, paper, demo, and live must all use the same shared core logic for:
+   - strategy logic
+   - signal scanning
+   - entry logic
+   - exit logic
+   - TP/SL/trailing
+   - risk logic
+   - symbol-specific thresholds
+4. Backtests must replay the same trading logic used in live trading. They must not use a separate trading-decision implementation.
+5. Risk logic belongs in core. Risk configuration belongs in settings UI, not as a confusing isolated top-level feature.
+6. If code is replaced, the old implementation must be deleted, not commented out, not preserved as fallback, and not left as legacy unless explicitly required.
+7. No silent fallback paths are allowed in trading logic.
+8. No duplicate strategy logic, duplicate risk logic, duplicate TP/SL logic, duplicate scanner logic, or duplicate threshold definitions.
+9. UI items must map to real endpoints or real local functions. If a UI item has no working backend/function path, remove it. If backend functionality exists and is intended to be user-facing, the UI must be updated and wired correctly.
+10. Refactors must reduce complexity and file sprawl, not increase them.
+
+Non-negotiable rule
+Never preserve old behavior through fallback logic. When behavior is intentionally changed, remove the previous path completely and update all callers to the new path.
+
+The skill must define the required target architecture
+
+- `core/`
+  - market models
+  - indicators/features/regimes
+  - strategies
+  - signal pipeline
+  - entry logic
+  - exit logic
+  - TP/SL/trailing
+  - risk logic
+  - portfolio/trade state logic
+  - settings schemas
+
+- `runtimes/`
+  - research runner
+  - backtest runner
+  - paper runner
+  - demo runner
+  - live runner
+
+- `infrastructure/`
+  - db/storage
+  - data adapters
+  - broker adapters
+  - logging
+  - stream/scheduler plumbing
+
+- `ui/`
+  - research
+  - live
+  - settings
+
+- `app/`
+  - routing
+  - app wiring
+  - dependency composition
+
+The skill must define required UI intent
+
+Research
+- research tab only
+
+Live
+- overview
+- signals
+- trades
+- data
+
+Settings
+- settings
+- help/version/admin
+- risk configuration
+
+The skill must define the mandatory refactor workflow
+
+Phase 1 — full repo audit
+- enumerate all files
+- identify what each file does
+- identify whether it is imported/used
+- identify what imports it
+- identify duplicates and mixed-responsibility files
+- identify dead files and legacy/fallback code
+- identify UI routes/components
+- identify backend endpoints/functions
+- produce UI-to-endpoint mapping
+
+Phase 2 — deletion
+- delete unused, obsolete, duplicate, superseded, backup-like, temp-like, and legacy files
+- remove commented-out dead code
+- remove fallback branches and alternate paths
+- do not keep old/new implementations side by side
+
+Phase 3 — consolidation
+- move trading decision logic into shared core
+- ensure all runtimes call the same core engine
+- remove separate research/live decision paths
+
+Phase 4 — runtime cleanup
+- make runtimes thin wrappers only
+- allow differences only for data source, scheduling, execution adapter, or simulation details
+
+Phase 5 — UI/backend parity
+- inspect every UI item one by one
+- verify each visible user action is wired to a real backend endpoint or function
+- if backend exists but UI is not wired, add the wiring
+- if UI exists without real support, remove it
+- backend-only completion is not acceptable
+
+Phase 6 — validation
+- report deleted files
+- report consolidated files
+- report moved files
+- report canonical source-of-truth files
+- report UI items removed
+- report UI items newly wired
+- report endpoint changes
+- report any remaining technical debt explicitly
+
+Naming and ownership rules
+- one concern = one owner file/module
+- one source of truth for each threshold/config/risk rule/strategy rule
+- no duplicate constants across files
+- no “v2”, “new”, “backup”, “temp”, “final”, or alternate implementation files
+- any new logic must declare:
+  - source-of-truth file
+  - direct callers
+  - deleted/replaced files
+
+Required outputs from the skill
+The skill must include:
+1. a strict working policy
+2. a target folder structure
+3. deletion rules
+4. consolidation rules
+5. UI/backend parity rules
+6. naming conventions
+7. audit workflow
+8. completion criteria
+9. output templates for:
+   - repo audit summary
+   - dead/duplicate file report
+   - deletion plan
+   - refactor plan
+   - UI-to-endpoint mismatch report
+   - final completion report
+
+Create this as a real Replit skill/project instruction package so that future Replit Agent work on this repo follows these rules automatically.
