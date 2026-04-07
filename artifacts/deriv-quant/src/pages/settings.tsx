@@ -5,12 +5,13 @@ import {
   useGetAccountInfo,
   useToggleTradingMode,
   getGetAccountInfoQueryKey,
+  useGetRiskStatus,
 } from "@workspace/api-client-react";
-import type { ToggleTradingModeRequestMode, ActionResponse } from "@workspace/api-client-react";
+import type { ToggleTradingModeRequestMode, ActionResponse, ModeRiskSnapshot } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui-elements";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
-import { Shield, TrendingUp, Clock, Crosshair, Save, RotateCcw, CheckCircle2, Key, Eye, EyeOff, AlertTriangle, Zap, Bot, Lock, Unlock, Database, Download, FlaskConical, Sparkles, ChevronRight, ChevronDown, XCircle, Wifi, Loader2, Trash2, BarChart3, Target, Layers, Activity } from "lucide-react";
+import { Shield, TrendingUp, Clock, Crosshair, Save, RotateCcw, CheckCircle2, Key, Eye, EyeOff, AlertTriangle, Zap, Bot, Lock, Unlock, Database, Download, FlaskConical, Sparkles, ChevronRight, ChevronDown, XCircle, Wifi, Loader2, Trash2, BarChart3, Target, Layers, Activity, ShieldAlert, Filter, Info } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 

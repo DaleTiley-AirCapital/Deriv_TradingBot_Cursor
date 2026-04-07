@@ -11,7 +11,6 @@ import Overview from "@/pages/overview";
 import Research from "@/pages/research";
 import Signals from "@/pages/signals";
 import Trades from "@/pages/trades";
-import Risk from "@/pages/risk";
 import DataManager from "@/pages/data";
 import Settings from "@/pages/settings";
 import Help from "@/pages/help";
@@ -78,7 +77,6 @@ function Router() {
         <Route path="/research" component={Research} />
         <Route path="/signals" component={Signals} />
         <Route path="/trades" component={Trades} />
-        <Route path="/risk" component={Risk} />
         <Route path="/data" component={DataManager} />
         <Route path="/settings" component={Settings} />
         <Route path="/help" component={Help} />

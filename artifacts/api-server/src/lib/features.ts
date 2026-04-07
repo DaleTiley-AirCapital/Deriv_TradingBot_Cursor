@@ -2,7 +2,7 @@
  * Feature Engineering Service
  * Computes technical indicators and regime features from candle/tick data
  */
-import { db, backgroundDb, candlesTable, spikeEventsTable, featuresTable } from "@workspace/db";
+import { db, backgroundDb, candlesTable, spikeEventsTable } from "@workspace/db";
 import { desc, eq, and, gte, lte } from "drizzle-orm";
 
 export interface SpikeMagnitudeStats {
@@ -885,56 +885,4 @@ export async function computeFeatures(symbol: string, lookback?: number): Promis
     distFromRange30dHighPct,
     distFromRange30dLowPct,
   };
-}
-
-export async function buildAndStoreFeaturesForSymbol(symbol: string): Promise<number> {
-  const candles = await db.select().from(candlesTable)
-    .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")))
-    .orderBy(desc(candlesTable.openTs))
-    .limit(500);
-
-  if (candles.length < 30) return 0;
-  candles.reverse();
-
-  let stored = 0;
-  // Compute features every 10 candles (sliding window)
-  for (let i = 50; i < candles.length; i += 10) {
-    const window = candles.slice(0, i + 1);
-    const closes = window.map(c => c.close);
-    const highs = window.map(c => c.high);
-    const lows = window.map(c => c.low);
-    const last = window[window.length - 1];
-    const price = last.close;
-
-    const ema20Arr = ema(closes, 20);
-    const ema20 = ema20Arr[ema20Arr.length - 1];
-    const ema20Prev = ema20Arr[ema20Arr.length - 2] || ema20;
-    const emaSlope = (ema20 - ema20Prev) / ema20;
-    const rsi14 = rsi(closes, 14);
-    const atr14v = atr(highs, lows, closes, 14) / price;
-    const bbCloses = closes.slice(-20);
-    const bbMean = mean(bbCloses);
-    const bbStd = stdDev(bbCloses);
-    const bbWidth = bbStd > 0 ? (4 * bbStd) / bbMean : 0;
-    const zScore = bbStd > 0 ? (price - bbMean) / bbStd : 0;
-    const regimeLabel = detectRegime(closes, atr14v, ema20Arr);
-
-    // Target label: did price go up in next 10 candles?
-    const futureClose = i + 10 < candles.length ? candles[i + 10].close : null;
-    const targetLabel = futureClose ? (futureClose > price ? "1" : "0") : null;
-
-    try {
-      await db.insert(featuresTable).values({
-        symbol,
-        ts: last.closeTs,
-        featureJson: { emaSlope, rsi14, atr14: atr14v, bbWidth, zScore },
-        regimeLabel,
-        targetLabel,
-      });
-      stored++;
-    } catch {
-      // skip duplicates
-    }
-  }
-  return stored;
 }
