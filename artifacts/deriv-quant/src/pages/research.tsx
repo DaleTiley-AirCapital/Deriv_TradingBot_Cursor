@@ -223,6 +223,7 @@ function DataStatusSection() {
   const [runningSymbol, setRunningSymbol] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState<string | null>(null);
   const [pruning, setPruning] = useState(false);
+  const [zipping, setZipping] = useState<string | null>(null);
 
   const [symbolHistory, setSymbolHistory] = useState<Record<string, BacktestHistoryRun[]>>({});
   const [selectedRunId, setSelectedRunId] = useState<Record<string, number>>({});
@@ -385,6 +386,31 @@ function DataStatusSection() {
     }
   }, [fetchStatus, fetchHistory]);
 
+  const handleZipExport = useCallback(async (symbol: string) => {
+    setZipping(symbol);
+    try {
+      const endDate = Math.floor(Date.now() / 1000);
+      const startDate = endDate - 90 * 24 * 3600;
+      const res = await fetch(api("/export/research"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, timeframe: "1m", startDate, endDate }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${symbol}_research_bundle.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch { /* ignore download errors */ } finally {
+      setZipping(null);
+    }
+  }, []);
+
   const handlePrune = useCallback(async () => {
     setPruning(true);
     try {
@@ -481,6 +507,14 @@ function DataStatusSection() {
               <FileDown className="w-3 h-3" />
               JSON
             </a>
+            <button
+              onClick={() => handleZipExport(sym.symbol)}
+              disabled={zipping === sym.symbol}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 transition-colors disabled:opacity-50"
+            >
+              {zipping === sym.symbol ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+              ZIP
+            </button>
           </div>
         )}
 

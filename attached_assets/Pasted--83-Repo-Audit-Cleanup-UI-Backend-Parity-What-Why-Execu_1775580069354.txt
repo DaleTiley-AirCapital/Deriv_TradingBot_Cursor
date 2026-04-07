@@ -1,0 +1,102 @@
+#83 - Repo Audit Cleanup & UI/Backend Parity
+
+## What & Why
+Execute the results of a completed repo audit.
+
+The audit identified:
+- dead routes
+- dead lib files
+- one disconnected UI page
+- one backend feature with no UI surface
+
+This task removes dead code, merges the disconnected Risk page into Settings, and wires the ZIP export to the Research page UI.
+
+The backtest engine and live engine already share core modules (`strategies.ts`, `tradeEngine.ts`, `regimeEngine.ts`, `features.ts`, `scoring.ts`). No consolidation of trading logic is needed here. This task is strictly limited to the audit findings.
+
+## Non-negotiable rule
+Never preserve old behavior through fallback logic. When behavior is intentionally changed, remove the previous path completely and update all callers to the new path.
+
+Also:
+- do not comment out replaced code
+- do not preserve legacy compatibility paths
+- do not leave dead imports, dead route mounts, dead nav items, or dead exports behind
+
+## Done looks like
+- no dead routes remain in the API server
+- no dead lib files remain
+- the `/risk` page is gone
+- risk status monitoring and kill-switch are accessible from Settings
+- the Risk nav item is removed from the sidebar
+- the Research page has an `Export ZIP` button that triggers `POST /export/research` and downloads the file
+- all deleted files have had their imports/usages removed
+- TypeScript compiles with zero errors after changes
+- API server starts cleanly after route removal
+- no compatibility shims, fallback routes, or commented-out preserved logic remain
+
+## Out of scope
+- no changes to strategy logic, scoring, TP/SL, backtest engine, scheduler, or signal pipeline
+- no DB schema changes
+- no reorganisation of the current lib folder structure
+- no changes to the old `/research/export-candles` endpoint; Excel/JSON export remains and ZIP is additive
+
+## Tasks
+
+### Phase 2 — Dead code deletion
+Before deleting any file, verify imports/usages/callers. After deletion, remove all references.
+
+1. Delete models route and model lib
+- delete `routes/models.ts`
+- delete `lib/model.ts`
+- remove `modelsRouter` import and `router.use(modelsRouter)` from `routes/index.ts`
+- remove `buildAndStoreFeaturesForSymbol` from `lib/features.ts`
+- do not touch `computeFeatures`
+- confirm `featuresTable` deletion/reset logic in `setup.ts` is still valid
+
+2. Delete dead research endpoints
+- remove `GET /research/grouped-results`
+- remove `POST /research/enrich-timeframes`
+- remove any dead types/helpers/imports related only to those handlers
+- confirm no UI caller remains
+
+### Phase 5 — UI/backend parity
+
+3. Merge Risk page into Settings
+- move the useful risk panel from `pages/risk.tsx` into Settings as a new `Risk` tab
+- include:
+  - per-mode risk status panel
+  - capital
+  - open trades
+  - drawdown
+  - allocation mode
+  - kill-switch button
+- wire kill-switch to `POST /risk/kill-switch`
+- delete `pages/risk.tsx`
+- remove `/risk` route and `Risk` import from `App.tsx`
+- remove the `Risk` nav item from `components/layout.tsx`
+- do not leave compatibility routes or dead tab links behind
+
+4. Wire ZIP export to Research page
+- add `Export ZIP (Research Bundle)` to Research symbol cards
+- POST to `/api/export/research`
+- pass:
+  - selected symbol
+  - `timeframe=1m`
+  - date range defaulting to last 90 days or current visible range
+- trigger file download using blob URL flow
+- keep existing Excel/JSON export buttons unchanged
+- ensure the button is only shown where the action is truly supported
+
+### Phase 6 — Validation
+
+5. Validation and parity check
+- run `pnpm tsc --noEmit` across the workspace
+- fix any errors introduced by deletions
+- confirm API server starts cleanly
+- confirm deleted routes are not still mounted
+- confirm deleted files have no remaining imports
+- produce a short UI-to-endpoint parity checklist covering:
+  - Risk tab → kill-switch endpoint
+  - Research ZIP export → export endpoint
+  - removed `/risk` route
+  - removed sidebar item
+  - removed dead research endpoints

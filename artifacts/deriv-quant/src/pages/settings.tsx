@@ -690,13 +690,188 @@ function SymbolDiagnosticsPanel() {
   );
 }
 
-type TabKey = "general" | "paper" | "demo" | "real" | "diagnostics";
+function RiskGauge({ value, max, breached, label }: { value: number; max: number; breached: boolean; label: string }) {
+  const pct = Math.min((Math.abs(value) / max) * 100, 100);
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between items-baseline">
+        <span className="text-xs text-muted-foreground uppercase tracking-wider">{label}</span>
+        <span className={cn("text-lg font-bold font-mono tabular-nums", breached ? "text-destructive" : "text-foreground")}>
+          {value.toFixed(2)}%
+        </span>
+      </div>
+      <div className="w-full bg-muted/40 rounded-full h-1.5 overflow-hidden">
+        <div
+          className={cn("h-1.5 rounded-full transition-all duration-500", breached ? "bg-destructive" : pct > 60 ? "bg-warning" : "bg-primary")}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <p className="text-[10px] text-muted-foreground">Limit: -{max}.0%</p>
+    </div>
+  );
+}
+
+function RiskMonitorTab({ base }: { base: string }) {
+  const { data: risk, refetch } = useGetRiskStatus({ query: { refetchInterval: 3000 } });
+  const [modeFilter, setModeFilter] = useState<"paper" | "demo" | "real">("paper");
+  const [activating, setActivating] = useState(false);
+  const { toast } = useToast();
+
+  const snap = risk?.perMode?.[modeFilter] as ModeRiskSnapshot | undefined;
+  const colorMap = { paper: "warning", demo: "primary", real: "destructive" } as const;
+  const color = colorMap[modeFilter];
+
+  async function handleKillSwitch() {
+    setActivating(true);
+    try {
+      const res = await fetch(`${base}api/risk/kill-switch`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        toast({ title: "Kill switch activated", description: data.message || "All trading halted." });
+        refetch();
+      } else {
+        toast({ title: "Failed", description: data.error || "Could not activate kill switch.", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Request failed.", variant: "destructive" });
+    } finally {
+      setActivating(false);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start gap-2 px-4 py-3 rounded-xl bg-muted/30 border border-border/40 text-xs text-muted-foreground">
+        <Info className="w-3.5 h-3.5 mt-0.5 shrink-0 text-primary" />
+        <span>Live read-out of exposure limits and circuit-breaker status. To change risk limits use the <span className="text-foreground font-medium">Paper / Demo / Real</span> tabs above.</span>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-primary" />
+            Per-Mode Risk Status
+            <div className="ml-auto flex items-center gap-1">
+              {(["paper", "demo", "real"] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setModeFilter(m)}
+                  className={cn(
+                    "px-2.5 py-1 rounded-md text-xs font-medium uppercase tracking-wider transition-all border",
+                    modeFilter === m
+                      ? "bg-primary/10 border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {snap ? (
+            <div className="space-y-5">
+              <div className="flex items-center gap-4 text-sm flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: `hsl(var(--${color}))` }} />
+                  <span className="font-bold uppercase tracking-wider" style={{ color: `hsl(var(--${color}))` }}>{modeFilter}</span>
+                </div>
+                <span className="text-muted-foreground text-xs">Capital: <span className="font-mono text-foreground">{snap.totalCapital != null ? `$${snap.totalCapital.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}</span></span>
+                <span className="text-muted-foreground text-xs">Open Trades: <span className="font-mono text-foreground">{snap.openTradeCount ?? 0}</span></span>
+                <span className="text-muted-foreground text-xs">Open Risk: <span className="font-mono text-foreground">{(snap.openRiskPct ?? 0).toFixed(2)}%</span></span>
+                <span className="text-muted-foreground text-xs">P&L: <span className={cn("font-mono", (snap.realisedPnl ?? 0) >= 0 ? "text-green-500" : "text-destructive")}>{snap.realisedPnl != null ? `$${snap.realisedPnl.toFixed(2)}` : "—"}</span></span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <RiskGauge label="Daily Loss" value={snap.dailyLossPct ?? 0} max={snap.maxDailyLossPct ?? 5} breached={snap.dailyLossBreached ?? false} />
+                <RiskGauge label="Weekly Loss" value={snap.weeklyLossPct ?? 0} max={snap.maxWeeklyLossPct ?? 12} breached={snap.weeklyLossBreached ?? false} />
+                <RiskGauge label="Max Drawdown" value={snap.drawdownPct ?? 0} max={snap.maxDrawdownPct ?? 20} breached={snap.maxDrawdownBreached ?? false} />
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No risk data available for {modeFilter} mode.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-primary" />Strategy Status</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Active Cooldowns</p>
+              {risk?.activeCooldowns?.length ? (
+                <div className="space-y-1.5">
+                  {risk.activeCooldowns.map(c => (
+                    <div key={c} className="flex items-center justify-between px-3 py-2 rounded-lg bg-warning/8 border border-warning/20">
+                      <span className="font-mono text-sm text-warning">{c}</span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-warning bg-warning/10 px-2 py-0.5 rounded-full">Cooling</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No strategies in cooldown.</p>
+              )}
+            </div>
+            <div className="border-t border-border/30 pt-4">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">Disabled Strategies</p>
+              {risk?.disabledStrategies?.length ? (
+                <div className="space-y-1.5">
+                  {risk.disabledStrategies.map(s => (
+                    <div key={s} className="flex items-center justify-between px-3 py-2 rounded-lg bg-destructive/8 border border-destructive/20">
+                      <span className="font-mono text-sm text-destructive">{s}</span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-destructive bg-destructive/10 px-2 py-0.5 rounded-full">Disabled</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">All strategies enabled.</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className={cn("border-2 transition-all duration-500", risk?.killSwitchActive ? "border-destructive/50 bg-destructive/5" : "border-border")}>
+          <CardContent className="p-8 flex flex-col items-center text-center">
+            <div className={cn("w-14 h-14 rounded-2xl flex items-center justify-center mb-4", risk?.killSwitchActive ? "bg-destructive/20 text-destructive animate-pulse" : "bg-muted/40 text-muted-foreground")}>
+              <ShieldAlert className="w-7 h-7" />
+            </div>
+            <h2 className="text-base font-semibold mb-1 text-foreground">Global Kill Switch</h2>
+            <div className={cn("w-full rounded-xl px-4 py-3 mb-4 flex items-center justify-between", risk?.killSwitchActive ? "bg-destructive/10 border border-destructive/25" : "bg-muted/20 border border-border")}>
+              <span className="text-sm font-medium text-foreground">Current Status</span>
+              <span className={cn("text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded-full", risk?.killSwitchActive ? "bg-destructive/20 text-destructive" : "bg-muted text-muted-foreground")}>
+                {risk?.killSwitchActive ? "ENGAGED — Halted" : "Off — Active"}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed mb-4">
+              Instantly flattens all open positions and blocks new entries across all modes.
+              {risk?.killSwitchActive ? " Reset via the kill_switch toggle in the General tab." : ""}
+            </p>
+            {!risk?.killSwitchActive && (
+              <button
+                onClick={handleKillSwitch}
+                disabled={activating}
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive text-sm font-semibold hover:bg-destructive/20 transition-colors disabled:opacity-50"
+              >
+                {activating ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldAlert className="w-4 h-4" />}
+                Activate Kill Switch
+              </button>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+type TabKey = "general" | "paper" | "demo" | "real" | "diagnostics" | "risk";
 const TABS: { key: TabKey; label: string; color: string }[] = [
   { key: "general", label: "General", color: "primary" },
   { key: "paper", label: "Paper Mode", color: "warning" },
   { key: "demo", label: "Demo USD", color: "primary" },
   { key: "real", label: "Real USD", color: "destructive" },
   { key: "diagnostics", label: "Diagnostics", color: "primary" },
+  { key: "risk", label: "Risk Monitor", color: "primary" },
 ];
 
 const MODE_DESCRIPTIONS: Record<string, { title: string; desc: string; target: string; color: string }> = {
@@ -1276,6 +1451,8 @@ export default function Settings() {
           )}
 
           {activeTab === "diagnostics" && <SymbolDiagnosticsPanel />}
+
+          {activeTab === "risk" && <RiskMonitorTab base={base} />}
         </motion.div>
       </AnimatePresence>
 
