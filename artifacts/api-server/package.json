@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "NODE_ENV=development tsx ./src/index.ts",
     "build": "tsx ./build.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify:structure": "bash ./scripts/verify-structure.sh",
+    "verify:guardrails": "bash ./scripts/verify-guardrails.sh"
   },
   "dependencies": {
     "@types/archiver": "^7.0.0",

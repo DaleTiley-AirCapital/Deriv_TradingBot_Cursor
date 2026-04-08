@@ -1,0 +1,223 @@
+#87 - Structural Guardrails & Regression Protection
+
+## What & Why
+Task #86 successfully completed the structural alignment of the API server:
+- `src/lib/` was removed
+- ownership split into `core/`, `infrastructure/`, and `runtimes/`
+- imports updated
+- no fallback/shim paths left behind
+
+This task adds guardrails to prevent future regressions.
+
+The repo has previously suffered from:
+- reintroduction of duplicate logic
+- dead code left behind after refactors
+- fallback/compatibility paths masking errors
+- backend changes not wired to UI
+- backup/temp/v2 files accumulating
+- commented-out code instead of proper deletion
+
+This task ensures those problems cannot silently return.
+
+This is a **repo governance and protection task only**.  
+No trading logic or behavior changes are allowed.
+
+---
+
+## Non-negotiable rule
+Never preserve old behavior through fallback logic.  
+When behavior is intentionally changed, remove the previous path completely and update all callers to the new path.
+
+Also:
+- no commented-out replaced code
+- no compatibility wrappers or bridge files unless explicitly justified
+- no reintroduction of `lib/`-style flat structure
+- no dead routes, dead UI items, or dead imports
+- no backend-only completion for user-facing features
+
+---
+
+## Done looks like
+- automated checks exist that validate repo structure
+- old `lib/` paths cannot reappear unnoticed
+- duplicate/backup/temp-style files are flagged
+- UI/backend parity expectations are documented and reusable
+- refactor completion checklist is defined and reusable
+- checks run cleanly on current repo state
+- TypeScript passes
+- no behavior logic is changed
+
+---
+
+## Out of scope
+- no strategy logic changes
+- no TP/SL/scoring/risk changes
+- no DB schema changes
+- no new features
+- no scheduler redesign
+- no frontend redesign
+- no structural moves (structure is already correct from #86)
+
+---
+
+## Tasks
+
+### 1. Add structural verification script
+Create a script or command that verifies the API server structure.
+
+It must check:
+
+- `artifacts/api-server/src/lib/` does NOT exist
+- these directories DO exist:
+  - `src/core/`
+  - `src/infrastructure/`
+  - `src/runtimes/`
+
+- expected files exist in each:
+  - core:
+    - features.ts
+    - regimeEngine.ts
+    - scoring.ts
+    - signalRouter.ts
+    - strategies.ts
+    - tradeEngine.ts
+    - extractionEngine.ts
+    - pendingSignals.ts
+
+  - infrastructure:
+    - deriv.ts
+    - openai.ts
+    - scheduler.ts
+    - symbolValidator.ts
+    - candleExport.ts
+
+  - runtimes:
+    - backtestEngine.ts
+
+- no old import paths remain:
+  - search for `../lib/`
+  - search for `./lib/`
+
+Output must clearly show PASS/FAIL per check.
+
+---
+
+### 2. Add forbidden-pattern checks
+Add checks to detect regression patterns:
+
+Flag files if they contain:
+- `v2`
+- `backup`
+- `temp`
+- `final`
+- `old`
+- `new`
+
+Flag:
+- compatibility re-export wrappers
+- bridge/shim files created to preserve old paths
+- commented-out imports that preserve old code paths
+- empty directories
+
+Do NOT flag normal business logic text (e.g. "alias" in symbolValidator).
+
+---
+
+### 3. Add UI/backend parity checklist
+Create a reusable checklist file (markdown) that enforces:
+
+For any user-facing feature:
+- backend endpoint/function must exist
+- UI must call it if exposed
+- if UI exists without backend → remove UI
+- if backend exists without UI (and is user-facing) → wire UI
+- no dead routes/pages/nav items remain
+
+Keep it short and actionable.
+
+---
+
+### 4. Add refactor completion checklist
+Create a reusable checklist for structural/refactor tasks:
+
+Must include:
+- files moved
+- old files deleted
+- imports updated
+- no fallback paths remain
+- no duplicate ownership remains
+- no dead imports remain
+- TypeScript passes
+- runtime starts cleanly (if affected)
+- before/after file map documented
+
+---
+
+### 5. Add runnable commands
+Expose guardrails via simple commands.
+
+Preferred:
+- add package scripts:
+  - `verify:structure`
+  - `verify:guardrails`
+
+If scripts are not suitable, document exact commands clearly in a markdown file.
+
+---
+
+### 6. Run verification on current repo
+Execute all checks.
+
+Also run:
+- `pnpm tsc --noEmit`
+
+Current repo must PASS all checks.
+
+If any check fails:
+- fix the guardrail logic itself
+- do NOT change trading logic or behavior
+
+---
+
+### 7. Document guardrails
+Create/update a short repo document explaining:
+
+- what guardrails exist
+- why they exist
+- how to run them
+- what failures mean
+- that fallback paths are forbidden
+- that old-path compatibility is forbidden unless explicitly justified
+
+Keep concise and practical.
+
+---
+
+## Completion report required
+
+Return:
+
+1. guardrail files/scripts added
+2. package scripts or commands added
+3. checks implemented
+4. current repo verification result (PASS/FAIL breakdown)
+5. TypeScript result
+6. any false positives handled
+7. explicit confirmation:
+   - no trading logic changed
+   - no behavior changed
+   - #86 structure is now protected from regression
+
+---
+
+## Quality bar
+This must be enforceable and practical.
+
+The goal is to prevent future regressions such as:
+- reintroducing `lib/` dumping ground
+- duplicate logic across files
+- backup/temp/v2 files accumulating
+- fallback paths hiding errors
+- UI/backend drift
+
+Keep it minimal but strict.
