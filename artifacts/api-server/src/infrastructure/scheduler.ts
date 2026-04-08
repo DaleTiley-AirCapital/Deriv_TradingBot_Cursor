@@ -454,6 +454,21 @@ let monthlyHandle: ReturnType<typeof setInterval> | null = null;
 let weeklyHandle: ReturnType<typeof setInterval> | null = null;
 let monthlyRunning = false;
 
+// ─── Scheduler Job Control ────────────────────────────────────────────────────
+// Single registry for all recurring jobs. Set enabled: false to explicitly
+// disable a job without deleting its implementation.
+//
+// monthly_optimisation is DISABLED:
+//   Running 20 sequential backtests against 275K-candle datasets blocks the
+//   event loop, exhausts DB connection pool, and crashes the trading system.
+//   Re-enable here once the backtest engine runs in a background job queue.
+const JOB_CONFIG = {
+  signalScan:           { enabled: true  },
+  positionManagement:   { enabled: true  },
+  weeklyAnalysis:       { enabled: true  },
+  monthlyOptimisation:  { enabled: false },
+} as const;
+
 async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void> {
   const closedTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "closed"));
   if (closedTrades.length < 5) {
@@ -880,24 +895,30 @@ async function monthlyOptimisationCycle(): Promise<void> {
 
 export function startScheduler(): void {
   if (schedulerHandle) return;
-  console.log(`[Scheduler] Starting signal scan every ${currentIntervalMs / 1000}s`);
-  schedulerHandle = setInterval(scanCycle, currentIntervalMs);
-  setTimeout(scanCycle, 5000);
 
-  console.log(`[Scheduler] Starting position management every ${POSITION_MGMT_INTERVAL_MS / 1000}s`);
-  positionMgmtHandle = setInterval(positionManagementCycle, POSITION_MGMT_INTERVAL_MS);
-  setTimeout(positionManagementCycle, 8000);
+  if (JOB_CONFIG.signalScan.enabled) {
+    console.log(`[Scheduler] Starting signal scan every ${currentIntervalMs / 1000}s`);
+    schedulerHandle = setInterval(scanCycle, currentIntervalMs);
+    setTimeout(scanCycle, 5000);
+  }
 
-  // Monthly re-optimisation temporarily disabled — runs 20 sequential backtests against 275K-candle
-  // datasets which blocks the event loop, starves DB connections, and crashes the trading system.
-  // Re-enable once the backtest engine is made event-loop-safe (background job queue).
-  // console.log(`[Scheduler] Starting monthly re-optimisation check (hourly) — first check in 5 minutes`);
-  // monthlyHandle = setInterval(monthlyOptimisationCycle, MONTHLY_CHECK_INTERVAL_MS);
-  // setTimeout(monthlyOptimisationCycle, 5 * 60 * 1000);
+  if (JOB_CONFIG.positionManagement.enabled) {
+    console.log(`[Scheduler] Starting position management every ${POSITION_MGMT_INTERVAL_MS / 1000}s`);
+    positionMgmtHandle = setInterval(positionManagementCycle, POSITION_MGMT_INTERVAL_MS);
+    setTimeout(positionManagementCycle, 8000);
+  }
 
-  console.log(`[Scheduler] Starting weekly AI analysis check (hourly)`);
-  weeklyHandle = setInterval(weeklyAnalysisCycle, WEEKLY_CHECK_INTERVAL_MS);
-  setTimeout(weeklyAnalysisCycle, 20000);
+  if (JOB_CONFIG.weeklyAnalysis.enabled) {
+    console.log(`[Scheduler] Starting weekly AI analysis check (hourly)`);
+    weeklyHandle = setInterval(weeklyAnalysisCycle, WEEKLY_CHECK_INTERVAL_MS);
+    setTimeout(weeklyAnalysisCycle, 20000);
+  }
+
+  if (JOB_CONFIG.monthlyOptimisation.enabled) {
+    console.log(`[Scheduler] Starting monthly re-optimisation check (hourly) — first check in 5 minutes`);
+    monthlyHandle = setInterval(monthlyOptimisationCycle, MONTHLY_CHECK_INTERVAL_MS);
+    setTimeout(monthlyOptimisationCycle, 5 * 60 * 1000);
+  }
 }
 
 export function stopScheduler(): void {

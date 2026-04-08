@@ -1,0 +1,237 @@
+#88 - Scheduler & Background Job Cleanup (remove commented-out disable pattern)
+
+## What & Why
+Recent work improved repo structure and added guardrails, but one important anti-pattern still remains in the API server:
+
+The monthly optimisation scheduler was disabled by commenting out registration lines instead of being reworked into a proper controllable background-job mechanism.
+
+That is exactly the kind of silent structural debt this repo must stop carrying.
+
+This task must clean up scheduler/background-job control so:
+- disabled jobs are controlled explicitly by configuration/state
+- no critical behavior is controlled by commented-out code
+- the scheduler has a clear ownership model for what starts automatically and what does not
+- future re-enable is safe, explicit, and observable
+
+This is a scheduler/control-plane cleanup task.
+It is **not** a trading-logic task.
+
+---
+
+## Non-negotiable rule
+Never preserve old behavior through fallback logic.
+When behavior is intentionally changed, remove the previous path completely and update all callers to the new path.
+
+Also:
+- do not leave commented-out scheduler registration lines behind
+- do not preserve alternate start paths
+- do not leave hidden/unused interval registration code
+- do not create a second scheduler path instead of cleaning the existing one
+
+---
+
+## Done looks like
+- no scheduler job is enabled/disabled by commented-out code
+- monthly optimisation registration is controlled explicitly and structurally
+- the scheduler startup path is clear and readable
+- there is one canonical place that defines which recurring jobs start automatically
+- monthly optimisation can be explicitly disabled without deleting its implementation
+- the reason/status of disabled jobs is visible in code, not hidden in comments
+- TypeScript passes
+- API server starts cleanly
+- existing active jobs still run normally
+- no trading behavior outside scheduling/orchestration is changed
+
+---
+
+## Out of scope
+- no changes to strategy logic
+- no changes to TP/SL/trailing/scoring/risk logic
+- no DB schema changes
+- no frontend changes
+- no background queue implementation in this task
+- no attempt to re-enable monthly optimisation if it is still unsafe
+- no changes to active trading symbols
+- no new feature UI
+
+---
+
+## Current repo context
+The monthly optimisation path was previously causing production instability by exhausting resources during large backtest runs. It was then disabled by commenting out registration lines in scheduler startup.
+
+That was an emergency mitigation, not a clean long-term structure.
+
+This task must convert that mitigation into a proper explicit control mechanism without changing trading logic.
+
+---
+
+## Objectives
+1. Remove commented-out scheduler control
+2. Replace it with explicit job registration/configuration
+3. Keep unsafe monthly optimisation disabled by default
+4. Make the scheduler readable and maintainable
+5. Preserve all currently working active jobs
+6. Make future re-enable straightforward and explicit
+
+---
+
+## Tasks
+
+### 1. Audit the current scheduler startup path
+Inspect the current scheduler system and identify:
+- all recurring jobs
+- where each is registered
+- which jobs start automatically on API server startup
+- where monthly optimisation is currently disabled
+- whether any duplicate start paths exist
+- whether any dead registration code remains
+
+Return a short scheduler audit before making changes.
+
+At minimum include:
+- signal scan job
+- position management job
+- weekly AI analysis job
+- monthly optimisation job
+- any startup timers / intervals / delayed registration calls
+
+---
+
+### 2. Remove commented-out monthly optimisation registration
+Locate the commented-out code currently preventing monthly optimisation from starting automatically.
+
+Remove it entirely.
+
+Do not leave:
+- commented-out registration lines
+- “temporary disable” code comments controlling behavior
+- alternate dead registration paths
+
+---
+
+### 3. Introduce explicit scheduler job control
+Replace the old disable-by-comment pattern with an explicit structural mechanism.
+
+Implement a clear scheduler control model such as one of these:
+- a scheduler job registry object with enabled flags
+- a central startup config object
+- a clearly named constant block that defines which recurring jobs auto-start
+
+The chosen approach must:
+- live in the scheduler/startup ownership area
+- be readable
+- avoid hidden logic
+- keep monthly optimisation disabled by default
+- make active jobs explicit
+
+At minimum the scheduler must clearly represent:
+- signal scanning: enabled
+- position management: enabled
+- weekly AI analysis: enabled
+- monthly optimisation: disabled
+
+The code must make it obvious that monthly optimisation is intentionally disabled, not accidentally dead.
+
+---
+
+### 4. Keep monthly optimisation implementation intact but non-starting
+Do NOT delete the monthly optimisation implementation itself if it may be needed later.
+
+But:
+- it must not auto-start
+- it must not have orphaned registration code
+- it must not appear half-enabled
+- it must be structurally clear that the implementation exists but the job is disabled by config/registry
+
+If useful, add a concise code comment explaining:
+- why it is disabled
+- what condition must be met before re-enabling
+- where to re-enable it properly
+
+Keep that comment concise and operational, not narrative.
+
+---
+
+### 5. Ensure one canonical startup path
+Clean the scheduler/startup logic so that there is one clear canonical place where recurring jobs are started.
+
+If scheduler startup is currently split awkwardly across multiple places, simplify it so:
+- job registration responsibility is obvious
+- startup order is obvious
+- no duplicate interval/setTimeout logic remains
+- no dead delayed-start fragments remain
+
+Do not redesign more than necessary.
+Keep the change focused and minimal.
+
+---
+
+### 6. Preserve active jobs
+Ensure currently active recurring jobs still start and run exactly as intended after cleanup:
+
+- signal scan
+- position management
+- weekly AI analysis
+
+Do not change their business behavior.
+Only change the control structure if needed.
+
+---
+
+### 7. Add guardrail-friendly structure
+Where practical, make the new scheduler control arrangement easy to validate in future guardrail tasks.
+
+That means:
+- explicit names
+- explicit enabled/disabled flags
+- no magic commented lines
+- no hidden interval creation
+
+This task does not need to create a new guardrail script, but the resulting structure should be easy to inspect.
+
+---
+
+### 8. Validation
+Run:
+- `pnpm tsc --noEmit`
+
+Then start the API server and confirm:
+- server starts cleanly
+- scheduler initializes cleanly
+- active jobs are started
+- monthly optimisation does not start automatically
+- no module/path/runtime errors were introduced
+
+Check logs and confirm there is no monthly optimisation startup message if it is disabled.
+
+---
+
+## Completion report required
+Return all of the following:
+
+1. scheduler audit summary
+2. old disable pattern removed
+3. new control mechanism implemented
+4. canonical startup location identified
+5. confirmation of active jobs still enabled
+6. confirmation that monthly optimisation remains disabled by explicit control
+7. TypeScript result
+8. API startup result
+9. exact files changed
+10. explicit confirmation that:
+   - no trading logic changed
+   - no strategy/scoring/TP/SL/risk behavior changed
+   - no commented-out scheduler registration remains
+
+---
+
+## Quality bar
+The result must eliminate the “commented out to disable” pattern completely.
+
+After this task, a future developer or agent should be able to answer all of these questions by reading one clear scheduler control section:
+- which jobs start automatically?
+- which jobs are disabled?
+- why is monthly optimisation disabled?
+- where do I re-enable it safely later?
+
+No ambiguity. No hidden dead paths. No commented-out control flow.
