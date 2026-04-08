@@ -352,11 +352,11 @@ initDb()
   .then(() => {
     app.listen(port, () => {
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log(`  Deriv Trading - Long Hold v2`);
+      console.log(`  Deriv Trading - Long Hold V3`);
       console.log(`  Port: ${port} | ENV: ${process.env.NODE_ENV || "development"}`);
       console.log(`  Health: /api/healthz`);
       console.log(`  Active trading symbols: ${ACTIVE_TRADING_SYMBOLS.length} (CRASH300, BOOM300, R_75, R_100)`);
-      console.log(`  Strategy families: 5 (trend_continuation, mean_reversion, spike_cluster_recovery, swing_exhaustion, trendline_breakout)`);
+      console.log(`  V3 engines: 8 (boom_expansion, crash_expansion, r75×3, r100×3) | coordinator + hybrid staged manager`);
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       startScheduler();
       autoStartStreaming();

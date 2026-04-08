@@ -618,6 +618,136 @@ export async function manageOpenPositions(): Promise<void> {
   }
 }
 
+/**
+ * V3 position opener — takes engine result inputs directly.
+ * Used by the V3 scheduler scan path. Reuses TP/SL calculation
+ * and broker execution infrastructure from openPosition.
+ */
+export async function openPositionV3(params: {
+  symbol: string;
+  engineName: string;
+  direction: "buy" | "sell";
+  confidence: number;
+  capitalAmount: number;
+  features: import("./features.js").FeatureVector;
+  mode: TradingMode;
+}): Promise<number | null> {
+  const { symbol, engineName, direction, confidence, capitalAmount, features, mode } = params;
+
+  const client = await getDerivClientForMode(mode);
+  const states = await db.select().from(platformStateTable);
+  const stateMap: Record<string, string> = {};
+  for (const s of states) stateMap[s.key] = s.value;
+
+  const capitalKey = getModeCapitalKey(mode);
+  const capitalDefault = getModeCapitalDefault(mode);
+  let equity = parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault);
+
+  if ((mode === "demo" || mode === "real") && client) {
+    try {
+      if (!client.isStreaming()) await client.connect();
+      const balanceData = await client.getAccountBalance();
+      if (balanceData) equity = balanceData.balance;
+    } catch { /* use configured capital */ }
+  }
+
+  let spotPrice = features.latestClose;
+  if (client) {
+    const livePrice = client.getLatestQuote(symbol);
+    if (livePrice && livePrice > 0) spotPrice = livePrice;
+  }
+
+  if (spotPrice <= 0) {
+    console.log(`[TradeEngine/V3] No spot price for ${symbol}`);
+    return null;
+  }
+
+  const atrPct = features.atr14 > 0 ? features.atr14 / spotPrice : getDefaultAtr14Pct(symbol);
+
+  const tp = calculateSRFibTP({
+    entryPrice: spotPrice,
+    direction,
+    swingHigh: features.swingHigh,
+    swingLow: features.swingLow,
+    fibExtensionLevels: features.fibExtensionLevels,
+    fibExtensionLevelsDown: features.fibExtensionLevelsDown,
+    bbUpper: features.bbUpper,
+    bbLower: features.bbLower,
+    atrPct,
+    pivotLevels: [
+      features.pivotR1, features.pivotR2, features.pivotR3,
+      features.pivotS1, features.pivotS2, features.pivotS3,
+    ].filter(v => v > 0),
+    vwap: features.vwap,
+    psychRound: features.psychRound,
+    prevSessionHigh: features.prevSessionHigh,
+    prevSessionLow: features.prevSessionLow,
+  });
+
+  const sl = calculateSRFibSL({ entryPrice: spotPrice, direction, tp, positionSize: capitalAmount, equity });
+
+  const notes = `V3 HybridStaged | engine=${engineName} | conf=${confidence.toFixed(3)}`;
+
+  if ((mode === "demo" || mode === "real") && client) {
+    try {
+      if (!client.isStreaming()) await client.connect();
+      const contractType = direction === "buy" ? "CALL" as const : "PUT" as const;
+      const result = await client.buyContract({
+        symbol,
+        contractType,
+        amount: capitalAmount,
+        duration: 5,
+        durationUnit: "d",
+        limitOrder: { stopLoss: Math.abs(spotPrice - sl), takeProfit: Math.abs(tp - spotPrice) },
+      });
+      if (!result) return null;
+      const [inserted] = await db.insert(tradesTable).values({
+        brokerTradeId: String(result.contractId),
+        symbol,
+        strategyName: engineName,
+        side: direction,
+        entryPrice: result.entrySpot,
+        sl, tp,
+        size: capitalAmount,
+        status: "open",
+        mode,
+        confidence,
+        trailingStopPct: PROFIT_TRAILING_DRAWDOWN_PCT,
+        peakPrice: result.entrySpot,
+        currentPrice: result.entrySpot,
+        notes,
+      }).returning();
+      console.log(`[TradeEngine/V3] Opened ${mode.toUpperCase()} ${direction} ${symbol} @ ${result.entrySpot} | engine=${engineName} | size=$${capitalAmount.toFixed(2)}`);
+      return inserted.id;
+    } catch (err) {
+      console.error(`[TradeEngine/V3] Failed to open ${mode} position:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
+  // Paper mode
+  const [inserted] = await db.insert(tradesTable).values({
+    symbol,
+    strategyName: engineName,
+    side: direction,
+    entryPrice: spotPrice,
+    sl, tp,
+    size: capitalAmount,
+    status: "open",
+    mode: "paper",
+    confidence,
+    trailingStopPct: PROFIT_TRAILING_DRAWDOWN_PCT,
+    peakPrice: spotPrice,
+    currentPrice: spotPrice,
+    notes,
+  }).returning();
+
+  const tpDistPct = Math.abs(tp - spotPrice) / spotPrice * 100;
+  const slDistPct = Math.abs(sl - spotPrice) / spotPrice * 100;
+  console.log(`[TradeEngine/V3] Opened PAPER ${direction} ${symbol} @ ${spotPrice} | engine=${engineName} | size=$${capitalAmount.toFixed(2)} | TP=${tp.toFixed(4)} (${tpDistPct.toFixed(2)}%) | SL=${sl.toFixed(4)} (${slDistPct.toFixed(2)}%)`);
+  return inserted.id;
+}
+
 async function closePosition(tradeId: number, exitPrice: number, exitReason: string): Promise<void> {
   const [trade] = await db.select().from(tradesTable).where(eq(tradesTable.id, tradeId));
   if (!trade) return;

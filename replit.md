@@ -1,8 +1,8 @@
-# Deriv Trading - Long Hold
+# Deriv Trading - Long Hold V3
 
 ## Overview
 
-Deriv Trading - Long Hold (v2.0.0) is a quantitative trading research and execution platform designed for Deriv synthetic indices, specifically focusing on Boom, Crash, and Volatility markets. Its primary purpose is to automate and optimize trading strategies through a comprehensive system that includes data collection, backtesting, probability modeling, strategy execution, and sophisticated risk and capital management. The platform targets real moves of 50-200%+, with TP as primary exit and 30% trailing stop as safety net only. No time-based exits — trades hold 9-44 days until TP, SL, or trailing stop.
+Deriv Trading - Long Hold (V3) is a quantitative trading research and execution platform for Deriv synthetic indices, focusing on Boom, Crash, and Volatility markets. Core mandate: **large capital, long hold, max profit** targeting 50-200%+ moves. V3 introduces 8 symbol-native engines (replacing the V2 5-family universal scanner), a symbol coordinator, and a 3-stage hybrid trade manager. TP is the primary exit; ATR-proportional adaptive trailing stop is safety net ONLY. No time-based exits — trades hold 9-44 days.
 
 ## User Preferences
 
@@ -16,7 +16,20 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 1.  **Data Collector:** Handles tick ingestion, candle building, and spike event detection.
 2.  **Backtesting Engine (V2):** A production-grade simulator mirroring live V2 logic — S/R + Fibonacci TP/SL, 30% profit-based trailing stop (safety net only), no time-based exits, confidence-scaled position sizing, and portfolio-level equity management. Supports walk-forward testing. Always saves results (including 0-trade strategies) and shows ALL strategies per symbol.
 3.  **Probability Model:** Focuses on feature engineering and gradient boost scoring.
-4.  **Strategy Engine (V2):** Five strategy families with **per-symbol calibrated thresholds** (not universal static values): trend_continuation (drift riding after confirmed reversal), mean_reversion (multi-day range extreme entries), spike_cluster_recovery (counter-trend after 3+ spike clusters in 4h), swing_exhaustion (multi-day rally/decline exhaustion at range extremes), trendline_breakout (dynamic trendline breaks with VWAP/pivot confluence). Calibrated on 193 days of 1m data: CRASH300 (20 swings), BOOM300 (23 swings), R_75 (38 swings), R_100 (91 swings). Per-symbol thresholds via `getSymbolThresholds()` in `strategies.ts`.
+4.  **V3 Symbol-Native Engine System (LIVE — replaces V2 5-family scanner):**
+    - **8 engines**: `boom_expansion_engine` (BOOM300), `crash_expansion_engine` (CRASH300), `r75_continuation_engine`, `r75_reversal_engine`, `r75_breakout_engine` (R_75 × 3), `r100_continuation_engine`, `r100_reversal_engine`, `r100_breakout_engine` (R_100 × 3).
+    - **Engine Registry** (`engineRegistry.ts`): maps each active symbol to its dedicated engine set. Loud failure on misconfiguration.
+    - **Symbol Coordinator** (`symbolCoordinator.ts`): resolves conflicts when multiple R_75/R_100 engines fire simultaneously. Priority: breakout > continuation > reversal. Direction conflicts suppressed unless confidence gap ≥ 0.12.
+    - **V3 Router** (`engineRouterV3.ts`): main live scan entry point. Calls engines, runs coordinator, returns `V3ScanResult` with features, regime, and `CoordinatorOutput`.
+    - **Portfolio Allocator V3** (`portfolioAllocatorV3.ts`): engine-aware risk allocation (max open trades, daily loss, drawdown, position sizing).
+    - **V3 Scheduler path**: `scanSingleSymbolV3()` in `scheduler.ts` calls `scanSymbolV3()` → `allocateV3Signal()` → AI verify (optional) → `openPositionV3()`.
+    - **V2 strategies.ts / signalRouter.ts**: BACKTEST-ONLY. Not called in live scan path.
+    - **V3 Trade Engine** (`openPositionV3()` in `tradeEngine.ts`): opens positions using SR/Fib TP, adaptive SL, same broker execution infrastructure.
+    - **3-Stage Hybrid Trade Manager** (`hybridTradeManager.ts`):
+      - Stage 1 (entry): SL at original position.
+      - Stage 2 (protection): SL promoted to breakeven at 20% of TP distance. Handled by `promoteBreakevenSls()` called before `manageOpenPositions()`.
+      - Stage 3 (runner): adaptive trailing stop from 30% of TP. Handled by existing `manageOpenPositions()`.
+    - **V2 5-family universal scanner**: RETIRED from live path. Preserved in strategies.ts/signalRouter.ts for backtesting only.
 5.  **Risk & Capital Manager:** Manages portfolio allocation, daily/weekly/max-drawdown limits, correlated family caps, and includes a kill switch mechanism.
 6.  **Symbol Validator:** Validates configured symbols against Deriv active_symbols API at startup, refuses invalid subscriptions, and runs a stale-stream watchdog with auto-resubscription.
 

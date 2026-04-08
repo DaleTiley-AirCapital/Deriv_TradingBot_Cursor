@@ -17,18 +17,26 @@ import {
 import { motion } from "framer-motion";
 
 const STRATEGY_DESCRIPTIONS = [
-  { name: "Trend Pullback",      desc: "Enters on dips within a confirmed strong trend" },
-  { name: "Exhaustion Rebound",  desc: "Catches reversals after overstretched moves" },
-  { name: "Volatility Breakout", desc: "Trades Bollinger Band compressions expanding" },
-  { name: "Spike Hazard",        desc: "Elevated boom/crash spike probability detection" },
+  { name: "Boom Expansion",        desc: "BOOM300 — spike-surge entries with multi-window confirmation" },
+  { name: "Crash Expansion",       desc: "CRASH300 — spike-drop entries with multi-window confirmation" },
+  { name: "R75 Continuation",      desc: "Volatility 75 — high-momentum trend following" },
+  { name: "R75 Reversal",          desc: "Volatility 75 — mean reversion at exhaustion extremes" },
+  { name: "R75 Breakout",          desc: "Volatility 75 — ATR-surge range expansion" },
+  { name: "R100 Continuation",     desc: "Volatility 100 — high-momentum trend following" },
+  { name: "R100 Reversal",         desc: "Volatility 100 — mean reversion at exhaustion extremes" },
+  { name: "R100 Breakout",         desc: "Volatility 100 — ATR-surge range expansion" },
 ];
 
 const FAMILY_LABELS: Record<string, string> = {
-  trend_continuation: "Trend",
-  mean_reversion: "Reversion",
-  spike_cluster_recovery: "Spike Cluster",
-  swing_exhaustion: "Swing Exhaust",
-  trendline_breakout: "Trendline",
+  boom_expansion_engine: "Boom Expansion",
+  crash_expansion_engine: "Crash Expansion",
+  r75_continuation_engine: "R75 Continuation",
+  r75_reversal_engine: "R75 Reversal",
+  r75_breakout_engine: "R75 Breakout",
+  r100_continuation_engine: "R100 Continuation",
+  r100_reversal_engine: "R100 Reversal",
+  r100_breakout_engine: "R100 Breakout",
+  v3_engine: "V3 Engine",
 };
 
 export default function Overview() {

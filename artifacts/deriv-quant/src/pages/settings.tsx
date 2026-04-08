@@ -360,11 +360,14 @@ const ALL_INSTRUMENTS = [
 ];
 
 const STRATEGY_FAMILIES = [
-  { key: "trend_continuation", label: "Trend Continuation", desc: "Enters on pullbacks within established trends", subStrategies: ["Trend Pullback"] },
-  { key: "mean_reversion", label: "Mean Reversion", desc: "Catches reversals after extreme moves or liquidity sweeps", subStrategies: ["Exhaustion Rebound", "Liquidity Sweep + Reversal"] },
-  { key: "spike_cluster_recovery", label: "Spike Cluster Recovery", desc: "Counter-trend entries after 3+ spike clusters in 4h exhaustion window", subStrategies: ["Spike Cluster Counter-Trend"] },
-  { key: "swing_exhaustion", label: "Swing Exhaustion", desc: "Multi-day exhaustion entries at range extremes after 14+ spikes or 8%+ moves", subStrategies: ["Multi-Day Exhaustion Reversal"] },
-  { key: "trendline_breakout", label: "Trendline Breakout", desc: "Breakouts from dynamic trendlines with VWAP/pivot confluence", subStrategies: ["Trendline Breakout"] },
+  { key: "boom_expansion_engine",    label: "Boom Expansion",    desc: "BOOM300 spike-surge entries with multi-window confirmation",     subStrategies: ["boom_expansion_engine"] },
+  { key: "crash_expansion_engine",   label: "Crash Expansion",   desc: "CRASH300 spike-drop entries with multi-window confirmation",    subStrategies: ["crash_expansion_engine"] },
+  { key: "r75_continuation_engine",  label: "R75 Continuation",  desc: "Volatility 75 high-momentum trend following",                   subStrategies: ["r75_continuation_engine"] },
+  { key: "r75_reversal_engine",      label: "R75 Reversal",      desc: "Volatility 75 mean reversion at exhaustion extremes",           subStrategies: ["r75_reversal_engine"] },
+  { key: "r75_breakout_engine",      label: "R75 Breakout",      desc: "Volatility 75 ATR-surge range expansion breakout",              subStrategies: ["r75_breakout_engine"] },
+  { key: "r100_continuation_engine", label: "R100 Continuation", desc: "Volatility 100 high-momentum trend following",                  subStrategies: ["r100_continuation_engine"] },
+  { key: "r100_reversal_engine",     label: "R100 Reversal",     desc: "Volatility 100 mean reversion at exhaustion extremes",          subStrategies: ["r100_reversal_engine"] },
+  { key: "r100_breakout_engine",     label: "R100 Breakout",     desc: "Volatility 100 ATR-surge range expansion breakout",             subStrategies: ["r100_breakout_engine"] },
 ];
 
 function InstrumentsPicker({ enabledSymbols, onChange, aiSuggestion, onApplySuggestion }: { enabledSymbols: string; onChange: (v: string) => void; aiSuggestion?: string; onApplySuggestion?: () => void }) {
@@ -1007,13 +1010,14 @@ function ModeSettingsTab({ mode, form, update, suggestions, onApplySuggestion, u
         </Card>
 
         <Card>
-          <CardHeader><CardTitle className="flex items-center gap-2"><TrendingUp className="w-4 h-4" />Trade Management (V2)</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><TrendingUp className="w-4 h-4" />V3 Hybrid Trade Management</CardTitle></CardHeader>
           <CardContent>
             <div className="space-y-2 text-xs text-muted-foreground">
-              <p><strong>TP/SL:</strong> TP targets 50-200%+ full spike magnitude. SL = TP / 5 (1:5 R:R). Not configurable — adapts to market structure.</p>
-              <p><strong>Trailing Stop:</strong> 30% drawdown from peak unrealized profit. Activates only after reaching 30% of TP target distance.</p>
-              <p><strong>No Time Exits:</strong> Trades hold 9-44 days until TP, SL, or trailing stop closes them.</p>
-              <p><strong>Pyramiding:</strong> Up to 3 positions per symbol (different strategies). Requires 3 confirmations + 1% price move in expected direction.</p>
+              <p><strong>TP/SL:</strong> TP targets 50-200%+ via SR/Fib extension levels. Adaptive ATR-proportional SL. Not configurable — adapts to market structure.</p>
+              <p><strong>Stage 1 → 2:</strong> SL promoted to breakeven after price reaches 20% of TP distance. Locks in protection.</p>
+              <p><strong>Stage 2 → 3:</strong> Adaptive trailing stop activates after 30% of TP distance reached. 30% drawdown from peak.</p>
+              <p><strong>No Time Exits:</strong> Trades hold until TP, SL, or trailing stop fires. Long hold mandate: 9-44 days typical.</p>
+              <p><strong>Engine-aware:</strong> 8 symbol-native engines (BOOM300, CRASH300, R_75×3, R_100×3). Coordinator resolves conflicts per symbol.</p>
             </div>
           </CardContent>
         </Card>

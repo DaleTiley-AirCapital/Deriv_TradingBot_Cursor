@@ -1,19 +1,14 @@
-import { computeFeatures } from "../core/features.js";
-import { runAllStrategies } from "../core/strategies.js";
-import { routeSignals, logSignalDecisions } from "../core/signalRouter.js";
-import { type ScoringWeights, DEFAULT_SCORING_WEIGHTS } from "../core/scoring.js";
-import { openPosition, manageOpenPositions } from "../core/tradeEngine.js";
+import { manageOpenPositions, openPositionV3 } from "../core/tradeEngine.js";
 import { verifySignal } from "./openai.js";
-import { classifyRegime, classifyRegimeFromHTF, classifyInstrument, getCachedRegime, cacheRegime, accumulateHourlyFeatures } from "../core/regimeEngine.js";
-import { db, platformStateTable, tradesTable, candlesTable, ticksTable, backtestRunsTable, backtestTradesTable } from "@workspace/db";
+import { db, platformStateTable, tradesTable, candlesTable, ticksTable, backtestRunsTable, backtestTradesTable, signalLogTable } from "@workspace/db";
 import { eq, desc, and, lt, gte, asc, sql, inArray } from "drizzle-orm";
 import { runBacktestSimulation } from "../runtimes/backtestEngine.js";
 import { getActiveModes, isAnyModeActive } from "./deriv.js";
 import type { TradingMode } from "./deriv.js";
-import type { AllocationDecision } from "../core/signalRouter.js";
-import { confirmSignal, removePendingSignal, expireStaleSignals, shouldEvaluateWindow, getWindowTs, invalidateUnconfirmedPending } from "../core/pendingSignals.js";
-
 import { ACTIVE_TRADING_SYMBOLS } from "./deriv.js";
+import { scanSymbolV3 } from "../core/engineRouterV3.js";
+import { allocateV3Signal } from "../core/portfolioAllocatorV3.js";
+import { promoteBreakevenSls } from "../core/hybridTradeManager.js";
 
 const DEFAULT_SYMBOLS = ACTIVE_TRADING_SYMBOLS;
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;
@@ -62,272 +57,169 @@ export function getSchedulerStatus() {
   };
 }
 
-function parseScoringWeights(stateMap: Record<string, string>): ScoringWeights | undefined {
-  const keys: (keyof ScoringWeights)[] = [
-    "rangePosition", "maDeviation", "volatilityProfile",
-    "rangeExpansion", "directionalConfirmation",
-  ];
-  const stateKeys: Record<keyof ScoringWeights, string> = {
-    rangePosition: "scoring_weight_range_position",
-    maDeviation: "scoring_weight_ma_deviation",
-    volatilityProfile: "scoring_weight_volatility_profile",
-    rangeExpansion: "scoring_weight_range_expansion",
-    directionalConfirmation: "scoring_weight_directional_confirmation",
-  };
-  const hasAny = keys.some(k => stateMap[stateKeys[k]] !== undefined);
-  if (!hasAny) return undefined;
-  const weights: ScoringWeights = {} as ScoringWeights;
-  for (const k of keys) {
-    weights[k] = parseFloat(stateMap[stateKeys[k]] || String(DEFAULT_SCORING_WEIGHTS[k]));
-  }
-  return weights;
-}
-
-async function scanSingleSymbol(symbol: string, stateMap: Record<string, string>): Promise<void> {
+/**
+ * V3 live scanner — replaces the V2 family-based scanSingleSymbol.
+ *
+ * Flow: scanSymbolV3 → coordinatorOutput → allocateV3Signal → [AI verify] → openPositionV3
+ * V2 strategies.ts / signalRouter.ts are NOT used here (backtest only).
+ */
+async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, string>): Promise<void> {
   lastScanTime = new Date();
   lastScanSymbol = symbol;
   totalScansRun++;
 
-  const features = await computeFeatures(symbol);
-  if (!features) {
-    console.log(`[Scan] ${symbol} | SKIP | reason=insufficient_data`);
+  const result = await scanSymbolV3(symbol);
+
+  if (result.skipped) {
+    console.log(`[V3Scan] ${symbol} | SKIP | reason=${result.skipReason ?? "unknown"}`);
     return;
   }
 
-  accumulateHourlyFeatures(features);
+  const { coordinatorOutput, features, operationalRegime, regimeConfidence, engineResults } = result;
 
-  const cachedRegime = await getCachedRegime(symbol);
-  const regime = cachedRegime ?? classifyRegimeFromHTF(features);
-  if (!cachedRegime) {
-    await cacheRegime(symbol, regime);
-  }
-
-  const latestCandleCloseMs = features.latestCandleCloseTs ? new Date(features.latestCandleCloseTs).getTime() : undefined;
-  const isNewWindow = shouldEvaluateWindow(symbol, latestCandleCloseMs);
-
-  if (!isNewWindow) {
+  if (!coordinatorOutput || !features) {
+    const engineCount = engineResults.length;
+    console.log(`[V3Scan] ${symbol} | regime=${operationalRegime} | engines=${engineCount} | SKIP=no_coordinator_output`);
     return;
   }
 
-  expireStaleSignals();
-
-  if (regime.allowedFamilies.length === 0) {
-    console.log(`[Scan] ${symbol} | regime=${regime.regime} | SKIP=no_allowed_families`);
-    invalidateUnconfirmedPending(symbol, new Set());
-    return;
-  }
-
-  const weights = parseScoringWeights(stateMap);
-  const candidates = runAllStrategies(features, weights, regime);
-  if (candidates.length === 0) {
-    console.log(`[Scan] ${symbol} | regime=${regime.regime} | families=[${regime.allowedFamilies.join(",")}] | candidates=0 | SKIP=no_signals`);
-    invalidateUnconfirmedPending(symbol, new Set());
-    return;
-  }
-
-  console.log(`[Intel] ${symbol} | regime=${regime.regime} | families=[${regime.allowedFamilies.join(",")}] | candidates=${candidates.length} | top=${candidates[0].strategyFamily}(${candidates[0].score.toFixed(3)}, EV=${candidates[0].expectedValue.toFixed(4)})`);
-
-  const windowTs = getWindowTs();
+  const { winner } = coordinatorOutput;
+  console.log(`[V3Scan] ${symbol} | regime=${operationalRegime}(${regimeConfidence.toFixed(2)}) | engine=${winner.engineName} | dir=${coordinatorOutput.resolvedDirection} | conf=${coordinatorOutput.coordinatorConfidence.toFixed(3)} | move=${(winner.projectedMovePct * 100).toFixed(1)}%`);
 
   const aiEnabled = stateMap["ai_verification_enabled"] === "true";
-
   const activeModes = getActiveModes(stateMap);
-
   const modesToProcess: TradingMode[] = activeModes.length > 0 ? activeModes : ["paper" as TradingMode];
   const isIntelOnly = activeModes.length === 0;
 
   for (const mode of modesToProcess) {
     const modePrefix = mode === "paper" ? "paper" : mode === "demo" ? "demo" : "real";
+
     if (!isIntelOnly) {
       const modeSymbolsRaw = stateMap[`${modePrefix}_enabled_symbols`] || stateMap["enabled_symbols"] || "";
       const modeSymbols = modeSymbolsRaw ? modeSymbolsRaw.split(",").map((s: string) => s.trim()).filter(Boolean) : null;
       if (modeSymbols && !modeSymbols.includes(symbol)) continue;
     }
 
-    const effectiveMode = isIntelOnly ? "paper" : mode;
-    const logMode = isIntelOnly ? undefined : mode;
+    const effectiveMode: TradingMode = isIntelOnly ? "paper" : mode;
 
-    const openSymbolTrades = await db.select().from(tradesTable)
-      .where(and(eq(tradesTable.status, "open"), eq(tradesTable.symbol, symbol), eq(tradesTable.mode, effectiveMode)));
-    const existingPositionCount = openSymbolTrades.length;
+    // ── Allocator decision ───────────────────────────────────────────────────
+    const v3Decision = await allocateV3Signal(coordinatorOutput, effectiveMode, stateMap);
 
-    const promotedCandidates: { candidate: typeof candidates[0]; atr: number }[] = [];
-    const confirmedKeysThisWindow = new Set<string>();
-
-    for (const candidate of candidates) {
-      if ((candidate.compositeScore ?? 0) < 75) {
-        continue;
-      }
-      const currentPrice = features.latestClose ?? 0;
-      const family = candidate.strategyFamily || candidate.strategyName;
-      const result = confirmSignal(candidate, windowTs, currentPrice, existingPositionCount, effectiveMode);
-      const candidateKey = `${candidate.symbol}|${family}|${candidate.direction}|${effectiveMode}`;
-      confirmedKeysThisWindow.add(candidateKey);
-
-      if (result.promoted) {
-        console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | PROMOTED after ${result.pending.confirmCount}/${result.pending.requiredConfirmations} windows | pyramid=${result.pending.pyramidLevel} | mode=${effectiveMode}`);
-        promotedCandidates.push({ candidate, atr: features.atr14 });
-        removePendingSignal(symbol, family, candidate.direction, effectiveMode);
-      } else {
-        console.log(`[Confirm] ${symbol} | ${candidate.strategyName} | dir=${candidate.direction} | window=${result.pending.confirmCount}/${result.pending.requiredConfirmations} | score=${candidate.compositeScore} | EV=${candidate.expectedValue.toFixed(4)}`);
-      }
+    if (!v3Decision.allowed) {
+      console.log(`[V3Scan] ${symbol} | ${effectiveMode} | engine=${winner.engineName} | BLOCKED | ${v3Decision.rejectionReason}`);
+      if (isIntelOnly) break;
+      continue;
     }
 
-    invalidateUnconfirmedPending(symbol, confirmedKeysThisWindow, effectiveMode);
+    // ── Optional AI verification ─────────────────────────────────────────────
+    let aiVerdict: string | undefined;
+    let aiBlocked = false;
 
-    const promotedCandidateSignals = promotedCandidates.map(c => c.candidate);
-    const promotedSet = new Set(promotedCandidateSignals.map(c => {
-      const family = c.strategyFamily || c.strategyName;
-      return `${c.symbol}|${family}|${c.direction}|${effectiveMode}`;
-    }));
+    if (aiEnabled && !isIntelOnly) {
+      try {
+        const recentTrades = await db.select().from(tradesTable)
+          .where(eq(tradesTable.symbol, symbol))
+          .orderBy(desc(tradesTable.entryTs))
+          .limit(5);
+        const recentWinLoss = recentTrades.length > 0
+          ? recentTrades.map(t => `${t.side} ${t.status} PnL:${(t.pnl ?? 0).toFixed(2)}`).join("; ")
+          : "No recent trades";
 
-    const execDecisions = promotedCandidateSignals.length > 0
-      ? await routeSignals(promotedCandidateSignals, effectiveMode)
-      : [];
+        const last5Candles = await db.select().from(candlesTable)
+          .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")))
+          .orderBy(desc(candlesTable.openTs))
+          .limit(5);
+        const candleDescriptions = last5Candles.length > 0
+          ? last5Candles.map((c, i) => `[${i + 1}] O:${c.open.toFixed(2)} H:${c.high.toFixed(2)} L:${c.low.toFixed(2)} C:${c.close.toFixed(2)}`).join("; ")
+          : "No recent candles";
 
-    for (const decision of execDecisions) {
-      const compositeScore = decision.signal.compositeScore ?? 0;
+        const verdict = await verifySignal({
+          symbol,
+          direction: coordinatorOutput.resolvedDirection,
+          confidence: coordinatorOutput.coordinatorConfidence,
+          score: coordinatorOutput.coordinatorConfidence,
+          strategyName: winner.engineName,
+          strategyFamily: "trend_continuation",
+          reason: winner.reason,
+          rsi14: features.rsi14 ?? 50,
+          atr14: features.atr14 ?? 0.01,
+          ema20: features.latestClose,
+          bbWidth: features.bbWidth ?? 0,
+          zScore: features.zScore ?? 0,
+          recentCandles: candleDescriptions,
+          recentWinLoss,
+          regimeState: operationalRegime,
+          regimeConfidence,
+          instrumentFamily: symbol.startsWith("BOOM") ? "boom_crash" : symbol.startsWith("CRASH") ? "boom_crash" : "volatility",
+          macroBiasModifier: 0,
+          compositeScore: Math.round(coordinatorOutput.coordinatorConfidence * 100),
+          expectedValue: winner.projectedMovePct,
+          latestClose: features.latestClose,
+        });
 
-      if (!decision.allowed) {
-        decision.aiVerdict = "skipped";
-        decision.aiReasoning = `AI check skipped — signal blocked by system: ${decision.rejectionReason || "unknown"}`;
-      } else if (aiEnabled && compositeScore >= 75) {
-        try {
-          const feats = await computeFeatures(decision.signal.symbol);
-
-          const recentTrades = await db.select().from(tradesTable)
-            .where(eq(tradesTable.symbol, decision.signal.symbol))
-            .orderBy(desc(tradesTable.entryTs))
-            .limit(5);
-          const recentWinLoss = recentTrades.length > 0
-            ? recentTrades.map(t => `${t.side} ${t.status} PnL:${(t.pnl ?? 0).toFixed(2)}`).join("; ")
-            : "No recent trades";
-
-          const last5Candles = await db.select().from(candlesTable)
-            .where(and(eq(candlesTable.symbol, decision.signal.symbol), eq(candlesTable.timeframe, "1m")))
-            .orderBy(desc(candlesTable.openTs))
-            .limit(5);
-          const candleDescriptions = last5Candles.length > 0
-            ? last5Candles.map((c, i) => `[${i+1}] O:${c.open.toFixed(2)} H:${c.high.toFixed(2)} L:${c.low.toFixed(2)} C:${c.close.toFixed(2)} Vol:${c.tickCount}`).join("; ")
-            : "No recent candles";
-
-          const ema20Value = feats ? feats.priceVsEma20 : 0;
-          const currentPrice = last5Candles.length > 0 ? last5Candles[0].close : 0;
-          const estimatedEma20 = currentPrice > 0 ? currentPrice / (1 + ema20Value) : 0;
-
-          const verdict = await verifySignal({
-            symbol: decision.signal.symbol,
-            direction: decision.signal.direction,
-            confidence: decision.signal.confidence,
-            score: decision.signal.score,
-            strategyName: decision.signal.strategyName,
-            strategyFamily: decision.signal.strategyFamily || "trend_continuation",
-            reason: decision.signal.reason,
-            rsi14: feats?.rsi14 ?? 50,
-            atr14: feats?.atr14 ?? 0.01,
-            ema20: estimatedEma20,
-            bbWidth: feats?.bbWidth ?? 0,
-            zScore: feats?.zScore ?? 0,
-            recentCandles: candleDescriptions,
-            recentWinLoss,
-            regimeState: decision.signal.regimeState || regime.regime,
-            regimeConfidence: decision.signal.regimeConfidence || regime.confidence,
-            instrumentFamily: classifyInstrument(decision.signal.symbol),
-            macroBiasModifier: 0,
-            compositeScore: decision.signal.compositeScore,
-            expectedValue: decision.signal.expectedValue,
-            swingHigh: feats?.swingHigh ?? undefined,
-            swingLow: feats?.swingLow ?? undefined,
-            fibRetraceLevels: feats?.fibRetraceLevels ?? undefined,
-            fibExtensionLevels: feats?.fibExtensionLevels ?? undefined,
-            fibExtensionLevelsDown: feats?.fibExtensionLevelsDown ?? undefined,
-            latestClose: feats?.latestClose ?? currentPrice,
-          });
-
-          if (verdict) {
-            decision.aiVerdict = verdict.verdict;
-            decision.aiReasoning = verdict.reasoning;
-            decision.aiConfidenceAdj = verdict.confidenceAdjustment;
-
-            if (verdict.verdict === "disagree") {
-              decision.allowed = false;
-              decision.rejectionReason = `AI disagree: ${verdict.reasoning}`;
-            } else if (verdict.verdict === "uncertain") {
-              decision.capitalAmount = decision.capitalAmount * 0.5;
-            }
+        if (verdict) {
+          aiVerdict = verdict.verdict;
+          if (verdict.verdict === "disagree") {
+            aiBlocked = true;
+            console.log(`[V3Scan] ${symbol} | ${effectiveMode} | AI DISAGREE | ${verdict.reasoning}`);
+          } else if (verdict.verdict === "uncertain") {
+            v3Decision.capitalAmount = v3Decision.capitalAmount * 0.5;
+            console.log(`[V3Scan] ${symbol} | ${effectiveMode} | AI UNCERTAIN | size halved to $${v3Decision.capitalAmount.toFixed(2)}`);
           }
-        } catch (err) {
-          decision.allowed = false;
-          decision.rejectionReason = `AI verification unavailable: ${err instanceof Error ? err.message : "unknown error"}`;
-          decision.aiVerdict = "error";
-          decision.aiReasoning = `Verification failed: ${err instanceof Error ? err.message : "unknown error"}`;
         }
-      }
-
-      if (isIntelOnly) {
-        decision.allowed = false;
-        if (!decision.rejectionReason) {
-          decision.rejectionReason = "No execution mode active — intelligence only";
-        }
+      } catch (err) {
+        console.error(`[V3Scan] AI verification error for ${symbol}:`, err instanceof Error ? err.message : err);
+        aiBlocked = true;
       }
     }
 
-    const allDecisionsForLog: AllocationDecision[] = [];
-
-    for (const candidate of candidates) {
-      const family = candidate.strategyFamily || candidate.strategyName;
-      const candidateKey = `${candidate.symbol}|${family}|${candidate.direction}|${effectiveMode}`;
-      const isPromoted = promotedSet.has(candidateKey);
-
-      const execMatch = execDecisions.find(d => {
-        const dFamily = d.signal.strategyFamily || d.signal.strategyName;
-        return d.signal.symbol === candidate.symbol &&
-          dFamily === family &&
-          d.signal.direction === candidate.direction;
-      });
-
-      if (isPromoted && execMatch) {
-        const sig = execMatch.signal;
-        const composite = sig.compositeScore ?? 0;
-        const modeTag = isIntelOnly ? "intel" : mode;
-        const aiTag = execMatch.aiVerdict ? ` | ai=${execMatch.aiVerdict}` : "";
-        const allocTag = execMatch.allowed ? ` | alloc=${((execMatch.capitalAmount ?? 0)).toFixed(2)}` : "";
-        const rejectTag = !execMatch.allowed && execMatch.rejectionReason ? ` | reject=${execMatch.rejectionReason}` : "";
-        console.log(`[Scan] ${sig.symbol} | ${modeTag} | family=${sig.strategyFamily || sig.strategyName} | dir=${sig.direction} | score=${sig.score.toFixed(3)} | EV=${sig.expectedValue.toFixed(4)} | composite=${composite}${aiTag}${allocTag}${rejectTag} | CONFIRMED | ${execMatch.allowed ? "EXECUTE" : "BLOCKED"}`);
-        allDecisionsForLog.push(execMatch);
-      } else {
-        const logDecision: AllocationDecision = {
-          signal: candidate,
-          allowed: false,
-          capitalAmount: 0,
-          capitalAllocationPct: 0,
-          rejectionReason: "Awaiting multi-window confirmation (not yet promoted)",
-          aiVerdict: "skipped",
-          aiReasoning: "Signal pending confirmation — AI check deferred",
-        };
-        const sig = candidate;
-        const composite = sig.compositeScore ?? 0;
-        const modeTag = isIntelOnly ? "intel" : mode;
-        console.log(`[Scan] ${sig.symbol} | ${modeTag} | family=${sig.strategyFamily || sig.strategyName} | dir=${sig.direction} | score=${sig.score.toFixed(3)} | EV=${sig.expectedValue.toFixed(4)} | composite=${composite} | reject=awaiting_confirmation | BLOCKED`);
-        allDecisionsForLog.push(logDecision);
-      }
+    if (isIntelOnly) {
+      console.log(`[V3Scan] ${symbol} | intel-only | engine=${winner.engineName} | dir=${coordinatorOutput.resolvedDirection} | alloc=$${v3Decision.capitalAmount.toFixed(2)} | INTELLIGENCE_ONLY`);
+      break;
     }
 
+    if (aiBlocked) {
+      if (isIntelOnly) break;
+      continue;
+    }
+
+    // ── Log to signal_log table ──────────────────────────────────────────────
     try {
-      await logSignalDecisions(allDecisionsForLog, logMode);
-      totalDecisionsLogged += allDecisionsForLog.length;
-    } catch (err) {
-      console.error(`[Scheduler] Failed to log ${allDecisionsForLog.length} signal decisions:`, err instanceof Error ? err.message : err);
+      await db.insert(signalLogTable).values({
+        symbol,
+        strategyName: winner.engineName,
+        strategyFamily: "v3_engine",
+        direction: coordinatorOutput.resolvedDirection,
+        score: coordinatorOutput.coordinatorConfidence,
+        compositeScore: Math.round(coordinatorOutput.coordinatorConfidence * 100),
+        expectedValue: winner.projectedMovePct,
+        allowedFlag: true,
+        allocationPct: v3Decision.capitalAllocationPct,
+        mode: effectiveMode,
+        aiVerdict: aiVerdict ?? "skipped",
+        aiReasoning: aiVerdict ? `AI: ${aiVerdict}` : "AI check skipped",
+        regime: operationalRegime,
+        regimeConfidence,
+        executionStatus: "executed",
+      });
+      totalDecisionsLogged++;
+    } catch (logErr) {
+      console.error(`[V3Scan] Signal log error:`, logErr instanceof Error ? logErr.message : logErr);
     }
 
-    if (!isIntelOnly && promotedCandidates.length > 0) {
-      const allowedExec = execDecisions.filter(d => d.allowed);
-      for (const decision of allowedExec) {
-        const matchingCandidate = promotedCandidates.find(c => c.candidate.symbol === decision.signal.symbol && c.candidate.strategyName === decision.signal.strategyName);
-        const atr = matchingCandidate?.atr ?? 0.01;
-        await openPosition(decision, atr, mode);
-        console.log(`[Exec] ${decision.signal.symbol} | ${mode} | ${decision.signal.direction} | family=${decision.signal.strategyFamily || decision.signal.strategyName} | alloc=$${(decision.capitalAmount ?? 0).toFixed(2)} | MULTI-WINDOW-CONFIRMED`);
-      }
+    // ── Open position ────────────────────────────────────────────────────────
+    const tradeId = await openPositionV3({
+      symbol,
+      engineName: winner.engineName,
+      direction: coordinatorOutput.resolvedDirection,
+      confidence: coordinatorOutput.coordinatorConfidence,
+      capitalAmount: v3Decision.capitalAmount,
+      features,
+      mode: effectiveMode,
+    });
+
+    if (tradeId) {
+      console.log(`[V3Exec] ${symbol} | ${effectiveMode} | ${coordinatorOutput.resolvedDirection} | engine=${winner.engineName} | alloc=$${v3Decision.capitalAmount.toFixed(2)} | tradeId=${tradeId} | EXECUTED`);
     }
 
     if (isIntelOnly) break;
@@ -349,7 +241,7 @@ async function scheduleStaggeredScan(symbols: string[], staggerMs: number): Prom
     );
     const freshMap: Record<string, string> = {};
     for (const s of freshStates) freshMap[s.key] = s.value;
-    await scanSingleSymbol(symbol, freshMap);
+    await scanSingleSymbolV3(symbol, freshMap);
   } catch (err) {
     console.error(`[Scheduler] Stagger scan error for ${symbol}:`, err instanceof Error ? err.message : err);
   }
@@ -426,6 +318,9 @@ async function positionManagementCycle(): Promise<void> {
     const legacyMode = stateMap["mode"] || "idle";
     if (!anyActive && legacyMode === "idle") return;
 
+    // Stage 1→2 SL promotion (breakeven at 20% TP progress) — V3 hybrid manager
+    await promoteBreakevenSls();
+    // Stage 2→3 trailing stop + closes — existing trade engine
     await manageOpenPositions();
   } catch (err) {
     console.error("[Scheduler] Position management error:", err instanceof Error ? err.message : err);

@@ -1,0 +1,648 @@
+#89 - V3 Symbol-Native Multi-Engine Hybrid Trading System + Full UI/Docs Redesign
+
+What & Why
+
+The current repo is structurally cleaner after the recent work:
+	•	Task #86 split the API server into core/, infrastructure/, and runtimes/
+	•	structural guardrails were added
+	•	scheduler job management was made explicit/configurable
+	•	the old research Excel/JSON export path was removed in favor of ZIP export
+	•	the app still currently presents a V2 worldview built around:
+	•	universal 5 strategy families
+	•	regime-heavy contextual scoring
+	•	family-based signal routing
+	•	long-hold/full-move trade management
+	•	UI pages and settings reflecting the old model
+
+That is no longer the correct architecture.
+
+The latest symbol research and design decisions require a full V3 redesign of how the system works:
+	•	BOOM300 must use 1 symbol-native engine
+	•	CRASH300 must use 1 symbol-native engine
+	•	R_75 must use 3 symbol-native engines
+	•	R_100 must use 3 symbol-native engines
+
+The new live architecture must be:
+
+feature extraction
+→ symbol regime classification
+→ symbol engine evaluation
+→ symbol coordinator
+→ portfolio allocator
+→ hybrid trade manager
+→ execution
+
+This is not a small tuning task.
+This is a full live-architecture migration to V3, including:
+	•	backend live decision architecture
+	•	hybrid trade management
+	•	portfolio allocation logic
+	•	UI alignment
+	•	settings alignment
+	•	docs/spec alignment
+	•	skill/source-of-truth updates
+
+The app must no longer look or behave like a V2 “5 family scanner” if V3 is the intended operating model.
+
+⸻
+
+Non-negotiable rules
+
+1. V3 must become the only live architecture
+
+The old universal 5-family live strategy architecture must not remain as active live fallback logic.
+
+It may remain in git history, but not as an alternate runtime path.
+Do not preserve the old behavior through fallback routing, compatibility wrappers, bridge files, or silent failover.
+
+If V3 fails, it must fail loudly and visibly.
+Do not silently drop back to the old family-based router in the background.
+
+2. Loud failure only
+
+If critical V3 pieces are not available or invalid at runtime:
+	•	raise explicit errors
+	•	log them clearly
+	•	surface them in diagnostics where appropriate
+	•	fail closed rather than silently continuing with legacy behavior
+
+No silent degradation to the old live decision path.
+
+3. Regime is secondary, not primary
+
+Regime must not be the main entry gate.
+
+Regime may only:
+	•	adjust confidence
+	•	adjust sizing
+	•	suppress clearly invalid engines
+	•	shape hold / exit behavior
+	•	inform coordinator decisions
+
+Entries must be event/setup driven first.
+
+4. Symbol-native engines are mandatory
+
+The new live system must be built around this engine map:
+
+BOOM300:
+	•	boom_expansion_engine
+
+CRASH300:
+	•	crash_expansion_engine
+
+R_75:
+	•	r75_continuation_engine
+	•	r75_reversal_engine
+	•	r75_breakout_engine
+
+R_100:
+	•	r100_continuation_engine
+	•	r100_reversal_engine
+	•	r100_breakout_engine
+
+Total live engines = 8
+
+5. Full UI alignment is required
+
+This is not backend-only.
+
+The UI must be updated so it no longer exposes the old V2 worldview as the main system:
+	•	no primary UI centered on the old 5 families
+	•	no signals/research/settings language that implies the old universal family scanner is still the main model
+	•	no dashboards that explain active logic in old-family terms
+	•	no settings panels that are clearly tuned to the old architecture without V3 alignment
+
+The current app surface includes routes/pages like:
+	•	Overview
+	•	Research
+	•	Signals / Decision Review
+	•	Trades
+	•	Data
+	•	Settings
+	•	Help
+
+Task #89 must align all relevant pages/tabs/settings/labels/content to V3.
+
+6. Update the skill/spec/source-of-truth docs
+
+Task #89 must update the authoritative documents so the repo no longer describes the old architecture as current truth.
+
+This includes, where applicable:
+	•	.agents/skills/deriv-trading-strategy/SKILL.md
+	•	replit.md
+	•	V2_SPECIFICATION.md
+	•	V2_EVOLUTION_BLUEPRINT.md
+	•	any UI help text / tooltips / labels that still describe V2 as the current live model
+
+Do not leave the repo with V3 code but V2 docs as the “truth”.
+
+7. Safe migration only
+
+Do not rewrite the whole app.
+Do not break:
+	•	ingestion / streaming
+	•	backfill
+	•	DB/storage
+	•	paper/demo/real separation
+	•	execution plumbing
+	•	diagnostics/logging
+	•	scheduler boot flow
+	•	research export bundle flow
+	•	current structural guardrails
+
+8. No fake compatibility
+	•	no commented-out replaced code
+	•	no dead fallback wrappers
+	•	no duplicate live ownership
+	•	no “bridge” files masking architectural ambiguity
+	•	no backend-only completion for user-facing V3 behavior
+
+⸻
+
+Done looks like
+	•	V3 symbol-native engine architecture exists and is the only live model
+	•	BOOM300 and CRASH300 each use 1 engine only
+	•	R_75 and R_100 each use 3 engines each
+	•	regime is secondary
+	•	the new live flow is:
+feature extraction
+→ symbol regime classification
+→ symbol engine evaluation
+→ symbol coordinator
+→ portfolio allocator
+→ hybrid trade manager
+→ execution
+	•	hybrid trade management is implemented for V3
+	•	old family-based live logic is removed from active runtime ownership
+	•	UI pages/tabs/settings/help are aligned to V3
+	•	skill/spec/docs are updated to describe V3 correctly
+	•	app still builds, runs, and preserves platform behavior outside the intended architectural migration
+	•	failures are loud, not masked
+
+⸻
+
+Out of scope
+	•	no database redesign unless a minimal additive field is truly required
+	•	no broad monorepo cleanup unrelated to V3
+	•	no deployment redesign
+	•	no unrelated styling/polish work
+	•	no research ZIP export redesign
+	•	no broad frontend redesign unrelated to V3 alignment
+	•	no unnecessary rewrites of ingestion/storage/execution infrastructure if adaptation is enough
+
+⸻
+
+Repo-specific context to respect
+
+The repo has recently received:
+	•	structural alignment work
+	•	regression guardrails
+	•	explicit scheduler configuration cleanup
+	•	research ZIP export cleanup
+
+Do not undo or bypass those improvements.
+
+This task must build on the current structure cleanly and remain compatible with the repo’s latest state.
+
+⸻
+
+Required implementation tasks
+
+1. Inspect and map the current live architecture against V3
+
+Read the actual current code and identify the concrete modules/files responsible for:
+	•	feature extraction
+	•	regime classification
+	•	live strategy evaluation
+	•	scoring
+	•	signal routing
+	•	portfolio allocation / risk
+	•	trade engine / trade management
+	•	scheduler
+	•	execution handoff
+	•	relevant UI pages/tabs/settings/help surfaces
+
+Create an internal migration map of:
+	•	what stays
+	•	what is adapted
+	•	what is bypassed
+	•	what UI/docs must change
+
+Do not rely only on repo docs. Inspect the real modules.
+
+⸻
+
+2. Remove active ownership of the old family-based live path
+
+The old universal 5-family live strategy router / evaluator / decision path must no longer own live runtime behavior.
+
+Requirements:
+	•	remove the old family-based live path from active live execution ownership
+	•	do not leave it as a runtime fallback
+	•	do not silently route around V3 if V3 fails
+	•	if there are legacy modules still needed for historical comparison or non-live research purposes, make that boundary explicit and non-runtime-critical
+
+If any old modules remain:
+	•	they must not be used as live fallback
+	•	they must not silently execute in parallel
+	•	they must not preserve old behavior through wrappers or bridge code
+
+⸻
+
+3. Add V3 symbol-native engine abstractions
+
+Create a proper engine interface/type and engine result shape.
+
+Each engine must return something like:
+	•	valid
+	•	symbol
+	•	engineName
+	•	direction
+	•	confidence
+	•	regimeFit
+	•	entryType
+	•	projectedMovePct
+	•	invalidation
+	•	reason
+	•	metadata
+
+Implement the 8 V3 live engines:
+
+BOOM300:
+	•	boom_expansion_engine
+
+CRASH300:
+	•	crash_expansion_engine
+
+R_75:
+	•	r75_continuation_engine
+	•	r75_reversal_engine
+	•	r75_breakout_engine
+
+R_100:
+	•	r100_continuation_engine
+	•	r100_reversal_engine
+	•	r100_breakout_engine
+
+Rules:
+	•	engines are symbol-native
+	•	engines are event/setup driven
+	•	do not force them to inherit the old universal-family assumptions
+	•	reuse existing feature infrastructure where practical
+
+⸻
+
+4. Rework regime into an operational secondary layer
+
+Keep regime, but change its role.
+
+Create compact operational regime states per symbol, for example:
+	•	boom_expansion
+	•	crash_expansion
+	•	trend_up
+	•	trend_down
+	•	breakout_up
+	•	breakout_down
+	•	exhaustion_up
+	•	exhaustion_down
+	•	neutral
+
+Rules:
+	•	regime must not create trades directly
+	•	regime must not be the primary entry driver
+	•	regime only informs:
+	•	engine suppression when clearly invalid
+	•	confidence/sizing adjustments
+	•	coordinator tie-breaking
+	•	hold/exit behavior
+
+If the current regime/scoring coupling conflicts with V3, adapt or bypass that coupling for the V3 path.
+
+⸻
+
+5. Build engine-ready feature flow
+
+Reuse the current feature infrastructure where practical, but restructure it for V3.
+
+The feature layer must produce:
+	•	shared base features
+	•	symbol-specific derived features
+	•	engine-ready context objects
+
+Requirements:
+	•	do not require every engine to share the same thresholds
+	•	do not preserve the old universal readiness/scoring assumptions if they conflict with V3
+	•	keep it efficient for live scanning
+
+⸻
+
+6. Add symbol coordinators
+
+Create symbol coordinators that:
+	•	run only the allowed engines for that symbol
+	•	resolve conflicts
+	•	output at most one actionable signal per symbol per cycle
+
+Rules:
+	•	BOOM300 and CRASH300 each have one engine only
+	•	R_75 and R_100 must resolve conflicts across three engines
+
+Conflict resolution requirements:
+	•	breakout should generally outrank continuation when breakout is truly active
+	•	reversal should only win when continuation/breakout are not dominant
+	•	coordinator logic must be explicit, deterministic, and inspectable
+
+⸻
+
+7. Add a V3 engine router
+
+Create a new live decision path for V3.
+
+Suggested naming:
+	•	engine_router_v3
+
+The V3 router must:
+	•	gather symbol features
+	•	get operational regime
+	•	run symbol-native engines
+	•	call symbol coordinators
+	•	emit ranked candidate signals
+
+There must not be an active legacy runtime router acting as fallback.
+
+If V3 router setup is incomplete or broken, the system must fail loudly rather than silently using old routing.
+
+⸻
+
+8. Replace family-based live allocation with engine-aware allocation
+
+Create or adapt a portfolio allocator for V3.
+
+It must:
+	•	rank candidate signals across symbols
+	•	enforce max exposure rules
+	•	preserve paper/demo/real separation
+	•	enforce one active direction per symbol unless explicitly justified
+	•	avoid conflicting entries
+	•	size using engine outputs such as confidence and projected move
+	•	reuse existing risk controls where practical
+
+The allocator must consume engine outputs, not legacy family outputs.
+
+Do not let every valid engine trade.
+Do not preserve old family-ranking assumptions if they conflict with V3.
+
+⸻
+
+9. Add V3 hybrid trade manager
+
+Implement a hybrid staged trade manager for V3.
+
+Every V3-managed trade must support:
+
+Stage 1 — extraction
+	•	partial profit on the first meaningful move
+
+Stage 2 — protection
+	•	stop adjustment / capital protection after stage 1
+
+Stage 3 — runner
+	•	hold remainder while structure stays valid
+
+Stage 4 — optional re-entry support
+	•	allow engine-consistent re-entry / continuation logic where appropriate
+
+Rules:
+	•	this is not pure scalping
+	•	this is not pure full-hold-only logic
+	•	hybrid means staged monetization
+	•	do not make time-based exits the primary logic
+	•	symbol-native behavior should be supported where relevant
+
+Integrate with existing execution plumbing and risk controls where possible.
+
+⸻
+
+10. Update execution path ownership cleanly
+
+Make the V3 path the sole active live model.
+
+Requirements:
+	•	V3 engine router becomes the active live path
+	•	old family-based live routing is removed from runtime ownership
+	•	the repo must clearly express that V3 is the live system
+	•	no ambiguous dual ownership
+	•	no silent failover
+
+⸻
+
+11. Update diagnostics/logging for V3
+
+Preserve and extend observability.
+
+V3 diagnostics/logging must expose:
+	•	symbol regime state
+	•	engine outputs
+	•	coordinator decisions
+	•	rejected engine reasons
+	•	allocator rankings
+	•	hybrid trade stage transitions
+	•	loud error conditions when V3 evaluation is unavailable or invalid
+
+Do not break existing diagnostics if they already exist.
+Extend them for V3.
+
+⸻
+
+12. Full UI redesign/alignment for V3
+
+Task #89 must update the current UI so it matches the V3 architecture.
+
+The current UI/pages include:
+	•	Overview
+	•	Research
+	•	Signals / Decision Review
+	•	Trades
+	•	Data
+	•	Settings
+	•	Help
+
+These surfaces currently still reflect the old model in various ways, including examples such as:
+	•	overview/dashboard content referring to built-in strategy families
+	•	decision/signal views grouped around old families, composite scores, and old-family labels
+	•	settings/help/research surfaces likely still describing V2 logic and old-family workflows
+
+Required UI work:
+
+Overview / Dashboard
+	•	remove primary language/UI elements that describe the old universal family scanner as the current system
+	•	update KPIs/cards/tooltips/labels to reflect V3 symbol-native engines
+	•	if recent signals/decision widgets exist, show engine-native terminology instead of old family-native terminology
+
+Signals / Decision Review
+	•	redesign away from old 5-family framing
+	•	do not present V3 as if it still revolves around the legacy family model
+	•	show V3 concepts such as:
+	•	symbol
+	•	engine
+	•	coordinator outcome
+	•	regime context
+	•	allocation outcome
+	•	hybrid trade stage / intent where relevant
+	•	if old-family exports/filters/details remain, replace or adapt them for V3
+
+Research
+	•	align the page with V3 engine research where user-facing logic is exposed
+	•	remove or demote UI that implies the old live model is still the operating truth
+	•	support the V3 symbol/engine worldview in research surfaces where applicable
+
+Trades
+	•	reflect V3 engine ownership and hybrid stage state where relevant
+	•	group/explain trades in V3 terms instead of old family terms where shown
+
+Data
+	•	keep data/streaming functionality intact, but align labels/help text if they still imply the old strategy architecture
+
+Settings
+	•	remove settings organization that assumes the old universal-family live architecture is still primary
+	•	add or reorganize settings to support V3 concepts:
+	•	active symbol-native engines
+	•	engine-level enablement if appropriate
+	•	symbol coordinator / allocator / hybrid trade manager settings if appropriate
+	•	keep it practical and aligned with existing settings patterns
+
+Help / Docs UI
+	•	update help text/tooltips/explanations so the app no longer teaches the old V2 worldview as current truth
+	•	explain the V3 engine model succinctly
+
+Navigation / page ownership
+	•	if a tab/page is fundamentally obsolete under V3, either redesign it for V3 or remove it
+	•	do not keep dead old-architecture UI just because it exists
+	•	no UI/backend drift
+
+⸻
+
+13. Update docs/spec/source-of-truth files to V3
+
+Task #89 must update the repo’s authoritative docs so code, UI, and docs all align.
+
+Update as applicable:
+	•	.agents/skills/deriv-trading-strategy/SKILL.md
+	•	replit.md
+	•	V2_SPECIFICATION.md
+	•	V2_EVOLUTION_BLUEPRINT.md
+	•	any in-repo help/spec/docs that still define the old live model as current truth
+
+Requirements:
+	•	V3 must be documented as the new architecture
+	•	old V2 family-based live logic should be clearly described as retired legacy design, not active runtime behavior
+	•	docs must describe:
+	•	symbol-native engines
+	•	secondary regime role
+	•	symbol coordinators
+	•	engine-aware allocation
+	•	hybrid trade manager
+	•	V3 UI/operating model
+
+Do not leave the repo in a state where the code is V3 but the docs still present V2 as the system of record.
+
+⸻
+
+14. Preserve compatibility with the current platform
+
+The following must continue to work:
+	•	Deriv streaming / ingestion
+	•	backfill
+	•	DB persistence
+	•	paper/demo/real mode separation
+	•	scheduler startup flow
+	•	research exports/backtests/storage
+	•	latest structural guardrails
+	•	current platform boot/runtime behavior outside intended V3 migration
+
+Any compatibility adjustments should be minimal and explicit.
+
+⸻
+
+15. Loud-failure migration safety
+
+This migration must be safe in the sense of code quality and explicit behavior, but not by silently keeping old runtime fallbacks.
+
+Requirements:
+	•	no silent fallback to the old strategy router
+	•	no compatibility bridge that masks broken V3 behavior
+	•	explicit errors if V3 configuration or runtime pieces are missing
+	•	fail closed, not by silently trading the old way
+	•	clearly document how failures surface
+
+⸻
+
+Required module targets
+
+Use existing repo structure and naming conventions where practical.
+
+Add or adapt modules along these lines:
+	•	engineRegistry
+	•	engine interface / types
+	•	symbol coordinators
+	•	V3 engine router
+	•	engine-ready feature builder/adapters
+	•	operational regime classifier adapter
+	•	portfolio allocator v3
+	•	hybrid trade manager v3
+
+If equivalent modules already exist, adapt them rather than duplicating responsibility.
+
+⸻
+
+Required completion report
+
+Return:
+	1.	exact files/modules added
+	2.	exact files/modules changed
+	3.	old live path vs new V3 live path
+	4.	how loud-failure behavior works when V3 is invalid or unavailable
+	5.	how BOOM300 and CRASH300 are each restricted to 1 engine
+	6.	how R_75 and R_100 are each mapped to 3 engines
+	7.	how symbol coordinators resolve conflicts
+	8.	how the portfolio allocator ranks engine signals
+	9.	how the hybrid trade manager stages work
+	10.	which UI pages/tabs/settings/help surfaces were changed for V3
+	11.	which docs/spec/source-of-truth files were updated
+	12.	current verification/build result
+	13.	explicit confirmation:
+
+	•	ingestion not broken
+	•	DB/storage not broken
+	•	paper/demo/real mode separation not broken
+	•	old family live path is no longer active runtime fallback
+	•	V3 is now the live model
+	•	UI/docs/settings are aligned to V3 rather than the old 5-family worldview
+	•	failures are loud, not silent
+
+⸻
+
+Quality bar
+
+This must be a real V3 migration.
+
+The repo must not come out of Task #89 with:
+	•	V3 backend code but V2 UI
+	•	V3 execution path but V2 docs/skill/spec as the source of truth
+	•	V3 engines hidden behind old-family labels everywhere
+	•	old signals/research/settings/help surfaces still teaching the old 5-family system as the main model
+	•	silent fallback to legacy live logic
+
+The result must be:
+	•	symbol-native
+	•	engine-based
+	•	event/setup-driven
+	•	regime-secondary
+	•	hybrid-monetized
+	•	UI-aligned
+	•	docs-aligned
+	•	loud-failure by design
+	•	safe to operate without silent legacy behavior
+
+Implement the migration accordingly.

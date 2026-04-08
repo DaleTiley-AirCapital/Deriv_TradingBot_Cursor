@@ -7,25 +7,43 @@ import { ClipboardList, ArrowUpRight, ArrowDownRight, Brain, ChevronDown, Chevro
 import { downloadCSV, downloadJSON } from "@/lib/export";
 import { motion, AnimatePresence } from "framer-motion";
 
-const FAMILIES = ["trend_continuation", "mean_reversion", "spike_cluster_recovery", "swing_exhaustion", "trendline_breakout"] as const;
+const FAMILIES = [
+  "boom_expansion_engine",
+  "crash_expansion_engine",
+  "r75_continuation_engine",
+  "r75_reversal_engine",
+  "r75_breakout_engine",
+  "r100_continuation_engine",
+  "r100_reversal_engine",
+  "r100_breakout_engine",
+  "v3_engine",
+] as const;
 
 const STATUSES = ["approved", "blocked"] as const;
 const AI_VERDICTS = ["agree", "disagree", "uncertain"] as const;
 
 const FAMILY_LABELS: Record<string, string> = {
-  trend_continuation: "Trend",
-  mean_reversion: "Reversion",
-  spike_cluster_recovery: "Spike Cluster",
-  swing_exhaustion: "Swing Exhaust",
-  trendline_breakout: "Trendline",
+  boom_expansion_engine: "Boom Expansion",
+  crash_expansion_engine: "Crash Expansion",
+  r75_continuation_engine: "R75 Continuation",
+  r75_reversal_engine: "R75 Reversal",
+  r75_breakout_engine: "R75 Breakout",
+  r100_continuation_engine: "R100 Continuation",
+  r100_reversal_engine: "R100 Reversal",
+  r100_breakout_engine: "R100 Breakout",
+  v3_engine: "V3 Engine",
 };
 
 const FAMILY_COLORS: Record<string, string> = {
-  trend_continuation: "bg-blue-500/12 text-blue-400 border-blue-500/25",
-  mean_reversion: "bg-purple-500/12 text-purple-400 border-purple-500/25",
-  spike_cluster_recovery: "bg-pink-500/12 text-pink-400 border-pink-500/25",
-  swing_exhaustion: "bg-orange-500/12 text-orange-400 border-orange-500/25",
-  trendline_breakout: "bg-cyan-500/12 text-cyan-400 border-cyan-500/25",
+  boom_expansion_engine: "bg-emerald-500/12 text-emerald-400 border-emerald-500/25",
+  crash_expansion_engine: "bg-red-500/12 text-red-400 border-red-500/25",
+  r75_continuation_engine: "bg-blue-500/12 text-blue-400 border-blue-500/25",
+  r75_reversal_engine: "bg-purple-500/12 text-purple-400 border-purple-500/25",
+  r75_breakout_engine: "bg-cyan-500/12 text-cyan-400 border-cyan-500/25",
+  r100_continuation_engine: "bg-indigo-500/12 text-indigo-400 border-indigo-500/25",
+  r100_reversal_engine: "bg-violet-500/12 text-violet-400 border-violet-500/25",
+  r100_breakout_engine: "bg-sky-500/12 text-sky-400 border-sky-500/25",
+  v3_engine: "bg-amber-500/12 text-amber-400 border-amber-500/25",
 };
 
 function AIVerdictBadge({ verdict, blocked }: { verdict: string | null | undefined; blocked?: boolean }) {

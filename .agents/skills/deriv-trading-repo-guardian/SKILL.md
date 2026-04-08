@@ -27,6 +27,55 @@ app/            — routing, app wiring, dependency composition
 
 ---
 
+## V3 Live Architecture (current — as of Task #89)
+
+**V3 replaces the V2 5-family universal scanner for the live path only.**
+V2 strategies.ts / signalRouter.ts are BACKTEST-ONLY — not called in live scan.
+
+### 8 Symbol-Native Engines
+| Symbol  | Engine(s) |
+|---------|-----------|
+| BOOM300 | `boom_expansion_engine` |
+| CRASH300| `crash_expansion_engine` |
+| R_75    | `r75_continuation_engine`, `r75_reversal_engine`, `r75_breakout_engine` |
+| R_100   | `r100_continuation_engine`, `r100_reversal_engine`, `r100_breakout_engine` |
+
+### V3 Core Files (all in `src/core/`)
+| File | Responsibility |
+|------|---------------|
+| `engineTypes.ts` | `EngineResult`, `EngineContext`, `CoordinatorOutput` types |
+| `engines/boom300Engine.ts` | boom_expansion_engine |
+| `engines/crash300Engine.ts` | crash_expansion_engine |
+| `engines/r75Engines.ts` | r75_continuation, r75_reversal, r75_breakout |
+| `engines/r100Engines.ts` | r100_continuation, r100_reversal, r100_breakout |
+| `engineRegistry.ts` | Symbol → engine(s) mapping; loud failure on misconfiguration |
+| `symbolCoordinator.ts` | Per-symbol conflict resolution; sets `resolvedDirection` + `coordinatorConfidence` |
+| `engineRouterV3.ts` | Live scan entry: `scanSymbolV3()` → `V3ScanResult` (includes features) |
+| `portfolioAllocatorV3.ts` | Engine-aware risk allocation; `allocateV3Signal()` |
+| `hybridTradeManager.ts` | Stage 1→2 SL promotion at 20% TP; `promoteBreakevenSls()` |
+
+### V3 Scheduler Live Path
+```
+scheduleStaggeredScan → scanSingleSymbolV3(symbol, stateMap)
+  → scanSymbolV3(symbol)           # engineRouterV3
+  → allocateV3Signal(coordinator)  # portfolioAllocatorV3
+  → [verifySignal()]               # openai.ts (optional AI verify)
+  → openPositionV3(...)            # tradeEngine.ts
+```
+
+### V3 Position Management
+```
+positionManagementCycle:
+  1. promoteBreakevenSls()   # hybridTradeManager — stage 1→2 SL promotion
+  2. manageOpenPositions()   # tradeEngine — stage 3 trailing + closes
+```
+
+### DB Notes
+- No schema changes for V3. `strategyName` field stores engine name. `notes` field has `"V3 HybridStaged | ..."` prefix.
+- `signalLogTable.strategyFamily` = `"v3_engine"` for V3 signals.
+
+---
+
 ## Architecture Rules
 
 - Code is organized by responsibility, not by UI tab or screen
@@ -34,6 +83,8 @@ app/            — routing, app wiring, dependency composition
 - Backtests must replay the same trading logic used in live trading — no separate trading-decision implementation for backtests
 - Runtimes are thin wrappers only — differences allowed only for: data source, scheduling, execution adapter, simulation details
 - Risk logic belongs in core; risk configuration belongs in settings UI
+- **V2 5-family scanner (strategies.ts + signalRouter.ts)**: BACKTEST-ONLY — no changes to live path allowed
+- **V3 engines**: all live signal decisions flow through `engineRouterV3.ts` → `symbolCoordinator.ts` → `portfolioAllocatorV3.ts`
 
 ---
 
