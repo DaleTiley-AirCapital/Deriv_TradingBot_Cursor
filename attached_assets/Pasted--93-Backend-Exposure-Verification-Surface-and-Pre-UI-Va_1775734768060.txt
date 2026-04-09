@@ -1,0 +1,282 @@
+#93 - Backend Exposure, Verification Surface, and Pre-UI Validation
+
+## What & Why
+Task #92 completed major backend work:
+- data integrity layer
+- gap detection and repair
+- deterministic timeframe enrichment
+- export hardening
+- AI research job foundation
+- diagnostics endpoints
+- research/top-up/enrich routes
+
+However, none of this is meaningfully usable yet because it is not exposed in the UI in a way that allows inspection, validation, or operational testing.
+
+Before doing the full V3 UI rebuild, we need a focused task that:
+- exposes the new backend capabilities in a minimal but usable way
+- allows end-to-end validation from the app
+- confirms what is actually wired and working
+- gives us confidence before we redesign the main UI surface
+
+This is NOT the final V3 UI rebuild.
+This is a temporary but real verification/admin surface.
+
+---
+
+## Non-negotiable rules
+- Do NOT do the full UI redesign in this task
+- Do NOT revert to or reinforce V2 concepts
+- Do NOT build decorative UI that hides backend truth
+- Do NOT silently stub missing backend behavior
+- If an endpoint is broken or incomplete, surface that clearly
+- Fail loudly and visibly in the UI for broken backend calls
+- Keep the same general look and feel of the app, but prioritize truth and operability over polish
+- Do NOT change trading strategy logic in this task
+- Do NOT redesign engines/coordinator/allocator/hybrid logic in this task unless a small bug is discovered while exposing them
+- Do NOT invent fake metrics
+
+---
+
+## Objective
+Create a minimal but practical V3 backend verification surface inside the app so that the following can be inspected and tested from the UI:
+
+1. data integrity status
+2. timeframe enrichment readiness
+3. symbol-level data coverage
+4. gap repair / top-up execution
+5. enrichment execution
+6. clean export readiness
+7. AI research job launch/status/result
+8. V3 engine/coordinator/allocator visibility where backend data already exists
+9. active streaming symbol configuration visibility
+
+This task is about exposing and verifying the backend truth before the full UI rebuild.
+
+---
+
+## Done looks like
+- there is a clearly labeled V3 backend/admin verification area in the UI
+- it can call the new backend endpoints
+- it shows real backend results, not placeholders
+- integrity status can be viewed across symbols/timeframes
+- top-up/enrich/research jobs can be launched from the app
+- async AI job status can be polled/viewed
+- errors are clearly surfaced
+- the report back tells us exactly what is working, what is still awkward, and what the final UI must support
+
+---
+
+## Out of scope
+- no full navigation redesign
+- no final V3 overview/signals/trades/settings/help rebuild
+- no visual overhaul of the entire app
+- no backend architectural rewrite unless a small bug is found while wiring exposure
+- no legacy V2 cleanup beyond what is necessary to avoid confusion in this temporary surface
+
+---
+
+## Tasks
+
+### 1. Add a temporary V3 backend verification section
+Create a clearly named temporary section/page set in the frontend, such as:
+- V3 Backend
+- V3 Admin
+- V3 Verification
+- or similar
+
+It should be obvious that this is an internal validation surface, not the final polished UI.
+
+It may be:
+- one page with tabs
+- or a few focused pages
+
+But keep it compact and usable.
+
+---
+
+### 2. Expose data integrity diagnostics
+Wire the new backend diagnostics endpoints into the UI.
+
+Required views:
+- all-symbol integrity grid
+- single-symbol detail view
+
+Show at minimum:
+- symbol
+- timeframe
+- row count / availability
+- first timestamp
+- last timestamp
+- duplicate count
+- missing interval count
+- ascending-order status
+- coverage/health if available
+- enrichment readiness if available
+
+If some fields are not yet returned by the backend, expose what exists and report the gap clearly.
+
+Do not hardcode 4 symbols only if the backend supports more.
+Show the real backend truth.
+
+---
+
+### 3. Expose timeframe enrichment status
+Add a view for enrichment readiness by symbol/timeframe.
+
+Required behavior:
+- show which timeframes exist
+- show which are ready / empty / missing base / not enriched
+- allow triggering enrichment for a symbol
+- allow triggering bulk enrichment where supported
+
+This should let us verify that the timeframe set is actually usable, not merely declared in code.
+
+---
+
+### 4. Expose data top-up / gap repair actions
+Add UI controls for the new backend top-up / repair flow.
+
+Required behavior:
+- choose symbol
+- launch data top-up / repair
+- show request status
+- show result summary
+- refresh integrity state after completion
+
+If the backend supports async behavior, poll it or show progress clearly.
+If it is sync, show the result clearly.
+
+Errors must be visible.
+
+---
+
+### 5. Expose research enrichment action
+Add UI controls to run enrichment explicitly.
+
+Required behavior:
+- choose symbol or all symbols if supported
+- trigger enrichment
+- show result summary
+- refresh readiness/integrity views after completion
+
+---
+
+### 6. Expose AI research jobs
+Add a temporary but usable AI research surface.
+
+Required behavior:
+- choose symbol
+- run synchronous AI analysis if supported
+- run background AI analysis if supported
+- poll/view background job status
+- display structured research result
+
+Show the real backend output fields.
+Do not reduce it to a single vague summary.
+
+If the backend returns structured fields like:
+- move frequency
+- move size
+- hold duration
+- likely setups
+- useful timeframes
+- drift/change observations
+
+display them properly.
+
+If the current backend result shape is awkward, expose it clearly and report what should change before the final UI rebuild.
+
+---
+
+### 7. Expose export readiness / validation visibility
+Without doing the full export UX redesign, expose enough to verify:
+- whether a symbol/timeframe dataset is export-ready
+- whether integrity issues remain
+- whether export would fail or succeed cleanly
+
+If there is already an export endpoint, wire a simple operator-facing trigger for testing.
+At minimum, show validation state and result messaging.
+
+---
+
+### 8. Expose streaming symbol truth
+Create a simple view showing:
+- what symbols are currently configured for streaming
+- whether this is hardcoded or state-driven
+- what the backend believes is active
+
+If backend controls for per-symbol streaming do not yet exist, do not fake them.
+Instead:
+- surface the current truth clearly
+- report what backend support is still needed for proper per-symbol toggles in the final UI
+
+This is important because Data/Diagnostics/Research must ultimately align with actual streaming and stored data behavior.
+
+---
+
+### 9. Expose V3 runtime visibility where possible
+If backend state/endpoints/logs already expose useful V3 runtime information, add a simple view for:
+- engine outputs
+- coordinator decisions
+- allocator outcomes
+- hybrid stage state
+- runtime errors
+
+Do not invent new backend behavior in this task unless a small exposure helper is needed.
+The goal is to see what already exists and what still needs proper surfacing.
+
+---
+
+### 10. Clearly mark what is temporary
+This verification surface must clearly distinguish:
+- temporary backend/admin validation UI
+from
+- the eventual final V3 user-facing UI
+
+Use simple labels like:
+- “Temporary V3 Verification”
+- “Admin/Debug”
+- “Backend Validation”
+
+So we do not confuse this task with the final rebuild.
+
+---
+
+### 11. Report what the final UI must support
+At the end of the task, provide a report that tells us:
+
+1. which backend capabilities are now exposed and working
+2. which ones are exposed but awkward
+3. which ones still need backend adjustments before the full UI rebuild
+4. what the final V3 UI must include based on real backend behavior
+5. what current legacy pages/tabs can be safely replaced later
+
+This report is critical because it will drive the final UI rebuild task.
+
+---
+
+## Required deliverables
+Return:
+
+1. exact frontend files/modules added
+2. exact frontend files/modules changed
+3. which backend endpoints are now exposed in the UI
+4. what each new verification page/tab does
+5. what works end to end
+6. what failed or is still awkward
+7. what backend limitations were discovered during exposure
+8. what the final V3 UI rebuild now needs to support
+9. build/test result
+10. explicit confirmation:
+   - no fake data was used
+   - no silent fallback behavior was added
+   - this is a temporary verification surface, not the final UI rebuild
+
+---
+
+## Quality bar
+This task is successful only if, after completion, we can actually use the app to inspect and validate the backend work from Task #92.
+
+The result should make the backend visible and testable enough that the full V3 UI rebuild can be designed with confidence.
+
+Implement accordingly.

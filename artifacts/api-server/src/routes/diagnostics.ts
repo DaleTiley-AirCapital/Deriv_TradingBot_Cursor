@@ -7,6 +7,9 @@ import {
 } from "../core/dataIntegrity.js";
 import { getEnrichmentStatus } from "../core/candleEnrichment.js";
 import { ALL_SYMBOLS } from "../infrastructure/deriv.js";
+import { db } from "@workspace/db";
+import { candlesTable } from "@workspace/db";
+import { inArray, and, gte, count, min, max, sql } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -94,10 +97,59 @@ router.get("/diagnostics/data-integrity", async (req, res) => {
       gaps?: Array<{ gapStart: number; gapEnd: number; expectedCount: number; label: string }>;
     }> = [];
 
-    for (const symbol of symbols) {
-      for (const tf of timeframes) {
-        try {
-          if (fullReport) {
+    if (!fullReport) {
+      // Fast path: single GROUP BY query — O(1) instead of O(symbols × timeframes)
+      const cutoff = Math.floor(Date.now() / 1000) - lookbackDays * 86400;
+      const nowSecs = Math.floor(Date.now() / 1000);
+
+      const rows = await db
+        .select({
+          symbol:    candlesTable.symbol,
+          timeframe: candlesTable.timeframe,
+          cnt:       count(),
+          firstTs:   min(candlesTable.openTs),
+          lastTs:    max(candlesTable.openTs),
+        })
+        .from(candlesTable)
+        .where(
+          and(
+            inArray(candlesTable.symbol, symbols),
+            inArray(candlesTable.timeframe, timeframes),
+            gte(candlesTable.openTs, cutoff),
+          ),
+        )
+        .groupBy(candlesTable.symbol, candlesTable.timeframe);
+
+      // Build a lookup from the aggregate results
+      const lookup = new Map<string, typeof rows[0]>();
+      for (const r of rows) lookup.set(`${r.symbol}|${r.timeframe}`, r);
+
+      for (const symbol of symbols) {
+        for (const tf of timeframes) {
+          const r = lookup.get(`${symbol}|${tf}`);
+          const cnt = Number(r?.cnt ?? 0);
+          const lastTs = r?.lastTs ?? null;
+          const ageHours = lastTs ? Math.round((nowSecs - lastTs) / 3600 * 10) / 10 : null;
+          results.push({
+            symbol,
+            timeframe: tf,
+            totalCandles: cnt,
+            firstDate: r?.firstTs ? new Date(r.firstTs * 1000).toISOString().slice(0, 10) : null,
+            lastDate:  lastTs     ? new Date(lastTs  * 1000).toISOString().slice(0, 10) : null,
+            ageHours,
+            gapCount: 0,
+            duplicateCount: 0,
+            missingIntervalCount: 0,
+            coveragePct: 0,
+            isHealthy: cnt > 0,
+          });
+        }
+      }
+    } else {
+      // Full path: per-symbol/TF gap analysis (slower but thorough)
+      for (const symbol of symbols) {
+        for (const tf of timeframes) {
+          try {
             const report = await getIntegrityReport(symbol, tf, lookbackDays);
             results.push({
               symbol,
@@ -120,37 +172,21 @@ router.get("/diagnostics/data-integrity", async (req, res) => {
                 label: g.label,
               })),
             });
-          } else {
-            const summary = await getSymbolDataSummary(symbol);
-            const tfEntry = summary.timeframes.find(t => t.timeframe === tf);
+          } catch (err) {
             results.push({
               symbol,
               timeframe: tf,
-              totalCandles: tfEntry?.count ?? 0,
-              firstDate: tfEntry?.firstDate ?? null,
-              lastDate: tfEntry?.lastDate ?? null,
-              ageHours: tfEntry?.ageHours ?? null,
-              gapCount: 0,
-              duplicateCount: 0,
-              missingIntervalCount: 0,
+              totalCandles: 0,
+              firstDate: null,
+              lastDate: null,
+              ageHours: null,
+              gapCount: -1,
+              duplicateCount: -1,
+              missingIntervalCount: -1,
               coveragePct: 0,
-              isHealthy: (tfEntry?.count ?? 0) > 0,
+              isHealthy: false,
             });
           }
-        } catch (err) {
-          results.push({
-            symbol,
-            timeframe: tf,
-            totalCandles: 0,
-            firstDate: null,
-            lastDate: null,
-            ageHours: null,
-            gapCount: -1,
-            duplicateCount: -1,
-            missingIntervalCount: -1,
-            coveragePct: 0,
-            isHealthy: false,
-          });
         }
       }
     }

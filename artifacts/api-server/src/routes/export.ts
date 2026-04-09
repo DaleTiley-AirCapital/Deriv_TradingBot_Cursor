@@ -1,9 +1,11 @@
 import { Router, type IRouter } from "express";
 import { streamResearchExport } from "../infrastructure/candleExport.js";
+import { ENRICHMENT_TIMEFRAMES } from "../core/dataIntegrity.js";
 
 const router: IRouter = Router();
 
-const SUPPORTED_TIMEFRAMES = new Set(["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"]);
+// Aligned with ENRICHMENT_TIMEFRAMES — the single source of truth for all supported TFs.
+const SUPPORTED_TIMEFRAMES = new Set(Object.keys(ENRICHMENT_TIMEFRAMES));
 const SYMBOL_RE = /^[A-Z0-9_]{1,20}$/;
 
 router.post("/export/research", async (req, res): Promise<void> => {

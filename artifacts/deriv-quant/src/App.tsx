@@ -14,6 +14,7 @@ import Trades from "@/pages/trades";
 import DataManager from "@/pages/data";
 import Settings from "@/pages/settings";
 import Help from "@/pages/help";
+import V3Backend from "@/pages/v3-backend";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -80,6 +81,7 @@ function Router() {
         <Route path="/data" component={DataManager} />
         <Route path="/settings" component={Settings} />
         <Route path="/help" component={Help} />
+        <Route path="/v3-backend" component={V3Backend} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>
