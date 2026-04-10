@@ -10,6 +10,7 @@ import {
 import {
   getIntegrityReport,
   getSymbolDataSummary,
+  getComprehensiveIntegrityReport,
   ENRICHMENT_TIMEFRAMES,
 } from "../core/dataIntegrity.js";
 import { getEnrichmentStatus } from "../core/candleEnrichment.js";
@@ -282,6 +283,7 @@ router.get("/diagnostics/data-integrity", async (req, res) => {
  *
  * Full enrichment status for a specific symbol.
  * Returns per-timeframe row counts and readiness flags.
+ * base1mCount is taken directly from the summary (not from enrichment status).
  */
 router.get("/diagnostics/data-integrity/:symbol", async (req, res) => {
   try {
@@ -292,17 +294,39 @@ router.get("/diagnostics/data-integrity/:symbol", async (req, res) => {
       getEnrichmentStatus(symbol),
     ]);
 
-    const ready = enrichment.filter(e => e.status === "ready").length;
-    const empty = enrichment.filter(e => e.status === "empty").length;
+    const ready  = enrichment.filter(e => e.status === "ready").length;
+    const empty  = enrichment.filter(e => e.status === "empty").length;
     const noBase = enrichment.filter(e => e.status === "no_base").length;
 
     res.json({
       symbol,
-      base1mCount: summary.timeframes.find(t => t.timeframe === "1m")?.count ?? 0,
+      base1mCount:       summary.base1mCount,
       enrichmentSummary: { ready, empty, noBase },
-      timeframes: enrichment,
-      checkedAt: new Date().toISOString(),
+      timeframes:        enrichment,
+      checkedAt:         new Date().toISOString(),
     });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+/**
+ * GET /diagnostics/data-integrity/:symbol/full
+ *
+ * Comprehensive integrity report for a symbol across ALL 12 timeframes.
+ * Returns per-TF: candle count, first/last date, gap count, missing candle count,
+ * coverage %, interpolated candle count, and an overall health flag.
+ *
+ * More expensive than the summary endpoint — runs detectCandleGaps for each TF.
+ * Use for admin diagnostics and data verification workflows.
+ */
+router.get("/diagnostics/data-integrity/:symbol/full", async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const lookbackDays = parseInt(req.query.lookbackDays as string || "365", 10);
+
+    const report = await getComprehensiveIntegrityReport(symbol, lookbackDays);
+    res.json(report);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }

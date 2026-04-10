@@ -31,6 +31,8 @@ interface ExportCandle {
   low: number;
   close: number;
   tickCount: number;
+  isInterpolated?: boolean;
+  source?: string;
 }
 
 interface ChunkMeta {
@@ -180,6 +182,7 @@ export async function streamResearchExport(
   let prevTs: number | null = null;
   let duplicateCount = 0;
   let missingCount = 0;
+  let interpolatedCount = 0;
   let strictlyAscending = true;
 
   for (const plan of chunkPlans) {
@@ -192,12 +195,14 @@ export async function streamResearchExport(
       const batchSize = Math.min(DB_BATCH_SIZE, remaining);
       const batch = await backgroundDb
         .select({
-          openTs: candlesTable.openTs,
-          open: candlesTable.open,
-          high: candlesTable.high,
-          low: candlesTable.low,
-          close: candlesTable.close,
-          tickCount: candlesTable.tickCount,
+          openTs:         candlesTable.openTs,
+          open:           candlesTable.open,
+          high:           candlesTable.high,
+          low:            candlesTable.low,
+          close:          candlesTable.close,
+          tickCount:      candlesTable.tickCount,
+          isInterpolated: candlesTable.isInterpolated,
+          source:         candlesTable.source,
         })
         .from(candlesTable)
         .where(and(
@@ -230,13 +235,18 @@ export async function streamResearchExport(
         if (firstTs === null) firstTs = ts;
         lastTs = ts;
 
+        const isInterp = row.isInterpolated ?? false;
+        if (isInterp) interpolatedCount++;
+
         candles.push({
-          timestamp: ts,
-          open: row.open,
-          high: row.high,
-          low: row.low,
-          close: row.close,
-          tickCount: row.tickCount,
+          timestamp:      ts,
+          open:           row.open,
+          high:           row.high,
+          low:            row.low,
+          close:          row.close,
+          tickCount:      row.tickCount,
+          isInterpolated: isInterp,
+          source:         row.source ?? "historical",
         });
       }
 
@@ -308,19 +318,23 @@ export async function streamResearchExport(
   if (totalExported !== totalExpected) {
     notes.push(`Candle count mismatch: COUNT query returned ${totalExpected}, actual export produced ${totalExported}.`);
   }
+  if (interpolatedCount > 0) {
+    notes.push(`${interpolatedCount} interpolated (carry-forward) candle(s) included — marked isInterpolated=true. Exclude from signal generation.`);
+  }
 
   const validationPassed = strictlyAscending && duplicateCount === 0 && totalExported === totalExpected;
 
   const validation = {
     symbol,
     timeframe,
-    totalCandlesExpected: totalExpected,
-    totalCandlesExported: totalExported,
-    duplicateTimestampCount: duplicateCount,
-    missingIntervalCount: missingCount,
+    totalCandlesExpected:        totalExpected,
+    totalCandlesExported:        totalExported,
+    duplicateTimestampCount:     duplicateCount,
+    missingIntervalCount:        missingCount,
+    interpolatedCandleCount:     interpolatedCount,
     timestampsStrictlyAscending: strictlyAscending,
-    firstTimestamp: firstTs,
-    lastTimestamp: lastTs,
+    firstTimestamp:              firstTs,
+    lastTimestamp:               lastTs,
     validationPassed,
     notes: notes.length > 0 ? notes.join(" ") : "All validation checks passed.",
   };

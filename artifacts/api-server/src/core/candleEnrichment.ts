@@ -153,20 +153,23 @@ export async function enrichSingleTimeframe(
     const insertValues: Array<{
       symbol: string; timeframe: string; openTs: number; closeTs: number;
       open: number; high: number; low: number; close: number; tickCount: number;
+      source: string; isInterpolated: boolean;
     }> = [];
 
     for (const [bucketTs, agg] of buckets.entries()) {
       if (!isLastBatch && bucketTs === lastBucket) continue; // incomplete tail
       insertValues.push({
         symbol,
-        timeframe: targetTf,
-        openTs:    bucketTs,
-        closeTs:   bucketTs + tfSecs,
-        open:      agg.open,
-        high:      agg.high,
-        low:       agg.low,
-        close:     agg.close,
-        tickCount: agg.tickCount,
+        timeframe:      targetTf,
+        openTs:         bucketTs,
+        closeTs:        bucketTs + tfSecs,
+        open:           agg.open,
+        high:           agg.high,
+        low:            agg.low,
+        close:          agg.close,
+        tickCount:      agg.tickCount,
+        source:         "enriched",
+        isInterpolated: false,
       });
       bucketsProcessed++;
     }

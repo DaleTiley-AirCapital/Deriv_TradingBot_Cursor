@@ -1,0 +1,162 @@
+#96 - Canonical Candle Unification, Full Gap Repair, and Data Pipeline Correction
+
+## Objective
+Fix the root cause of data inconsistency by ensuring:
+- ALL candle data (historical + live) is unified into ONE canonical source
+- ALL missing candles are backfilled correctly
+- enrichment applies to ALL candles
+- export, AI, and engines all read from the SAME truth
+
+---
+
+## 1. Identify ALL candle data sources
+You must explicitly list:
+
+- historical/backfill storage location
+- live tick → 1m candle storage
+- enriched candle storage
+- any temp/intermediate tables
+
+Return:
+- exact table names / file paths
+- schema differences
+- how each is written to
+
+---
+
+## 2. Define ONE canonical candle table
+
+Create or confirm ONE table:
+
+canonical_candles:
+- symbol
+- timeframe
+- timestamp (PRIMARY KEY)
+- open
+- high
+- low
+- close
+- volume (optional)
+- tickCount
+- source (historical/live/topup)
+- isInterpolated (bool)
+- createdAt
+- updatedAt
+
+ALL pipelines must write here.
+
+---
+
+## 3. Merge ALL existing data into canonical
+
+Process:
+- pull from all existing sources
+- merge by timestamp
+- resolve conflicts:
+  - prefer real tick data over historical
+  - prefer non-zero tickCount
+- deduplicate
+- sort
+
+---
+
+## 4. Build full gap detection + repair engine
+
+For each symbol/timeframe:
+
+- scan full timestamp range
+- detect ALL missing minutes
+- for each gap:
+  - fetch from historical API if available
+  - OR reconstruct using:
+    - last close carry-forward (flag as interpolated)
+- insert missing candles
+
+Output:
+- total gaps found
+- total gaps repaired
+- unrecoverable gaps
+
+---
+
+## 5. Force re-enrichment of ALL candles
+
+- run enrichment across ENTIRE canonical dataset
+- not just new data
+- ensure:
+  - no partial enrichment
+  - no split datasets
+
+---
+
+## 6. Fix top-up logic
+
+Top-up must:
+- check canonical table ONLY
+- detect missing timestamps
+- fill gaps regardless of source
+- re-enrich after fill
+
+---
+
+## 7. Fix live pipeline
+
+Live tick ingestion must:
+- write directly into canonical_candles
+- not into a separate table
+
+---
+
+## 8. Fix export
+
+Export must:
+- read ONLY from canonical_candles
+- guarantee:
+  - sorted data
+  - no duplicates
+  - no gaps (unless explicitly allowed)
+
+---
+
+## 9. Add integrity verification endpoint
+
+Return:
+- total rows
+- first timestamp
+- last timestamp
+- gap count
+- duplicate count
+- % completeness
+
+---
+
+## 10. Re-run BOOM300 verification
+
+After fixes:
+- regenerate export
+- verify:
+  - zero gaps
+  - correct first/last
+  - consistent tickCount handling
+
+---
+
+## Done criteria
+
+- canonical dataset is unified
+- no missing minutes after repair
+- top-up works across ALL data
+- export is fully consistent
+- AI uses correct data
+- BOOM300 dataset is clean and continuous
+
+---
+
+## Critical rule
+
+There must NEVER again be:
+- multiple candle sources
+- partial datasets
+- gaps after top-up
+
+The system must maintain ONE continuous canonical truth at all times.

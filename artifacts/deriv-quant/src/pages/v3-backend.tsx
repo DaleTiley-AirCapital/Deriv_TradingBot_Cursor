@@ -219,6 +219,9 @@ function IntegrityTab() {
   const [detailData, setDetailData] = useState<any | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [fullReport, setFullReport] = useState<any | null>(null);
+  const [fullReportLoading, setFullReportLoading] = useState(false);
+  const [fullReportErr, setFullReportErr] = useState<string | null>(null);
   const [showFull, setShowFull] = useState(false);
   const [days, setDays] = useState(30);
 
@@ -239,6 +242,8 @@ function IntegrityTab() {
     setDetailLoading(true);
     setDetailErr(null);
     setDetailData(null);
+    setFullReport(null);
+    setFullReportErr(null);
     try {
       const d = await apiFetch(`diagnostics/data-integrity/${sym}`);
       setDetailData(d);
@@ -246,6 +251,20 @@ function IntegrityTab() {
       setDetailErr(e.message);
     } finally {
       setDetailLoading(false);
+    }
+  }, []);
+
+  const loadFullReport = useCallback(async (sym: string, lookbackDays: number) => {
+    setFullReportLoading(true);
+    setFullReportErr(null);
+    setFullReport(null);
+    try {
+      const d = await apiFetch(`diagnostics/data-integrity/${sym}/full?lookbackDays=${lookbackDays}`);
+      setFullReport(d);
+    } catch (e: any) {
+      setFullReportErr(e.message);
+    } finally {
+      setFullReportLoading(false);
     }
   }, []);
 
@@ -378,6 +397,77 @@ function IntegrityTab() {
                   <Badge label={t.status} variant={t.status === "ready" ? "ok" : t.status === "empty" ? "warn" : "error"} />,
                 ])}
               />
+
+              <div className="border-t border-border/20 pt-3">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xs font-semibold text-foreground">Full Gap Report</span>
+                  <span className="text-[10px] text-muted-foreground">(runs gap detection across all 12 TFs — may take a moment)</span>
+                  <div className="flex gap-1.5 ml-auto">
+                    {[30,90,365].map(d => (
+                      <button
+                        key={d}
+                        onClick={() => loadFullReport(selectedSymbol, d)}
+                        className="px-2 py-1 rounded border border-border/40 hover:border-primary/40 hover:bg-primary/10 text-[10px] text-muted-foreground hover:text-primary transition-colors"
+                      >{d}d</button>
+                    ))}
+                  </div>
+                </div>
+                {fullReportLoading && <Spinner />}
+                {fullReportErr && <ErrorBox msg={fullReportErr} />}
+                {fullReport && !fullReportLoading && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div className="bg-muted/20 rounded-lg p-3">
+                        <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Overall Health</div>
+                        <div className={cn("text-sm font-mono font-bold", fullReport.overallHealthy ? "text-green-400" : "text-yellow-400")}>
+                          {fullReport.overallHealthy ? "Healthy" : "Issues Detected"}
+                        </div>
+                      </div>
+                      <div className="bg-muted/20 rounded-lg p-3">
+                        <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Total Gaps</div>
+                        <div className={cn("text-sm font-mono font-bold", (fullReport.totalGaps ?? 0) === 0 ? "text-green-400" : "text-yellow-400")}>
+                          {(fullReport.totalGaps ?? 0).toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="bg-muted/20 rounded-lg p-3">
+                        <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Missing Candles</div>
+                        <div className={cn("text-sm font-mono font-bold", (fullReport.totalMissingCandles ?? 0) === 0 ? "text-green-400" : "text-yellow-400")}>
+                          {(fullReport.totalMissingCandles ?? 0).toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="bg-muted/20 rounded-lg p-3">
+                        <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Interpolated</div>
+                        <div className={cn("text-sm font-mono font-bold", (fullReport.totalInterpolated ?? 0) === 0 ? "text-muted-foreground" : "text-orange-400")}>
+                          {(fullReport.totalInterpolated ?? 0).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                    <Table
+                      cols={["TF", "Candles", "Coverage", "Gaps", "Missing", "Interp.", "First", "Last", "Health"]}
+                      rows={(fullReport.timeframes ?? []).map((t: any) => [
+                        <span className="font-semibold">{t.timeframe}</span>,
+                        (t.count ?? 0).toLocaleString(),
+                        <span className={cn((t.coveragePct ?? 0) >= 95 ? "text-green-400" : (t.coveragePct ?? 0) >= 80 ? "text-yellow-400" : "text-red-400")}>
+                          {t.coveragePct != null ? `${t.coveragePct.toFixed(1)}%` : "—"}
+                        </span>,
+                        <span className={cn((t.gapCount ?? 0) === 0 ? "text-muted-foreground" : "text-yellow-400")}>
+                          {t.gapCount ?? 0}
+                        </span>,
+                        <span className={cn((t.missingCandles ?? 0) === 0 ? "text-muted-foreground" : "text-yellow-400")}>
+                          {(t.missingCandles ?? 0).toLocaleString()}
+                        </span>,
+                        <span className={cn((t.interpolatedCount ?? 0) === 0 ? "text-muted-foreground" : "text-orange-400")}>
+                          {t.interpolatedCount ?? 0}
+                        </span>,
+                        <span className="text-[10px]">{t.firstDate ?? "—"}</span>,
+                        <span className="text-[10px]">{t.lastDate ?? "—"}</span>,
+                        <Badge label={t.isHealthy ? "ok" : "issues"} variant={t.isHealthy ? "ok" : "warn"} />,
+                      ])}
+                    />
+                    <p className="text-[10px] text-muted-foreground">Coverage = actual candles ÷ expected candles in window. Interpolated candles are carry-forward fills — excluded from signal generation.</p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </Section>

@@ -192,14 +192,16 @@ async function updateOpenCandles(symbol: string, quote: number, epochTs: number)
         try {
           await db.insert(candlesTable).values({
             symbol,
-            timeframe: tf,
-            openTs: prevOpenTs,
-            closeTs: prevOpenTs + seconds,
-            open: prev.open,
-            high: prev.high,
-            low: prev.low,
-            close: prev.close,
-            tickCount: prev.tickCount,
+            timeframe:      tf,
+            openTs:         prevOpenTs,
+            closeTs:        prevOpenTs + seconds,
+            open:           prev.open,
+            high:           prev.high,
+            low:            prev.low,
+            close:          prev.close,
+            tickCount:      prev.tickCount,
+            source:         "live",
+            isInterpolated: false,
           }).onConflictDoNothing();
         } catch {
           // ignore duplicate
@@ -732,14 +734,16 @@ class DerivClient {
 
         const values = candles.map(c => ({
           symbol,
-          timeframe: tf,
-          openTs: c.epoch,
-          closeTs: c.epoch + granularity,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          tickCount: 0,
+          timeframe:      tf,
+          openTs:         c.epoch,
+          closeTs:        c.epoch + granularity,
+          open:           c.open,
+          high:           c.high,
+          low:            c.low,
+          close:          c.close,
+          tickCount:      0,
+          source:         "historical",
+          isInterpolated: false,
         }));
         for (let i = 0; i < values.length; i += 500) {
           const chunk = values.slice(i, i + 500);

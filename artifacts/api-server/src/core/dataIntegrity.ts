@@ -1,16 +1,21 @@
 /**
- * Data Integrity Service — V3 Backend Foundation
+ * Data Integrity Service — V3 Canonical Candle Pipeline
  *
- * Provides gap detection, targeted gap-fill, and data top-up workflows
- * for all stored candle data.
+ * Provides gap detection, full gap repair (API + carry-forward interpolation),
+ * and comprehensive integrity reporting for the canonical `candles` table.
  *
- * This is the reusable backend layer for:
- * - backfill/top-up workflows
- * - export preparation
- * - research preparation
- * - diagnostics
+ * CANONICAL TRUTH: The `candles` table is the SINGLE source of truth.
+ * All pipelines write here. All reads come from here. No other candle store.
  *
- * Does NOT touch trading logic, strategies, or live engine path.
+ * Source tags on every candle:
+ *   'historical'   — initial API backfill
+ *   'live'         — completed live candles from tick stream
+ *   'topup'        — API gap-fill from repairGapFromApi()
+ *   'enriched'     — derived from 1m aggregation by candleEnrichment
+ *   'interpolated' — carry-forward fill (API returned no data for gap)
+ *
+ * isInterpolated=true marks synthetic candles. These MUST NOT be used
+ * in strategy signal generation.
  */
 import { db, backgroundDb, candlesTable } from "@workspace/db";
 import { eq, and, gte, lt, min, max, count, asc, sql } from "drizzle-orm";
@@ -42,6 +47,37 @@ export interface IntegrityReport {
   coveragePct: number;
   isHealthy: boolean;
   checkedAt: string;
+  interpolatedCount: number;
+  sourceBreakdown: Record<string, number>;
+}
+
+export interface ComprehensiveIntegrityReport {
+  symbol: string;
+  checkedAt: string;
+  base1mCount: number;
+  base1mFirstDate: string | null;
+  base1mLastDate: string | null;
+  base1mAgeHours: number | null;
+  base1mGapCount: number;
+  base1mMissingCandles: number;
+  base1mCoveragePct: number;
+  base1mInterpolatedCount: number;
+  overallHealthy: boolean;
+  totalGaps: number;
+  totalMissingCandles: number;
+  totalInterpolated: number;
+  timeframes: Array<{
+    timeframe: string;
+    count: number;
+    firstDate: string | null;
+    lastDate: string | null;
+    ageHours: number | null;
+    gapCount: number;
+    missingCandles: number;
+    coveragePct: number;
+    interpolatedCount: number;
+    isHealthy: boolean;
+  }>;
 }
 
 export interface TopUpResult {
@@ -49,6 +85,7 @@ export interface TopUpResult {
   timeframes: string[];
   gapsFound: number;
   gapsRepaired: number;
+  gapsInterpolated: number;
   candlesInserted: number;
   errors: string[];
   durationMs: number;
@@ -74,17 +111,21 @@ export const ENRICHMENT_TIMEFRAMES: Record<string, number> = {
 export const API_FETCHABLE_TIMEFRAMES = ["1m", "5m"] as const;
 
 /**
- * Detects missing candle intervals (gaps) for a given symbol/timeframe.
+ * Detects ALL missing candle intervals (gaps) for a given symbol/timeframe.
+ *
  * Reads all stored openTs values and finds segments where timestamps are
  * non-consecutive beyond 1.5× the expected interval.
  *
+ * @param minGapCandles  Minimum gap size to report (default: 1 — ALL gaps).
+ *                       Set to 3 for noise filtering when gap count matters more than precision.
+ *
  * Returns gaps sorted by gapStart ascending.
- * Gaps smaller than 3 expected candles are ignored (market microstructure noise).
  */
 export async function detectCandleGaps(
   symbol: string,
   timeframe: string,
   lookbackDays = 365,
+  minGapCandles = 1,
 ): Promise<CandleGap[]> {
   const tfSecs = ENRICHMENT_TIMEFRAMES[timeframe];
   if (!tfSecs) throw new Error(`[DataIntegrity] Unknown timeframe: ${timeframe}`);
@@ -113,7 +154,7 @@ export async function detectCandleGaps(
 
     if (delta > maxGapSecs) {
       const missedCandles = Math.round(delta / tfSecs) - 1;
-      if (missedCandles >= 3) {
+      if (missedCandles >= minGapCandles) {
         gaps.push({
           symbol,
           timeframe,
@@ -131,7 +172,7 @@ export async function detectCandleGaps(
 
 /**
  * Counts duplicate timestamps for a given symbol/timeframe.
- * (uniqueIndex should prevent new duplicates, but existing data may have them.)
+ * The uniqueIndex should prevent new duplicates, but existing data may have them.
  */
 export async function countDuplicateTimestamps(
   symbol: string,
@@ -146,8 +187,37 @@ export async function countDuplicateTimestamps(
 }
 
 /**
+ * Counts interpolated candles (is_interpolated=true) for a symbol/timeframe.
+ */
+async function countInterpolatedCandles(symbol: string, timeframe: string): Promise<number> {
+  const result = await db.execute(sql`
+    SELECT COUNT(*) AS cnt
+    FROM candles
+    WHERE symbol = ${symbol} AND timeframe = ${timeframe} AND is_interpolated = true
+  `);
+  return Number((result.rows[0] as { cnt: unknown })?.cnt ?? 0);
+}
+
+/**
+ * Returns a breakdown of candle counts by source for a symbol/timeframe.
+ */
+async function getSourceBreakdown(symbol: string, timeframe: string): Promise<Record<string, number>> {
+  const result = await db.execute(sql`
+    SELECT source, COUNT(*) AS cnt
+    FROM candles
+    WHERE symbol = ${symbol} AND timeframe = ${timeframe}
+    GROUP BY source
+  `);
+  const breakdown: Record<string, number> = {};
+  for (const row of result.rows as Array<{ source: string; cnt: unknown }>) {
+    breakdown[row.source] = Number(row.cnt);
+  }
+  return breakdown;
+}
+
+/**
  * Produces a full integrity report for a symbol/timeframe pair.
- * Includes gap list, duplicate count, coverage %, and health flag.
+ * Includes gap list, duplicate count, coverage %, source breakdown, and health flag.
  */
 export async function getIntegrityReport(
   symbol: string,
@@ -177,14 +247,17 @@ export async function getIntegrityReport(
   const firstTs = summary?.firstTs ?? null;
   const lastTs = summary?.lastTs ?? null;
 
-  const gaps = await detectCandleGaps(symbol, timeframe, lookbackDays);
+  // Detect ALL gaps (minGapCandles=1)
+  const gaps = await detectCandleGaps(symbol, timeframe, lookbackDays, 1);
   const dupes = await countDuplicateTimestamps(symbol, timeframe);
+  const interpolatedCount = await countInterpolatedCandles(symbol, timeframe);
+  const sourceBreakdown = await getSourceBreakdown(symbol, timeframe);
 
   const missingIntervalCount = gaps.reduce((s, g) => s + g.expectedCount, 0);
   const expectedTotal = firstTs ? Math.ceil((now - firstTs) / tfSecs) : 0;
   const coveragePct = expectedTotal > 0 ? Math.min(100, (totalCandles / expectedTotal) * 100) : 0;
 
-  // Check ascending order (sample last 100 rows)
+  // Check ascending order (sample first 200 rows)
   const sample = await backgroundDb
     .select({ ts: candlesTable.openTs })
     .from(candlesTable)
@@ -194,7 +267,7 @@ export async function getIntegrityReport(
       gte(candlesTable.openTs, cutoff),
     ))
     .orderBy(asc(candlesTable.openTs))
-    .limit(100);
+    .limit(200);
 
   let strictlyAscending = true;
   for (let i = 1; i < sample.length; i++) {
@@ -214,19 +287,128 @@ export async function getIntegrityReport(
     duplicateCount: dupes,
     missingIntervalCount,
     gapCount: gaps.length,
-    gaps: gaps.slice(0, 20),
+    gaps: gaps.slice(0, 50),
     strictlyAscending,
     coveragePct: Math.round(coveragePct * 10) / 10,
     isHealthy,
     checkedAt: new Date().toISOString(),
+    interpolatedCount,
+    sourceBreakdown,
+  };
+}
+
+/**
+ * Comprehensive integrity report across ALL timeframes for a symbol.
+ * Lightweight — uses COUNT queries + detectCandleGaps for each TF.
+ * Returns the base 1m stats prominently plus a per-TF array.
+ */
+export async function getComprehensiveIntegrityReport(
+  symbol: string,
+  lookbackDays = 365,
+): Promise<ComprehensiveIntegrityReport> {
+  const now = Math.floor(Date.now() / 1000);
+  const checkedAt = new Date().toISOString();
+  const tfKeys = Object.keys(ENRICHMENT_TIMEFRAMES);
+
+  const tfResults: ComprehensiveIntegrityReport["timeframes"] = [];
+  let base1mCount = 0;
+  let base1mFirstDate: string | null = null;
+  let base1mLastDate: string | null = null;
+  let base1mAgeHours: number | null = null;
+  let base1mGapCount = 0;
+  let base1mMissingCandles = 0;
+  let base1mCoveragePct = 0;
+  let base1mInterpolatedCount = 0;
+
+  for (const tf of tfKeys) {
+    const tfSecs = ENRICHMENT_TIMEFRAMES[tf];
+    const cutoff = now - lookbackDays * 86400;
+
+    const [row] = await backgroundDb
+      .select({
+        cnt: count(),
+        first: min(candlesTable.openTs),
+        last: max(candlesTable.openTs),
+      })
+      .from(candlesTable)
+      .where(and(
+        eq(candlesTable.symbol, symbol),
+        eq(candlesTable.timeframe, tf),
+        gte(candlesTable.openTs, cutoff),
+      ));
+
+    const cnt     = Number(row?.cnt ?? 0);
+    const firstTs = row?.first ?? null;
+    const lastTs  = row?.last  ?? null;
+    const ageHours = lastTs ? Math.round((now - lastTs) / 360) / 10 : null;
+
+    const gaps = await detectCandleGaps(symbol, tf, lookbackDays, 1);
+    const missingCandles = gaps.reduce((s, g) => s + g.expectedCount, 0);
+    const expectedTotal = firstTs ? Math.ceil((now - firstTs) / tfSecs) : 0;
+    const coveragePct = expectedTotal > 0
+      ? Math.round(Math.min(100, (cnt / expectedTotal) * 100) * 10) / 10
+      : 0;
+
+    const interpolatedCount = await countInterpolatedCandles(symbol, tf);
+    const isHealthy = gaps.length === 0 && coveragePct >= 70 && cnt > 0;
+
+    const entry = {
+      timeframe: tf,
+      count: cnt,
+      firstDate: firstTs ? new Date(firstTs * 1000).toISOString().slice(0, 10) : null,
+      lastDate:  lastTs  ? new Date(lastTs  * 1000).toISOString().slice(0, 10) : null,
+      ageHours,
+      gapCount: gaps.length,
+      missingCandles,
+      coveragePct,
+      interpolatedCount,
+      isHealthy,
+    };
+
+    if (tf === "1m") {
+      base1mCount            = cnt;
+      base1mFirstDate        = entry.firstDate;
+      base1mLastDate         = entry.lastDate;
+      base1mAgeHours         = ageHours;
+      base1mGapCount         = gaps.length;
+      base1mMissingCandles   = missingCandles;
+      base1mCoveragePct      = coveragePct;
+      base1mInterpolatedCount = interpolatedCount;
+    }
+
+    tfResults.push(entry);
+  }
+
+  const overallHealthy = base1mCount >= 1000 && base1mGapCount === 0;
+
+  const totalGaps           = tfResults.reduce((s, t) => s + t.gapCount, 0);
+  const totalMissingCandles = tfResults.reduce((s, t) => s + t.missingCandles, 0);
+  const totalInterpolated   = tfResults.reduce((s, t) => s + t.interpolatedCount, 0);
+
+  return {
+    symbol,
+    checkedAt,
+    base1mCount,
+    base1mFirstDate,
+    base1mLastDate,
+    base1mAgeHours,
+    base1mGapCount,
+    base1mMissingCandles,
+    base1mCoveragePct,
+    base1mInterpolatedCount,
+    overallHealthy,
+    totalGaps,
+    totalMissingCandles,
+    totalInterpolated,
+    timeframes: tfResults,
   };
 }
 
 /**
  * Fetches and inserts candles for a specific time range for a symbol/timeframe.
  * Used to fill individual gaps. Only works for API-fetchable timeframes (1m, 5m).
+ * Tags inserted candles with source='topup'.
  *
- * client must be connected and authorized.
  * Returns the number of candles inserted.
  */
 export async function repairGapFromApi(
@@ -257,13 +439,15 @@ export async function repairGapFromApi(
     const values = inRange.map(c => ({
       symbol,
       timeframe,
-      openTs: c.epoch,
-      closeTs: c.epoch + tfSecs,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-      tickCount: 0,
+      openTs:         c.epoch,
+      closeTs:        c.epoch + tfSecs,
+      open:           c.open,
+      high:           c.high,
+      low:            c.low,
+      close:          c.close,
+      tickCount:      0,
+      source:         "topup",
+      isInterpolated: false,
     }));
 
     for (let i = 0; i < values.length; i += 500) {
@@ -283,34 +467,128 @@ export async function repairGapFromApi(
 }
 
 /**
- * Targeted gap-fill for a symbol/timeframe.
- * Detects gaps, then fetches missing ranges from the API (1m/5m only).
- * For derived timeframes, call candleEnrichment.enrichTimeframes() after.
+ * Fills a gap by carry-forward interpolation from the candle immediately before gapStart.
+ * Inserts synthetic candles with source='interpolated' and isInterpolated=true.
+ * Used as a fallback when the API cannot provide real data for a gap.
  *
- * Returns number of candles inserted.
+ * These candles MUST NOT be used for signal generation — they are placeholder continuity only.
+ *
+ * Returns number of interpolated candles inserted.
+ */
+export async function interpolateGap(
+  symbol: string,
+  timeframe: string,
+  gapStart: number,
+  gapEnd: number,
+): Promise<number> {
+  const tfSecs = ENRICHMENT_TIMEFRAMES[timeframe];
+  if (!tfSecs) return 0;
+
+  // Get the last real candle before the gap
+  const [prior] = await db
+    .select({
+      close: candlesTable.close,
+    })
+    .from(candlesTable)
+    .where(and(
+      eq(candlesTable.symbol, symbol),
+      eq(candlesTable.timeframe, timeframe),
+      lt(candlesTable.openTs, gapStart),
+    ))
+    .orderBy(asc(candlesTable.openTs));
+
+  if (!prior) {
+    console.warn(`[DataIntegrity] Cannot interpolate ${symbol}/${timeframe} gap at ${gapStart}: no prior candle`);
+    return 0;
+  }
+
+  const price = prior.close;
+  const values: Array<{
+    symbol: string; timeframe: string; openTs: number; closeTs: number;
+    open: number; high: number; low: number; close: number;
+    tickCount: number; source: string; isInterpolated: boolean;
+  }> = [];
+
+  let ts = gapStart;
+  while (ts <= gapEnd) {
+    values.push({
+      symbol,
+      timeframe,
+      openTs:         ts,
+      closeTs:        ts + tfSecs,
+      open:           price,
+      high:           price,
+      low:            price,
+      close:          price,
+      tickCount:      0,
+      source:         "interpolated",
+      isInterpolated: true,
+    });
+    ts += tfSecs;
+  }
+
+  let inserted = 0;
+  for (let i = 0; i < values.length; i += 500) {
+    const chunk = values.slice(i, i + 500);
+    await db.insert(candlesTable).values(chunk).onConflictDoNothing();
+    inserted += chunk.length;
+  }
+
+  console.log(`[DataIntegrity] Interpolated ${inserted} carry-forward candles for ${symbol}/${timeframe} gap at ${new Date(gapStart * 1000).toISOString()}`);
+  return inserted;
+}
+
+/**
+ * Full gap repair for a symbol/timeframe: API fetch first, interpolation fallback.
+ *
+ * For each detected gap:
+ * 1. Try to fetch from API (topup source)
+ * 2. If API returns fewer candles than expected, fill remainder by carry-forward (interpolated)
+ *
+ * Only works for API-fetchable timeframes (1m, 5m).
+ * For derived timeframes, call candleEnrichment.enrichTimeframes() after repairing 1m.
  */
 export async function repairAllGaps(
   symbol: string,
   timeframe: string,
   client: DerivClientPublic,
   lookbackDays = 365,
-): Promise<{ inserted: number; errors: string[] }> {
+): Promise<{ inserted: number; interpolated: number; errors: string[] }> {
   if (!(API_FETCHABLE_TIMEFRAMES as readonly string[]).includes(timeframe)) {
-    return { inserted: 0, errors: [`${timeframe} cannot be repaired from API — derive from 1m`] };
+    return { inserted: 0, interpolated: 0, errors: [`${timeframe} cannot be repaired from API — derive from 1m`] };
   }
 
-  const gaps = await detectCandleGaps(symbol, timeframe, lookbackDays);
-  if (gaps.length === 0) return { inserted: 0, errors: [] };
+  const gaps = await detectCandleGaps(symbol, timeframe, lookbackDays, 1);
+  if (gaps.length === 0) return { inserted: 0, interpolated: 0, errors: [] };
 
   let totalInserted = 0;
+  let totalInterpolated = 0;
   const errors: string[] = [];
 
   for (const gap of gaps) {
     try {
       console.log(`[DataIntegrity] Repairing gap ${gap.label} for ${symbol}/${timeframe}`);
-      const n = await repairGapFromApi(symbol, timeframe, gap.gapStart, gap.gapEnd, client);
-      totalInserted += n;
-      console.log(`[DataIntegrity] Gap repaired: inserted ${n} candles`);
+
+      // Step 1: Try API fetch
+      const apiInserted = await repairGapFromApi(symbol, timeframe, gap.gapStart, gap.gapEnd, client);
+      totalInserted += apiInserted;
+
+      // Step 2: Check if gap is still there (API may return partial data)
+      if (apiInserted < gap.expectedCount) {
+        const remaining = await detectCandleGaps(symbol, timeframe, lookbackDays + 30, 1);
+        const stillGapped = remaining.some(g =>
+          g.gapStart <= gap.gapEnd && g.gapEnd >= gap.gapStart,
+        );
+
+        if (stillGapped) {
+          // Interpolate what the API couldn't fill
+          const interpInserted = await interpolateGap(symbol, timeframe, gap.gapStart, gap.gapEnd);
+          totalInterpolated += interpInserted;
+          console.log(`[DataIntegrity] Interpolated ${interpInserted} candles for remaining gap`);
+        }
+      }
+
+      console.log(`[DataIntegrity] Gap repaired: ${apiInserted} real + ${totalInterpolated} interpolated`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[DataIntegrity] Gap repair failed for ${gap.label}: ${msg}`);
@@ -318,19 +596,17 @@ export async function repairAllGaps(
     }
   }
 
-  return { inserted: totalInserted, errors };
+  return { inserted: totalInserted, interpolated: totalInterpolated, errors };
 }
 
 /**
  * Full data top-up / reconciliation pipeline for a symbol.
  *
  * Steps:
- * 1. Check 1m and 5m base data integrity
- * 2. Repair detected gaps via API
+ * 1. Check 1m and 5m base data integrity (detect ALL gaps)
+ * 2. Repair detected gaps via API (with interpolation fallback)
  * 3. Trigger timeframe enrichment for derived TFs
  * 4. Final integrity re-check
- *
- * Designed to be reusable from: research prep, export prep, future UI "top up" action.
  */
 export async function runDataTopUp(
   symbol: string,
@@ -340,19 +616,21 @@ export async function runDataTopUp(
   const errors: string[] = [];
   let gapsFound = 0;
   let gapsRepaired = 0;
+  let gapsInterpolated = 0;
   let candlesInserted = 0;
 
   const baseTimeframes: string[] = ["1m", "5m"];
 
   for (const tf of baseTimeframes) {
     try {
-      const gaps = await detectCandleGaps(symbol, tf);
+      const gaps = await detectCandleGaps(symbol, tf, 365, 1);
       gapsFound += gaps.length;
 
       if (gaps.length > 0) {
         console.log(`[DataTopUp] ${symbol}/${tf}: ${gaps.length} gaps found, starting repair...`);
-        const { inserted, errors: repairErrors } = await repairAllGaps(symbol, tf, client);
-        candlesInserted += inserted;
+        const { inserted, interpolated, errors: repairErrors } = await repairAllGaps(symbol, tf, client);
+        candlesInserted += inserted + interpolated;
+        gapsInterpolated += interpolated;
         gapsRepaired += gaps.length - repairErrors.length;
         errors.push(...repairErrors);
       } else {
@@ -365,7 +643,7 @@ export async function runDataTopUp(
     }
   }
 
-  // Trigger enrichment for derived timeframes via dynamic import to avoid circular deps
+  // Trigger enrichment for derived timeframes
   try {
     const { enrichTimeframes } = await import("./candleEnrichment.js");
     const enriched = await enrichTimeframes(symbol);
@@ -380,13 +658,18 @@ export async function runDataTopUp(
   const durationMs = Date.now() - start;
   const enrichedTfs = Object.keys(ENRICHMENT_TIMEFRAMES);
 
-  console.log(`[DataTopUp] ${symbol}: complete in ${durationMs}ms | gaps=${gapsFound} repaired=${gapsRepaired} inserted=${candlesInserted} errors=${errors.length}`);
+  console.log(
+    `[DataTopUp] ${symbol}: complete in ${durationMs}ms | ` +
+    `gaps=${gapsFound} repaired=${gapsRepaired} interpolated=${gapsInterpolated} ` +
+    `inserted=${candlesInserted} errors=${errors.length}`,
+  );
 
   return {
     symbol,
     timeframes: enrichedTfs,
     gapsFound,
     gapsRepaired,
+    gapsInterpolated,
     candlesInserted,
     errors,
     durationMs,
@@ -407,6 +690,7 @@ export interface ReconcileResult {
   repair: {
     gapsFound: number;
     gapsRepaired: number;
+    gapsInterpolated: number;
     candlesInserted: number;
     errors: string[];
   };
@@ -432,7 +716,7 @@ const MIN_BASE_1M_FOR_ENRICHMENT = 1000;
  * Order of operations (mandatory):
  * 1. Inspect canonical 1m base data count
  * 2. Fail loudly if insufficient for enrichment
- * 3. Repair 1m and 5m gaps from API
+ * 3. Repair 1m and 5m gaps from API (with interpolation fallback)
  * 4. Validate that base data is now sufficient
  * 5. Enrich derived timeframes from clean 1m base
  * 6. Final post-check and return
@@ -469,18 +753,20 @@ export async function reconcileSymbolData(
   // ── Step 2: Repair gaps in 1m and 5m (even if base is thin) ─────────
   let gapsFound = 0;
   let gapsRepaired = 0;
+  let gapsInterpolated = 0;
   let candlesInserted = 0;
   const repairErrors: string[] = [];
 
   if (priorBase1m > 0) {
     for (const tf of ["1m", "5m"] as const) {
       try {
-        const gaps = await detectCandleGaps(symbol, tf);
+        const gaps = await detectCandleGaps(symbol, tf, 365, 1);
         gapsFound += gaps.length;
         if (gaps.length > 0) {
           console.log(`[Reconcile] ${symbol}/${tf}: ${gaps.length} gaps found — repairing...`);
-          const { inserted, errors: repErr } = await repairAllGaps(symbol, tf, client);
-          candlesInserted += inserted;
+          const { inserted, interpolated, errors: repErr } = await repairAllGaps(symbol, tf, client);
+          candlesInserted += inserted + interpolated;
+          gapsInterpolated += interpolated;
           gapsRepaired += gaps.length - repErr.length;
           repairErrors.push(...repErr);
         }
@@ -531,7 +817,8 @@ export async function reconcileSymbolData(
   const durationMs = Date.now() - start;
   console.log(
     `[Reconcile] ${symbol}: done in ${durationMs}ms | gaps=${gapsFound} repaired=${gapsRepaired} ` +
-    `inserted=${candlesInserted} enriched=${enrichInserted} errors=${errors.length + repairErrors.length + enrichErrors.length}`,
+    `interpolated=${gapsInterpolated} inserted=${candlesInserted} enriched=${enrichInserted} ` +
+    `errors=${errors.length + repairErrors.length + enrichErrors.length}`,
   );
 
   return {
@@ -545,6 +832,7 @@ export async function reconcileSymbolData(
     repair: {
       gapsFound,
       gapsRepaired,
+      gapsInterpolated,
       candlesInserted,
       errors: repairErrors,
     },
@@ -569,6 +857,7 @@ export async function reconcileSymbolData(
  */
 export async function getSymbolDataSummary(symbol: string): Promise<{
   symbol: string;
+  base1mCount: number;
   timeframes: Array<{
     timeframe: string;
     count: number;
@@ -578,6 +867,7 @@ export async function getSymbolDataSummary(symbol: string): Promise<{
   }>;
 }> {
   const results = [];
+  let base1mCount = 0;
 
   for (const tf of Object.keys(ENRICHMENT_TIMEFRAMES)) {
     const [row] = await db
@@ -594,6 +884,8 @@ export async function getSymbolDataSummary(symbol: string): Promise<{
     const last = row?.last ?? null;
     const ageHours = last ? Math.round((Date.now() / 1000 - last) / 3600 * 10) / 10 : null;
 
+    if (tf === "1m") base1mCount = cnt;
+
     results.push({
       timeframe: tf,
       count: cnt,
@@ -603,5 +895,5 @@ export async function getSymbolDataSummary(symbol: string): Promise<{
     });
   }
 
-  return { symbol, timeframes: results };
+  return { symbol, base1mCount, timeframes: results };
 }
