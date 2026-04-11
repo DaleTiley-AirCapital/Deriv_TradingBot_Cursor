@@ -16,7 +16,6 @@ import {
   Square,
   Power,
   HelpCircle,
-  Wrench,
 } from "lucide-react";
 import {
   useGetOverview,
@@ -34,14 +33,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { AiChat } from "./AiChat";
 
 const NAV_ITEMS = [
-  { name: "Overview",         href: "/",             icon: Activity },
-  { name: "Engine Decisions", href: "/decisions",    icon: Zap },
-  { name: "Trades",           href: "/trades",       icon: History },
-  { name: "Research",         href: "/research",     icon: BarChart2 },
-  { name: "Data",             href: "/data",         icon: Database },
-  { name: "Settings",         href: "/settings",     icon: Settings },
-  { name: "Help",             href: "/help",         icon: HelpCircle },
-  { name: "Diagnostics",      href: "/diagnostics",  icon: Wrench },
+  { name: "Overview",         href: "/",          icon: Activity  },
+  { name: "Engine Decisions", href: "/decisions", icon: Zap       },
+  { name: "Trades",           href: "/trades",    icon: History   },
+  { name: "Research",         href: "/research",  icon: BarChart2 },
+  { name: "Data",             href: "/data",      icon: Database  },
+  { name: "Settings",         href: "/settings",  icon: Settings  },
+  { name: "Help",             href: "/help",      icon: HelpCircle},
 ];
 
 const MOBILE_PRIMARY = NAV_ITEMS.slice(0, 4);

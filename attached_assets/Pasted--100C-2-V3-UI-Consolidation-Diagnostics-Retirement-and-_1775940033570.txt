@@ -1,0 +1,381 @@
+#100C.2 - V3 UI Consolidation, Diagnostics Retirement, and Strict Anti-Legacy Cleanup
+
+## What & Why
+The current UI is still a mixture of:
+- fresh V3 pages
+- provisional Task #99 patch pages
+- duplicated surfaces
+- stale ownership from prior iterations
+
+This task is **UI-only**.
+Do NOT change engine logic, allocator logic, scoring logic, strategy logic, or backend architecture in this task except for tiny endpoint wiring fixes strictly required for UI truth.
+
+The goal is to make the UI clean, coherent, and actually usable so I can:
+- inspect the system properly
+- run the right data operations
+- export clean data
+- extract the 4 symbol datasets for external analysis
+
+This task must NOT attempt to redesign trading logic.
+It must ONLY fix the UI structure, ownership, and interactions I describe below.
+
+---
+
+## Absolute rules — no legacy contamination
+
+### 1. No reuse of old V1/V2 page ownership
+Do NOT patch old screens.
+Do NOT preserve old shells.
+Do NOT keep old sections “because they still work”.
+Do NOT keep duplicate UI just in case.
+
+If a page/section belongs to previous builds and is not part of the V3 design described below:
+- DELETE it
+- remove its route ownership
+- remove its navigation entry
+- remove its imports/usages
+
+### 2. No fallback logic
+No compatibility wrappers.
+No hidden redirects preserving old primary behavior.
+No “if new fails, show old”.
+No commented-out old code.
+No keeping old components around “for safety”.
+
+If the new V3 UI fails, it must fail loudly so it can be fixed properly.
+
+### 3. Delete, do not deprecate
+If a section is replaced by a better one:
+- remove the worse one
+- do not keep both
+- do not leave dead code behind
+
+### 4. This is a fresh V3 ownership cleanup
+Treat any old/provisional Task #99 content as disposable.
+The final UI must reflect only current V3 ownership.
+
+### 5. UI only
+Do NOT try to fix the shared scoring system, engines, allocator design, or V3 backend logic in this task.
+Backend changes are allowed only if they are tiny and strictly necessary to make an existing UI control work truthfully.
+
+---
+
+## Primary objective
+Make the UI clean and coherent by:
+- fixing the known UI bugs
+- consolidating duplicated functionality
+- moving each concept to its correct page
+- removing the Diagnostics tab from primary usage
+- removing global streaming controls
+- making all 28 symbols show connected/available for research
+- making only the active trading symbols show streaming
+- making the app clean enough to use for exporting clean data for research
+
+---
+
+## Current user-directed ownership model
+These are the required owners:
+
+### Overview owns:
+- system status
+- streaming summary
+- system overview
+- high-level runtime summary
+- top warnings / blockers
+- no detailed operational controls
+
+### Decisions owns:
+- engine decision log
+- why a candidate passed / failed / blocked
+- coordinator / allocator outcomes
+- engine feature reasoning if useful
+- no data operations
+- no diagnostics duplication
+
+### Trades owns:
+- open and closed trades
+- trade rationale
+- trade lifecycle
+- stage transitions
+- no data/admin duplication
+
+### Research owns:
+- AI analysis
+- strategy ranking
+- research output
+- export data using the latest export pipeline only
+- backtest visibility only if a real current backtest surface exists
+- no data operations
+- no diagnostics duplication
+
+### Data owns:
+- all 28 symbols and their states
+- per-symbol streaming control
+- symbol state
+- candle coverage / integrity
+- data operations
+- live ticks
+- M1 candles
+- spike events
+- V3 engine live feature state if useful
+- no global streaming
+- no duplicate diagnostics-heavy tabs if they can be absorbed cleanly
+
+### Settings owns:
+- only settings actually used by current V3
+- no stale V2 controls exposed
+
+### Help owns:
+- V3 explanation only
+
+### Diagnostics:
+- must be reduced to advanced/debug-only or retired from primary nav entirely
+- useful content must be absorbed into the correct pages first
+
+---
+
+## Required fixes from my review
+
+### 1. Decisions page
+Fix and keep:
+- date filter must work
+- the page can stay generally as-is if it is already good
+- but it must show real current state only
+- and not rely on stale data
+
+### 2. Overview page
+Keep generally as-is because it looks good, but:
+- fix any misleading hardcoded status indicators
+- move “System Overview” runtime content from Diagnostics into Overview below system status
+- fix the “AI Untrained” confusion:
+  - if this is not a real backend state, remove or relabel it
+  - do not show misleading red X states
+
+### 3. Research page
+Keep header data that is already good.
+Then restructure sub-tabs/sections as follows:
+
+#### Keep in Research:
+- AI Analysis
+- strategy ranking / research output
+- export data using the latest export system only
+
+#### Remove from Research:
+- Data Operations:
+  - Repair Interpolated Candles
+  - Reconcile Candles
+  - Enrich Candles
+These belong in Data.
+
+#### Export:
+The export section must use the latest new export system only.
+Remove any old V2 JSON/XLSX export behavior.
+
+#### Backtests:
+Audit whether there is a real current V3-compatible backtest surface.
+If yes, expose it properly in Research.
+If no, do NOT fake a backtest UI.
+Instead report clearly that it is not yet exposed.
+
+### 4. Data page — this is the biggest UI job
+This page needs major restructuring.
+
+#### Remove:
+- global Start All / Stop All controls
+- any global streaming UX
+- “global streaming online” as a primary control concept
+
+#### Replace with:
+- per-symbol streaming only
+
+#### Symbol State section:
+- all 28 symbols must show connected/available for research/data
+- 4 active trading symbols should show streaming/active
+- the rest should show available/idle unless disabled
+- the current non-active/research symbols presentation is not acceptable
+- symbol names must be clear and complete
+- this should merge with the better integrity/candle-coverage table so symbol state and data truth are visible together
+
+#### Candle Coverage / Integrity:
+The better, more comprehensive integrity view currently in Diagnostics should be moved into Data and become the main version.
+Do not keep the weaker duplicate.
+
+#### Data Operations:
+Move these here from Research:
+- Repair Interpolated Candles
+- Reconcile Candles
+- Enrich Candles
+
+This should become the second major tab/section in Data.
+
+#### Live Ticks / M1 Candles / Spike Events:
+These should not feel like disconnected top-level concepts.
+Make them one area with a single symbol selection flow and sub-tabs beneath it, so the symbol is selected once and then you can switch between:
+- Live Ticks
+- M1 Candles
+- Spike Events
+
+#### V3 Engine Features — Live State
+Move this from Diagnostics Runtime into either:
+- Data
+or
+- Decisions
+Choose the cleaner owner.
+It must not remain stranded in Diagnostics if it is operationally useful.
+
+### 5. Diagnostics tab
+The goal is to retire Diagnostics from primary usage.
+
+Do this by:
+- moving useful content into the correct pages
+- reducing Diagnostics to advanced debug only
+or
+- removing it from primary nav entirely if very little remains
+
+At minimum:
+- AI Research must be removed from Diagnostics
+- Integrity/Coverage should move to Data if the Diagnostics version is stronger
+- System Overview should move to Overview
+- Streaming primary ownership should move to Data
+- Runtime useful live-state content should move to Data or Decisions
+
+After that, Diagnostics should either:
+- become a small advanced/debug page
+or
+- be removed from primary nav
+
+### 6. Streaming controls
+Current problem:
+- streaming endpoint appears everywhere
+- buttons do nothing or are unclear
+- streaming is duplicated
+
+Required:
+- one primary streaming control surface only: Data page
+- remove duplicate interactive streaming controls elsewhere
+- fix click behavior so buttons visibly work:
+  - loading state
+  - success/failure state
+  - refresh visible symbol state after action
+- all 28 symbols connected/available
+- only active trading symbols streaming by default
+
+### 7. Connected vs streaming state
+This is critical:
+- all 28 symbols should show connected/available for research/data/API access
+- only 4 active trading symbols should show streaming/active
+- do NOT confuse “connected” with “streaming”
+
+This distinction must be visible and correct.
+
+### 8. Settings page audit
+I am concerned V2 settings are still persisting.
+
+In this UI task:
+- remove or hide settings that are clearly stale/not used by current V3
+- especially investigate score thresholds/global threshold presentation
+- if they are currently shown but not clearly justified in V3 UI, remove them from primary Settings for now rather than confusing the user
+- do not attempt to redesign scoring here, just prevent misleading UI
+
+### 9. Bug fixes already identified
+Fix these as part of this task:
+1. Decisions date filter missing dependency / no-op
+2. Streaming tab/control wrong endpoint wiring wherever it still exists
+3. lastUpdated undefined issue if still shown
+4. Overview hardcoded green sync status
+5. Layout mode indicator reading wrong endpoint
+
+### 10. Hard anti-legacy cleanup
+As part of this task, explicitly search for and remove from primary ownership:
+- old V2 export UI
+- duplicated AI research surfaces
+- duplicated integrity tables
+- duplicated streaming controls
+- old diagnostics surfaces now moved elsewhere
+- dead imports/components no longer used
+
+No commented-out code.
+No unused replacement files left behind.
+Delete obsolete code.
+
+---
+
+## Required implementation order
+Execute in this order:
+
+### Phase 1
+Fix the 5 known bugs.
+
+### Phase 2
+Restructure Research and Data ownership exactly as described.
+
+### Phase 3
+Move useful Diagnostics content into:
+- Overview
+- Data
+- Decisions
+as appropriate.
+
+### Phase 4
+Reduce or retire Diagnostics from primary nav.
+
+### Phase 5
+Remove duplicated / obsolete UI code and verify no stale primary ownership remains.
+
+Do NOT do this out of order.
+
+---
+
+## Required deliverables
+Return:
+
+1. exact frontend files/modules changed
+2. exact frontend files/modules removed
+3. exact frontend files/modules added, if any
+4. any tiny backend files changed for UI truth only
+5. which Diagnostics sections moved where
+6. what now lives in Research
+7. what now lives in Data
+8. what now lives in Overview
+9. what remains in Diagnostics and why
+10. proof that global streaming controls are gone
+11. proof that per-symbol streaming is the only control model
+12. proof that all 28 symbols show connected/available
+13. proof that 4 active trading symbols show streaming/active
+14. proof that old V2 export UI is removed
+15. proof that Data Operations moved from Research to Data
+16. proof that AI Analysis exists only in Research
+17. proof that duplicate integrity/coverage surfaces were removed
+18. proof that the 5 known bugs were fixed
+19. build/test result
+20. explicit confirmation:
+   - no fallback/compatibility UI remains in primary ownership
+   - stale duplicated UI was deleted, not deprecated
+   - the app is now clean enough to use for exporting data for external re-analysis
+
+---
+
+## Verification requirements
+You must verify with real runs:
+- route loads
+- controls render
+- per-symbol streaming buttons visibly work
+- all 28 symbols visible as connected/available
+- Research export uses the new export flow
+- Data Operations are in Data
+- AI Analysis is only in Research
+- Overview statuses are truthful
+- no old V2 export or duplicate diagnostics content remains in primary flow
+
+Do not fake verification.
+
+---
+
+## Quality bar
+This task succeeds only if the UI becomes:
+- coherent
+- non-duplicative
+- V3-only in primary ownership
+- operationally usable for data extraction and review
+
+If it still feels like overlapping systems or patched screens, the task has failed.

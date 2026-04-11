@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  FlaskConical, Brain, Database, Download, Play, RefreshCw,
+  FlaskConical, Brain, Download, Play, RefreshCw,
   Loader2, CheckCircle, XCircle, ChevronRight, AlertTriangle,
-  Wrench, FileText, Clock,
+  FileText, Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -29,11 +29,10 @@ const ALL_SYMBOLS = [
 ];
 const ACTIVE = ["CRASH300", "BOOM300", "R_75", "R_100"];
 
-type Tab = "ai" | "operations" | "export";
+type Tab = "ai" | "export";
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: "ai",         label: "AI Analysis",     icon: Brain },
-  { id: "operations", label: "Data Operations",  icon: Wrench },
-  { id: "export",     label: "Export Data",      icon: Download },
+  { id: "ai",     label: "AI Analysis", icon: Brain    },
+  { id: "export", label: "Export Data", icon: Download },
 ];
 
 function StatusPill({ ok, yes, no }: { ok: boolean; yes: string; no: string }) {
@@ -134,7 +133,7 @@ function AiAnalysisTab() {
       {/* Config */}
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
         <div>
-          <h3 className="text-sm font-semibold mb-1">AI Research Analysis</h3>
+          <h3 className="text-sm font-semibold">AI Research Analysis</h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
             Runs a GPT-4o structured analysis on stored candle data for the selected symbol.
             Extracts swing patterns, move size distribution, frequency, and behavioral drift.
@@ -223,167 +222,6 @@ function AiAnalysisTab() {
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── Data Operations Tab ──────────────────────────────────────────────────
-
-type OpResult = { ok: boolean; msg: string; detail?: any } | null;
-
-function OpCard({
-  title, description, symbol, onSymbolChange, onRun, running, result,
-}: {
-  title: string; description: string;
-  symbol: string; onSymbolChange: (s: string) => void;
-  onRun: () => void; running: boolean; result: OpResult;
-}) {
-  return (
-    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-      <div>
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{description}</p>
-      </div>
-      <div className="flex items-center gap-3 flex-wrap">
-        <SymbolSelect value={symbol} onChange={onSymbolChange} />
-        <button
-          onClick={onRun}
-          disabled={running}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-          {running ? "Running…" : `Run for ${symbol}`}
-        </button>
-      </div>
-      {result && (
-        result.ok ? (
-          <div className="space-y-1.5">
-            <SuccessBox msg={result.msg} />
-            {result.detail && (
-              <div className="rounded bg-muted/20 p-3 space-y-1">
-                {Object.entries(result.detail).map(([k, v]) => (
-                  <div key={k} className="flex items-start gap-3 text-xs">
-                    <span className="text-muted-foreground w-36 shrink-0">{k}</span>
-                    <span className="font-mono text-foreground">{String(v)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : <ErrorBox msg={result.msg} />
-      )}
-    </div>
-  );
-}
-
-function DataOperationsTab() {
-  const [repairSym, setRepairSym] = useState("CRASH300");
-  const [repairRunning, setRepairRunning] = useState(false);
-  const [repairResult, setRepairResult] = useState<OpResult>(null);
-
-  const [reconcileSym, setReconcileSym] = useState("CRASH300");
-  const [reconcileRunning, setReconcileRunning] = useState(false);
-  const [reconcileResult, setReconcileResult] = useState<OpResult>(null);
-
-  const [enrichSym, setEnrichSym] = useState("CRASH300");
-  const [enrichRunning, setEnrichRunning] = useState(false);
-  const [enrichResult, setEnrichResult] = useState<OpResult>(null);
-
-  const runRepair = async () => {
-    setRepairRunning(true); setRepairResult(null);
-    try {
-      const d = await apiFetch("research/repair-interpolated", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: repairSym }),
-      });
-      const s = d.summary ?? {};
-      setRepairResult({
-        ok: true,
-        msg: `Repair complete — recovered ${(s.totalRecovered ?? 0).toLocaleString()} of ${(s.totalBefore ?? 0).toLocaleString()} interpolated candles`,
-        detail: {
-          "Found (before)": (s.totalBefore ?? 0).toLocaleString(),
-          "Recovered": (s.totalRecovered ?? 0).toLocaleString(),
-          "Unrecoverable": (s.totalUnrecoverable ?? 0).toLocaleString(),
-        },
-      });
-    } catch (e: any) { setRepairResult({ ok: false, msg: e.message }); }
-    finally { setRepairRunning(false); }
-  };
-
-  const runReconcile = async () => {
-    setReconcileRunning(true); setReconcileResult(null);
-    try {
-      const d = await apiFetch("research/reconcile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: reconcileSym }),
-      });
-      setReconcileResult({
-        ok: true,
-        msg: `Reconciliation complete for ${reconcileSym}`,
-        detail: d.summary ?? d,
-      });
-    } catch (e: any) { setReconcileResult({ ok: false, msg: e.message }); }
-    finally { setReconcileRunning(false); }
-  };
-
-  const runEnrich = async () => {
-    setEnrichRunning(true); setEnrichResult(null);
-    try {
-      const d = await apiFetch("research/enrich", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: enrichSym }),
-      });
-      setEnrichResult({
-        ok: true,
-        msg: `Enrichment complete for ${enrichSym}`,
-        detail: d.summary ?? d,
-      });
-    } catch (e: any) { setEnrichResult({ ok: false, msg: e.message }); }
-    finally { setEnrichRunning(false); }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-4 py-3 flex items-start gap-3">
-        <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          Data operations run in the foreground and may take several minutes for large symbol histories.
-          Repair may not recover all candles — data outside API history limits remains interpolated (unrecoverable).
-        </p>
-      </div>
-
-      <OpCard
-        title="Repair Interpolated Candles"
-        description="Scans all isInterpolated=true candles in the 1m and 5m tables and attempts to replace them with real API candles. Candles the API cannot supply remain interpolated (unrecoverable — e.g. market closures or history limits). May take 2–5 minutes for symbols with many interpolated rows."
-        symbol={repairSym}
-        onSymbolChange={setRepairSym}
-        onRun={runRepair}
-        running={repairRunning}
-        result={repairResult}
-      />
-
-      <OpCard
-        title="Reconcile Candles"
-        description="Reconciles the stored candle database against the Deriv API to identify gaps, missing bars, and timeframe coverage issues. Fills gaps where possible using available API history."
-        symbol={reconcileSym}
-        onSymbolChange={setReconcileSym}
-        onRun={runReconcile}
-        running={reconcileRunning}
-        result={reconcileResult}
-      />
-
-      <OpCard
-        title="Enrich Candles"
-        description="Re-runs the multi-timeframe aggregation pipeline for the selected symbol. Derives all higher timeframes (5m, 10m, 20m, 40m, 1h, 2h, 4h, 8h, 1d, 2d, 4d) from the base 1m candle data."
-        symbol={enrichSym}
-        onSymbolChange={setEnrichSym}
-        onRun={runEnrich}
-        running={enrichRunning}
-        result={enrichResult}
-      />
     </div>
   );
 }
@@ -545,10 +383,10 @@ function DataSummaryBanner() {
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       {[
-        { label: "Total Candles", value: total >= 1_000_000 ? `${(total / 1_000_000).toFixed(2)}M` : `${(total / 1_000).toFixed(0)}K`, color: "text-foreground" },
-        { label: "Symbols Tracked", value: String(data.symbols.length), color: "text-foreground" },
-        { label: "Current",   value: String(current),  color: "text-green-400" },
-        { label: "Stale / No Data", value: `${stale} / ${noData}`, color: stale + noData > 0 ? "text-amber-400" : "text-muted-foreground" },
+        { label: "Total Candles",    value: total >= 1_000_000 ? `${(total / 1_000_000).toFixed(2)}M` : `${(total / 1_000).toFixed(0)}K`, color: "text-foreground" },
+        { label: "Symbols Tracked",  value: String(data.symbols.length), color: "text-foreground" },
+        { label: "Current",          value: String(current),  color: "text-green-400" },
+        { label: "Stale / No Data",  value: `${stale} / ${noData}`, color: stale + noData > 0 ? "text-amber-400" : "text-muted-foreground" },
       ].map(({ label, value, color }) => (
         <div key={label} className="rounded-xl border border-border/50 bg-card px-4 py-3">
           <p className="text-[11px] text-muted-foreground uppercase tracking-wider">{label}</p>
@@ -573,7 +411,7 @@ export default function Research() {
           Research
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          AI market analysis · data repair &amp; reconciliation · candle export
+          AI market analysis · candle data export · Data operations moved to Data console
         </p>
       </div>
 
@@ -596,9 +434,8 @@ export default function Research() {
       </div>
 
       {/* Tab content */}
-      {tab === "ai"         && <AiAnalysisTab />}
-      {tab === "operations" && <DataOperationsTab />}
-      {tab === "export"     && <ExportTab />}
+      {tab === "ai"     && <AiAnalysisTab />}
+      {tab === "export" && <ExportTab />}
     </div>
   );
 }

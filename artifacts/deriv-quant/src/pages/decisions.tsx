@@ -431,8 +431,10 @@ export default function Decisions() {
     if (engineFilter) p.family = engineFilter;
     if (statusFilter === "approved" || statusFilter === "blocked") p.status = statusFilter;
     if (aiFilter) p.ai = aiFilter;
+    (p as any)._dateFrom = dateFrom || undefined;
+    (p as any)._dateTo   = dateTo   || undefined;
     return p;
-  }, [symbolFilter, engineFilter, statusFilter, aiFilter, page]);
+  }, [symbolFilter, engineFilter, statusFilter, aiFilter, page, dateFrom, dateTo]);
 
   const { data, isLoading } = useGetLatestSignals(params, { query: { refetchInterval: 5000 } });
   const { data: pendingData } = useGetPendingSignals({ query: { refetchInterval: 5000 } });
@@ -549,8 +551,10 @@ export default function Decisions() {
             options={["approved", "blocked"]} placeholder="All States" />
           <FilterSelect value={aiFilter} onChange={v => { setAiFilter(v); setPage(0); }}
             options={["agree", "disagree", "uncertain"]} placeholder="AI Verdict" />
+          <span className="text-[10px] text-muted-foreground">From:</span>
           <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(0); }}
             className="bg-card border border-border/50 rounded-md px-2 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none" />
+          <span className="text-[10px] text-muted-foreground">To:</span>
           <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(0); }}
             className="bg-card border border-border/50 rounded-md px-2 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none" />
           {hasFilters && (
