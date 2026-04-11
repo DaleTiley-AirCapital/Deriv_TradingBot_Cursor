@@ -18,7 +18,7 @@
  * in strategy signal generation.
  */
 import { db, backgroundDb, candlesTable } from "@workspace/db";
-import { eq, and, gte, lt, min, max, count, asc, sql } from "drizzle-orm";
+import { eq, and, gte, lte, lt, min, max, count, asc, desc, inArray, sql } from "drizzle-orm";
 import type { DerivClient } from "../infrastructure/deriv.js";
 type DerivClientPublic = DerivClient;
 
@@ -87,8 +87,19 @@ export interface TopUpResult {
   gapsRepaired: number;
   gapsInterpolated: number;
   candlesInserted: number;
+  interpolatedBefore: number;
+  interpolatedRecovered: number;
+  interpolatedUnrecoverable: number;
   errors: string[];
   durationMs: number;
+}
+
+export interface InterpolationRepairResult {
+  symbol: string;
+  timeframe: string;
+  before: number;
+  recovered: number;
+  unrecoverable: number;
 }
 
 // Candle intervals in seconds for all supported timeframes
@@ -426,11 +437,22 @@ export async function repairGapFromApi(
 
   const MAX_PER_PAGE = 5000;
   const granularity = tfSecs;
+
+  // Resolve configured symbol → API symbol via client's instance map (e.g. BOOM300 → BOOM300N).
+  // client.apiToConfiguredMap stores api→configured, so we reverse-lookup here.
+  let apiSymbol = symbol;
+  for (const [api, cfg] of client.apiToConfiguredMap.entries()) {
+    if (cfg === symbol) { apiSymbol = api; break; }
+  }
+  if (apiSymbol !== symbol) {
+    console.log(`[DataIntegrity] repairGapFromApi: ${symbol} → API symbol ${apiSymbol}`);
+  }
+
   let inserted = 0;
   let endEpoch = gapEnd;
 
   while (endEpoch > gapStart) {
-    const candles = await client.getCandleHistoryWithEnd(symbol, granularity, MAX_PER_PAGE, endEpoch, true);
+    const candles = await client.getCandleHistoryWithEnd(apiSymbol, granularity, MAX_PER_PAGE, endEpoch, true);
     if (!candles || candles.length === 0) break;
 
     const inRange = candles.filter(c => c.epoch >= gapStart && c.epoch <= gapEnd);
@@ -452,6 +474,19 @@ export async function repairGapFromApi(
 
     for (let i = 0; i < values.length; i += 500) {
       const chunk = values.slice(i, i + 500);
+      // Delete existing interpolated rows at these timestamps BEFORE insert
+      // so real API candles replace them. Non-interpolated rows are preserved
+      // via onConflictDoNothing on the subsequent insert.
+      const timestamps = chunk.map(v => v.openTs);
+      for (let j = 0; j < timestamps.length; j += 1000) {
+        await db.delete(candlesTable)
+          .where(and(
+            eq(candlesTable.symbol, symbol),
+            eq(candlesTable.timeframe, timeframe),
+            eq(candlesTable.isInterpolated, true),
+            inArray(candlesTable.openTs, timestamps.slice(j, j + 1000)),
+          ));
+      }
       await db.insert(candlesTable).values(chunk).onConflictDoNothing();
       inserted += chunk.length;
     }
@@ -484,7 +519,7 @@ export async function interpolateGap(
   const tfSecs = ENRICHMENT_TIMEFRAMES[timeframe];
   if (!tfSecs) return 0;
 
-  // Get the last real candle before the gap
+  // Get the most recent real candle immediately before the gap
   const [prior] = await db
     .select({
       close: candlesTable.close,
@@ -494,8 +529,10 @@ export async function interpolateGap(
       eq(candlesTable.symbol, symbol),
       eq(candlesTable.timeframe, timeframe),
       lt(candlesTable.openTs, gapStart),
+      eq(candlesTable.isInterpolated, false),
     ))
-    .orderBy(asc(candlesTable.openTs));
+    .orderBy(desc(candlesTable.openTs))
+    .limit(1);
 
   if (!prior) {
     console.warn(`[DataIntegrity] Cannot interpolate ${symbol}/${timeframe} gap at ${gapStart}: no prior candle`);
@@ -600,13 +637,125 @@ export async function repairAllGaps(
 }
 
 /**
+ * Scans for ALL existing isInterpolated=true candles in the lookback window
+ * and attempts to replace them with real API candles.
+ *
+ * This is the ACTIVE RECOVERY pass — it runs AFTER gap repair to ensure
+ * previously-interpolated candles are replaced wherever the API has real data.
+ *
+ * Only operates on API-fetchable timeframes (1m, 5m).
+ *
+ * Returns:
+ *   before        — interpolated count before recovery attempt
+ *   recovered     — how many were replaced by real candles
+ *   unrecoverable — how many remain interpolated (API had no data for them)
+ */
+export async function repairInterpolatedCandles(
+  symbol: string,
+  timeframe: string,
+  client: DerivClientPublic,
+  lookbackDays = 400,
+): Promise<{ before: number; recovered: number; unrecoverable: number }> {
+  if (!(API_FETCHABLE_TIMEFRAMES as readonly string[]).includes(timeframe)) {
+    return { before: 0, recovered: 0, unrecoverable: 0 };
+  }
+
+  const cutoff = Math.floor(Date.now() / 1000) - lookbackDays * 86400;
+
+  // Count interpolated rows BEFORE repair (baseline)
+  const [beforeRow] = await db
+    .select({ cnt: count() })
+    .from(candlesTable)
+    .where(and(
+      eq(candlesTable.symbol, symbol),
+      eq(candlesTable.timeframe, timeframe),
+      eq(candlesTable.isInterpolated, true),
+      gte(candlesTable.openTs, cutoff),
+    ));
+
+  const before = Number(beforeRow?.cnt ?? 0);
+  if (before === 0) return { before: 0, recovered: 0, unrecoverable: 0 };
+
+  console.log(`[InterpolationRepair] ${symbol}/${timeframe}: ${before} interpolated candles found — scanning ranges for API recovery...`);
+
+  const tfSecs = ENRICHMENT_TIMEFRAMES[timeframe]!;
+
+  // Fetch all interpolated timestamps (ordered)
+  const interpolatedRows = await db
+    .select({ openTs: candlesTable.openTs })
+    .from(candlesTable)
+    .where(and(
+      eq(candlesTable.symbol, symbol),
+      eq(candlesTable.timeframe, timeframe),
+      eq(candlesTable.isInterpolated, true),
+      gte(candlesTable.openTs, cutoff),
+    ))
+    .orderBy(asc(candlesTable.openTs));
+
+  if (interpolatedRows.length === 0) return { before: 0, recovered: 0, unrecoverable: 0 };
+
+  // Group consecutive interpolated timestamps into contiguous ranges
+  // (gap between consecutive timestamps > 2× timeframe means a new range)
+  const ranges: Array<{ start: number; end: number; count: number }> = [];
+  let rangeStart = interpolatedRows[0].openTs;
+  let rangePrev  = interpolatedRows[0].openTs;
+  let rangeCount = 1;
+
+  for (let i = 1; i < interpolatedRows.length; i++) {
+    const ts = interpolatedRows[i].openTs;
+    if (ts - rangePrev > tfSecs * 2) {
+      ranges.push({ start: rangeStart, end: rangePrev, count: rangeCount });
+      rangeStart = ts;
+      rangeCount = 0;
+    }
+    rangePrev = ts;
+    rangeCount++;
+  }
+  ranges.push({ start: rangeStart, end: rangePrev, count: rangeCount });
+
+  console.log(`[InterpolationRepair] ${symbol}/${timeframe}: ${before} interpolated rows in ${ranges.length} range(s) — calling API for each...`);
+
+  for (const range of ranges) {
+    try {
+      await repairGapFromApi(symbol, timeframe, range.start, range.end, client);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[InterpolationRepair] ${symbol}/${timeframe}: failed to recover range ${range.start}–${range.end}: ${msg}`);
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  // Re-count interpolated rows AFTER recovery
+  const [afterRow] = await db
+    .select({ cnt: count() })
+    .from(candlesTable)
+    .where(and(
+      eq(candlesTable.symbol, symbol),
+      eq(candlesTable.timeframe, timeframe),
+      eq(candlesTable.isInterpolated, true),
+      gte(candlesTable.openTs, cutoff),
+    ));
+
+  const remaining   = Number(afterRow?.cnt ?? 0);
+  const recovered   = before - remaining;
+  const unrecoverable = remaining;
+
+  console.log(
+    `[InterpolationRepair] ${symbol}/${timeframe}: done — ` +
+    `before=${before} recovered=${recovered} unrecoverable=${unrecoverable}`,
+  );
+
+  return { before, recovered, unrecoverable };
+}
+
+/**
  * Full data top-up / reconciliation pipeline for a symbol.
  *
  * Steps:
- * 1. Check 1m and 5m base data integrity (detect ALL gaps)
- * 2. Repair detected gaps via API (with interpolation fallback)
- * 3. Trigger timeframe enrichment for derived TFs
- * 4. Final integrity re-check
+ * 1. Check 1m and 5m base data integrity (detect missing candle gaps)
+ * 2. Repair detected missing gaps via API (with interpolation fallback)
+ * 3. Repair existing interpolated candles — replace with real API candles wherever available
+ * 4. Trigger timeframe enrichment for derived TFs
  */
 export async function runDataTopUp(
   symbol: string,
@@ -618,9 +767,13 @@ export async function runDataTopUp(
   let gapsRepaired = 0;
   let gapsInterpolated = 0;
   let candlesInserted = 0;
+  let interpolatedBefore = 0;
+  let interpolatedRecovered = 0;
+  let interpolatedUnrecoverable = 0;
 
   const baseTimeframes: string[] = ["1m", "5m"];
 
+  // Step 1 & 2: Repair missing candle gaps
   for (const tf of baseTimeframes) {
     try {
       const gaps = await detectCandleGaps(symbol, tf, 365, 1);
@@ -638,12 +791,26 @@ export async function runDataTopUp(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`${tf} check failed: ${msg}`);
+      errors.push(`${tf} gap check failed: ${msg}`);
       console.error(`[DataTopUp] ${symbol}/${tf} error: ${msg}`);
     }
   }
 
-  // Trigger enrichment for derived timeframes
+  // Step 3: Replace interpolated candles with real API candles wherever available
+  for (const tf of baseTimeframes) {
+    try {
+      const result = await repairInterpolatedCandles(symbol, tf, client);
+      interpolatedBefore      += result.before;
+      interpolatedRecovered   += result.recovered;
+      interpolatedUnrecoverable += result.unrecoverable;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${tf} interpolation repair failed: ${msg}`);
+      console.error(`[DataTopUp] ${symbol}/${tf} interpolation repair error: ${msg}`);
+    }
+  }
+
+  // Step 4: Enrich derived timeframes from repaired 1m base
   try {
     const { enrichTimeframes } = await import("./candleEnrichment.js");
     const enriched = await enrichTimeframes(symbol);
@@ -661,6 +828,7 @@ export async function runDataTopUp(
   console.log(
     `[DataTopUp] ${symbol}: complete in ${durationMs}ms | ` +
     `gaps=${gapsFound} repaired=${gapsRepaired} interpolated=${gapsInterpolated} ` +
+    `interpBefore=${interpolatedBefore} recovered=${interpolatedRecovered} unrecoverable=${interpolatedUnrecoverable} ` +
     `inserted=${candlesInserted} errors=${errors.length}`,
   );
 
@@ -671,6 +839,9 @@ export async function runDataTopUp(
     gapsRepaired,
     gapsInterpolated,
     candlesInserted,
+    interpolatedBefore,
+    interpolatedRecovered,
+    interpolatedUnrecoverable,
     errors,
     durationMs,
   };
@@ -693,6 +864,11 @@ export interface ReconcileResult {
     gapsInterpolated: number;
     candlesInserted: number;
     errors: string[];
+  };
+  interpolationRepair: {
+    before: number;
+    recovered: number;
+    unrecoverable: number;
   };
   enrichment: {
     inserted: number;
@@ -750,7 +926,7 @@ export async function reconcileSymbolData(
     console.warn(`[Reconcile] ${symbol}: ${insufficiencyReason}`);
   }
 
-  // ── Step 2: Repair gaps in 1m and 5m (even if base is thin) ─────────
+  // ── Step 2: Repair missing candle gaps in 1m and 5m ─────────────────
   let gapsFound = 0;
   let gapsRepaired = 0;
   let gapsInterpolated = 0;
@@ -777,6 +953,26 @@ export async function reconcileSymbolData(
     }
   } else {
     console.warn(`[Reconcile] ${symbol}: No 1m base data — skipping gap repair. Download historical data first.`);
+  }
+
+  // ── Step 2b: Replace interpolated candles with real API candles ───────
+  let interpBefore = 0;
+  let interpRecovered = 0;
+  let interpUnrecoverable = 0;
+
+  if (priorBase1m > 0) {
+    for (const tf of ["1m", "5m"] as const) {
+      try {
+        const ir = await repairInterpolatedCandles(symbol, tf, client);
+        interpBefore        += ir.before;
+        interpRecovered     += ir.recovered;
+        interpUnrecoverable += ir.unrecoverable;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        repairErrors.push(`${tf} interpolation repair: ${msg}`);
+        console.error(`[Reconcile] ${symbol}/${tf} interpolation repair error: ${msg}`);
+      }
+    }
   }
 
   // ── Step 3: Re-check after repair ────────────────────────────────────
@@ -816,9 +1012,10 @@ export async function reconcileSymbolData(
 
   const durationMs = Date.now() - start;
   console.log(
-    `[Reconcile] ${symbol}: done in ${durationMs}ms | gaps=${gapsFound} repaired=${gapsRepaired} ` +
-    `interpolated=${gapsInterpolated} inserted=${candlesInserted} enriched=${enrichInserted} ` +
-    `errors=${errors.length + repairErrors.length + enrichErrors.length}`,
+    `[Reconcile] ${symbol}: done in ${durationMs}ms | ` +
+    `gaps=${gapsFound} repaired=${gapsRepaired} interpolated=${gapsInterpolated} inserted=${candlesInserted} ` +
+    `interpBefore=${interpBefore} recovered=${interpRecovered} unrecoverable=${interpUnrecoverable} ` +
+    `enriched=${enrichInserted} errors=${errors.length + repairErrors.length + enrichErrors.length}`,
   );
 
   return {
@@ -835,6 +1032,11 @@ export async function reconcileSymbolData(
       gapsInterpolated,
       candlesInserted,
       errors: repairErrors,
+    },
+    interpolationRepair: {
+      before:        interpBefore,
+      recovered:     interpRecovered,
+      unrecoverable: interpUnrecoverable,
     },
     enrichment: {
       inserted: enrichInserted,

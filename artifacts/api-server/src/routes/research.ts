@@ -812,4 +812,76 @@ router.post("/research/strategy-ranking", async (req, res): Promise<void> => {
   }
 });
 
+// ─── POST /research/repair-interpolated ──────────────────────────────────────
+//
+// Actively replaces isInterpolated=true candles with real API candles wherever
+// the Deriv API can supply the data. This is the RECOVERY pass that should be
+// run after historical backfill and after any reconcile run.
+//
+// Returns per-timeframe breakdown:
+//   before        — interpolated count before recovery
+//   recovered     — replaced with real candles
+//   unrecoverable — still interpolated after API attempt (API had no data)
+//
+// Body: { symbol }
+// Query: ?background=true to run async and return immediately
+
+router.post("/research/repair-interpolated", async (req, res): Promise<void> => {
+  const { symbol } = req.body ?? {};
+
+  if (!symbol || typeof symbol !== "string") {
+    res.status(400).json({ error: "symbol is required" });
+    return;
+  }
+
+  if (!ALL_SYMBOLS.includes(symbol)) {
+    res.status(400).json({ error: `Unknown symbol: ${symbol}` });
+    return;
+  }
+
+  const background = req.query.background === "true";
+
+  try {
+    const derivClient = await getDerivClientWithDbToken();
+    const { repairInterpolatedCandles } = await import("../core/dataIntegrity.js");
+
+    const run = async () => {
+      const results: Array<{
+        timeframe: string;
+        before: number;
+        recovered: number;
+        unrecoverable: number;
+      }> = [];
+
+      for (const tf of ["1m", "5m"]) {
+        const r = await repairInterpolatedCandles(symbol, tf, derivClient);
+        results.push({ timeframe: tf, ...r });
+      }
+      return results;
+    };
+
+    if (background) {
+      run().then(results => {
+        console.log(`[RepairInterpolated] Background run complete for ${symbol}:`, results);
+      }).catch(err => {
+        console.error(`[RepairInterpolated] Background run failed for ${symbol}:`, err);
+      });
+      res.json({ success: true, message: `Interpolation repair started in background for ${symbol}` });
+    } else {
+      const results = await run();
+      const totalBefore      = results.reduce((s, r) => s + r.before, 0);
+      const totalRecovered   = results.reduce((s, r) => s + r.recovered, 0);
+      const totalUnrecoverable = results.reduce((s, r) => s + r.unrecoverable, 0);
+      res.json({
+        success: true,
+        symbol,
+        summary: { totalBefore, totalRecovered, totalUnrecoverable },
+        byTimeframe: results,
+      });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Interpolation repair failed" });
+  }
+});
+
 export default router;

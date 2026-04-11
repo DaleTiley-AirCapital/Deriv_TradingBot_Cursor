@@ -655,6 +655,7 @@ function TopUpTab() {
                 </div>
               ) : (
                 <>
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Gap Repair</div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {[
                       { k: "Gaps Found", v: result.result?.gapsFound ?? "—", color: "text-yellow-400" },
@@ -668,6 +669,23 @@ function TopUpTab() {
                       </div>
                     ))}
                   </div>
+                  {result.result?.interpolatedBefore != null && (
+                    <>
+                      <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mt-2">Interpolation Recovery (1m + 5m combined)</div>
+                      <div className="grid grid-cols-3 gap-3">
+                        {[
+                          { k: "Found (before)", v: result.result.interpolatedBefore.toLocaleString(), color: "text-orange-400" },
+                          { k: "Recovered", v: result.result.interpolatedRecovered.toLocaleString(), color: "text-green-400" },
+                          { k: "Unrecoverable", v: result.result.interpolatedUnrecoverable.toLocaleString(), color: result.result.interpolatedUnrecoverable > 0 ? "text-red-400" : "text-muted-foreground" },
+                        ].map(m => (
+                          <div key={m.k} className="bg-muted/20 rounded-lg p-3">
+                            <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">{m.k}</div>
+                            <div className={cn("text-sm font-mono font-bold", m.color)}>{m.v}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                   {(result.result?.errors ?? []).length > 0 && (
                     <ErrorBox msg={`${result.result.errors.length} error(s): ${result.result.errors.join(" | ")}`} />
                   )}
@@ -677,7 +695,90 @@ function TopUpTab() {
           )}
         </div>
       </Section>
+
+      <RepairInterpolatedSection />
     </div>
+  );
+}
+
+function RepairInterpolatedSection() {
+  const [symbol, setSymbol] = useState("BOOM300");
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<any | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async () => {
+    setRunning(true);
+    setErr(null);
+    setResult(null);
+    try {
+      const d = await apiFetch("research/repair-interpolated", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol }),
+      });
+      setResult(d);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Section title="Repair Interpolated Candles" icon={Shield}>
+      <div className="space-y-4">
+        <div className="text-xs text-muted-foreground leading-relaxed bg-muted/20 rounded p-3">
+          <strong className="text-foreground">What this does:</strong> Scans for all <code className="text-primary">isInterpolated=true</code> candles in the 1m and 5m tables
+          and attempts to replace them with <strong className="text-foreground">real API candles</strong>. Candles that the API cannot supply
+          remain interpolated (unrecoverable — e.g. market closures or API history limits).
+          This runs in the foreground and may take several minutes for symbols with many interpolated rows.
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <SymbolSelect value={symbol} onChange={setSymbol} />
+          <Btn
+            label={running ? "Repairing…" : `Repair ${symbol} Interpolated`}
+            icon={Play}
+            onClick={run}
+            loading={running}
+            variant="primary"
+          />
+        </div>
+
+        {running && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Fetching real candles from the API — may take 2-5 minutes for symbols with many interpolated rows.
+          </div>
+        )}
+
+        {err && <ErrorBox msg={err} />}
+
+        {result && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { k: "Found (before)", v: (result.summary?.totalBefore ?? 0).toLocaleString(), color: "text-orange-400" },
+                { k: "Recovered", v: (result.summary?.totalRecovered ?? 0).toLocaleString(), color: "text-green-400" },
+                { k: "Unrecoverable", v: (result.summary?.totalUnrecoverable ?? 0).toLocaleString(), color: result.summary?.totalUnrecoverable > 0 ? "text-red-400" : "text-muted-foreground" },
+              ].map(m => (
+                <div key={m.k} className="bg-muted/20 rounded-lg p-3">
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">{m.k}</div>
+                  <div className={cn("text-sm font-mono font-bold", m.color)}>{m.v}</div>
+                </div>
+              ))}
+            </div>
+            {(result.byTimeframe ?? []).map((tf: any) => (
+              <div key={tf.timeframe} className="text-xs text-muted-foreground">
+                <span className="font-mono font-semibold text-foreground">{tf.timeframe}</span>:
+                {" "}before={tf.before.toLocaleString()} recovered=<span className="text-green-400">{tf.recovered.toLocaleString()}</span> unrecoverable=<span className={tf.unrecoverable > 0 ? "text-red-400" : "text-muted-foreground"}>{tf.unrecoverable.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Section>
   );
 }
 
@@ -1014,15 +1115,34 @@ function ExportTab() {
                 min={rangeBounds?.firstAvailableDate ?? undefined}
                 max={rangeBounds?.lastAvailableDate  ?? undefined}
                 onChange={e => { setStartDate(e.target.value); setPrecheck(null); }}
+                onBlur={e => {
+                  const first = rangeBounds?.firstAvailableDate as string | undefined;
+                  const last  = rangeBounds?.lastAvailableDate  as string | undefined;
+                  let v = e.target.value;
+                  if (first && v < first) v = first;
+                  if (last  && v > last)  v = last;
+                  if (endDate && v > endDate) v = endDate;
+                  setStartDate(v);
+                  setPrecheck(null);
+                }}
                 className="bg-background border border-border/50 rounded px-2 py-1 text-foreground text-xs"
               />
               <span className="text-muted-foreground">→</span>
               <input
                 type="date"
                 value={endDate}
-                min={rangeBounds?.firstAvailableDate ?? undefined}
+                min={startDate || (rangeBounds?.firstAvailableDate ?? undefined)}
                 max={rangeBounds?.lastAvailableDate  ?? undefined}
                 onChange={e => { setEndDate(e.target.value); setPrecheck(null); }}
+                onBlur={e => {
+                  const first = startDate || (rangeBounds?.firstAvailableDate as string | undefined);
+                  const last  = rangeBounds?.lastAvailableDate  as string | undefined;
+                  let v = e.target.value;
+                  if (first && v < first) v = first;
+                  if (last  && v > last)  v = last;
+                  setEndDate(v);
+                  setPrecheck(null);
+                }}
                 className="bg-background border border-border/50 rounded px-2 py-1 text-foreground text-xs"
               />
             </div>
