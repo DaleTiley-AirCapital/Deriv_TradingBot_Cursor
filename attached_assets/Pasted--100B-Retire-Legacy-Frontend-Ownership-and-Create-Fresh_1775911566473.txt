@@ -1,0 +1,97 @@
+#100B - Retire Legacy Frontend Ownership and Create Fresh V3 Shell
+
+## What & Why
+The current app shell is contaminated by old V1/V2 page ownership and patched-over surfaces.
+
+We do NOT want to refactor old pages into V3.
+We want to retire them from primary ownership and create a fresh V3 shell.
+
+This task is about:
+- removing legacy pages from the main app experience
+- isolating any legacy routes if they must remain temporarily
+- building a fresh V3 shell and navigation
+- preparing empty/new page ownership for the new frontend rebuild
+
+This is NOT the page-content rebuild yet.
+This is the shell/ownership reset.
+
+---
+
+## Non-negotiable rules
+- Do NOT patch old V2 pages into the new shell
+- Do NOT keep legacy pages in primary nav
+- Do NOT make redirects that secretly preserve the old primary experience
+- Do NOT rebuild page content in this task beyond scaffolding/shell ownership
+- Legacy pages may remain only under clearly isolated legacy/dev paths if needed
+
+---
+
+## Tasks
+
+### 1. Audit current frontend route/page ownership
+Return a matrix:
+- route
+- current page/component owner
+- V1/V2/V3/unknown
+- keep as primary / move to legacy / retire
+- reason
+
+### 2. Remove legacy pages from primary navigation
+Main navigation must no longer point to patched legacy pages.
+
+### 3. Build a fresh V3 shell
+Create a clean primary shell for the new app:
+- new nav
+- new layout
+- clean page ownership
+- V3 terminology only
+
+### 4. Define fresh primary routes
+Primary app routes should be the new V3 routes only, such as:
+- /overview
+- /decisions
+- /trades
+- /research
+- /data
+- /settings
+- /help
+- /diagnostics
+
+### 5. Isolate legacy routes
+If any old pages must remain temporarily:
+- move them under /legacy/*
+or equivalent hidden/dev-only ownership
+
+They must not be the primary app.
+
+### 6. Add placeholder/scaffold pages only
+Create fresh scaffold pages/components for the new V3 pages.
+Do NOT reuse old page implementations.
+
+### 7. Verify shell reset
+After this task:
+- main app nav is V3-only
+- primary route ownership is V3-only
+- old pages are no longer the main user experience
+
+---
+
+## Required deliverables
+Return:
+1. route/page ownership matrix
+2. routes moved to legacy/dev-only
+3. new primary nav structure
+4. new primary route structure
+5. fresh shell files added
+6. old shell files removed from primary ownership
+7. proof primary app no longer depends on patched V2 pages
+8. build/test result
+9. explicit confirmation:
+   - old frontend is retired from primary ownership
+   - fresh V3 shell now owns the main app
+   - page content rebuild has NOT yet been done
+
+---
+
+## Quality bar
+This task succeeds only if the primary app experience is no longer built on top of the old patched frontend.
