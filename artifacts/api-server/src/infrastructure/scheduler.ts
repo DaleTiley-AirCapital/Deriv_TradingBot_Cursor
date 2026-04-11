@@ -119,6 +119,29 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
 
     if (!v3Decision.allowed) {
       console.log(`[V3Scan] ${symbol} | ${effectiveMode} | engine=${winner.engineName} | BLOCKED | ${v3Decision.rejectionReason}`);
+      // Log blocked decisions so Decisions UI can surface them with full gate info
+      try {
+        await db.insert(signalLogTable).values({
+          symbol,
+          strategyName: winner.engineName,
+          strategyFamily: "v3_engine",
+          direction: coordinatorOutput.resolvedDirection,
+          score: coordinatorOutput.coordinatorConfidence,
+          compositeScore: Math.round(coordinatorOutput.coordinatorConfidence * 100),
+          expectedValue: winner.projectedMovePct,
+          allowedFlag: false,
+          rejectionReason: v3Decision.rejectionReason,
+          mode: effectiveMode,
+          aiVerdict: "skipped",
+          aiReasoning: "blocked before AI check",
+          regime: operationalRegime,
+          regimeConfidence,
+          executionStatus: "blocked",
+        });
+        totalDecisionsLogged++;
+      } catch (logErr) {
+        console.error(`[V3Scan] Blocked signal log error:`, logErr instanceof Error ? logErr.message : logErr);
+      }
       if (isIntelOnly) break;
       continue;
     }

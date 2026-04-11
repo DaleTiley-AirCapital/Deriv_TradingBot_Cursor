@@ -19,7 +19,7 @@ interface OverviewAPI {
   openPositions: number;
   availableCapital: number;
   openRisk: number;
-  modelStatus: string;
+  aiVerificationEnabled: boolean;
   lastDataSyncAt: string | null;
   totalTrades: number;
   winRate: number;
@@ -147,16 +147,20 @@ function SectionHeader({ icon: Icon, title, sub }: { icon: React.ElementType; ti
   );
 }
 
-function StatusRow({ label, ok, detail }: { label: string; ok: boolean; detail?: string }) {
+function StatusRow({ label, ok, detail, loading }: { label: string; ok: boolean; detail?: string; loading?: boolean }) {
   return (
     <div className="flex items-center justify-between py-2 border-b border-border/20 last:border-0">
       <div className="flex items-center gap-2">
-        {ok
-          ? <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />
-          : <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+        {loading
+          ? <span className="w-3.5 h-3.5 rounded-full border border-border/40 shrink-0 animate-pulse bg-muted/40" />
+          : ok
+            ? <CheckCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />
+            : <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />}
         <span className="text-xs text-foreground">{label}</span>
       </div>
-      {detail && <span className="text-[11px] text-muted-foreground tabular-nums">{detail}</span>}
+      <span className="text-[11px] text-muted-foreground tabular-nums">
+        {loading ? "…" : (detail ?? "")}
+      </span>
     </div>
   );
 }
@@ -194,10 +198,10 @@ export default function Overview() {
   const staleSymbols = activeSymbolData.filter(s => s.status === "stale" || s.status === "no_data");
 
   const warnings: string[] = [];
-  if (ov?.killSwitchActive) warnings.push("Kill switch is active — all new signals are being rejected.");
-  if (!ov?.streamingOnline) warnings.push("Tick streaming is offline — candles may not update in real time.");
-  if (ov?.scannerRunning === false) warnings.push("Signal scanner is not running — no new decisions will be logged.");
-  if (staleSymbols.length > 0) warnings.push(`${staleSymbols.length} active symbol(s) have stale candle data: ${staleSymbols.map(s => s.symbol).join(", ")}.`);
+  if (ov && ov.killSwitchActive) warnings.push("Kill switch is active — all new signals are being rejected.");
+  if (ov && !ov.streamingOnline) warnings.push("Tick streaming is offline — candles may not update in real time.");
+  if (ov && ov.scannerRunning === false) warnings.push("Signal scanner is not running — no new decisions will be logged.");
+  if (ov && staleSymbols.length > 0) warnings.push(`${staleSymbols.length} active symbol(s) have stale candle data: ${staleSymbols.map(s => s.symbol).join(", ")}.`);
   if (port?.suggestWithdrawal) warnings.push(`Capital has grown above the withdrawal threshold ($${port.withdrawalThreshold.toLocaleString()}) — consider extracting profits.`);
 
   const scanAge = ov?.lastScanTime ? formatAge(ov.lastScanTime) : "never";
@@ -217,25 +221,33 @@ export default function Overview() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <ModeBadge mode={mode} />
+          {ovLoading
+            ? <span className="inline-flex items-center px-2.5 py-0.5 rounded text-[11px] font-bold border bg-muted/30 text-muted-foreground border-border/40 uppercase tracking-widest animate-pulse">Loading…</span>
+            : <ModeBadge mode={mode} />}
           <span className={cn(
             "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-semibold border",
-            ov?.streamingOnline
-              ? "bg-green-500/10 text-green-400 border-green-500/25"
-              : "bg-red-500/10 text-red-400 border-red-500/25"
+            ovLoading
+              ? "bg-muted/30 text-muted-foreground border-border/40"
+              : ov?.streamingOnline
+                ? "bg-green-500/10 text-green-400 border-green-500/25"
+                : "bg-red-500/10 text-red-400 border-red-500/25"
           )}>
-            {ov?.streamingOnline
-              ? <><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" /> {ov.subscribedSymbolCount} streaming</>
-              : <><RadioTower className="w-3 h-3" /> Offline</>}
+            {ovLoading
+              ? <><RadioTower className="w-3 h-3" /> Checking…</>
+              : ov?.streamingOnline
+                ? <><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" /> {ov.subscribedSymbolCount} streaming</>
+                : <><RadioTower className="w-3 h-3" /> Offline</>}
           </span>
           <span className={cn(
             "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-semibold border",
-            ov?.scannerRunning
-              ? "bg-primary/10 text-primary border-primary/25"
-              : "bg-muted/30 text-muted-foreground border-border/40"
+            ovLoading
+              ? "bg-muted/30 text-muted-foreground border-border/40"
+              : ov?.scannerRunning
+                ? "bg-primary/10 text-primary border-primary/25"
+                : "bg-muted/30 text-muted-foreground border-border/40"
           )}>
             <Scan className="w-3 h-3" />
-            {ov?.scannerRunning ? "Scanner live" : "Scanner off"}
+            {ovLoading ? "Checking…" : ov?.scannerRunning ? "Scanner live" : "Scanner off"}
           </span>
         </div>
       </div>
@@ -260,29 +272,35 @@ export default function Overview() {
             <StatusRow
               label="Tick Streaming"
               ok={!!ov?.streamingOnline}
-              detail={ov?.streamingOnline ? `${ov.subscribedSymbolCount} symbols` : "offline"} />
+              detail={ov?.streamingOnline ? `${ov.subscribedSymbolCount} symbols` : "offline"}
+              loading={ovLoading} />
             <StatusRow
               label="Signal Scanner"
               ok={!!ov?.scannerRunning}
-              detail={ov?.scannerRunning ? `last scan ${scanAge}` : "stopped"} />
+              detail={ov?.scannerRunning ? `last scan ${scanAge}` : "stopped"}
+              loading={ovLoading} />
             <StatusRow
               label="Kill Switch"
               ok={!ov?.killSwitchActive}
-              detail={ov?.killSwitchActive ? "ACTIVE — signals blocked" : "off"} />
+              detail={ov?.killSwitchActive ? "ACTIVE — signals blocked" : "off"}
+              loading={ovLoading} />
           </div>
           <div>
             <StatusRow
               label="Active Trading Mode"
               ok={mode !== "idle"}
-              detail={mode.toUpperCase()} />
+              detail={mode.toUpperCase()}
+              loading={ovLoading} />
             <StatusRow
               label="Data Last Sync"
-              ok={true}
-              detail={dataAge} />
+              ok={!!ov?.lastDataSyncAt && (Date.now() - new Date(ov.lastDataSyncAt).getTime()) < 3_600_000}
+              detail={dataAge}
+              loading={ovLoading} />
             <StatusRow
-              label="Model / AI Status"
-              ok={ov?.modelStatus !== "untrained"}
-              detail={ov?.modelStatus ?? "—"} />
+              label="AI Verification"
+              ok={ov?.aiVerificationEnabled === true}
+              detail={ov?.aiVerificationEnabled ? "GPT-4o Enabled" : "Disabled"}
+              loading={ovLoading} />
           </div>
         </div>
         {ov?.scannerRunning && ov.lastScanTime && (
@@ -366,7 +384,7 @@ export default function Overview() {
                 <div className="space-y-1.5 text-xs">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Capital</span>
-                    <span className="tabular-nums font-semibold">${(md?.capital ?? 600).toLocaleString()}</span>
+                    <span className="tabular-nums font-semibold">${(md?.capital ?? 0).toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Open positions</span>

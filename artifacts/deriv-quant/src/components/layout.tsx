@@ -19,7 +19,6 @@ import {
   Wrench,
 } from "lucide-react";
 import {
-  useGetDataStatus,
   useGetOverview,
   useGetAccountInfo,
   useToggleTradingMode,
@@ -67,10 +66,10 @@ function useBreakpoint(): Breakpoint {
 }
 
 function useModeInfo() {
-  const { data: statusData } = useGetDataStatus({
+  const { data: overviewData } = useGetOverview({
     query: { refetchInterval: 5000, retry: false },
   });
-  const mode = statusData?.mode || "idle";
+  const mode = overviewData?.mode || "idle";
   const isLive      = mode === "live";
   const isDemo      = mode === "demo";
   const isPaper     = mode === "paper";

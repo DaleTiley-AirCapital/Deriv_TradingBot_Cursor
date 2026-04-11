@@ -129,7 +129,7 @@ router.get("/overview", async (_req, res): Promise<void> => {
       openPositions: openTrades.length,
       availableCapital: totalCapital - openRisk,
       openRisk,
-      modelStatus: stateMap["model_status"] || "untrained",
+      aiVerificationEnabled: stateMap["ai_verification_enabled"] === "true",
       lastDataSyncAt: stateMap["last_sync_at"] || null,
       totalTrades: closedTrades.length,
       winRate,
@@ -152,7 +152,7 @@ router.get("/overview", async (_req, res): Promise<void> => {
     console.error("[API] /overview error:", err instanceof Error ? err.message : err);
     res.json({
       mode: "idle", activeModes: [], openPositions: 0, availableCapital: 10000,
-      openRisk: 0, modelStatus: "untrained", lastDataSyncAt: null, totalTrades: 0,
+      openRisk: 0, aiVerificationEnabled: false, lastDataSyncAt: null, totalTrades: 0,
       winRate: 0, realisedPnl: 0, activeStrategies: 4, killSwitchActive: false,
       perMode: {}, paperModeActive: false, demoModeActive: false, realModeActive: false,
       streamingOnline: false, subscribedSymbolCount: 0, scannerRunning: false,

@@ -1,0 +1,360 @@
+#100C.2 - Signal Path Verification, V2 Settings Audit, Operational Ownership Cleanup, and Diagnostics Retirement
+
+## What & Why
+The current V3 rebuild is not yet trustworthy enough to proceed casually.
+
+There are now two categories of issues:
+
+### A. Critical system-trust issues
+The biggest concern is that after days of V3 work, there are still effectively no visible engine decisions/signals flowing through the system.
+
+That raises serious questions:
+- are engines actually running?
+- are features being computed?
+- are engine outputs being generated?
+- are coordinator/allocator gates blocking everything?
+- are decisions failing to persist or display?
+- are stale or legacy settings suppressing V3?
+
+Until this is answered, the system may be doing far less than it appears.
+
+### B. UI ownership / duplication issues
+The UI still has duplicated or misplaced concepts:
+- AI Research appears in both Research and Diagnostics
+- Data Operations appear in Research but belong in Data
+- Export in Research has reverted to old V2 export behavior
+- global streaming controls still appear even though streaming should be per-symbol only
+- Data and Diagnostics overlap heavily
+- Runtime information is split awkwardly
+- only 12 symbols appear connected, but all 28 should show connected for research access
+- only 4 should show streaming for active trading
+
+This task must address both categories, in the correct order:
+1. verify the core system is actually running and explain why signals are or are not appearing
+2. audit whether V2 settings are still influencing V3
+3. fix known UI bugs
+4. consolidate ownership properly
+5. retire Diagnostics by moving its useful content into the correct pages
+
+---
+
+## Non-negotiable rules
+
+### 1. Signal-path verification comes first
+Do NOT spend the task only rearranging UI if the core engine/deployment path is not proven.
+
+Before ownership cleanup is considered complete, you must prove:
+- engines run
+- outputs are generated or not generated for understood reasons
+- coordinator/allocator behavior is visible
+- decisions are being persisted/displayed correctly
+
+### 2. No fake reassurance
+Do NOT say “no signals is normal” unless you can prove it from live engine outputs and gating logic.
+
+### 3. No global streaming controls
+Streaming is not global in the intended system model.
+Remove global stream start/stop as a primary user-facing control.
+Streaming must be per symbol.
+
+### 4. All 28 symbols must appear connected for research/data
+The UI must represent:
+- all 28 symbols as connected/available for research and data operations
+- 4 active trading symbols as streaming/active by default
+- the rest as available/idle unless disabled
+
+### 5. Diagnostics must not remain a dumping ground
+After this task, Diagnostics should either:
+- be greatly reduced to advanced/debug-only material
+or
+- be retired from the primary app if its useful content is successfully absorbed elsewhere
+
+### 6. No V2 export fallback
+Research/export must use the real latest export pipeline, not old V2 json/xlsx behavior.
+
+### 7. Do not keep stale settings just because they exist
+If score thresholds or other settings are still active in V3, prove where.
+If they are stale or no longer used, remove/hide them from the UI.
+
+---
+
+## Done looks like
+- engine/signal path is explicitly verified
+- if signals are absent, the exact reason is known and surfaced
+- V2 settings influence on V3 is explicitly audited and clarified
+- the 5 known UI bugs are fixed
+- AI Research exists only in Research
+- Data Operations move to Data
+- Research export uses the new export system
+- global streaming controls are removed
+- all 28 symbols appear connected/available
+- 4 symbols show as streaming/active
+- useful diagnostics content is absorbed into the correct pages
+- Diagnostics becomes reduced or retireable
+
+---
+
+## Out of scope
+- no major new strategy redesign
+- no fresh backend architecture rewrite
+- no full visual redesign
+- no legacy reintroduction
+
+---
+
+## Part 1 - Core signal/engine verification
+
+### 1. Verify the live signal path end to end
+Explicitly trace and report the current V3 flow:
+
+- feature extraction
+- symbol engine evaluation
+- coordinator
+- allocator
+- decision persistence/logging
+- trade creation
+
+For each stage, show:
+- exact files/modules involved
+- whether it is currently running
+- what current live output exists
+- where output is being dropped if applicable
+
+### 2. Prove whether engines are generating outputs
+For the 4 active trading symbols:
+- CRASH300
+- BOOM300
+- R_75
+- R_100
+
+report over a recent live window:
+- how many scans ran
+- how many times each engine evaluated
+- how many times each engine produced a candidate
+- how many candidates reached coordinator
+- how many reached allocator
+- how many were blocked
+- how many became decisions
+- how many became trades
+
+If zero or near-zero, explain exactly why.
+
+### 3. Surface blocking reasons
+If signals are not becoming decisions/trades, return the real reasons, such as:
+- no engine output
+- insufficient score
+- mode gating
+- allocator block
+- missing coordinator output
+- data quality issue
+- symbol not active
+- settings mismatch
+- other gating
+
+This is critical.
+
+### 4. Verify decision persistence/display
+Confirm whether decisions are:
+- actually being generated but not shown
+- not being generated at all
+- being generated but overwritten/filtered out
+- stored in DB or only transient
+
+Fix any disconnect between runtime decisions and the Decisions UI.
+
+---
+
+## Part 2 - Audit V2 settings / stale config influence
+
+### 5. Audit all visible strategy/scoring settings against real V3 usage
+Inspect the current Settings page and underlying configuration/storage.
+
+For each visible setting, return:
+- setting name
+- currently shown in UI? yes/no
+- actually used by V3 runtime? yes/no
+- file/module where used
+- keep / move / remove / relabel
+- reason
+
+Specifically include:
+- score thresholds
+- global scoring threshold
+- any V2 family settings
+- any paper/demo/real mode gates
+- engine-level thresholds if exposed
+- allocator/coordinator gates if exposed
+
+### 6. Clarify whether score thresholds are real V3 controls
+You specifically need to answer:
+- are the current score threshold settings still used by the new engines?
+- is there a global scoring threshold?
+- are these V2 leftovers or active V3 controls?
+
+Do not answer vaguely.
+
+### 7. Remove/hide stale settings
+Any setting shown in UI but not actually used by V3 must be removed from the primary Settings page.
+
+---
+
+## Part 3 - Fix the 5 known bugs
+
+### 8. Fix the 5 already identified bugs
+Fix and verify:
+
+1. Decisions date filter missing dependency / no-op
+2. Diagnostics streaming toggle wrong endpoint
+3. Diagnostics streaming lastUpdated undefined
+4. Overview “Data Last Sync” hardcoded green
+5. Layout mode indicator reading wrong endpoint
+
+Verify each one individually.
+
+---
+
+## Part 4 - Ownership cleanup and page consolidation
+
+### 9. Consolidate AI Research ownership
+AI Research belongs in Research.
+Remove duplicate AI Research from Diagnostics.
+
+### 10. Move Data Operations into Data
+Move these from Research into Data:
+- Repair Interpolated Candles
+- Reconcile Candles
+- Enrich Candles
+
+Research should focus on:
+- strategy ranking
+- AI analysis
+- exports
+- backtesting/research comparisons
+
+### 11. Fix Research export ownership and implementation
+Research export must use the latest correct export system.
+Remove/replace any old V2 json/xlsx export behavior.
+
+### 12. Address backtest visibility
+You raised a valid concern: backtest capability is missing or invisible.
+
+Audit:
+- does a current V3-compatible backtest engine exist?
+- is it wired anywhere?
+- is it stale?
+- should it appear in Research now?
+
+Return a recommendation:
+- expose it now
+- leave it out because not ready
+- or replace it with AI analysis only
+
+Do not fake a backtest surface.
+
+### 13. Rebuild Data ownership properly
+Data page should own:
+- symbol state
+- streaming control
+- candle coverage
+- data operations
+- live ticks / M1 candles / spike events
+- engine feature live state if appropriate
+
+Reorganize Data so it becomes the single operational data console.
+
+### 14. Eliminate global streaming controls
+Remove global Start All / Stop All as the primary user-facing model.
+Streaming must be controlled per symbol.
+
+### 15. Show all 28 symbols as connected/available
+Fix symbol-state representation so:
+- all 28 symbols show connected/available for research/data
+- only 4 active trading symbols show streaming/active by default
+- the rest show idle/available unless disabled
+
+### 16. Merge/absorb the useful Integrity view from Diagnostics into Data
+The better integrity/coverage grid from Diagnostics should become part of Data ownership if it is the stronger implementation.
+
+### 17. Move useful Runtime content to proper owners
+You specifically identified:
+- System Overview from Diagnostics Runtime → move to Overview
+- V3 Engine Features — Live State → move to Data or Decisions, whichever is the cleaner owner
+
+Implement that ownership cleanup.
+
+### 18. Reduce or retire Diagnostics
+After moving the useful content out:
+- reduce Diagnostics to advanced/debug-only
+or
+- retire it from primary nav if little remains
+
+Return what remains in Diagnostics and why.
+
+---
+
+## Part 5 - Clarify confusing UI states
+
+### 19. Investigate “AI Untrained” on Overview
+Audit exactly why the Overview system-status card shows AI Analysis with a red cross / “AI Untrained”.
+
+Answer:
+- is this a real backend state?
+- stale placeholder?
+- missing training concept?
+- mislabel?
+- broken endpoint mapping?
+
+Fix it or remove it if misleading.
+
+---
+
+## Required deliverables
+Return:
+
+1. end-to-end signal-path report
+2. per-active-symbol scan/candidate/block/trade counts
+3. explanation of why there are or are not signals
+4. decision persistence/display diagnosis
+5. settings audit matrix
+6. explicit answer on score thresholds/global thresholds and whether V3 uses them
+7. confirmation that the 5 known bugs were fixed
+8. what moved out of Diagnostics
+9. what moved into Data
+10. what moved into Overview
+11. what remains in Research
+12. what remains in Diagnostics and why
+13. proof that all 28 symbols now show connected/available
+14. proof that only 4 default active trading symbols show streaming
+15. proof that streaming is no longer presented globally
+16. clarification/fix for “AI Untrained”
+17. build/test/server result
+18. explicit confirmation:
+   - core engine path was verified
+   - UI ownership is cleaner
+   - stale V2 settings were audited
+   - the app is now ready to proceed to 100D only if signal-path trust is established
+
+---
+
+## Verification requirements
+You must verify with real runs:
+- recent scan cycles
+- candidate/block/trade counts
+- decisions UI showing real current state
+- per-symbol streaming state
+- all 28 connected visibility
+- date filter behavior
+- endpoint-correct streaming buttons
+- overview status correctness
+- settings usage correctness
+
+Do not fake verification.
+
+---
+
+## Quality bar
+This task succeeds only if it answers the user’s biggest concern:
+
+“Is the system actually doing anything, and if not, exactly why not?”
+
+If that remains unclear, the task has failed.

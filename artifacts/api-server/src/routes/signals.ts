@@ -48,7 +48,13 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
 
   const conditions = [];
 
-  const visibilityCondition = sql`(${signalLogTable.allowedFlag} = true OR COALESCE(${signalLogTable.compositeScore}, 0) >= ${visibilityThreshold})`;
+  // Show: allowed signals, high-score signals above threshold, and all blocked/rejected V3 decisions
+  const visibilityCondition = sql`(
+    ${signalLogTable.allowedFlag} = true
+    OR COALESCE(${signalLogTable.compositeScore}, 0) >= ${visibilityThreshold}
+    OR ${signalLogTable.executionStatus} = 'blocked'
+    OR ${signalLogTable.executionStatus} = 'rejected'
+  )`;
   conditions.push(visibilityCondition);
 
   if (symbolFilter) conditions.push(eq(signalLogTable.symbol, symbolFilter));

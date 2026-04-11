@@ -663,11 +663,12 @@ function StreamingTab() {
 
   useEffect(() => { load(); }, []);
 
-  const toggle = async (sym: string, currentState: boolean) => {
+  const toggle = async (sym: string, currentlyStreaming: boolean) => {
     setToggling(t => ({ ...t, [sym]: true }));
     try {
-      await apiFetch(currentState ? "stream/stop" : "stream/start", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: sym }),
+      await apiFetch(`diagnostics/symbols/${encodeURIComponent(sym)}/streaming`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !currentlyStreaming }),
       });
       await load();
     } catch {}
@@ -675,15 +676,15 @@ function StreamingTab() {
   };
 
   const startAll = async () => {
-    try { await apiFetch("stream/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }); await load(); } catch {}
+    try { await apiFetch("data/stream/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }); await load(); } catch {}
   };
 
   const stopAll = async () => {
-    try { await apiFetch("stream/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }); await load(); } catch {}
+    try { await apiFetch("data/stream/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }); await load(); } catch {}
   };
 
   const symbols: any[] = data?.symbols ?? data ?? [];
-  const streaming = symbols.filter((s: any) => s.streamState === "streaming" || s.isStreaming).length;
+  const streaming = symbols.filter((s: any) => s.streamingState === "streaming" || s.streaming).length;
 
   return (
     <div className="space-y-4">
@@ -709,7 +710,7 @@ function StreamingTab() {
                 <tbody>
                   {symbols.map((s: any) => {
                     const isActive = ACTIVE_SYMBOLS.includes(s.symbol);
-                    const isStreaming = s.streamState === "streaming" || s.isStreaming;
+                    const isStreaming = s.streamingState === "streaming" || s.streaming === true;
                     return (
                       <tr key={s.symbol} className={cn("border-b border-border/20 hover:bg-muted/10 last:border-0", isActive && "bg-primary/3")}>
                         <td className="py-2 pl-0 font-mono font-medium">
@@ -717,11 +718,11 @@ function StreamingTab() {
                           {isActive && <span className="ml-1 text-[9px] text-primary/60">●</span>}
                         </td>
                         <td className="py-2 px-2">
-                          <Pill variant={isStreaming ? "ok" : "default"} label={s.streamState ?? (isStreaming ? "Streaming" : "Idle")} />
+                          <Pill variant={isStreaming ? "ok" : "default"} label={s.streamingState ?? (isStreaming ? "Streaming" : "Idle")} />
                         </td>
                         <td className="py-2 px-2 font-mono text-muted-foreground">{s.count1m?.toLocaleString() ?? "—"}</td>
                         <td className="py-2 px-2 font-mono text-muted-foreground">{s.count5m?.toLocaleString() ?? "—"}</td>
-                        <td className="py-2 px-2 font-mono text-muted-foreground text-[11px]">{s.lastUpdated ? new Date(s.lastUpdated).toLocaleString() : "—"}</td>
+                        <td className="py-2 px-2 font-mono text-muted-foreground text-[11px]">{s.lastTickTs ? new Date(s.lastTickTs).toLocaleString() : "—"}</td>
                         <td className="py-2 px-2">
                           <button
                             onClick={() => toggle(s.symbol, isStreaming)}
