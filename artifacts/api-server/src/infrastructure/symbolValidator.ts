@@ -78,10 +78,22 @@ const symbolHealthStore: Map<string, {
   error: string | null;
 }> = new Map();
 
-// In-memory per-symbol streaming disable set.
-// Symbols in this set will not be streamed even if active trading symbols.
-// Persists until server restart (intentional — survivable in practice).
 const disabledSymbols = new Set<string>();
+
+export async function initStreamingStateFromDb(): Promise<void> {
+  try {
+    const rows = await db.select().from(platformStateTable);
+    for (const row of rows) {
+      if (row.key.startsWith("streaming_disabled_") && row.value === "true") {
+        const symbol = row.key.slice("streaming_disabled_".length);
+        disabledSymbols.add(symbol);
+        console.log(`[SymbolValidator] Loaded persisted DISABLED state for ${symbol}`);
+      }
+    }
+  } catch (err) {
+    console.warn("[SymbolValidator] Could not load streaming state from DB:", err instanceof Error ? err.message : err);
+  }
+}
 
 let validatedSymbolMap: Map<string, { apiSymbol: string; displayName: string; marketType: string }> = new Map();
 let lastValidationTs = 0;

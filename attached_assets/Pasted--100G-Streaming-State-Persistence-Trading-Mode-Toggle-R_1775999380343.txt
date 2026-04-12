@@ -1,0 +1,361 @@
+#100G - Streaming State Persistence, Trading Mode Toggle Repair (Paper/Demo/Real), 28-Symbol Truth, and Duplicate Tick Elimination
+
+## What & Why
+The system is very close, but several critical control-layer issues are still broken or unreliable:
+
+1. Per-symbol streaming toggles:
+   - Appear to change in UI
+   - Revert after navigation
+   - Not fully respected by backend
+
+2. Trading mode toggles (Paper / Demo / Real):
+   - Paper + Demo toggle from header → partially works
+   - Real mode toggle → does nothing (non-functional)
+   - Settings page toggles → trigger "saved" notification but do not apply correctly
+   - Header and Settings are NOT using a consistent state source
+
+3. System still behaves like a 12-symbol system in places instead of full 28-symbol V3 model
+
+4. Live ticks are duplicated:
+   - Same timestamp/price appears multiple times
+   - Indicates duplicate subscriptions and/or no deduplication
+
+These are NOT UI polish issues.
+They are **control-plane integrity failures**.
+
+This task fixes:
+- backend truth
+- toggle contract
+- streaming control
+- tick ingestion correctness
+- UI/backend alignment
+
+---
+
+## Absolute rules
+
+### 1. Backend is the source of truth
+No UI-only fixes.
+No optimistic UI without backend confirmation.
+
+### 2. All toggles must be real and durable
+Applies to:
+- per-symbol streaming
+- trading modes (paper/demo/real)
+
+State must:
+- persist across navigation
+- reflect correctly on reload
+- match backend truth at all times
+
+### 3. No in-memory-only control for critical state
+Streaming + trading modes must NOT rely purely on memory.
+
+### 4. Eliminate duplicate subscriptions and duplicate ticks
+No tolerance for duplicate ingestion.
+
+### 5. Enforce full 28-symbol V3 model
+- all 28 available
+- 4 active streaming by default
+
+---
+
+## Done looks like
+
+- Per-symbol streaming toggle:
+  - works
+  - persists
+  - survives navigation + restart
+
+- Trading modes:
+  - Paper works
+  - Demo works
+  - Real works (FIXED)
+  - Header + Settings are fully synced
+  - No “fake save” behavior
+
+- All 28 symbols:
+  - visible
+  - connected/available
+
+- Live ticks:
+  - no duplication
+  - clean ingestion
+
+- UI reflects backend truth everywhere
+
+---
+
+# PART 1 - Trading Mode Toggle Repair (CRITICAL)
+
+## 1. Audit current trading mode system end-to-end
+
+Trace FULL flow:
+
+- Header toggle click
+- Settings toggle click
+- API route called
+- Backend state update (platform_state)
+- UI refresh/state propagation
+
+Identify:
+- why REAL toggle does nothing
+- why Settings shows “saved” but does not apply
+- why header toggles partially work but Settings does not drive behavior
+
+Return a clear flow explanation.
+
+---
+
+## 2. Fix Real Mode toggle (currently broken)
+
+The Real toggle must:
+- be clickable
+- trigger backend update
+- persist state
+- reflect in UI immediately
+
+Likely issues to check:
+- disabled UI control
+- missing handler
+- backend route ignoring real_mode_active
+- validation blocking silently
+
+Fix fully.
+
+---
+
+## 3. Unify toggle logic between Header and Settings
+
+Currently:
+- Header toggles partially work
+- Settings toggles show success message but don’t apply
+
+Fix so that:
+
+- BOTH use the SAME backend route(s)
+- BOTH update the SAME state keys
+- BOTH trigger consistent refresh
+
+No duplicate logic paths.
+
+---
+
+## 4. Fix “Settings saved but nothing happens”
+
+This indicates:
+- UI save is firing
+- backend is either:
+  - not updating
+  - overwritten
+  - ignored
+  - or not re-read by UI
+
+Fix so that:
+- Save actually updates backend state
+- UI reflects updated values immediately
+- Header and Settings stay in sync
+
+---
+
+## 5. Validate trading mode state system
+
+Using platform_state:
+
+Ensure correct keys:
+- paper_mode_active
+- demo_mode_active
+- real_mode_active
+
+Verify:
+- toggling updates DB
+- reading reflects DB
+- no overwrites from other processes
+
+---
+
+## 6. Verify full trading mode workflow
+
+Test:
+
+1. toggle Paper on/off → works
+2. toggle Demo on/off → works
+3. toggle Real on/off → MUST work now
+4. use Settings toggles → must update Header
+5. use Header toggles → must update Settings
+6. reload page → state persists correctly
+
+---
+
+# PART 2 - Streaming State Persistence
+
+## 7. Replace in-memory streaming control
+
+Current issue:
+- uses in-memory disabledSymbols set
+
+Fix:
+- persist per-symbol streaming state
+- ensure backend respects it
+
+---
+
+## 8. Ensure backend enforces streaming state
+
+Disabled symbols must:
+- not stream
+- not resubscribe
+- not remain active via old socket
+
+---
+
+## 9. Fix stream toggle contract
+
+- UI → backend → DB → status endpoint → UI
+must be consistent
+
+---
+
+## 10. Verify streaming persistence
+
+- toggle off
+- navigate away/back
+- still off
+- restart server (if applicable)
+- still correct
+
+---
+
+# PART 3 - 28 Symbol Truth
+
+## 11. Remove 12-symbol fallback
+
+Eliminate legacy defaults.
+
+---
+
+## 12. Enforce V3 model
+
+- 28 symbols connected
+- 4 active streaming by default
+
+---
+
+## 13. Verify symbol state
+
+- Data page shows 28
+- statuses correct
+- no “missing” symbols
+
+---
+
+# PART 4 - Duplicate Tick Fix
+
+## 14. Audit subscription system
+
+Check:
+- reconnect
+- watchdog
+- enable/disable
+- startup
+
+---
+
+## 15. Prevent duplicate subscriptions
+
+Ensure:
+- one active subscription per symbol
+- no stacking
+
+---
+
+## 16. Add tick deduplication
+
+Fix:
+- insertion logic OR
+- DB constraint
+
+---
+
+## 17. Verify tick integrity
+
+- no repeated identical ticks
+- candles still correct
+
+---
+
+# PART 5 - UI + Data Alignment
+
+## 18. Fix Symbol State UI
+
+- reflect backend truth only
+- remove fake optimistic states
+
+---
+
+## 19. Fix Live View
+
+- show clean tick data
+- no duplication artifacts
+
+---
+
+## 20. Fix Overview/Runtime
+
+- correct counts
+- correct streaming indicators
+
+---
+
+# PART 6 - Full System Verification
+
+## 21. End-to-end workflow
+
+1. open Data
+2. verify 28 symbols
+3. verify streaming defaults
+4. toggle symbol off → persists
+5. toggle back on → works
+6. test Paper/Demo/Real toggles
+7. navigate between screens
+8. verify no state reversion
+9. inspect live ticks → clean
+10. run Clean Canonical Data
+11. verify Export still works
+
+---
+
+## Deliverables
+
+1. files changed (frontend + backend)
+2. DB/state changes
+3. root cause:
+   - real toggle failure
+   - settings toggle mismatch
+   - stream toggle reversion
+   - duplicate ticks
+4. explanation of fixes
+5. proof:
+   - real toggle works
+   - settings + header synced
+   - 28 symbols correct
+   - no duplicate ticks
+   - streaming persistence works
+6. build/test results
+7. explicit confirmations:
+   - trading mode toggles fully fixed
+   - streaming state durable
+   - duplicate ticks eliminated
+   - UI reflects backend truth
+
+---
+
+## Quality bar
+
+This task only passes if:
+
+- Real toggle works (this is critical)
+- Settings toggles actually control the system
+- No state lies in UI
+- No duplicate ticks
+- Data page becomes fully trustworthy

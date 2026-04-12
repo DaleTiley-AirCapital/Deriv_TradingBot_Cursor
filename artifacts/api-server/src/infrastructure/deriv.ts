@@ -2,7 +2,7 @@ import WebSocket from "ws";
 import { db, ticksTable, candlesTable, spikeEventsTable, platformStateTable } from "@workspace/db";
 import { eq, and, count, sql } from "drizzle-orm";
 import { createDecipheriv, scryptSync } from "crypto";
-import { recordTick, validateActiveSymbols, isSymbolValid, markSymbolError, markSymbolSubscribed, startWatchdog, getAllSymbolStatuses, getApiSymbol } from "./symbolValidator.js";
+import { recordTick, validateActiveSymbols, isSymbolValid, markSymbolError, markSymbolSubscribed, startWatchdog, getAllSymbolStatuses, getApiSymbol, isSymbolStreamingDisabled } from "./symbolValidator.js";
 
 const DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089";
 
@@ -817,6 +817,14 @@ class DerivClient {
 
     for (const symbol of validSymbols) {
       try {
+        if (isSymbolStreamingDisabled(symbol)) {
+          console.log(`[Deriv] Skipping ${symbol} — streaming disabled`);
+          continue;
+        }
+        if (this.subscribedSymbols.has(symbol)) {
+          console.log(`[Deriv] Skipping ${symbol} — already subscribed (duplicate guard)`);
+          continue;
+        }
         const info = validatedMap.get(symbol);
         const apiSymbol = info?.apiSymbol || symbol;
         if (apiSymbol !== symbol) {
@@ -842,6 +850,10 @@ class DerivClient {
     const self = this;
     startWatchdog(async (symbol: string) => {
       if (self._authorized && self.ws && self.ws.readyState === WebSocket.OPEN) {
+        if (isSymbolStreamingDisabled(symbol)) {
+          console.log(`[Deriv] Watchdog skipping ${symbol} — streaming disabled`);
+          return;
+        }
         const apiSymbol = self.configuredToApiSymbol(symbol);
         await self.subscribeToTicks(apiSymbol);
         self.subscribedSymbols.add(symbol);

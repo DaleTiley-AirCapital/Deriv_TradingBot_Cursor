@@ -243,6 +243,22 @@ router.post("/settings", async (req, res): Promise<void> => {
         target: platformStateTable.key,
         set: { value: "idle", updatedAt: new Date() },
       });
+  } else if (updates.some((u) => ["paper_mode_active", "demo_mode_active", "real_mode_active"].includes(u.key))) {
+    const allStates = await db.select().from(platformStateTable);
+    const stateMap: Record<string, string> = {};
+    for (const s of allStates) stateMap[s.key] = s.value;
+    for (const u of updates) stateMap[u.key] = u.value;
+
+    const paperActive = stateMap["paper_mode_active"] === "true";
+    const demoActive = stateMap["demo_mode_active"] === "true";
+    const realActive = stateMap["real_mode_active"] === "true";
+    let derivedMode = "idle";
+    if (realActive) derivedMode = "real";
+    else if (demoActive) derivedMode = "demo";
+    else if (paperActive) derivedMode = "paper";
+
+    await db.insert(platformStateTable).values({ key: "mode", value: derivedMode })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: derivedMode, updatedAt: new Date() } });
   }
 
   res.json({ success: true, message: `Updated ${updates.length} setting(s)` });

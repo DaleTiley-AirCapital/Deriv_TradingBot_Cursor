@@ -43,10 +43,26 @@ router.post("/trade/mode/toggle", async (req, res): Promise<void> => {
   await db.insert(platformStateTable).values({ key: stateKey, value: active ? "true" : "false" })
     .onConflictDoUpdate({ target: platformStateTable.key, set: { value: active ? "true" : "false", updatedAt: new Date() } });
 
+  const allStates = await db.select().from(platformStateTable);
+  const stateMap: Record<string, string> = {};
+  for (const s of allStates) stateMap[s.key] = s.value;
+
+  const paperActive = stateMap["paper_mode_active"] === "true";
+  const demoActive = stateMap["demo_mode_active"] === "true";
+  const realActive = stateMap["real_mode_active"] === "true";
+  let derivedMode = "idle";
+  if (realActive) derivedMode = "real";
+  else if (demoActive) derivedMode = "demo";
+  else if (paperActive) derivedMode = "paper";
+
+  await db.insert(platformStateTable).values({ key: "mode", value: derivedMode })
+    .onConflictDoUpdate({ target: platformStateTable.key, set: { value: derivedMode, updatedAt: new Date() } });
+
   const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1);
   res.json({
     success: true,
     message: `${modeLabel} trading ${active ? "activated" : "deactivated"}.`,
+    mode: derivedMode,
   });
 });
 

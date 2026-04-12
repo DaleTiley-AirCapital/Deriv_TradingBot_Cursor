@@ -6,6 +6,7 @@ import {
   disableSymbolStreaming,
   isSymbolStreamingDisabled,
   getDisabledSymbols,
+  initStreamingStateFromDb,
 } from "../infrastructure/symbolValidator.js";
 import {
   getIntegrityReport,
@@ -15,9 +16,13 @@ import {
 } from "../core/dataIntegrity.js";
 import { getEnrichmentStatus } from "../core/candleEnrichment.js";
 import { ALL_SYMBOLS } from "../infrastructure/deriv.js";
-import { db } from "@workspace/db";
+import { db, platformStateTable } from "@workspace/db";
 import { candlesTable } from "@workspace/db";
 import { inArray, and, gte, count, min, max, sql } from "drizzle-orm";
+
+initStreamingStateFromDb().catch(err =>
+  console.warn("[Diagnostics] initStreamingStateFromDb failed:", err instanceof Error ? err.message : err)
+);
 
 const router: IRouter = Router();
 
@@ -69,7 +74,7 @@ router.post("/diagnostics/symbols/revalidate", async (_req, res) => {
  * subscription cycles omit it. For active trading symbols this prevents
  * live tick ingestion without a full server restart.
  */
-router.post("/diagnostics/symbols/:symbol/streaming", (req, res) => {
+router.post("/diagnostics/symbols/:symbol/streaming", async (req, res) => {
   try {
     const { symbol } = req.params;
     const { enabled } = req.body ?? {};
@@ -84,6 +89,10 @@ router.post("/diagnostics/symbols/:symbol/streaming", (req, res) => {
     } else {
       disableSymbolStreaming(symbol);
     }
+
+    const dbKey = `streaming_disabled_${symbol}`;
+    await db.insert(platformStateTable).values({ key: dbKey, value: enabled ? "false" : "true" })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: enabled ? "false" : "true", updatedAt: new Date() } });
 
     const disabled = isSymbolStreamingDisabled(symbol);
     res.json({
@@ -109,7 +118,7 @@ router.get("/diagnostics/symbols/streaming-config", (_req, res) => {
     res.json({
       disabledSymbols: disabled,
       totalDisabled: disabled.length,
-      note: "Disabled state is in-memory and resets on server restart.",
+      note: "Disabled state is persisted to database and survives server restarts.",
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });

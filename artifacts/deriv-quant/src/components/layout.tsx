@@ -142,7 +142,7 @@ function ModeToggleButtons({ compact = false, controls }: { compact?: boolean; c
       {modes.map(({ mode, label, fullLabel, active, color }) => (
         <button
           key={mode}
-          onClick={() => toggleMode({ data: { mode: mode as ToggleTradingModeRequestMode, active: !active } })}
+          onClick={() => toggleMode({ data: { mode: mode as ToggleTradingModeRequestMode, active: !active, ...(mode === "real" && !active ? { confirmed: true } : {}) } })}
           disabled={toggling}
           title={fullLabel}
           className={cn(
