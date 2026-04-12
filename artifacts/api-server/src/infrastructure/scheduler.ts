@@ -125,6 +125,9 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       const blockedNativeScore =
         winner.metadata?.["boom300NativeScore"] != null ? (winner.metadata["boom300NativeScore"] as number)
         : winner.metadata?.["crash300NativeScore"] != null ? (winner.metadata["crash300NativeScore"] as number)
+        : winner.metadata?.["r75ReversalNativeScore"] != null ? (winner.metadata["r75ReversalNativeScore"] as number)
+        : winner.metadata?.["r75ContinuationNativeScore"] != null ? (winner.metadata["r75ContinuationNativeScore"] as number)
+        : winner.metadata?.["r75BreakoutNativeScore"] != null ? (winner.metadata["r75BreakoutNativeScore"] as number)
         : null;
       try {
         await db.insert(signalLogTable).values({
@@ -231,6 +234,9 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     const approvedNativeScore =
       winner.metadata?.["boom300NativeScore"] != null ? (winner.metadata["boom300NativeScore"] as number)
       : winner.metadata?.["crash300NativeScore"] != null ? (winner.metadata["crash300NativeScore"] as number)
+      : winner.metadata?.["r75ReversalNativeScore"] != null ? (winner.metadata["r75ReversalNativeScore"] as number)
+      : winner.metadata?.["r75ContinuationNativeScore"] != null ? (winner.metadata["r75ContinuationNativeScore"] as number)
+      : winner.metadata?.["r75BreakoutNativeScore"] != null ? (winner.metadata["r75BreakoutNativeScore"] as number)
       : null;
     try {
       await db.insert(signalLogTable).values({

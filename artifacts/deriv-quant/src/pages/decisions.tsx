@@ -64,6 +64,9 @@ function classifyDecision(sig: SignalLog): DecisionState {
     if (r.includes("score") && r.includes("below")) return "rejected";
     if (r.startsWith("boom300_score_below")) return "rejected";
     if (r.startsWith("crash300_score_below")) return "rejected";
+    if (r.startsWith("r75_reversal_score_below")) return "rejected";
+    if (r.startsWith("r75_continuation_score_below")) return "rejected";
+    if (r.startsWith("r75_breakout_score_below")) return "rejected";
     if (r.includes("intelligence only") || r.includes("mode not active")) return "suppressed";
     return "blocked";
   }
@@ -115,6 +118,45 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
       gate: "CRASH300 Score Gate",
+      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      raw: r,
+    };
+  }
+
+  // R_75 Reversal-specific patterns
+  if (r.startsWith("r75_reversal_score_below_mode_threshold")) {
+    const nativeMatch = r.match(/native=(\d+)/);
+    const modeMinMatch = r.match(/mode_min=(\d+)/);
+    const native = nativeMatch ? nativeMatch[1] : "?";
+    const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
+    return {
+      gate: "R75 Reversal Score Gate",
+      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      raw: r,
+    };
+  }
+
+  // R_75 Continuation-specific patterns
+  if (r.startsWith("r75_continuation_score_below_mode_threshold")) {
+    const nativeMatch = r.match(/native=(\d+)/);
+    const modeMinMatch = r.match(/mode_min=(\d+)/);
+    const native = nativeMatch ? nativeMatch[1] : "?";
+    const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
+    return {
+      gate: "R75 Continuation Score Gate",
+      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      raw: r,
+    };
+  }
+
+  // R_75 Breakout-specific patterns
+  if (r.startsWith("r75_breakout_score_below_mode_threshold")) {
+    const nativeMatch = r.match(/native=(\d+)/);
+    const modeMinMatch = r.match(/mode_min=(\d+)/);
+    const native = nativeMatch ? nativeMatch[1] : "?";
+    const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
+    return {
+      gate: "R75 Breakout Score Gate",
       detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
       raw: r,
     };
@@ -280,6 +322,81 @@ function isCrash300Breakdown(dims: unknown): dims is Record<string, number> {
   return "crashSpikeClusterPressure" in d || "downsideDisplacement" in d || "exhaustionReversalEvidence" in d;
 }
 
+// ── R_75 Reversal native 6-component dimension labels ────────────────────────
+const R75_REVERSAL_DIMENSION_LABELS: Record<string, string> = {
+  rangeExtremity:          "Range Extremity",
+  reversalConfirmation:    "Reversal Confirmation",
+  stretchDeviationQuality: "Stretch / Deviation",
+  structureQuality:        "Structure Quality",
+  entryEfficiency:         "Entry Efficiency",
+  expectedMoveSufficiency: "Expected Move Runway",
+};
+
+const R75_REVERSAL_DIMENSION_ORDER = [
+  "rangeExtremity",
+  "reversalConfirmation",
+  "stretchDeviationQuality",
+  "structureQuality",
+  "entryEfficiency",
+  "expectedMoveSufficiency",
+] as const;
+
+function isR75ReversalBreakdown(dims: unknown): dims is Record<string, number> {
+  if (!dims || typeof dims !== "object") return false;
+  const d = dims as Record<string, unknown>;
+  return "rangeExtremity" in d && "reversalConfirmation" in d && "stretchDeviationQuality" in d;
+}
+
+// ── R_75 Continuation native 6-component dimension labels ────────────────────
+const R75_CONTINUATION_DIMENSION_LABELS: Record<string, string> = {
+  trendQuality:            "Trend Quality",
+  pullbackQuality:         "Pullback Quality",
+  slopeAlignment:          "Slope Alignment",
+  structureContinuity:     "Structure Continuity",
+  entryEfficiency:         "Entry Efficiency",
+  expectedMoveSufficiency: "Expected Move Runway",
+};
+
+const R75_CONTINUATION_DIMENSION_ORDER = [
+  "trendQuality",
+  "pullbackQuality",
+  "slopeAlignment",
+  "structureContinuity",
+  "entryEfficiency",
+  "expectedMoveSufficiency",
+] as const;
+
+function isR75ContinuationBreakdown(dims: unknown): dims is Record<string, number> {
+  if (!dims || typeof dims !== "object") return false;
+  const d = dims as Record<string, unknown>;
+  return "trendQuality" in d && "pullbackQuality" in d && "slopeAlignment" in d;
+}
+
+// ── R_75 Breakout native 6-component dimension labels ────────────────────────
+const R75_BREAKOUT_DIMENSION_LABELS: Record<string, string> = {
+  boundaryPressure:        "Boundary Pressure",
+  breakStrength:           "Break Strength",
+  expansionQuality:        "Expansion Quality",
+  retestAcceptanceQuality: "Retest / Acceptance",
+  entryEfficiency:         "Entry Efficiency",
+  expectedMoveSufficiency: "Expected Move Runway",
+};
+
+const R75_BREAKOUT_DIMENSION_ORDER = [
+  "breakStrength",
+  "boundaryPressure",
+  "expansionQuality",
+  "retestAcceptanceQuality",
+  "entryEfficiency",
+  "expectedMoveSufficiency",
+] as const;
+
+function isR75BreakoutBreakdown(dims: unknown): dims is Record<string, number> {
+  if (!dims || typeof dims !== "object") return false;
+  const d = dims as Record<string, unknown>;
+  return "boundaryPressure" in d && "breakStrength" in d && "expansionQuality" in d;
+}
+
 function DimBar({ label, value }: { label: string; value: number }) {
   const cls = value >= 75 ? "bg-emerald-500" : value >= 50 ? "bg-amber-500" : "bg-red-500";
   return (
@@ -327,6 +444,9 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
           <BarChart3 className="w-3.5 h-3.5 text-primary" />
           {isCrash300Breakdown(sig.scoringDimensions) ? "CRASH300 Native Score"
             : isBoom300Breakdown(sig.scoringDimensions) ? "BOOM300 Native Score"
+            : isR75ReversalBreakdown(sig.scoringDimensions) ? "R75 Reversal Score"
+            : isR75ContinuationBreakdown(sig.scoringDimensions) ? "R75 Continuation Score"
+            : isR75BreakoutBreakdown(sig.scoringDimensions) ? "R75 Breakout Score"
             : "Score Breakdown"}
         </h4>
         {sig.scoringDimensions ? (
@@ -358,6 +478,48 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
                 </p>
               </div>
             </div>
+          ) : isR75ReversalBreakdown(sig.scoringDimensions) ? (
+            <div className="space-y-1.5">
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score · Reversal</p>
+              {R75_REVERSAL_DIMENSION_ORDER.map(key => {
+                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+                if (val == null) return null;
+                return <DimBar key={key} label={R75_REVERSAL_DIMENSION_LABELS[key]} value={val} />;
+              })}
+              <div className="mt-1 pt-1.5 border-t border-border/20">
+                <p className="text-[9px] text-muted-foreground/50 mt-1">
+                  Weights: extreme×0.25 · reversal×0.20 · stretch×0.20 · structure×0.15 · entry×0.10 · move×0.10
+                </p>
+              </div>
+            </div>
+          ) : isR75ContinuationBreakdown(sig.scoringDimensions) ? (
+            <div className="space-y-1.5">
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score · Continuation</p>
+              {R75_CONTINUATION_DIMENSION_ORDER.map(key => {
+                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+                if (val == null) return null;
+                return <DimBar key={key} label={R75_CONTINUATION_DIMENSION_LABELS[key]} value={val} />;
+              })}
+              <div className="mt-1 pt-1.5 border-t border-border/20">
+                <p className="text-[9px] text-muted-foreground/50 mt-1">
+                  Weights: trend×0.25 · pullback×0.20 · slope×0.20 · structure×0.15 · entry×0.10 · move×0.10
+                </p>
+              </div>
+            </div>
+          ) : isR75BreakoutBreakdown(sig.scoringDimensions) ? (
+            <div className="space-y-1.5">
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score · Breakout</p>
+              {R75_BREAKOUT_DIMENSION_ORDER.map(key => {
+                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+                if (val == null) return null;
+                return <DimBar key={key} label={R75_BREAKOUT_DIMENSION_LABELS[key]} value={val} />;
+              })}
+              <div className="mt-1 pt-1.5 border-t border-border/20">
+                <p className="text-[9px] text-muted-foreground/50 mt-1">
+                  Weights: break×0.25 · boundary×0.20 · expand×0.20 · retest×0.15 · entry×0.10 · move×0.10
+                </p>
+              </div>
+            </div>
           ) : (
             <div className="space-y-1.5">
               {Object.keys(DIMENSION_LABELS).map(key => {
@@ -371,8 +533,11 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
           <p className="text-[10px] text-muted-foreground">No dimension data available</p>
         )}
         <div className="pt-2 border-t border-border/20 space-y-1">
-          <DR label={isCrash300Breakdown(sig.scoringDimensions) || isBoom300Breakdown(sig.scoringDimensions) ? "Native Score" : "Composite Score"}
-              value={sig.compositeScore != null ? Math.round(sig.compositeScore).toString() : "—"} />
+          <DR label={
+            isCrash300Breakdown(sig.scoringDimensions) || isBoom300Breakdown(sig.scoringDimensions) ||
+            isR75ReversalBreakdown(sig.scoringDimensions) || isR75ContinuationBreakdown(sig.scoringDimensions) || isR75BreakoutBreakdown(sig.scoringDimensions)
+              ? "Native Score" : "Composite Score"
+          } value={sig.compositeScore != null ? Math.round(sig.compositeScore).toString() : "—"} />
           <DR label="Raw Score" value={formatNumber(sig.score, 3)} />
           <DR label="Expected Value" value={formatNumber(sig.expectedValue, 4)} highlight={sig.expectedValue > 0 ? "green" : "red"} />
         </div>
