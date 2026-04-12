@@ -120,6 +120,8 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     if (!v3Decision.allowed) {
       console.log(`[V3Scan] ${symbol} | ${effectiveMode} | engine=${winner.engineName} | BLOCKED | ${v3Decision.rejectionReason}`);
       // Log blocked decisions so Decisions UI can surface them with full gate info
+      // Include engine-native score breakdown in scoringDimensions for BOOM300
+      const blockedScoringDims = winner.metadata?.["componentScores"] ?? null;
       try {
         await db.insert(signalLogTable).values({
           symbol,
@@ -127,7 +129,9 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
           strategyFamily: "v3_engine",
           direction: coordinatorOutput.resolvedDirection,
           score: coordinatorOutput.coordinatorConfidence,
-          compositeScore: Math.round(coordinatorOutput.coordinatorConfidence * 100),
+          compositeScore: winner.metadata?.["boom300NativeScore"] != null
+            ? (winner.metadata["boom300NativeScore"] as number)
+            : Math.round(coordinatorOutput.coordinatorConfidence * 100),
           expectedValue: winner.projectedMovePct,
           allowedFlag: false,
           rejectionReason: v3Decision.rejectionReason,
@@ -137,6 +141,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
           regime: operationalRegime,
           regimeConfidence,
           executionStatus: "blocked",
+          scoringDimensions: blockedScoringDims,
         });
         totalDecisionsLogged++;
       } catch (logErr) {
@@ -219,6 +224,8 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     }
 
     // ── Log to signal_log table ──────────────────────────────────────────────
+    // Include engine-native score breakdown in scoringDimensions for BOOM300
+    const approvedScoringDims = winner.metadata?.["componentScores"] ?? null;
     try {
       await db.insert(signalLogTable).values({
         symbol,
@@ -226,7 +233,9 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         strategyFamily: "v3_engine",
         direction: coordinatorOutput.resolvedDirection,
         score: coordinatorOutput.coordinatorConfidence,
-        compositeScore: Math.round(coordinatorOutput.coordinatorConfidence * 100),
+        compositeScore: winner.metadata?.["boom300NativeScore"] != null
+          ? (winner.metadata["boom300NativeScore"] as number)
+          : Math.round(coordinatorOutput.coordinatorConfidence * 100),
         expectedValue: winner.projectedMovePct,
         allowedFlag: true,
         allocationPct: v3Decision.capitalAllocationPct,
@@ -236,6 +245,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         regime: operationalRegime,
         regimeConfidence,
         executionStatus: "executed",
+        scoringDimensions: approvedScoringDims,
       });
       totalDecisionsLogged++;
     } catch (logErr) {

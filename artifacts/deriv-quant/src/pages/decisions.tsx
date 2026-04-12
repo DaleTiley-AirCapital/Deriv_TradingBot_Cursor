@@ -62,6 +62,7 @@ function classifyDecision(sig: SignalLog): DecisionState {
     // Distinguish score-based rejection vs gate/mode blocking
     if (r.includes("composite") && r.includes("<")) return "rejected";
     if (r.includes("score") && r.includes("below")) return "rejected";
+    if (r.startsWith("boom300_score_below")) return "rejected";
     if (r.includes("intelligence only") || r.includes("mode not active")) return "suppressed";
     return "blocked";
   }
@@ -91,9 +92,24 @@ interface GateInfo { gate: string; detail: string; raw: string }
 function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
   if (!reason) return null;
   const r = reason;
+
+  // BOOM300-specific patterns (check first — more specific)
+  if (r.startsWith("boom300_score_below_mode_threshold")) {
+    const nativeMatch = r.match(/native=(\d+)/);
+    const modeMinMatch = r.match(/mode_min=(\d+)/);
+    const native = nativeMatch ? nativeMatch[1] : "?";
+    const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
+    return {
+      gate: "BOOM300 Score Gate",
+      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      raw: r,
+    };
+  }
+
   const patterns: { test: RegExp; gate: string; detail: (m: RegExpMatchArray) => string }[] = [
     { test: /composite.*?(\d+).*?[<below].*?(\d+)/i,     gate: "Score Below Threshold", detail: m => `Score ${m[1]} < required ${m[2]}` },
     { test: /composite.*?(\d+\.?\d*).*?<.*?(\d+\.?\d*)/i,gate: "Score Below Threshold", detail: m => `Score ${m[1]} < required ${m[2]}` },
+    { test: /confidence.*?(\d+\.?\d*).*?<.*?(\d+\.?\d*)/i,gate:"Score Below Threshold", detail: m => `Confidence ${m[1]} < required ${m[2]}` },
     { test: /RR.*?(\d+\.?\d*).*?below.*?(\d+\.?\d*)/i,   gate: "R:R Ratio",             detail: m => `RR ${m[1]} < minimum ${m[2]}` },
     { test: /EV.*?(-?\d+\.?\d*).*?below.*?(-?\d+\.?\d*)/i,gate:"Expected Value",         detail: m => `EV ${m[1]} < minimum ${m[2]}` },
     { test: /kill.?switch/i,          gate: "Kill Switch",       detail: () => "Trading halted by kill switch" },
@@ -114,7 +130,7 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const m = r.match(p.test);
     if (m) return { gate: p.gate, detail: p.detail(m), raw: r };
   }
-  return { gate: "Gate", detail: r.slice(0, 120), raw: r };
+  return { gate: "Gate", detail: r.slice(0, 160), raw: r };
 }
 
 // ── Micro Components ──────────────────────────────────────────────────────────
@@ -198,13 +214,39 @@ const DIMENSION_LABELS: Record<string, string> = {
   directionalConfirmation: "Directional Confirm",
 };
 
+// BOOM300-native 6-component dimension labels
+const BOOM300_DIMENSION_LABELS: Record<string, string> = {
+  spikeClusterPressure:    "Spike Cluster Pressure",
+  upsideDisplacement:      "Upside Displacement",
+  exhaustionEvidence:      "Exhaustion Evidence",
+  driftResumption:         "Drift Resumption",
+  entryEfficiency:         "Entry Efficiency",
+  expectedMoveSufficiency: "Expected Move Runway",
+};
+
+// Ordered for display (highest weight first)
+const BOOM300_DIMENSION_ORDER = [
+  "spikeClusterPressure",
+  "upsideDisplacement",
+  "exhaustionEvidence",
+  "driftResumption",
+  "entryEfficiency",
+  "expectedMoveSufficiency",
+] as const;
+
+function isBoom300Breakdown(dims: unknown): dims is Record<string, number> {
+  if (!dims || typeof dims !== "object") return false;
+  const d = dims as Record<string, unknown>;
+  return "spikeClusterPressure" in d || "upsideDisplacement" in d || "exhaustionEvidence" in d;
+}
+
 function DimBar({ label, value }: { label: string; value: number }) {
-  const cls = value >= 80 ? "bg-emerald-500" : value >= 60 ? "bg-amber-500" : "bg-red-500";
+  const cls = value >= 75 ? "bg-emerald-500" : value >= 50 ? "bg-amber-500" : "bg-red-500";
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] text-muted-foreground w-28 shrink-0 text-right">{label}</span>
+      <span className="text-[10px] text-muted-foreground w-32 shrink-0 text-right">{label}</span>
       <div className="flex-1 h-1.5 bg-muted/40 rounded-full overflow-hidden">
-        <div className={cn("h-full rounded-full", cls)} style={{ width: `${value}%` }} />
+        <div className={cn("h-full rounded-full transition-all duration-300", cls)} style={{ width: `${Math.min(value, 100)}%` }} />
       </div>
       <span className="text-[10px] tabular-nums text-foreground w-6 text-right">{value}</span>
     </div>
@@ -242,21 +284,39 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
       {/* Column 1: Scoring */}
       <div className="space-y-3">
         <h4 className="text-xs font-semibold flex items-center gap-1.5">
-          <BarChart3 className="w-3.5 h-3.5 text-primary" /> Score Breakdown
+          <BarChart3 className="w-3.5 h-3.5 text-primary" />
+          {isBoom300Breakdown(sig.scoringDimensions) ? "BOOM300 Native Score" : "Score Breakdown"}
         </h4>
         {sig.scoringDimensions ? (
-          <div className="space-y-1.5">
-            {Object.keys(DIMENSION_LABELS).map(key => {
-              const val = (sig.scoringDimensions as Record<string, number>)[key];
-              if (val == null) return null;
-              return <DimBar key={key} label={DIMENSION_LABELS[key]} value={val} />;
-            })}
-          </div>
+          isBoom300Breakdown(sig.scoringDimensions) ? (
+            <div className="space-y-1.5">
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score</p>
+              {BOOM300_DIMENSION_ORDER.map(key => {
+                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+                if (val == null) return null;
+                return <DimBar key={key} label={BOOM300_DIMENSION_LABELS[key]} value={val} />;
+              })}
+              <div className="mt-1 pt-1.5 border-t border-border/20">
+                <p className="text-[9px] text-muted-foreground/50 mt-1">
+                  Weights: spike×0.25 · disp×0.20 · exhaust×0.20 · drift×0.15 · entry×0.10 · move×0.10
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {Object.keys(DIMENSION_LABELS).map(key => {
+                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+                if (val == null) return null;
+                return <DimBar key={key} label={DIMENSION_LABELS[key]} value={val} />;
+              })}
+            </div>
+          )
         ) : (
           <p className="text-[10px] text-muted-foreground">No dimension data available</p>
         )}
         <div className="pt-2 border-t border-border/20 space-y-1">
-          <DR label="Composite Score" value={sig.compositeScore != null ? Math.round(sig.compositeScore).toString() : "—"} />
+          <DR label={isBoom300Breakdown(sig.scoringDimensions) ? "Native Score" : "Composite Score"}
+              value={sig.compositeScore != null ? Math.round(sig.compositeScore).toString() : "—"} />
           <DR label="Raw Score" value={formatNumber(sig.score, 3)} />
           <DR label="Expected Value" value={formatNumber(sig.expectedValue, 4)} highlight={sig.expectedValue > 0 ? "green" : "red"} />
         </div>

@@ -1,0 +1,291 @@
+#101A - BOOM300 Engine-Native Scoring, Gate, and Decision Explanation Rebuild
+
+## What & Why
+We now have a cleaned BOOM300 canonical export that is good enough for symbol-specific calibration.
+
+Verified export quality:
+- 296,376 candles exported
+- 0 duplicate timestamps
+- 0 missing intervals
+- 28 interpolated candles only
+- timestamps strictly ascending
+- validation passed
+
+This means BOOM300 is now ready for its own engine-native scoring rebuild.
+
+The current architecture still routes symbol-native engines through an inherited shared scoring/gating model from the older system.
+That is not acceptable for BOOM300.
+
+This task must rebuild BOOM300 scoring and gating inside the BOOM300 engine itself.
+
+Important:
+- We are NOT redesigning all symbols in this task
+- We are ONLY doing BOOM300
+- We are NOT doing generic scoring cleanup here
+- We are NOT doing a vague refactor
+- We are doing a precise BOOM300-only engine-native scoring implementation
+
+---
+
+## Strategy truth for BOOM300
+BOOM300 behavior remains:
+
+- upward boom spikes
+- downward drift between spikes
+- primary opportunity = SELL after swing-high / boom-spike-cluster exhaustion
+- secondary opportunity = BUY after prolonged drift-down exhaustion
+
+For now, the primary engine focus must be:
+- BOOM300 SELL after swing-high / spike-cluster exhaustion
+
+Do NOT turn this into a generic trend-following or generic reversal engine.
+
+---
+
+## Non-negotiable rules
+
+### 1. BOOM300 must stop depending on the shared V2 scoring path
+For BOOM300 only:
+- do NOT use the inherited shared composite scoring module as the primary scoring gate
+- do NOT rely on the old 5-dimension V2 scoring model for final BOOM300 pass/fail
+- do NOT use inherited Paper/Demo/Real score thresholds as the primary BOOM300 decision gate
+
+If BOOM300 currently flows through shared scoring before allocator/trade:
+- remove that dependency for BOOM300
+- replace it with BOOM300-native scoring and BOOM300-native gate
+
+### 2. No fallback to old BOOM/V2 scoring
+Do NOT preserve the old scoring path “just in case”.
+Do NOT leave a fallback.
+Do NOT leave commented-out old code.
+
+Delete or bypass the old path for BOOM300 cleanly.
+
+### 3. Keep the existing BOOM300 strategy family direction
+Do NOT change the BOOM300 strategic idea into something new.
+The scoring rebuild must reinforce the correct BOOM300 setup:
+- SELL after spike-cluster / swing-high exhaustion
+
+### 4. Decision explanation must improve
+After this task, a BOOM300 blocked or approved decision must show:
+- what the engine saw
+- how the BOOM300-native score was built
+- what passed
+- what failed
+- why it was blocked or approved
+
+No more black-box “score too low” without BOOM300-specific explanation.
+
+### 5. Do not redesign other symbols
+This task is BOOM300 only.
+Do not touch CRASH300 / R_75 / R_100 scoring logic except where shared plumbing must be cleanly bypassed for BOOM300.
+
+---
+
+## Objective
+Build BOOM300-specific scoring and BOOM300-specific pass/fail gating based on the cleaned BOOM300 dataset and the intended long-hold strategy.
+
+The BOOM300 engine must:
+1. detect the correct BOOM300 setup
+2. score that setup with BOOM300-native components
+3. apply a BOOM300-native minimum gate
+4. emit rich explanation fields for Decisions / Trades / Research review
+5. no longer depend on inherited shared V2 scoring as the primary gate
+
+---
+
+## BOOM300 scoring framework to build
+
+### Primary BOOM300 setup
+SELL after swing-high / spike-cluster exhaustion
+
+The scoring model should be BOOM300-specific and built around components like:
+
+1. Spike Cluster Pressure
+- how many boom spikes recently occurred
+- relevant windows such as short / medium / recent cluster context
+- does the move look spike-driven rather than ordinary drift
+
+2. Upside Displacement / Swing-High Stretch
+- how extended price is into a local swing high
+- distance from recent structural highs / upper range context
+- is the symbol elevated enough to justify a SELL setup
+
+3. Exhaustion Evidence
+- signs the upside move is weakening after spike support
+- failed continuation / reduced follow-through / weakening recovery behavior
+- the rally is tiring rather than strengthening
+
+4. Drift Resumption Quality
+- evidence that the normal BOOM downward drift is reasserting itself
+- the move is transitioning from spike-supported upside into resumed downside
+
+5. Entry Efficiency
+- how good the entry location is relative to the swing high
+- avoid late entries after too much of the collapse already happened
+
+6. Expected Move Sufficiency
+- whether the structure still supports a worthwhile long-hold downside capture
+- avoid high score on setups with weak remaining downside opportunity
+
+You may refine the exact names, but the scoring must clearly be BOOM300-native and derived from BOOM300 behavior.
+
+---
+
+## Required output from BOOM300 engine
+The BOOM300 engine must output structured BOOM300-native decision metadata such as:
+
+- setupDetected
+- setupFamily
+- engineScore
+- engineScoreBreakdown
+- gatePassed
+- gateReason
+- expectedMovePct
+- expectedHoldProfile
+- tpLogicSummary
+- slLogicSummary
+- trailingActivationSummary
+- structuralContextSummary
+
+These fields must be usable by:
+- Decisions page
+- Trades page
+- future research calibration
+
+---
+
+## Gate design requirements
+
+### 1. BOOM300-native pass gate
+Create a BOOM300-specific pass threshold / gate.
+Do NOT keep using the inherited global V2 score threshold as BOOM300’s primary pass gate.
+
+### 2. Gate must be explainable
+When BOOM300 is blocked, the system must say exactly why, for example:
+- insufficient spike-cluster pressure
+- insufficient exhaustion evidence
+- entry too late
+- expected move too small
+- drift not yet resuming
+- structural location poor
+
+### 3. Gate must be calibratable
+Do not hardcode magic numbers without showing where they live and how they can be recalibrated later.
+
+---
+
+## Calibration requirements
+
+### 1. Use the cleaned BOOM300 dataset as calibration basis
+Calibration must be based on the now-clean export quality, not the earlier messy mixed-state assumptions.
+
+### 2. Run BOOM300-only analysis during implementation
+During implementation, evaluate the BOOM300 engine over historical BOOM300 data and report:
+
+- how many candidate setups were found
+- how many passed the new BOOM300-native gate
+- how many were blocked
+- score distribution
+- common block reasons
+- whether the resulting frequency is roughly plausible for BOOM300 long-hold trading
+
+### 3. Do not overfit to micro-trades
+This is not a scalping engine.
+Do not optimize for frequent tiny signals.
+The goal is high-conviction swing capture.
+
+---
+
+## UI / explanation requirements
+
+### Decisions page
+For BOOM300 decisions, show:
+- BOOM300 engine score
+- breakdown by BOOM300-native scoring components
+- gate result
+- specific block/approve reason
+- expected move
+- expected hold profile
+
+### Trades page
+For BOOM300 trades, if opened, show:
+- BOOM300 setup family
+- why it was opened
+- expected move logic
+- TP/SL rationale summary
+- stage / lifecycle summary
+
+### Research/debug visibility
+Ensure BOOM300-specific scoring outputs are available for future calibration review.
+Do not leave them hidden inside the engine.
+
+---
+
+## Required implementation order
+
+### Phase 1
+Audit the current BOOM300 flow:
+- where BOOM300 engine emits candidates
+- where shared scoring is currently applied
+- where allocator currently blocks BOOM300
+
+### Phase 2
+Implement BOOM300-native scoring structure and BOOM300-native gate.
+
+### Phase 3
+Bypass/remove shared V2 scoring dependency for BOOM300.
+
+### Phase 4
+Expose BOOM300-native explanation fields to Decisions/Trades.
+
+### Phase 5
+Run BOOM300 historical evaluation and report results.
+
+Do NOT do this out of order.
+
+---
+
+## Required deliverables
+Return:
+
+1. exact backend files/modules changed
+2. exact frontend files/modules changed for explanation display
+3. exact shared-scoring dependency removed/bypassed for BOOM300
+4. the final BOOM300-native scoring component list
+5. the BOOM300-native gate logic
+6. where the BOOM300 score/gate now lives in code
+7. how BOOM300 decisions are now explained in UI
+8. historical BOOM300 calibration/evaluation summary:
+   - candidate count
+   - pass count
+   - block count
+   - common block reasons
+   - score distribution summary
+9. explicit confirmation that BOOM300 no longer depends on inherited shared V2 scoring as its primary gate
+10. build/test result
+11. explicit confirmation:
+   - BOOM300 scoring is now engine-native
+   - BOOM300 gate is now engine-native
+   - BOOM300 explanations are now visible
+   - no fallback to old BOOM/V2 scoring remains
+
+---
+
+## Verification requirements
+You must verify with real runs:
+- BOOM300 engine still runs
+- BOOM300 decisions appear
+- BOOM300 blocked decisions now show meaningful BOOM300-specific reasons
+- BOOM300 approved decisions/trades show BOOM300-specific metadata
+- build passes
+- app/server run cleanly
+
+Do not fake verification.
+
+---
+
+## Quality bar
+This task succeeds only if BOOM300 is now scored and gated according to BOOM300 behavior, not according to inherited generic V2 logic.
+
+If BOOM300 still ultimately depends on the old shared score model to pass/fail, the task has failed.
