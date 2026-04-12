@@ -1,0 +1,356 @@
+#101B - CRASH300 Engine-Native Scoring, Gate, and Decision Explanation Rebuild
+
+## What & Why
+We now have a cleaned CRASH300 canonical export that is good enough for symbol-specific calibration.
+
+Verified export quality:
+- 296,367 candles expected
+- 296,367 candles exported
+- 0 duplicate timestamps
+- 0 missing intervals
+- timestamps strictly ascending
+- validation passed
+- only 28 interpolated candles, explicitly flagged and excluded from signal generation
+
+This means CRASH300 is now ready for its own engine-native scoring rebuild.
+
+The BOOM300 work in Task #101A established the correct direction:
+- keep the symbol-native strategy
+- move scoring into the engine
+- make rejection reasons explicit
+- expose native breakdown in Decisions
+
+This task must now do the same for **CRASH300**.
+
+The current generic/shared inherited scoring behavior is not acceptable for CRASH300.
+CRASH300 must be scored according to **CRASH300 behavior**, not the older shared model.
+
+This is a **CRASH300-only task**.
+Do NOT redesign the other symbols here.
+
+---
+
+## Non-negotiable source of truth
+Use the repo strategy source-of-truth and the cleaned CRASH300 export behavior.
+
+CRASH300 strategic truth:
+- Primary trade = **BUY after swing low / crash spike cluster**
+- Secondary trade = **SELL after extended rally / exhaustion cascade**
+- Swing-low structure:
+  - crash spike clusters
+  - 24h decline roughly 5–14%
+  - reversal UP for roughly 25–176%
+- Swing-high structure:
+  - 7d rally roughly 8–21%
+  - 14–23 crash spikes in 7d while price still recovers
+  - then downside exhaustion cascade of roughly 21–62%
+- Long-hold swing logic only
+- No scalp logic
+- No time-based forced exits
+
+Do NOT let this task drift into a generic reversal engine or a shared multi-symbol scoring refactor.
+
+---
+
+## Non-negotiable rules
+
+### 1. CRASH300 must stop depending on inherited generic scoring as its engine scoring path
+For CRASH300 only:
+- do NOT use the inherited shared V2-style composite scoring model as the primary engine score
+- do NOT use boolean-count confidence logic
+- do NOT use `signalCount / N`
+- do NOT reuse BOOM300 labels inverted without proper CRASH300 naming
+
+### 2. No fallback to old CRASH300 scoring
+Do NOT preserve the old scoring path “just in case”.
+Do NOT leave fallback logic.
+Do NOT leave commented-out legacy code.
+
+### 3. Keep CRASH300 strategic direction intact
+Do NOT change the strategic family:
+- primary = BUY after crash-spike / swing-low exhaustion
+- secondary = SELL after extended rally / exhaustion cascade
+
+### 4. Decisions must become explainable
+Blocked and approved CRASH300 decisions must show:
+- what the engine saw
+- how CRASH300-native score was built
+- what passed
+- what failed
+- why it was blocked or approved
+
+### 5. Do not redesign other symbols
+Do not modify BOOM300 logic again.
+Do not modify R_75 or R_100.
+Only touch shared plumbing if required to surface CRASH300-native metadata or bypass the old CRASH300 scoring dependency.
+
+---
+
+## Objective
+Build CRASH300-specific scoring and CRASH300-specific pass/fail gating based on the cleaned CRASH300 dataset and the intended long-hold strategy.
+
+The CRASH300 engine must:
+1. detect the correct CRASH300 setup
+2. score that setup with CRASH300-native components
+3. apply a CRASH300-native minimum gate
+4. emit rich explanation fields for Decisions / Trades / future calibration
+5. no longer depend on inherited shared generic scoring as the engine scoring path
+
+---
+
+## CRASH300 scoring framework to build
+
+### Primary CRASH300 setup
+BUY after crash-spike-cluster / swing-low exhaustion / reversal
+
+### Secondary CRASH300 setup
+SELL after extended rally / exhaustion cascade from swing high
+
+The scoring model must be CRASH300-specific and structured around the actual CRASH300 behavior.
+
+Implement a **6-component CRASH300-native scoring model**.
+
+### Required CRASH300-native components
+
+#### BUY side must primarily reflect:
+
+1. Crash Spike Cluster Pressure
+- measures crash-spike intensity and recency into the low
+- this is the CRASH-specific version of spike pressure
+- should reflect cluster behavior around lows
+
+2. Downside Displacement
+- measures how structurally stretched price is into the lower zone
+- distance from recent lows / lower range context / lower structural placement
+
+3. Exhaustion / Reversal Evidence
+- measures whether the downward push is exhausting
+- evidence that reversal conditions are starting to appear after the crash cluster
+
+4. Recovery Quality
+- measures quality of upward rebound / recovery after the low
+- is price starting to reclaim properly rather than just bouncing weakly
+
+5. Entry Efficiency
+- measures how close the entry is to the swing low / optimal reversal zone
+- avoid very late entries after too much of the rebound already happened
+
+6. Expected Move Sufficiency
+- measures whether the remaining upside runway is large enough for a true swing trade
+- avoid high score where expected remaining move is too small
+
+#### SELL side must be implemented as the correct CRASH300 secondary mirror:
+- rally extension
+- swing-high / elevated structure
+- crash-spike persistence despite recovery
+- recovery exhaustion
+- downside cascade potential
+- entry quality near elevated structure
+
+Do not fake SELL logic using generic opposite-direction placeholders.
+
+---
+
+## Required weights
+
+### Starting BUY weights
+Use this exact starting model unless CRASH300-specific evidence strongly requires a minor refinement:
+
+- Crash Spike Cluster Pressure = 25%
+- Downside Displacement = 20%
+- Exhaustion / Reversal Evidence = 20%
+- Recovery Quality = 15%
+- Entry Efficiency = 10%
+- Expected Move Sufficiency = 10%
+
+Weights must sum to 1.0 exactly.
+
+### SELL weights
+Use the same overall weight structure unless a clearly justified CRASH300-specific redistribution is needed.
+If changed, explain why in the final report.
+
+---
+
+## Required engine-native gates
+
+Add explicit CRASH300 engine gates:
+
+- `CRASH300_BUY_MIN_GATE = 55`
+- `CRASH300_SELL_MIN_GATE = 50`
+
+Interpretation:
+- BUY is the primary setup and should require the stronger structural case
+- SELL remains valid but is secondary
+
+These are the **primary engine gates** for CRASH300.
+Do NOT use inherited shared/generic scoring as CRASH300’s primary engine gate.
+
+---
+
+## Confidence mapping
+Use direct mapping:
+
+- `confidence = nativeScore / 100`
+
+That means:
+- Paper requires native >= 85
+- Demo requires native >= 90
+- Real requires native >= 92
+
+Do NOT use boolean count confidence.
+Do NOT use generic shared CRASH300 score as the confidence source.
+
+---
+
+## Rich rejection reasons
+When CRASH300 fails the allocator mode threshold or engine gate, the rejection reason must be CRASH300-specific and descriptive.
+
+### Required format style
+Use the BOOM300 pattern as the formatting style, but with true CRASH300 naming.
+
+Example BUY failure style:
+`crash300_score_below_mode_threshold:native=64/100,engine_gate=55,mode_min=85 | breakdown:[cluster=78,disp=72,exhaust=31,recovery=49,entry=70,move=64] | weak=[insufficient_reversal_evidence(31/100)]`
+
+Example SELL failure style:
+`crash300_score_below_mode_threshold:native=58/100,engine_gate=50,mode_min=85 | breakdown:[rally=74,stretch=69,exhaust=22,cascade=41,entry=63,move=57] | weak=[insufficient_rally_exhaustion(22/100),weak_downside_cascade_potential(41/100)]`
+
+Requirements:
+- include native score
+- include engine gate
+- include mode threshold
+- include full breakdown
+- include weak components
+- no vague generic `confidence_below_threshold` message for CRASH300
+
+---
+
+## Required CRASH300 engine metadata
+Add a dedicated CRASH300 metadata object similar in quality to BOOM300.
+
+Required fields must include:
+- `crash300NativeScore`
+- `crash300GatePassed`
+- `crash300GateThreshold`
+- `crash300BlockReasons`
+- `setupDetected`
+- `setupFamily`
+- `componentScores`
+- `componentFlags`
+- `expectedHoldProfile`
+- `tpLogicSummary`
+- `slLogicSummary`
+- `trailingActivationSummary`
+- `structuralContextSummary`
+
+This metadata must be usable by:
+- Decisions page
+- Trades page
+- future calibration / research review
+
+---
+
+## UI requirements — Decisions page
+File:
+- `artifacts/deriv-quant/src/pages/decisions.tsx`
+
+Update Decisions so CRASH300-native scoring displays properly.
+
+Requirements:
+- detect CRASH300-native payload
+- render 6 CRASH300-native component bars
+- use CRASH300-specific labels
+- show weight annotation
+- show CRASH300-specific rejection reasons clearly
+- do not break BOOM300 display
+- do not regress generic display for the other symbols
+
+---
+
+## Preserve current trading philosophy
+Do NOT introduce:
+- scalping
+- short-hold micro-trades
+- time exits
+- ATR-based TP/SL as primary logic
+- reduced TP targets
+- shared V2-style scoring dimensions for CRASH300
+
+CRASH300 must remain aligned with the long-hold strategy philosophy.
+
+---
+
+## Required implementation order
+
+### Phase 1
+Audit current CRASH300 flow:
+- where CRASH300 engine emits candidates
+- where inherited generic scoring is currently applied
+- where allocator currently blocks CRASH300
+
+### Phase 2
+Implement CRASH300-native scoring structure and CRASH300-native engine gates.
+
+### Phase 3
+Bypass/remove inherited generic scoring dependency for CRASH300 as the engine scoring path.
+
+### Phase 4
+Expose CRASH300-native explanation fields to Decisions.
+
+### Phase 5
+Run CRASH300 historical evaluation and report results.
+
+Do NOT do this out of order.
+
+---
+
+## Scope guardrails
+This task is **only** for CRASH300-native scoring and display.
+
+Do NOT:
+- rewrite allocator architecture
+- remove the remaining shared mode thresholds globally yet
+- change BOOM300 again
+- touch R_75 or R_100
+- refactor unrelated pages
+- rewrite docs in this task
+
+Keep the scope tight and complete.
+
+---
+
+## Done criteria
+This task is complete only if all of the following are true:
+
+1. `crash300Engine.ts` uses true CRASH300-native weighted scoring
+2. BUY is primary and SELL is secondary
+3. inherited generic/shared CRASH300 scoring behavior is no longer the engine scoring path
+4. confidence is mapped directly from native score
+5. CRASH300-specific rejection reason exists and is descriptive
+6. Decisions page renders CRASH300-native breakdown cleanly
+7. TypeScript passes cleanly
+8. BOOM300 does not regress
+9. Replit returns a detailed completion report in the exact format below
+
+---
+
+## Required final response format from Replit
+At the end, respond in this exact structure:
+
+### Task #101B complete
+1. Files changed
+2. CRASH300-native component model
+3. Weights used
+4. Engine gates used
+5. Confidence mapping
+6. Example BUY rejection reason
+7. Example SELL rejection reason
+8. UI rendering changes
+9. TypeScript/build result
+10. Remaining dependency on secondary allocator mode threshold: Yes/No
+
+---
+
+## Quality bar
+This task succeeds only if CRASH300 is now scored and gated according to CRASH300 behavior, not according to inherited generic logic.
+
+If CRASH300 still ultimately depends on the old shared score model as its engine scoring path, the task has failed.

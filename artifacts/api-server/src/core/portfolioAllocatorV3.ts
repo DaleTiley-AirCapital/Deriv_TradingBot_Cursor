@@ -120,9 +120,9 @@ export async function allocateV3Signal(
   }
 
   // ── Minimum confidence gate ────────────────────────────────────────────────
-  // For BOOM300 engines: the primary gate is the engine-native score embedded in confidence.
-  // The secondary check here uses mode min_composite_score / 100 as a floor.
-  // Rejection reasons are engine-specific when metadata is available.
+  // For BOOM300 and CRASH300 engines: the primary gate is the engine-native score
+  // embedded in confidence. The secondary check here uses mode min_composite_score / 100
+  // as a floor. Rejection reasons are engine-specific when metadata is available.
   const minScore = parseFloat(stateMap[`${prefix}_min_composite_score`] || stateMap["min_composite_score"] || "80");
   const minConfidence = minScore / 100;
   if (winner.confidence < minConfidence) {
@@ -144,6 +144,26 @@ export async function allocateV3Signal(
         weakParts
       );
     }
+
+    // Build engine-specific rejection reason for CRASH300
+    const isCrash300 = winner.engineName === "crash_expansion_engine";
+    if (isCrash300 && winner.metadata) {
+      const nativeScore = winner.metadata["crash300NativeScore"] as number | undefined;
+      const blockReasons = winner.metadata["crash300BlockReasons"] as string[] | undefined;
+      const gateThreshold = winner.metadata["crash300GateThreshold"] as number | undefined;
+      const componentScores = winner.metadata["componentScores"] as Record<string, number> | undefined;
+      const cs = componentScores ?? {};
+      const breakdown = componentScores
+        ? `cluster=${cs.crashSpikeClusterPressure?.toFixed(0)},disp=${cs.downsideDisplacement?.toFixed(0)},exhaust=${cs.exhaustionReversalEvidence?.toFixed(0)},recovery=${cs.recoveryQuality?.toFixed(0)},entry=${cs.entryEfficiency?.toFixed(0)},move=${cs.expectedMoveSufficiency?.toFixed(0)}`
+        : "";
+      const weakParts = blockReasons && blockReasons.length > 0 ? ` | weak=[${blockReasons.join("; ")}]` : "";
+      return deny(
+        `crash300_score_below_mode_threshold:native=${nativeScore ?? "?"}/100,engine_gate=${gateThreshold ?? "?"},mode_min=${minScore}` +
+        (breakdown ? ` | breakdown:[${breakdown}]` : "") +
+        weakParts
+      );
+    }
+
     return deny(`confidence_below_threshold:${winner.confidence.toFixed(3)}<${minConfidence.toFixed(3)}`);
   }
 

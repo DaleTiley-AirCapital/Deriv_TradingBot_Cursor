@@ -120,8 +120,12 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     if (!v3Decision.allowed) {
       console.log(`[V3Scan] ${symbol} | ${effectiveMode} | engine=${winner.engineName} | BLOCKED | ${v3Decision.rejectionReason}`);
       // Log blocked decisions so Decisions UI can surface them with full gate info
-      // Include engine-native score breakdown in scoringDimensions for BOOM300
+      // Include engine-native score breakdown in scoringDimensions for BOOM300/CRASH300
       const blockedScoringDims = winner.metadata?.["componentScores"] ?? null;
+      const blockedNativeScore =
+        winner.metadata?.["boom300NativeScore"] != null ? (winner.metadata["boom300NativeScore"] as number)
+        : winner.metadata?.["crash300NativeScore"] != null ? (winner.metadata["crash300NativeScore"] as number)
+        : null;
       try {
         await db.insert(signalLogTable).values({
           symbol,
@@ -129,9 +133,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
           strategyFamily: "v3_engine",
           direction: coordinatorOutput.resolvedDirection,
           score: coordinatorOutput.coordinatorConfidence,
-          compositeScore: winner.metadata?.["boom300NativeScore"] != null
-            ? (winner.metadata["boom300NativeScore"] as number)
-            : Math.round(coordinatorOutput.coordinatorConfidence * 100),
+          compositeScore: blockedNativeScore ?? Math.round(coordinatorOutput.coordinatorConfidence * 100),
           expectedValue: winner.projectedMovePct,
           allowedFlag: false,
           rejectionReason: v3Decision.rejectionReason,
@@ -224,8 +226,12 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     }
 
     // ── Log to signal_log table ──────────────────────────────────────────────
-    // Include engine-native score breakdown in scoringDimensions for BOOM300
+    // Include engine-native score breakdown in scoringDimensions for BOOM300/CRASH300
     const approvedScoringDims = winner.metadata?.["componentScores"] ?? null;
+    const approvedNativeScore =
+      winner.metadata?.["boom300NativeScore"] != null ? (winner.metadata["boom300NativeScore"] as number)
+      : winner.metadata?.["crash300NativeScore"] != null ? (winner.metadata["crash300NativeScore"] as number)
+      : null;
     try {
       await db.insert(signalLogTable).values({
         symbol,
@@ -233,9 +239,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         strategyFamily: "v3_engine",
         direction: coordinatorOutput.resolvedDirection,
         score: coordinatorOutput.coordinatorConfidence,
-        compositeScore: winner.metadata?.["boom300NativeScore"] != null
-          ? (winner.metadata["boom300NativeScore"] as number)
-          : Math.round(coordinatorOutput.coordinatorConfidence * 100),
+        compositeScore: approvedNativeScore ?? Math.round(coordinatorOutput.coordinatorConfidence * 100),
         expectedValue: winner.projectedMovePct,
         allowedFlag: true,
         allocationPct: v3Decision.capitalAllocationPct,

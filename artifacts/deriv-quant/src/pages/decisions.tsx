@@ -63,6 +63,7 @@ function classifyDecision(sig: SignalLog): DecisionState {
     if (r.includes("composite") && r.includes("<")) return "rejected";
     if (r.includes("score") && r.includes("below")) return "rejected";
     if (r.startsWith("boom300_score_below")) return "rejected";
+    if (r.startsWith("crash300_score_below")) return "rejected";
     if (r.includes("intelligence only") || r.includes("mode not active")) return "suppressed";
     return "blocked";
   }
@@ -101,6 +102,19 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
       gate: "BOOM300 Score Gate",
+      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      raw: r,
+    };
+  }
+
+  // CRASH300-specific patterns
+  if (r.startsWith("crash300_score_below_mode_threshold")) {
+    const nativeMatch = r.match(/native=(\d+)/);
+    const modeMinMatch = r.match(/mode_min=(\d+)/);
+    const native = nativeMatch ? nativeMatch[1] : "?";
+    const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
+    return {
+      gate: "CRASH300 Score Gate",
       detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
       raw: r,
     };
@@ -237,7 +251,33 @@ const BOOM300_DIMENSION_ORDER = [
 function isBoom300Breakdown(dims: unknown): dims is Record<string, number> {
   if (!dims || typeof dims !== "object") return false;
   const d = dims as Record<string, unknown>;
-  return "spikeClusterPressure" in d || "upsideDisplacement" in d || "exhaustionEvidence" in d;
+  return "spikeClusterPressure" in d || "upsideDisplacement" in d || "driftResumption" in d;
+}
+
+// CRASH300-native 6-component dimension labels
+const CRASH300_DIMENSION_LABELS: Record<string, string> = {
+  crashSpikeClusterPressure:  "Crash Spike Cluster Pressure",
+  downsideDisplacement:       "Downside Displacement",
+  exhaustionReversalEvidence: "Exhaustion / Reversal Evidence",
+  recoveryQuality:            "Recovery / Cascade Quality",
+  entryEfficiency:            "Entry Efficiency",
+  expectedMoveSufficiency:    "Expected Move Runway",
+};
+
+// Ordered for display (highest weight first)
+const CRASH300_DIMENSION_ORDER = [
+  "crashSpikeClusterPressure",
+  "downsideDisplacement",
+  "exhaustionReversalEvidence",
+  "recoveryQuality",
+  "entryEfficiency",
+  "expectedMoveSufficiency",
+] as const;
+
+function isCrash300Breakdown(dims: unknown): dims is Record<string, number> {
+  if (!dims || typeof dims !== "object") return false;
+  const d = dims as Record<string, unknown>;
+  return "crashSpikeClusterPressure" in d || "downsideDisplacement" in d || "exhaustionReversalEvidence" in d;
 }
 
 function DimBar({ label, value }: { label: string; value: number }) {
@@ -285,10 +325,26 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
       <div className="space-y-3">
         <h4 className="text-xs font-semibold flex items-center gap-1.5">
           <BarChart3 className="w-3.5 h-3.5 text-primary" />
-          {isBoom300Breakdown(sig.scoringDimensions) ? "BOOM300 Native Score" : "Score Breakdown"}
+          {isCrash300Breakdown(sig.scoringDimensions) ? "CRASH300 Native Score"
+            : isBoom300Breakdown(sig.scoringDimensions) ? "BOOM300 Native Score"
+            : "Score Breakdown"}
         </h4>
         {sig.scoringDimensions ? (
-          isBoom300Breakdown(sig.scoringDimensions) ? (
+          isCrash300Breakdown(sig.scoringDimensions) ? (
+            <div className="space-y-1.5">
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score</p>
+              {CRASH300_DIMENSION_ORDER.map(key => {
+                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+                if (val == null) return null;
+                return <DimBar key={key} label={CRASH300_DIMENSION_LABELS[key]} value={val} />;
+              })}
+              <div className="mt-1 pt-1.5 border-t border-border/20">
+                <p className="text-[9px] text-muted-foreground/50 mt-1">
+                  Weights: cluster×0.25 · disp×0.20 · exhaust×0.20 · recovery×0.15 · entry×0.10 · move×0.10
+                </p>
+              </div>
+            </div>
+          ) : isBoom300Breakdown(sig.scoringDimensions) ? (
             <div className="space-y-1.5">
               <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score</p>
               {BOOM300_DIMENSION_ORDER.map(key => {
@@ -315,7 +371,7 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
           <p className="text-[10px] text-muted-foreground">No dimension data available</p>
         )}
         <div className="pt-2 border-t border-border/20 space-y-1">
-          <DR label={isBoom300Breakdown(sig.scoringDimensions) ? "Native Score" : "Composite Score"}
+          <DR label={isCrash300Breakdown(sig.scoringDimensions) || isBoom300Breakdown(sig.scoringDimensions) ? "Native Score" : "Composite Score"}
               value={sig.compositeScore != null ? Math.round(sig.compositeScore).toString() : "—"} />
           <DR label="Raw Score" value={formatNumber(sig.score, 3)} />
           <DR label="Expected Value" value={formatNumber(sig.expectedValue, 4)} highlight={sig.expectedValue > 0 ? "green" : "red"} />
