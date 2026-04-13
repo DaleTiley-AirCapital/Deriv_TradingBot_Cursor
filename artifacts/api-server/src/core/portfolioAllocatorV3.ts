@@ -254,6 +254,96 @@ export async function allocateV3Signal(
       );
     }
 
+    // Build engine-specific rejection reason for R_100 Reversal
+    const isR100Reversal = winner.engineName === "r100_reversal_engine";
+    if (isR100Reversal && winner.metadata) {
+      const nativeScore    = winner.metadata["r100ReversalNativeScore"] as number | undefined;
+      const gateThreshold  = winner.metadata["r100ReversalGateThreshold"] as number | undefined;
+      const componentScores= winner.metadata["componentScores"] as Record<string, number> | undefined;
+      const cs = componentScores ?? {};
+      const breakdown = componentScores
+        ? `extreme=${cs.rangeExtremity?.toFixed(0)},reversal=${cs.reversalConfirmation?.toFixed(0)},stretch=${cs.stretchDeviation?.toFixed(0)},structure=${cs.structureQuality?.toFixed(0)},entry=${cs.entryEfficiency?.toFixed(0)},move=${cs.expectedMoveSufficiency?.toFixed(0)}`
+        : "";
+      const weakComponents = componentScores
+        ? Object.entries(cs).filter(([, v]) => v < 55).map(([k, v]) => {
+            const label: Record<string, string> = {
+              rangeExtremity:          "insufficient_range_extremity",
+              reversalConfirmation:    "insufficient_reversal_confirmation",
+              stretchDeviation:        "insufficient_stretch_deviation",
+              structureQuality:        "weak_structure_quality",
+              entryEfficiency:         "poor_entry_efficiency",
+              expectedMoveSufficiency: "insufficient_expected_move",
+            };
+            return `${label[k] ?? k}(${v}/100)`;
+          })
+        : [];
+      return deny(
+        `r100_reversal_score_below_mode_threshold:native=${nativeScore ?? "?"}/100,engine_gate=${gateThreshold ?? "?"},mode_min=${minScore}` +
+        (breakdown ? ` | breakdown:[${breakdown}]` : "") +
+        (weakComponents.length > 0 ? ` | weak=[${weakComponents.join("; ")}]` : "")
+      );
+    }
+
+    // Build engine-specific rejection reason for R_100 Breakout
+    const isR100Breakout = winner.engineName === "r100_breakout_engine";
+    if (isR100Breakout && winner.metadata) {
+      const nativeScore    = winner.metadata["r100BreakoutNativeScore"] as number | undefined;
+      const gateThreshold  = winner.metadata["r100BreakoutGateThreshold"] as number | undefined;
+      const componentScores= winner.metadata["componentScores"] as Record<string, number> | undefined;
+      const cs = componentScores ?? {};
+      const breakdown = componentScores
+        ? `pressure=${cs.boundaryPressure?.toFixed(0)},break=${cs.breakStrength?.toFixed(0)},expand=${cs.expansionQuality?.toFixed(0)},accept=${cs.acceptanceQuality?.toFixed(0)},entry=${cs.entryEfficiency?.toFixed(0)},move=${cs.expectedMoveSufficiency?.toFixed(0)}`
+        : "";
+      const weakComponents = componentScores
+        ? Object.entries(cs).filter(([, v]) => v < 55).map(([k, v]) => {
+            const label: Record<string, string> = {
+              boundaryPressure:        "weak_boundary_pressure",
+              breakStrength:           "insufficient_break_strength",
+              expansionQuality:        "insufficient_expansion_quality",
+              acceptanceQuality:       "weak_acceptance_quality",
+              entryEfficiency:         "poor_entry_efficiency",
+              expectedMoveSufficiency: "insufficient_expected_move",
+            };
+            return `${label[k] ?? k}(${v}/100)`;
+          })
+        : [];
+      return deny(
+        `r100_breakout_score_below_mode_threshold:native=${nativeScore ?? "?"}/100,engine_gate=${gateThreshold ?? "?"},mode_min=${minScore}` +
+        (breakdown ? ` | breakdown:[${breakdown}]` : "") +
+        (weakComponents.length > 0 ? ` | weak=[${weakComponents.join("; ")}]` : "")
+      );
+    }
+
+    // Build engine-specific rejection reason for R_100 Continuation
+    const isR100Continuation = winner.engineName === "r100_continuation_engine";
+    if (isR100Continuation && winner.metadata) {
+      const nativeScore    = winner.metadata["r100ContinuationNativeScore"] as number | undefined;
+      const gateThreshold  = winner.metadata["r100ContinuationGateThreshold"] as number | undefined;
+      const componentScores= winner.metadata["componentScores"] as Record<string, number> | undefined;
+      const cs = componentScores ?? {};
+      const breakdown = componentScores
+        ? `trend=${cs.trendStrength?.toFixed(0)},pullback=${cs.pullbackQuality?.toFixed(0)},slope=${cs.slopeAlignment?.toFixed(0)},structure=${cs.structureContinuity?.toFixed(0)},entry=${cs.entryEfficiency?.toFixed(0)},move=${cs.expectedMoveSufficiency?.toFixed(0)}`
+        : "";
+      const weakComponents = componentScores
+        ? Object.entries(cs).filter(([, v]) => v < 55).map(([k, v]) => {
+            const label: Record<string, string> = {
+              trendStrength:           "weak_trend_strength",
+              pullbackQuality:         "weak_pullback_quality",
+              slopeAlignment:          "poor_slope_alignment",
+              structureContinuity:     "poor_structure_continuity",
+              entryEfficiency:         "poor_entry_efficiency",
+              expectedMoveSufficiency: "insufficient_expected_move",
+            };
+            return `${label[k] ?? k}(${v}/100)`;
+          })
+        : [];
+      return deny(
+        `r100_continuation_score_below_mode_threshold:native=${nativeScore ?? "?"}/100,engine_gate=${gateThreshold ?? "?"},mode_min=${minScore}` +
+        (breakdown ? ` | breakdown:[${breakdown}]` : "") +
+        (weakComponents.length > 0 ? ` | weak=[${weakComponents.join("; ")}]` : "")
+      );
+    }
+
     return deny(`confidence_below_threshold:${winner.confidence.toFixed(3)}<${minConfidence.toFixed(3)}`);
   }
 
