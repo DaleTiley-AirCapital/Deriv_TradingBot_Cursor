@@ -20,6 +20,7 @@ import { db, platformStateTable } from "@workspace/db";
 import { candlesTable } from "@workspace/db";
 import { inArray, and, gte, count, min, max, sql } from "drizzle-orm";
 import { getWatchedCandidates } from "../core/candidateLifecycle.js";
+import { runNativeScoreCalibration } from "../core/calibrationRunner.js";
 
 initStreamingStateFromDb().catch(err =>
   console.warn("[Diagnostics] initStreamingStateFromDb failed:", err instanceof Error ? err.message : err)
@@ -363,6 +364,52 @@ router.get("/diagnostics/lifecycle", (_req, res) => {
       },
     };
     res.json({ summary, candidates: watched });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+/**
+ * POST /api/calibration/run
+ * Runs native score calibration across all symbols and engines.
+ * Query param: ?updateState=true to also persist thresholds to platform_state.
+ * This is a long-running operation (seconds to minutes depending on data volume).
+ */
+router.post("/calibration/run", async (req, res) => {
+  const updateState = req.query.updateState === "true";
+  try {
+    const report = await runNativeScoreCalibration(updateState);
+    res.json({ ok: true, report });
+  } catch (err) {
+    console.error("[Calibration] Error:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+/**
+ * GET /api/calibration/report
+ * Returns the latest calibration report stored in platform_state,
+ * or a 404 if calibration has never been run.
+ */
+router.get("/calibration/report", async (_req, res) => {
+  try {
+    const { eq: eqOp } = await import("drizzle-orm");
+    const rows = await db
+      .select()
+      .from(platformStateTable)
+      .where(eqOp(platformStateTable.key, "calibration_last_run"));
+    if (rows.length === 0) {
+      res.status(404).json({
+        error: "Calibration has never been run. POST /api/calibration/run first.",
+        hint: "Run POST /api/calibration/run?updateState=true to generate and store a calibration report.",
+      });
+      return;
+    }
+    const lastRun = rows[0].value;
+    res.json({
+      calibrationLastRun: lastRun,
+      message: "Full calibration report is returned from POST /api/calibration/run. Use that endpoint to run a fresh calibration.",
+    });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
   }
