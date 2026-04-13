@@ -8,6 +8,11 @@ import {
   type BacktestConfig,
   type BacktestResult,
 } from "../runtimes/backtestEngine.js";
+import {
+  runV3Backtest,
+  runV3BacktestMulti,
+} from "../core/backtest/backtestRunner.js";
+import { ACTIVE_SYMBOLS } from "../core/engineTypes.js";
 
 const router: IRouter = Router();
 
@@ -378,6 +383,99 @@ router.post("/backtest/:id/analyse", async (req, res): Promise<void> => {
     res.json(analysis);
   } catch (err) {
     const message = err instanceof Error ? err.message : "AI analysis failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+// ── V3 Isolated Backtest ──────────────────────────────────────────────────────
+
+/**
+ * POST /api/backtest/v3/run
+ *
+ * Run the V3 engine backtest over historical candles for one or all active symbols.
+ * Uses the same engines, feature vector, and regime classifier as the live scanner,
+ * but in a fully isolated DB-free loop (no spike events, no cross-correlation).
+ *
+ * Body params:
+ *   symbol?   — one of CRASH300 | BOOM300 | R_75 | R_100 | "all" (default "all")
+ *   startTs?  — unix seconds; default = 90 days ago
+ *   endTs?    — unix seconds; default = now
+ *   minScore? — override engine minimum gate (0-100); omit to use engine native gates
+ *
+ * Response:
+ *   { results: Record<symbol, V3BacktestResult> }
+ *   Each result contains trades[], summary{}, and metadata.
+ *
+ * Warning: running all 4 symbols over 90 days can take 30-120 seconds.
+ * Frontend should poll or show a loading indicator.
+ */
+router.post("/backtest/v3/run", async (req, res): Promise<void> => {
+  const {
+    symbol = "all",
+    startTs,
+    endTs,
+    minScore,
+  } = req.body ?? {};
+
+  const validSymbols = [...ACTIVE_SYMBOLS, "all"];
+  if (!validSymbols.includes(symbol)) {
+    res.status(400).json({
+      error: `Invalid symbol. Use one of: ${validSymbols.join(", ")}`,
+    });
+    return;
+  }
+
+  if (minScore !== undefined && (typeof minScore !== "number" || minScore < 0 || minScore > 100)) {
+    res.status(400).json({ error: "minScore must be a number between 0 and 100" });
+    return;
+  }
+
+  const parsedStart = startTs !== undefined ? Number(startTs) : undefined;
+  const parsedEnd = endTs !== undefined ? Number(endTs) : undefined;
+
+  if (parsedStart !== undefined && isNaN(parsedStart)) {
+    res.status(400).json({ error: "startTs must be a valid unix timestamp (seconds)" });
+    return;
+  }
+  if (parsedEnd !== undefined && isNaN(parsedEnd)) {
+    res.status(400).json({ error: "endTs must be a valid unix timestamp (seconds)" });
+    return;
+  }
+
+  try {
+    let results: Record<string, unknown>;
+
+    if (symbol === "all") {
+      const multi = await runV3BacktestMulti(
+        [...ACTIVE_SYMBOLS],
+        parsedStart,
+        parsedEnd,
+        minScore,
+      );
+      results = multi as Record<string, unknown>;
+    } else {
+      const single = await runV3Backtest({
+        symbol,
+        startTs: parsedStart,
+        endTs: parsedEnd,
+        minScore,
+      });
+      results = { [symbol]: single };
+    }
+
+    const totalTrades = Object.values(results).reduce(
+      (sum, r) => sum + ((r as { trades: unknown[] }).trades?.length ?? 0), 0
+    );
+
+    res.json({
+      ok: true,
+      symbol,
+      totalTrades,
+      results,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "V3 backtest failed";
+    console.error("[backtest/v3/run] error:", message);
     res.status(500).json({ error: message });
   }
 });
