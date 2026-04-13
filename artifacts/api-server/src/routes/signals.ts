@@ -2,29 +2,7 @@ import { Router, type IRouter } from "express";
 import { desc, eq, gte, lte, and, sql } from "drizzle-orm";
 import { db, signalLogTable, platformStateTable } from "@workspace/db";
 import { computeFeatures } from "../core/features.js";
-import { runAllStrategies } from "../core/strategies.js";
-import { routeSignals, logSignalDecisions } from "../core/signalRouter.js";
-import { type ScoringWeights, DEFAULT_SCORING_WEIGHTS } from "../core/scoring.js";
 import { getPendingSignalStatus } from "../core/pendingSignals.js";
-
-async function loadScoringWeights(): Promise<ScoringWeights | undefined> {
-  const states = await db.select().from(platformStateTable);
-  const m: Record<string, string> = {};
-  for (const s of states) m[s.key] = s.value;
-  const map: Record<keyof ScoringWeights, string> = {
-    rangePosition: "scoring_weight_range_position",
-    maDeviation: "scoring_weight_ma_deviation",
-    volatilityProfile: "scoring_weight_volatility_profile",
-    rangeExpansion: "scoring_weight_range_expansion",
-    directionalConfirmation: "scoring_weight_directional_confirmation",
-  };
-  const keys = Object.keys(map) as (keyof ScoringWeights)[];
-  const hasAny = keys.some(k => m[map[k]] !== undefined);
-  if (!hasAny) return undefined;
-  const w = {} as ScoringWeights;
-  for (const k of keys) w[k] = parseFloat(m[map[k]] || String(DEFAULT_SCORING_WEIGHTS[k]));
-  return w;
-}
 
 const router: IRouter = Router();
 
@@ -48,7 +26,6 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
 
   const conditions = [];
 
-  // Show: allowed signals, high-score signals above threshold, and all blocked/rejected V3 decisions
   const visibilityCondition = sql`(
     ${signalLogTable.allowedFlag} = true
     OR COALESCE(${signalLogTable.compositeScore}, 0) >= ${visibilityThreshold}
@@ -115,60 +92,6 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
   });
 });
 
-router.post("/signals/scan", async (_req, res): Promise<void> => {
-  try {
-    const weights = await loadScoringWeights();
-    const allCandidates = [];
-    const symbolResults: Record<string, number> = {};
-
-    for (const symbol of SYMBOLS) {
-      const features = await computeFeatures(symbol);
-      if (!features) { symbolResults[symbol] = 0; continue; }
-
-      const candidates = runAllStrategies(features, weights);
-      allCandidates.push(...candidates);
-      symbolResults[symbol] = candidates.length;
-    }
-
-    if (allCandidates.length === 0) {
-      res.json({
-        success: true,
-        message: "Scan complete — no signals fired on current market conditions.",
-        candidates: 0, allowed: 0, decisions: [],
-      });
-      return;
-    }
-
-    const decisions = await routeSignals(allCandidates, "paper");
-    await logSignalDecisions(decisions, "paper");
-
-    const allowed = decisions.filter(d => d.allowed);
-    const rejected = decisions.filter(d => !d.allowed);
-
-    res.json({
-      success: true,
-      message: `Scan complete: ${allCandidates.length} candidates → ${allowed.length} allowed, ${rejected.length} rejected`,
-      candidates: allCandidates.length,
-      allowed: allowed.length,
-      symbolBreakdown: symbolResults,
-      decisions: decisions.map(d => ({
-        symbol: d.signal.symbol,
-        strategy: d.signal.strategyName,
-        direction: d.signal.direction,
-        score: d.signal.score.toFixed(3),
-        ev: d.signal.expectedValue.toFixed(4),
-        allowed: d.allowed,
-        rejectionReason: d.rejectionReason,
-        capitalAmount: d.capitalAmount.toFixed(2),
-        reason: d.signal.reason,
-      })),
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    res.status(500).json({ success: false, message: `Scan failed: ${message}` });
-  }
-});
-
 router.get("/signals/features/:symbol", async (req, res): Promise<void> => {
   const symbol = req.params.symbol?.toUpperCase() ?? "";
   if (!SYMBOLS.includes(symbol)) {
@@ -195,43 +118,6 @@ router.get("/signals/pending", async (_req, res): Promise<void> => {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown error";
     res.status(500).json({ error: `Failed to get pending signals: ${message}` });
-  }
-});
-
-router.get("/signals/strategies/:symbol", async (req, res): Promise<void> => {
-  const symbol = req.params.symbol?.toUpperCase() ?? "";
-  if (!SYMBOLS.includes(symbol)) {
-    res.status(400).json({ error: `Unknown symbol. Use: ${SYMBOLS.join(", ")}` });
-    return;
-  }
-  try {
-    const features = await computeFeatures(symbol);
-    if (!features) {
-      res.status(404).json({ error: `Insufficient data for ${symbol} — run backfill first.` });
-      return;
-    }
-    const w = await loadScoringWeights();
-    const candidates = runAllStrategies(features, w);
-    res.json({
-      symbol,
-      regime: features.regimeLabel,
-      rsi14: features.rsi14,
-      emaSlope: features.emaSlope,
-      spikeHazard: features.spikeHazardScore,
-      bbWidth: features.bbWidth,
-      zScore: features.zScore,
-      strategies: candidates.map(c => ({
-        name: c.strategyName,
-        direction: c.direction,
-        score: c.score,
-        confidence: c.confidence,
-        ev: c.expectedValue,
-        reason: c.reason,
-      })),
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    res.status(500).json({ error: `Strategy scan failed: ${message}` });
   }
 });
 

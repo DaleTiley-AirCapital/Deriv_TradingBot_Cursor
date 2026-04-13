@@ -1,8 +1,7 @@
 import { manageOpenPositions, openPositionV3 } from "../core/tradeEngine.js";
 import { verifySignal } from "./openai.js";
-import { db, platformStateTable, tradesTable, candlesTable, ticksTable, backtestRunsTable, backtestTradesTable, signalLogTable } from "@workspace/db";
-import { eq, desc, and, lt, gte, asc, sql, inArray } from "drizzle-orm";
-import { runBacktestSimulation } from "../runtimes/backtestEngine.js";
+import { db, platformStateTable, tradesTable, candlesTable, signalLogTable } from "@workspace/db";
+import { eq, desc, and, gte, sql } from "drizzle-orm";
 import { getActiveModes, isAnyModeActive } from "./deriv.js";
 import type { TradingMode } from "./deriv.js";
 import { ACTIVE_TRADING_SYMBOLS } from "./deriv.js";
@@ -31,8 +30,6 @@ async function dbWithRetry<T>(fn: () => Promise<T>, label: string, maxAttempts =
 
 const POSITION_MGMT_INTERVAL_MS = 10_000;
 
-const STRATEGY_FAMILIES = ["trend_continuation", "mean_reversion", "spike_cluster_recovery", "swing_exhaustion", "trendline_breakout"] as const;
-
 let schedulerHandle: ReturnType<typeof setInterval> | null = null;
 let positionMgmtHandle: ReturnType<typeof setInterval> | null = null;
 let currentIntervalMs = DEFAULT_SCAN_INTERVAL_MS;
@@ -55,18 +52,6 @@ export function getSchedulerStatus() {
     totalDecisionsLogged,
     scanIntervalMs: currentIntervalMs,
   };
-}
-
-/**
- * Maps V3 engine entry type + symbol to the correct AI strategy family string.
- * Replaces the former hardcoded "trend_continuation" that was applied to every engine.
- */
-function resolveAiStrategyFamily(entryType: string, symbol: string): string {
-  const isBoomCrash = symbol.startsWith("BOOM") || symbol.startsWith("CRASH");
-  if (isBoomCrash) return "spike_cluster_recovery";
-  if (entryType === "breakout") return "trendline_breakout";
-  if (entryType === "reversal") return "mean_reversion";
-  return "trend_continuation";
 }
 
 /**
@@ -187,7 +172,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
           confidence: coordinatorOutput.coordinatorConfidence,
           score: coordinatorOutput.coordinatorConfidence,
           strategyName: winner.engineName,
-          strategyFamily: resolveAiStrategyFamily(winner.entryType, symbol),
+          strategyFamily: "v3_engine",
           reason: winner.reason,
           rsi14: features.rsi14 ?? 50,
           atr14: features.atr14 ?? 0.01,
@@ -388,15 +373,7 @@ async function positionManagementCycle(): Promise<void> {
   }
 }
 
-const MONTHLY_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 const WEEKLY_CHECK_INTERVAL_MS = 60 * 60 * 1000;
-const STRATEGIES_LIST = [
-  "trend_continuation",
-  "mean_reversion",
-  "spike_cluster_recovery",
-  "swing_exhaustion",
-  "trendline_breakout",
-] as const;
 const AI_LOCKABLE_KEYS = [
   "equity_pct_per_trade", "paper_equity_pct_per_trade", "demo_equity_pct_per_trade", "real_equity_pct_per_trade",
   "max_open_trades", "paper_max_open_trades", "demo_max_open_trades", "real_max_open_trades",
@@ -406,23 +383,12 @@ const AI_LOCKABLE_KEYS = [
   "correlated_family_cap", "extraction_target_pct",
   "allocation_mode", "paper_allocation_mode", "demo_allocation_mode", "real_allocation_mode",
 ];
-let monthlyHandle: ReturnType<typeof setInterval> | null = null;
 let weeklyHandle: ReturnType<typeof setInterval> | null = null;
-let monthlyRunning = false;
 
-// ─── Scheduler Job Control ────────────────────────────────────────────────────
-// Single registry for all recurring jobs. Set enabled: false to explicitly
-// disable a job without deleting its implementation.
-//
-// monthly_optimisation is DISABLED:
-//   Running 20 sequential backtests against 275K-candle datasets blocks the
-//   event loop, exhausts DB connection pool, and crashes the trading system.
-//   Re-enable here once the backtest engine runs in a background job queue.
 const JOB_CONFIG = {
-  signalScan:           { enabled: true  },
-  positionManagement:   { enabled: true  },
-  weeklyAnalysis:       { enabled: true  },
-  monthlyOptimisation:  { enabled: false },
+  signalScan:         { enabled: true },
+  positionManagement: { enabled: true },
+  weeklyAnalysis:     { enabled: true },
 } as const;
 
 async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void> {
@@ -506,38 +472,6 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
       suggestions[`${mode}_extraction_target_pct`] = String(Math.min(currentExtractionTarget * 1.1, 200).toFixed(0));
     }
 
-    const regimeDistribution: Record<string, number> = {};
-    for (const t of modeTrades) {
-      const tradeRegime = (t as Record<string, unknown>).regime as string || "unknown";
-      regimeDistribution[tradeRegime] = (regimeDistribution[tradeRegime] || 0) + 1;
-    }
-    const regimeWinRates: Record<string, number> = {};
-    for (const regKey of Object.keys(regimeDistribution)) {
-      const regTrades = modeTrades.filter(t => ((t as Record<string, unknown>).regime as string || "unknown") === regKey);
-      const regWins = regTrades.filter(t => (t.pnl ?? 0) > 0).length;
-      regimeWinRates[regKey] = regTrades.length > 0 ? regWins / regTrades.length : 0;
-    }
-    const worstRegime = Object.entries(regimeWinRates).sort((a, b) => a[1] - b[1])[0];
-    if (worstRegime && worstRegime[1] < 0.25 && (regimeDistribution[worstRegime[0]] || 0) > 3) {
-      const curRangeWeight = parseFloat(stateMap["scoring_weight_range_position"] || "25");
-      suggestions["scoring_weight_range_position"] = String(Math.min(curRangeWeight * 1.15, 40).toFixed(2));
-    }
-
-    const disableFamilies: string[] = [];
-    for (const family of STRATEGY_FAMILIES) {
-      const ft = modeTrades.filter(t => t.strategyName === family);
-      if (ft.length >= 5) {
-        const fwr = ft.filter(t => (t.pnl ?? 0) > 0).length / ft.length;
-        if (fwr < 0.2) disableFamilies.push(family);
-      }
-    }
-    if (disableFamilies.length > 0 && disableFamilies.length < STRATEGY_FAMILIES.length) {
-      const currentEnabled = stateMap[`${mode}_enabled_strategies`] || STRATEGY_FAMILIES.join(",");
-      const remaining = currentEnabled.split(",").filter(f => !disableFamilies.includes(f));
-      if (remaining.length > 0) {
-        suggestions[`${mode}_enabled_strategies`] = remaining.join(",");
-      }
-    }
   }
 
   const currentMinScore = parseFloat(stateMap["min_composite_score"] || "80");
@@ -553,16 +487,6 @@ async function runWeeklyAnalysis(stateMap: Record<string, string>): Promise<void
     suggestions["min_rr_ratio"] = String(Math.min(currentMinRR * 1.1, 4.0).toFixed(2));
   } else if (allWinRate > 0.6 && closedTrades.length > 20) {
     suggestions["min_composite_score"] = String(Math.max(currentMinScore - 1, 80).toFixed(0));
-  }
-
-  const exitReasons = closedTrades.map(t => t.exitReason || "");
-  const tpCount = exitReasons.filter(r => r.includes("tp")).length;
-  const totalExits = closedTrades.length;
-  if (totalExits > 10 && tpCount / totalExits < 0.25) {
-    const curVolProfile = parseFloat(stateMap["scoring_weight_volatility_profile"] || "20");
-    suggestions["scoring_weight_volatility_profile"] = String(Math.min(curVolProfile * 1.1, 35).toFixed(2));
-    const curDirConfirm = parseFloat(stateMap["scoring_weight_directional_confirmation"] || "20");
-    suggestions["scoring_weight_directional_confirmation"] = String(Math.min(curDirConfirm * 1.05, 30).toFixed(2));
   }
 
   const filteredSuggestions: Record<string, string> = {};
@@ -626,229 +550,6 @@ async function weeklyAnalysisCycle(): Promise<void> {
   }
 }
 
-async function runMonthlyTickBackflush(): Promise<void> {
-  const now = new Date();
-  const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
-  const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-  const prevMonthStartTs = Math.floor(prevMonthStart.getTime() / 1000);
-  const prevMonthEndTs = Math.floor(prevMonthEnd.getTime() / 1000);
-  const monthKey = `${prevMonthStart.getFullYear()}-${String(prevMonthStart.getMonth() + 1).padStart(2, "0")}`;
-
-  console.log(`[TickFlush] Starting tick→candle backflush for ${monthKey} (${ACTIVE_TRADING_SYMBOLS.length} symbols)...`);
-
-  for (const symbol of ACTIVE_TRADING_SYMBOLS) {
-    try {
-      const rawTicks = await db.select()
-        .from(ticksTable)
-        .where(and(
-          eq(ticksTable.symbol, symbol),
-          gte(ticksTable.epochTs, prevMonthStartTs),
-          lt(ticksTable.epochTs, prevMonthEndTs),
-        ))
-        .orderBy(asc(ticksTable.epochTs));
-
-      if (rawTicks.length === 0) {
-        console.log(`[TickFlush] ${symbol}: no ticks for ${monthKey} — skipping`);
-        continue;
-      }
-
-      const minuteMap = new Map<number, { open: number; high: number; low: number; close: number; count: number }>();
-      for (const tick of rawTicks) {
-        const minuteTs = Math.floor(tick.epochTs / 60) * 60;
-        const existing = minuteMap.get(minuteTs);
-        if (!existing) {
-          minuteMap.set(minuteTs, { open: tick.quote, high: tick.quote, low: tick.quote, close: tick.quote, count: 1 });
-        } else {
-          if (tick.quote > existing.high) existing.high = tick.quote;
-          if (tick.quote < existing.low) existing.low = tick.quote;
-          existing.close = tick.quote;
-          existing.count++;
-        }
-      }
-
-      const candleRows = [...minuteMap.entries()].map(([openTs, c]) => ({
-        symbol,
-        timeframe: "1m",
-        openTs,
-        closeTs: openTs + 59,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        tickCount: c.count,
-      }));
-
-      const BATCH_SIZE = 500;
-      let insertedCandles = 0;
-      for (let i = 0; i < candleRows.length; i += BATCH_SIZE) {
-        await db.insert(candlesTable).values(candleRows.slice(i, i + BATCH_SIZE)).onConflictDoNothing();
-        insertedCandles += candleRows.slice(i, i + BATCH_SIZE).length;
-      }
-
-      await db.delete(ticksTable)
-        .where(and(
-          eq(ticksTable.symbol, symbol),
-          gte(ticksTable.epochTs, prevMonthStartTs),
-          lt(ticksTable.epochTs, prevMonthEndTs),
-        ));
-
-      console.log(`[TickFlush] ${symbol}: ${rawTicks.length} ticks → ${minuteMap.size} candles (${insertedCandles} rows inserted), ticks deleted`);
-    } catch (err) {
-      console.error(`[TickFlush] ${symbol} error:`, err instanceof Error ? err.message : err);
-    }
-  }
-
-  console.log(`[TickFlush] Backflush complete for ${monthKey}`);
-}
-
-async function runMonthlyOptimisation(stateMap: Record<string, string>): Promise<void> {
-  const rawSymbols = stateMap["enabled_symbols"] ? stateMap["enabled_symbols"].split(",").filter(Boolean) : [];
-  const enabledSymbols = rawSymbols.length > 0
-    ? rawSymbols.filter(s => ACTIVE_TRADING_SYMBOLS.includes(s))
-    : [...ACTIVE_TRADING_SYMBOLS];
-  const initialCapital = parseFloat(stateMap["total_capital"] || "10000");
-
-  const combinations: { strategy: string; symbol: string }[] = [];
-  for (const strategy of STRATEGIES_LIST) {
-    for (const symbol of enabledSymbols) {
-      combinations.push({ strategy, symbol });
-    }
-  }
-
-  const [minRow] = await db.select({ minTs: sql<number>`min(${candlesTable.openTs})` })
-    .from(candlesTable)
-    .where(inArray(candlesTable.symbol, enabledSymbols));
-  const twelveMonthsAgo = new Date();
-  twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
-  let monthlyStartDate: Date | undefined;
-  if (minRow?.minTs) {
-    const firstCandleDate = new Date(minRow.minTs * 1000);
-    monthlyStartDate = firstCandleDate > twelveMonthsAgo ? firstCandleDate : twelveMonthsAgo;
-    const monthsAvail = Math.round((Date.now() - firstCandleDate.getTime()) / (30 * 24 * 3600 * 1000));
-    console.log(`[Monthly] ${monthsAvail} month(s) of data available — using window from ${monthlyStartDate.toISOString().slice(0, 10)}`);
-  } else {
-    monthlyStartDate = twelveMonthsAgo;
-    console.log(`[Monthly] No candle data found — defaulting to 12-month window from ${monthlyStartDate.toISOString().slice(0, 10)}`);
-  }
-
-  let ran = 0;
-  const comboResults: { strategy: string; symbol: string; pf: number; hold: number; score: number }[] = [];
-
-  for (const { strategy, symbol } of combinations) {
-    console.log(`[Monthly] Backtest ${ran + 1}/${combinations.length}: ${strategy} × ${symbol}...`);
-    try {
-      const result = await runBacktestSimulation(strategy, symbol, initialCapital, "balanced", monthlyStartDate);
-
-      await db.insert(backtestRunsTable).values({
-        strategyName: strategy,
-        symbol,
-        initialCapital,
-        totalReturn: result.totalReturn,
-        netProfit: result.netProfit,
-        winRate: result.winRate,
-        profitFactor: result.profitFactor,
-        maxDrawdown: result.maxDrawdown,
-        tradeCount: result.tradeCount,
-        avgHoldingHours: result.avgHoldingHours,
-        expectancy: result.expectancy,
-        sharpeRatio: result.sharpeRatio,
-        configJson: { allocationMode: "balanced", symbol, strategyName: strategy, source: "monthly-reoptimise" },
-        metricsJson: {
-          equityCurve: result.equityCurve,
-          grossProfit: result.grossProfit,
-          grossLoss: result.grossLoss,
-          avgWin: result.avgWin,
-          avgLoss: result.avgLoss,
-          maxDrawdownDuration: result.maxDrawdownDuration,
-          monthlyReturns: result.monthlyReturns,
-          returnBySymbol: result.returnBySymbol,
-          returnByRegime: result.returnByRegime,
-        },
-        status: "completed",
-      });
-
-      if (result.tradeCount >= 3) {
-        comboResults.push({
-          strategy, symbol,
-          pf: result.profitFactor,
-          hold: result.avgHoldingHours,
-          score: (result.sharpeRatio * 0.4) + (result.winRate * 0.25) + (result.profitFactor * 0.2) + (result.expectancy * 0.15),
-        });
-      }
-      ran++;
-    } catch { /* skip failed */ }
-
-    await new Promise<void>(r => setTimeout(r, 5000));
-  }
-
-  const sortedCombos = [...comboResults].sort((a, b) => b.score - a.score);
-  const topCombos = sortedCombos.slice(0, Math.min(6, sortedCombos.length));
-  const bestPf = topCombos.length > 0 ? topCombos.reduce((s, c) => s + c.pf, 0) / topCombos.length : 1.5;
-
-  const conservatism = (m: string) => m === "real" ? 0.85 : m === "demo" ? 0.95 : 1.05;
-  const optEquityPct = (pf: number, m: string) => {
-    const base = Math.min(Math.max(pf * 8, 10), 30);
-    return (base * conservatism(m)).toFixed(1);
-  };
-
-  const nowIso = new Date().toISOString();
-  const currentMonthKey = `${new Date().getFullYear()}-${new Date().getMonth() + 1}`;
-
-  const aiSuggestions: Record<string, string> = {
-    ai_suggest_paper_equity_pct_per_trade: optEquityPct(bestPf, "paper"),
-    ai_suggest_demo_equity_pct_per_trade: optEquityPct(bestPf, "demo"),
-    ai_suggest_real_equity_pct_per_trade: optEquityPct(bestPf, "real"),
-    ai_suggest_paper_min_composite_score: String(Math.max(85, Math.round(88 - bestPf * 2))),
-    ai_suggest_demo_min_composite_score: String(Math.max(90, Math.round(93 - bestPf * 2))),
-    ai_suggest_real_min_composite_score: String(Math.max(92, Math.round(95 - bestPf * 2))),
-    ai_optimised_at: nowIso,
-    last_monthly_optimise_month: currentMonthKey,
-    last_monthly_optimise_at: nowIso,
-  };
-
-  for (const [key, value] of Object.entries(aiSuggestions)) {
-    await db.insert(platformStateTable).values({ key, value })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value, updatedAt: new Date() } });
-  }
-
-  const completedAt = new Date().toISOString();
-  await db.insert(platformStateTable)
-    .values({ key: "monthly_reopt_completed_at", value: completedAt })
-    .onConflictDoUpdate({ target: platformStateTable.key, set: { value: completedAt, updatedAt: new Date() } });
-
-  console.log(`[Scheduler] Monthly re-optimisation complete — ${ran} backtests, suggestions updated (no settings changed).`);
-}
-
-async function monthlyOptimisationCycle(): Promise<void> {
-  if (monthlyRunning) {
-    console.log("[Scheduler] Monthly re-opt already in progress — skipping this check");
-    return;
-  }
-  try {
-    const states = await db.select().from(platformStateTable);
-    const stateMap: Record<string, string> = {};
-    for (const s of states) stateMap[s.key] = s.value;
-
-    if (stateMap["initial_setup_complete"] !== "true") return;
-
-    const now = new Date();
-    const currentMonthKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
-    if (stateMap["last_monthly_optimise_month"] === currentMonthKey) return;
-
-    console.log(`[Scheduler] New month detected (${currentMonthKey}) — starting tick backflush then rolling re-optimisation on ${ACTIVE_TRADING_SYMBOLS.length} symbols...`);
-    monthlyRunning = true;
-    try {
-      await runMonthlyTickBackflush();
-      await runMonthlyOptimisation(stateMap);
-    } finally {
-      monthlyRunning = false;
-    }
-  } catch (err) {
-    monthlyRunning = false;
-    console.error("[Scheduler] Monthly optimisation error:", err instanceof Error ? err.message : err);
-  }
-}
-
 export function startScheduler(): void {
   if (schedulerHandle) return;
 
@@ -869,12 +570,6 @@ export function startScheduler(): void {
     weeklyHandle = setInterval(weeklyAnalysisCycle, WEEKLY_CHECK_INTERVAL_MS);
     setTimeout(weeklyAnalysisCycle, 20000);
   }
-
-  if (JOB_CONFIG.monthlyOptimisation.enabled) {
-    console.log(`[Scheduler] Starting monthly re-optimisation check (hourly) — first check in 5 minutes`);
-    monthlyHandle = setInterval(monthlyOptimisationCycle, MONTHLY_CHECK_INTERVAL_MS);
-    setTimeout(monthlyOptimisationCycle, 5 * 60 * 1000);
-  }
 }
 
 export function stopScheduler(): void {
@@ -887,11 +582,6 @@ export function stopScheduler(): void {
     clearInterval(positionMgmtHandle);
     positionMgmtHandle = null;
     console.log("[Scheduler] Position manager stopped.");
-  }
-  if (monthlyHandle) {
-    clearInterval(monthlyHandle);
-    monthlyHandle = null;
-    console.log("[Scheduler] Monthly optimiser stopped.");
   }
   if (weeklyHandle) {
     clearInterval(weeklyHandle);

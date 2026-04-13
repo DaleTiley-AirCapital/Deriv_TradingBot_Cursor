@@ -2,7 +2,7 @@
 
 ## Overview
 
-Deriv Trading - Long Hold (V3) is a quantitative trading research and execution platform for Deriv synthetic indices, focusing on Boom, Crash, and Volatility markets. Core mandate: **large capital, long hold, max profit** targeting 50-200%+ moves. V3 introduces 8 symbol-native engines (replacing the V2 5-family universal scanner), a symbol coordinator, and a 3-stage hybrid trade manager. TP is the primary exit; ATR-proportional adaptive trailing stop is safety net ONLY. No time-based exits — trades hold 9-44 days.
+Deriv Trading - Long Hold V3 is a quantitative trading research and execution platform for Deriv synthetic indices, focusing on Boom, Crash, and Volatility markets. Core mandate: **large capital, long hold, max profit** targeting 50-200%+ moves. The platform uses 8 symbol-native engines across 4 active symbols, a symbol coordinator, and a 3-stage hybrid trade manager. TP is the primary exit; ATR-proportional adaptive trailing stop is safety net ONLY. No time-based exits — trades hold 9-44 days.
 
 ## User Preferences
 
@@ -13,102 +13,76 @@ I want iterative development. Ask before making major changes. I prefer detailed
 The platform is built as a pnpm workspace monorepo using TypeScript, featuring a React frontend and an Express backend.
 
 **Core Layers:**
-1.  **Data Collector:** Handles tick ingestion, candle building, and spike event detection.
-2.  **Backtesting Engine (V2):** A production-grade simulator mirroring live V2 logic — S/R + Fibonacci TP/SL, 30% profit-based trailing stop (safety net only), no time-based exits, confidence-scaled position sizing, and portfolio-level equity management. Supports walk-forward testing. Always saves results (including 0-trade strategies) and shows ALL strategies per symbol.
-3.  **Probability Model:** Focuses on feature engineering and gradient boost scoring.
-4.  **V3 Symbol-Native Engine System (LIVE — replaces V2 5-family scanner):**
-    - **8 engines**: `boom_expansion_engine` (BOOM300), `crash_expansion_engine` (CRASH300), `r75_continuation_engine`, `r75_reversal_engine`, `r75_breakout_engine` (R_75 × 3), `r100_continuation_engine`, `r100_reversal_engine`, `r100_breakout_engine` (R_100 × 3).
-    - **Engine Registry** (`engineRegistry.ts`): maps each active symbol to its dedicated engine set. Loud failure on misconfiguration.
-    - **Symbol Coordinator** (`symbolCoordinator.ts`): resolves conflicts when multiple R_75/R_100 engines fire simultaneously. Priority: breakout > continuation > reversal. Direction conflicts suppressed unless confidence gap ≥ 0.12.
-    - **V3 Router** (`engineRouterV3.ts`): main live scan entry point. Calls engines, runs coordinator, returns `V3ScanResult` with features, regime, and `CoordinatorOutput`.
-    - **Portfolio Allocator V3** (`portfolioAllocatorV3.ts`): engine-aware risk allocation (max open trades, daily loss, drawdown, position sizing).
-    - **V3 Scheduler path**: `scanSingleSymbolV3()` in `scheduler.ts` calls `scanSymbolV3()` → `allocateV3Signal()` → AI verify (optional) → `openPositionV3()`.
-    - **V2 strategies.ts / signalRouter.ts**: BACKTEST-ONLY. Not called in live scan path.
-    - **V3 Trade Engine** (`openPositionV3()` in `tradeEngine.ts`): opens positions using SR/Fib TP, adaptive SL, same broker execution infrastructure.
-    - **3-Stage Hybrid Trade Manager** (`hybridTradeManager.ts`):
-      - Stage 1 (entry): SL at original position.
-      - Stage 2 (protection): SL promoted to breakeven at 20% of TP distance. Handled by `promoteBreakevenSls()` called before `manageOpenPositions()`.
-      - Stage 3 (runner): adaptive trailing stop from 30% of TP. Handled by existing `manageOpenPositions()`.
-    - **V2 5-family universal scanner**: RETIRED from live path. Preserved in strategies.ts/signalRouter.ts for backtesting only.
-5.  **Risk & Capital Manager:** Manages portfolio allocation, daily/weekly/max-drawdown limits, correlated family caps, and includes a kill switch mechanism.
-6.  **Symbol Validator:** Validates configured symbols against Deriv active_symbols API at startup, refuses invalid subscriptions, and runs a stale-stream watchdog with auto-resubscription.
+1. **Data Collector:** Handles tick ingestion, candle building, and spike event detection.
+2. **Backtesting Engine:** A production-grade simulator using S/R + Fibonacci TP/SL, 30% profit-based trailing stop (safety net only), no time-based exits, confidence-scaled position sizing, and portfolio-level equity management. Supports walk-forward testing.
+3. **V3 Symbol-Native Engine System (LIVE):**
+   - **8 engines**: `boom_expansion_engine` (BOOM300), `crash_expansion_engine` (CRASH300), `r75_continuation_engine`, `r75_reversal_engine`, `r75_breakout_engine` (R_75 × 3), `r100_continuation_engine`, `r100_reversal_engine`, `r100_breakout_engine` (R_100 × 3).
+   - **Engine Registry** (`engineRegistry.ts`): maps each active symbol to its dedicated engine set. Loud failure on misconfiguration.
+   - **Symbol Coordinator** (`symbolCoordinator.ts`): resolves conflicts when multiple R_75/R_100 engines fire simultaneously. Priority: breakout > continuation > reversal. Direction conflicts suppressed unless confidence gap ≥ 0.12.
+   - **V3 Router** (`engineRouterV3.ts`): main live scan entry point. Calls engines, runs coordinator, returns `V3ScanResult` with features, regime, and `CoordinatorOutput`.
+   - **Portfolio Allocator V3** (`portfolioAllocatorV3.ts`): engine-aware risk allocation (max open trades, daily loss, drawdown, position sizing).
+   - **V3 Scheduler path**: `scanSingleSymbolV3()` in `scheduler.ts` calls `scanSymbolV3()` → `allocateV3Signal()` → AI verify (optional) → `openPositionV3()`.
+   - **V3 Trade Engine** (`openPositionV3()` in `tradeEngine.ts`): opens positions using SR/Fib TP, adaptive SL, same broker execution infrastructure.
+   - **3-Stage Hybrid Trade Manager** (`hybridTradeManager.ts`):
+     - Stage 1 (entry): SL at original position.
+     - Stage 2 (protection): SL promoted to breakeven at 20% of TP distance. Handled by `promoteBreakevenSls()` called before `manageOpenPositions()`.
+     - Stage 3 (runner): adaptive trailing stop from 30% of TP. Handled by existing `manageOpenPositions()`.
+4. **Risk & Capital Manager:** Manages portfolio allocation, daily/weekly/max-drawdown limits, correlated family caps, and includes a kill switch mechanism.
+5. **Symbol Validator:** Validates configured symbols against Deriv active_symbols API at startup, refuses invalid subscriptions, and runs a stale-stream watchdog with auto-resubscription.
+
+**Active Trading Symbols (4):**
+- CRASH300 — `crash_expansion_engine` (PRIMARY)
+- BOOM300 — `boom_expansion_engine` (PRIMARY)
+- R_75 — `r75_reversal_engine`, `r75_continuation_engine`, `r75_breakout_engine` (coordinator resolves)
+- R_100 — `r100_reversal_engine`, `r100_breakout_engine`, `r100_continuation_engine` (coordinator resolves)
+
+**Mode Thresholds (non-negotiable):**
+- Paper: native score ≥ 85
+- Demo: native score ≥ 90
+- Real: native score ≥ 92
+
+**Native Scoring (all 4 symbols):**
+Each engine computes a 6-component native score (0–100). `confidence = nativeScore / 100`. The mode threshold gates are enforced by `portfolioAllocatorV3.ts`. There is no shared V2 composite score path in the live system. `strategies.ts` / `signalRouter.ts` / `scoring.ts` are backtest-only.
 
 **UI/UX and Technical Implementations:**
--   **Frontend:** Developed with React, Vite, Tailwind CSS v4, shadcn/ui, and Recharts, providing a modern and responsive user interface.
--   **Backend:** Utilizes Express 5 for API services.
--   **Database:** PostgreSQL with Drizzle ORM for efficient data management.
--   **Validation:** Employs Zod (`zod/v4`) and `drizzle-zod`.
--   **API Codegen:** Uses Orval for generating API code from an OpenAPI specification.
--   **Build System:** esbuild is used for CJS bundle creation.
--   **Trading Modes:** Supports three independent trading modes (Paper, Demo, Real) which can run simultaneously, each with independent capital allocation, risk limits, position sizing, and Deriv API tokens.
--   **Signal & ML Pipeline (Regime-First Architecture):** A sophisticated pipeline that includes:
-    -   **Feature Engineering:** Computes various technical indicators and regime labels.
-    -   **Regime Engine:** Classifies market regimes (informational only — all 5 strategy families allowed in all states including no_trade).
-    -   **Scoring System (Empirical Big Move Readiness v2):** 5-dimension empirical readiness score (0-100): Range Position (25%), MA Deviation (20%), Volatility Profile (20%), Range Expansion (15%), Directional Confirmation (20%). Replaced logistic regression with rule-based scoring from observed preconditions of actual 50-200%+ moves.
-    -   **Strategy Engine:** Implements five strategy families with per-symbol calibrated thresholds.
-    -   **Signal Router:** Manages conflict resolution, multi-asset ranking, and tiered allocation.
-    -   **AI Signal Verification:** GPT-4o powered verification of signals.
-    -   **Signal Scheduler:** Manages staggered symbol scanning and position management.
-    -   **Multi-Window Signal Confirmation:** Signals must persist across 2 consecutive 60-minute evaluation windows before execution. In-memory pending signal store (`pendingSignals.ts`) tracks confirmation progress per symbol/strategy/direction. Signals expire if gap > 4 hours between confirmations. Price-reversal invalidation: signal reset if price moves >0.5% against expected direction. Pyramiding requires 3 confirmations + 1% price move in expected direction. Frontend shows pending signals with progress bars on the Decision Review page.
-    -   **Pyramiding:** Up to 3 positions per symbol (up from 2). After Trade 1 confirmed, continue monitoring; if 3+ more windows confirm with price moved 1%+ in expected direction, open Trade 2/3. MAX_OPEN_TRADES raised to 6 (up from 3). Trades page groups pyramided positions by symbol with combined P&L.
-    -   **Trade Engine (V3):** Full market move TP/SL. Boom/Crash: TP = 50% of 90-day longTermRangePct (min 10% of entry), targeting 50-200%+ full moves. Volatility: TP = 70% of major swing range from 1500+ candle window (min 2% of entry). SL = TP distance / 5 (fixed 1:5 R:R ratio) with 10% equity safety cap. No structural S/R-based SL, no ATR fallbacks ever. TP is PRIMARY exit; adaptive trailing stop is SAFETY NET ONLY — activates only after trade reaches 30% of TP target (before that, only fixed SL protects). No time-based exits — trades hold 9-44 days. Score thresholds: 85 (paper), 90 (demo), 92 (real). Up to 3 positions per symbol (pyramided).
-    -   **Extraction Engine:** Manages capital cycles, targeting profit percentages for auto-extraction.
-    -   **Symbol Diagnostics:** `/api/diagnostics/symbols` endpoint and Settings > Diagnostics tab show per-symbol stream health, validation status, tick counts, and errors.
--   **Database Schema:** Key tables include `ticks`, `candles`, `spike_events`, `features`, `model_runs`, `backtest_trades`, `backtest_runs`, `trades`, `signal_log`, and `platform_state`.
+- **Frontend:** React, Vite, Tailwind CSS v4, shadcn/ui, Recharts. Active pages: Overview, Decisions, Trades, Research, Data, Settings, Help, Diagnostics.
+- **Backend:** Express 5 for API services.
+- **Database:** PostgreSQL with Drizzle ORM.
+- **Trading Modes:** Supports three independent trading modes (Paper, Demo, Real) which can run simultaneously, each with independent capital allocation, risk limits, position sizing, and Deriv API tokens.
+- **Signal Pipeline:**
+  - Feature Engineering: computes technical indicators and regime labels.
+  - Regime Engine: classifies market regimes (informational — does not gate engine entry).
+  - Native Engine Scoring: 6-component per-engine score replaces all generic composite scoring.
+  - AI Signal Verification: GPT-4o powered verification of signals (optional).
+  - Signal Scheduler: staggered symbol scanning and position management.
+  - Multi-Window Signal Confirmation: signals must persist across 2 consecutive 60-minute evaluation windows before execution.
+  - Pyramiding: up to 3 positions per symbol after multi-window confirmation.
+- **Extraction Engine:** Manages capital cycles, targeting profit percentages for auto-extraction.
+- **Symbol Diagnostics:** `/api/diagnostics/symbols` endpoint shows per-symbol stream health.
+
+**Database Schema:** Key tables: `ticks`, `candles`, `spike_events`, `features`, `model_runs`, `backtest_trades`, `backtest_runs`, `trades`, `signal_log`, `platform_state`.
 
 ### CRITICAL DESIGN MANDATES — DO NOT VIOLATE
 1. **TP is PRIMARY exit** targeting full spike magnitude (50-200%+). Trailing stop is SAFETY NET ONLY. NEVER dilute this to 0.01-0.3% targets.
 2. **Never use ATR-based TP/SL exits.** All exits from market structure and spike magnitude analysis.
-3. **No time-based exits** — trades hold 9-44 days until TP, SL, or trailing stop. Research shows this captures full swing magnitude.
-4. **Never compute indicators on raw 1-minute candles.** Indicators (RSI, EMA, ATR, BB, z-score) use per-symbol HTF aggregation: CRASH300→12h, BOOM300→8h, R_75/R_100→4h via `aggregateCandles()`. Percentage features (24h/7d change, 30d range, spike counts) use 1m timestamp lookback. Structural windows use `max(1500, 55 × tfMins)` candles.
-5. **Use rolling 60-90 day windows** (not static all-time levels) for spike magnitude analysis.
+3. **No time-based exits** — trades hold 9-44 days until TP, SL, or trailing stop.
+4. **Never compute indicators on raw 1-minute candles.** Indicators use per-symbol HTF aggregation: CRASH300→12h, BOOM300→8h, R_75/R_100→4h via `aggregateCandles()`.
+5. **Use rolling 60-90 day windows** for spike magnitude analysis.
 6. **Boom/Crash and Volatility treated differently** — 50% of 90-day range TP for Boom/Crash, 70% major swing range TP for Volatility.
+7. **Never introduce a shared generic scoring path** — all active engines use native 6-component scoring.
 
 **Deployment:**
--   Deployed via Replit (current environment). Separate production environments may use Docker or Docker Compose.
+Deployed via Replit (current environment).
 
 **Instrument Catalog (28 total, 3 tiers):**
 - Active Trading (4): CRASH300, BOOM300, R_75, R_100 — scanned for signals, traded
 - Data Streaming (12): BOOM1000, CRASH1000, BOOM900, CRASH900, BOOM600, CRASH600, BOOM500, CRASH500, BOOM300, CRASH300, R_75, R_100 — auto-streamed on startup
-- Research Only (16): R_10, R_25, R_50, RDBULL, RDBEAR, JD10, JD25, JD50, JD75, JD100, stpRNG, stpRNG2, stpRNG3, stpRNG5, RB100, RB200 — manual download only, no streaming, no auto-backfill
+- Research Only (16): R_10, R_25, R_50, RDBULL, RDBEAR, JD10, JD25, JD50, JD75, JD100, stpRNG, stpRNG2, stpRNG3, stpRNG5, RB100, RB200 — manual download only
 
-**API Keys:** deriv_api_token_demo, deriv_api_token_real, openai_api_key (legacy single deriv_api_token removed)
+**API Keys:** deriv_api_token_demo, deriv_api_token_real, openai_api_key
 
 **Two-Layer Architecture:**
-1. **Market Intelligence Layer** (always-on with stream): Scanner runs whenever streaming is active, producing signal decisions regardless of execution mode state. When no modes are active, decisions are logged with `executionStatus: "blocked"` and `rejectionReason: "No execution mode active — intelligence only"`.
+1. **Market Intelligence Layer** (always-on with stream): Scanner runs whenever streaming is active, producing signal decisions regardless of execution mode state.
 2. **Execution Layer** (only with active modes): Trades are only placed when Paper, Demo, or Real mode is explicitly enabled.
 
-**Symbol Mapping:** Some Deriv symbols use different API names (e.g., BOOM300 → BOOM300N). The `apiToConfiguredMap` on `DerivClient` handles bidirectional mapping. Collision detection prevents two configured symbols from mapping to the same API symbol.
-
-**Auto-streaming:** Server auto-starts tick streaming on boot unless user explicitly stopped it. Paper mode is NOT auto-enabled on boot.
-
-**System Modes:** `idle` (no stream), `scanning` (stream on, no execution modes), `paper`/`demo`/`live` (execution modes active).
-
-**Startup Order (Railway/production):** DB init → Listen on PORT → Start scheduler → AI auto-config → Symbol validation → 12-month candle backfill (paginated, partial success ≥8/12) → Tick streaming → Health at /api/healthz
-
-**Data Backfill:** On startup, auto-backfills 12 months of 1m and 5m candle history for all 12 symbols via paginated Deriv API calls (5,000 candles per page). Uses `onConflictDoNothing` so re-runs fill gaps without duplicating. Partial success model: proceeds if ≥8/12 symbols succeed; failed symbols shown with "Re-download from Research > Data Status". Data older than 12 months is automatically pruned.
-
-**Research Page:** Restructured into two sections: Active Trading Symbols (4) at top with Download & Simulate + Re-run Backtest, and Research & Data Collection below (24 symbols) with Download Data only. Data collection symbols show STREAMING badge, research-only symbols show RESEARCH badge. All 28 symbols available for manual data download. Routes in `artifacts/api-server/src/routes/research.ts`. Backtests now run 1 pass per symbol with all 5 strategies, storing strategyBreakdown in metricsJson. Always saves results (even 0-trade runs). Shows ALL strategies in results (profitable and unprofitable). Grouped-results shows all symbols with data. When data exists, shows "Update Data" + "Re-run Backtest" instead of "Download & Simulate".
-
-**Data Console (Task #100E):** Fully restructured — tabs: Runtime (default), Symbol State, Coverage, Data Operations, Export, Live View. "Top-Up" tab and global streaming cards removed. RuntimeTab slimmed to V3 Engine Features only (System Overview + Per-Mode Status moved to overview.tsx System Overview section). DataOpsTab replaced by unified `CleanCanonicalTab` — one "Clean Canonical Data" button that runs the full pipeline (gap detect → API fetch → repair interpolated → enrich); Advanced accordion shows individual repair/reconcile/enrich ops. Coverage tab uses new `CoverageAllGrid` component backed by `GET /research/coverage-all` — shows all 12 timeframes × all 28 symbols as a colour-coded matrix. Backend: `POST /research/clean-canonical` (full cleanup pipeline with before/after summary) and `GET /research/coverage-all` (multi-TF GROUP BY query) added to research.ts. Overview page has new System Overview KPI section (Active Mode, Total Scans Run, Total Decisions, Streaming Symbols). Settings page: "Live Tick Streaming" global toggle removed — per-symbol streaming control lives only in Data Console > Symbol State tab.
-
-**Multi-Timeframe Candle Aggregation:** Live ticks aggregate into 14 timeframes: 1m, 5m, 15m, 1h, 2h, 4h, 8h, 12h, 1d, 2d, 4d, 7d, 15d, 30d. Higher timeframes enable multi-timeframe confluence for higher-conviction entries.
-
-**Strategy Skill File:** `.agents/skills/deriv-trading-strategy/SKILL.md` is the SINGLE SOURCE OF TRUTH for all trading parameters, TP/SL rules, scoring thresholds, empirical research findings, and AI calibration process. All code must conform to this skill.
-
-**New FeatureVector Fields (V2):** `spikeCount4h`, `spikeCount24h`, `spikeCount7d` (rolling spike cluster counts), `priceChange24hPct`, `priceChange7dPct` (multi-day momentum), `distFromRange30dHighPct`, `distFromRange30dLowPct` (range position). Computed in both live features.ts (DB query) and backtestEngine.ts (candle approximation).
-
-## External Dependencies
-
--   **Deriv:** For synthetic indices trading, market data, and account management via WebSocket API.
--   **PostgreSQL:** Primary database for persistent storage.
--   **OpenAI GPT-4o:** Used for AI-powered backtest analysis, signal verification, and the AI chatbot advisor.
-
-## AI Chatbot System
-The AI chatbot (`/api/ai/chat`) is a comprehensive trading advisor with:
-- **Full system knowledge**: 12-section knowledge base covering all platform concepts, strategy families, signal pipeline, position sizing formulas, trade lifecycle, capital extraction, settings glossary, regime definitions, and technical glossary
-- **Dynamic context injection**: Each conversation includes live system state (active modes, capital, recent performance, pending AI suggestions)
-- **Trade analysis tool** (`analyze_trades`): Queries recent trades with 7 focus modes (overview, by_strategy, by_symbol, durations, tp_sl_effectiveness, recent_closed, open_positions)
-- **Signal analysis tool** (`analyze_signals`): Queries signal logs with 5 focus modes (hit_rates, rejection_reasons, regime_distribution, score_distribution, by_symbol)
-- **Suggestion writing** (`write_suggestions`): Writes ai_suggest_ keys only — never changes actual settings
-- **Changelog section**: Tracks recent system changes so the AI stays current
+**Backtesting:** `strategies.ts`, `scoring.ts`, `signalRouter.ts` are BACKTEST-ONLY files used by `backtestEngine.ts` (runtimes/). They are not called in the live scan path. Do not add them to the live engine flow.

@@ -27,10 +27,10 @@ app/            — routing, app wiring, dependency composition
 
 ---
 
-## V3 Live Architecture (current — as of Task #89)
+## V3 Live Architecture (current — as of Task #102)
 
-**V3 replaces the V2 5-family universal scanner for the live path only.**
-V2 strategies.ts / signalRouter.ts are BACKTEST-ONLY — not called in live scan.
+**The live path runs exclusively on V3 native-engine scoring. There is no V2 shared scoring path in the live system.**
+`strategies.ts` / `signalRouter.ts` / `scoring.ts` are BACKTEST-ONLY — not called in live scan.
 
 ### 8 Symbol-Native Engines
 | Symbol  | Engine(s) |
@@ -83,8 +83,8 @@ positionManagementCycle:
 - Backtests must replay the same trading logic used in live trading — no separate trading-decision implementation for backtests
 - Runtimes are thin wrappers only — differences allowed only for: data source, scheduling, execution adapter, simulation details
 - Risk logic belongs in core; risk configuration belongs in settings UI
-- **V2 5-family scanner (strategies.ts + signalRouter.ts)**: BACKTEST-ONLY — no changes to live path allowed
-- **V3 engines**: all live signal decisions flow through `engineRouterV3.ts` → `symbolCoordinator.ts` → `portfolioAllocatorV3.ts`
+- **Backtest simulation files (strategies.ts, signalRouter.ts, scoring.ts)**: BACKTEST-ONLY — do not add them to live path
+- **V3 engines (live)**: all live signal decisions flow through `engineRouterV3.ts` → `symbolCoordinator.ts` → `portfolioAllocatorV3.ts`
 
 ---
 

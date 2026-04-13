@@ -1,0 +1,349 @@
+#102 - V2 Retirement, Legacy Code Purge, and V3-Only Active Path Lockdown
+
+## What & Why
+Tasks #101A through #101D are now complete.
+
+All 4 active trading symbols have engine-native scoring:
+- BOOM300
+- CRASH300
+- R_75
+- R_100
+
+That means the platform has crossed the threshold where the remaining legacy V2 logic, docs, labels, score paths, and dead compatibility code are now dangerous.
+
+We already know from earlier work that old V2 concepts persisted far too long:
+- old shared score labels
+- old family language
+- old generic scoring logic
+- dead routes/pages/docs
+- mixed docs causing AI agents to drift back toward V2 assumptions
+
+This task is the controlled retirement of all remaining V2 code and documentation that is no longer part of the active V3 system.
+
+This is NOT a fresh redesign task.
+This is a **purge + lockdown** task:
+- remove inactive V2 code
+- remove stale V2 docs
+- remove dead fallback paths
+- keep only the active V3 truth
+- ensure the app/server operate on V3 only
+
+---
+
+## Non-negotiable source of truth
+The repo strategy source-of-truth remains binding.
+
+The following must remain intact:
+- only 4 active trading symbols:
+  - CRASH300
+  - BOOM300
+  - R_75
+  - R_100
+- mode thresholds:
+  - Paper = 85
+  - Demo = 90
+  - Real = 92
+- per-symbol calibration
+- no time-based forced exits
+- no ATR-based TP/SL as primary exit logic
+- no generic shared scoring as active engine scoring path
+- no V2 family logic in the live path
+
+Do NOT purge anything that contradicts the source-of-truth V3 system.
+
+---
+
+## Critical rules
+
+### 1. Purge old code completely
+If a V2 code path is no longer part of active V3 behavior:
+- DELETE it
+- do NOT comment it out
+- do NOT keep a fallback
+- do NOT keep bridge wrappers “just in case”
+
+If something breaks after removal, fix it in V3.
+Do not preserve legacy code for comfort.
+
+### 2. Purge old docs completely
+If docs still describe V2 concepts, delete or rewrite them.
+Do NOT leave mixed docs where some sections are V2 and some are V3.
+
+This is critical because AI agents are clearly being influenced by stale docs.
+
+### 3. Do not break active V3 behavior
+The purge must preserve:
+- 4 active symbol-native engines
+- current mode thresholds
+- current UI pages
+- current data/export pipeline
+- current runtime state model
+
+### 4. No fake cleanup
+Do not just rename or hide V2 files.
+Actually remove dead ownership and dead imports.
+
+### 5. Fail loudly
+If a route/page/module still depends on V2 code after removal, fix it immediately in the same task.
+Do not silently restore old paths.
+
+---
+
+## Objective
+Retire and purge all remaining V2 code, docs, labels, inactive scoring logic, and compatibility leftovers from the active system so that the repo becomes V3-only in all active paths.
+
+This task must:
+1. identify every remaining V2 artifact still in the active path or still capable of misleading the system
+2. remove it cleanly
+3. update docs so only V3 truth remains
+4. verify that all live paths still work
+5. leave the repo in a V3-only state
+
+---
+
+## Scope
+
+### In scope
+- legacy shared score modules no longer used by active engines
+- old V2 strategy families and labels
+- old scoring breakdown labels if still present anywhere
+- dead signal/intel/research references from V2
+- stale V2 routes/pages/components not used anymore
+- stale V2 docs/specs/checklists/brain files/skills references
+- compatibility wrappers/shims/bridges created during prior migration
+- dead imports / dead routes / dead UI references
+- dead platform_state keys only if proven V2-only and no longer used
+- guardrails/docs cleanup to make V3-only truth explicit
+
+### Out of scope
+- no redesign of allocator architecture in this task
+- no changing Paper/Demo/Real thresholds
+- no redesign of native engine scoring
+- no new features
+- no UI redesign beyond removing stale V2 references and fixing fallout
+- no database history purge of candles/ticks/spike events
+
+---
+
+## Required implementation order
+
+### Phase 1 — Audit and classification
+Create a precise audit of remaining V2 artifacts.
+
+Classify findings into:
+
+1. **Active-path blockers**
+   - still imported or still callable in live V3 path
+
+2. **Dead-but-present code**
+   - not used now, but still in repo and confusing
+
+3. **Stale docs**
+   - specs, markdown, skill docs, replit docs, guardrails, brain files, etc. that still describe V2 concepts
+
+4. **Dead UI references**
+   - labels, tooltips, help text, page copy, FAQ entries, parser labels, etc.
+
+5. **Dead state/config**
+   - platform_state keys or config values clearly tied to retired V2 behavior
+
+Return this audit in the final completion report.
+
+---
+
+### Phase 2 — Remove legacy shared scoring from active path
+Now that all four symbols have native scoring, remove/retire any remaining V2 shared scoring logic from the ACTIVE engine path.
+
+Requirements:
+- remove imports/usages of the old shared score path if they still exist in active signal flow
+- do NOT remove the current mode thresholds (85/90/92)
+- do NOT redesign allocator secondary gate in this task
+- do remove code that still computes or exposes V2-style shared score dimensions for active V3 engines if it is no longer used
+
+Important:
+If some shared score module is now fully dead, delete it.
+If it is partially reused for something unrelated, narrow it and remove the V2 scoring ownership.
+
+---
+
+### Phase 3 — Remove stale V2 strategy/family language
+Purge remaining V2 language from the active UI and docs.
+
+Examples of things that should not remain if still present:
+- old family naming
+- old “5 family” references
+- old “signals/intel” framing from V2
+- generic composite score explanations that no longer represent the live engine logic
+- stale help text describing old strategy behavior
+
+Anything user-facing or AI-facing that still describes V2 logic must be updated or removed.
+
+---
+
+### Phase 4 — Remove dead V2 routes/pages/components
+Audit and delete retired V2 frontend/backend artifacts that are no longer needed.
+
+Examples:
+- old retired pages still hanging around in primary code
+- dead route handlers
+- old diagnostics/temp verification surfaces if their content has been absorbed elsewhere
+- obsolete compatibility redirects if no longer needed
+- old components created only for V2 layouts/flows
+
+Be careful:
+- if a route/page is still intentionally kept as a legacy dev-only archive, decide whether it is still useful
+- if it is not needed, delete it
+- if it must remain temporarily, move it fully out of any active path and document why
+
+Default stance:
+**delete unless justified**
+
+---
+
+### Phase 5 — Rewrite docs to V3-only truth
+This is one of the most important parts.
+
+Audit and rewrite/delete docs so they are fully aligned to V3 only.
+
+Required targets include at minimum:
+- `replit.md`
+- any `SKILL.md` / strategy skill docs in repo
+- guardrail docs
+- any V2 spec files
+- any “brain” / context / workflow docs that still teach V2 assumptions
+- help/FAQ docs if duplicated in markdown form
+
+Rules:
+- if a doc is mostly stale V2, delete and rewrite
+- do not keep mixed V2/V3 guidance
+- do not preserve outdated examples
+- ensure AI-facing docs point to the current 4-symbol native-scoring architecture only
+
+Required V3 documentation truth:
+- 4 active symbols only
+- each symbol has native scoring
+- 85/90/92 remain current mode thresholds
+- no shared V2 score path as active symbol scoring
+- current data/export/research architecture
+- current UI ownership
+- no V2 family model
+
+---
+
+### Phase 6 — Remove dead imports, dead code, dead references
+Run a full cleanup pass:
+- dead imports
+- dead branches
+- dead utility functions
+- dead parser branches for V2-only labels
+- dead settings/help references
+- dead backend route exports
+- dead frontend nav entries
+
+No commented-out code.
+No “backup” files.
+No compatibility wrapper clutter.
+
+---
+
+### Phase 7 — State/config cleanup
+Audit platform state/config keys and remove only those that are clearly V2-only and no longer used.
+
+Be conservative:
+- do NOT remove anything needed by V3 runtime
+- do NOT remove active mode keys
+- do NOT remove current stream/data/runtime settings
+- do NOT remove current risk keys if still used
+
+But do remove:
+- stale V2 suggestion keys
+- dead V2 cache keys
+- dead V2 score/config keys
+- dead V2 UI flags
+if and only if they are proven unused
+
+Return exact keys removed in final report.
+
+---
+
+### Phase 8 — Lock V3 active path
+After cleanup, verify that the repo is V3-only in active behavior.
+
+Required confirmations:
+- active engines = 8 total across 4 active symbols
+- native engine scoring active for all 4 symbols
+- no V2 shared score path in active signal generation
+- no V2 docs steering the system
+- no V2 UI references in active pages
+- no dead fallback routes being used
+
+---
+
+## Verification requirements
+
+You must verify all of the following:
+
+1. API server builds and runs
+2. frontend builds/runs for the touched paths
+3. active pages still render:
+   - Overview
+   - Decisions
+   - Trades
+   - Data
+   - Research
+   - Settings
+   - Help
+   - Diagnostics
+4. no active engine depends on V2 shared score path
+5. all 4 symbol-native scoring paths still function:
+   - BOOM300
+   - CRASH300
+   - R_75
+   - R_100
+6. mode thresholds remain:
+   - Paper 85
+   - Demo 90
+   - Real 92
+7. no stale V2 docs remain in active guidance
+8. TypeScript/build result reported honestly
+
+Do not fake verification.
+
+---
+
+## Deliverables
+Return the final report in this exact structure:
+
+### Task #102 complete
+1. V2 audit summary
+2. Active-path V2 artifacts removed
+3. Dead code/files/routes removed
+4. Docs rewritten or deleted
+5. State/config keys removed
+6. Remaining intentionally preserved legacy items (if any) and why
+7. Verification results
+8. TypeScript/build result
+9. Explicit confirmations:
+   - all 4 active symbols now run only on native engine scoring
+   - no active V2 shared score path remains
+   - no stale V2 docs remain in active guidance
+   - Paper/Demo/Real thresholds remain 85/90/92
+   - V3 is now the only active system path
+
+---
+
+## Quality bar
+This task succeeds only if the repo becomes genuinely V3-only in all active paths.
+
+Failure conditions:
+- old V2 score modules still influence live decisions
+- stale V2 docs still teach the wrong model
+- dead V2 routes/pages/components still linger without purpose
+- fallback paths remain
+- code is only hidden, not removed
+
+The goal is:
+**no more overlapping systems**
+**no more old logic hanging around**
+**no more AI confusion from stale docs**
+**V3 only**
