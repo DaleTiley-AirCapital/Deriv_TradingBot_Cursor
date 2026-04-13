@@ -388,27 +388,36 @@ router.post("/calibration/run", async (req, res) => {
 
 /**
  * GET /api/calibration/report
- * Returns the latest calibration report stored in platform_state,
- * or a 404 if calibration has never been run.
+ * Returns the calibration-report.json from disk as structured JSON.
+ * Fields: reportGeneratedAt, enginesAnalyzed, perEngineDistributions,
+ *         thresholdRecommendations, oldThresholds, newThresholds.
+ * Returns 404 if the file has not been generated yet.
  */
 router.get("/calibration/report", async (_req, res) => {
   try {
-    const { eq: eqOp } = await import("drizzle-orm");
-    const rows = await db
-      .select()
-      .from(platformStateTable)
-      .where(eqOp(platformStateTable.key, "calibration_last_run"));
-    if (rows.length === 0) {
+    const { readFile } = await import("fs/promises");
+    const { REPORT_PATH } = await import("../core/calibrationRunner.js");
+    let raw: string;
+    try {
+      raw = await readFile(REPORT_PATH, "utf-8");
+    } catch {
       res.status(404).json({
-        error: "Calibration has never been run. POST /api/calibration/run first.",
-        hint: "Run POST /api/calibration/run?updateState=true to generate and store a calibration report.",
+        error: "Calibration report not found on disk.",
+        hint: "POST /api/calibration/run to generate the report first.",
+        reportPath: REPORT_PATH,
       });
       return;
     }
-    const lastRun = rows[0].value;
+    const parsed = JSON.parse(raw);
     res.json({
-      calibrationLastRun: lastRun,
-      message: "Full calibration report is returned from POST /api/calibration/run. Use that endpoint to run a fresh calibration.",
+      reportGeneratedAt: parsed.reportGeneratedAt ?? null,
+      enginesAnalyzed: parsed.enginesAnalyzed ?? 0,
+      totalHTFBarsAnalyzed: parsed.totalHTFBarsAnalyzed ?? 0,
+      oldThresholds: parsed.oldThresholds ?? {},
+      newThresholds: parsed.newThresholds ?? {},
+      perEngineDistributions: parsed.perEngineDistributions ?? [],
+      thresholdRecommendations: parsed.recommendations ?? {},
+      platformStateUpdateApplied: parsed.platformStateUpdateApplied ?? false,
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
