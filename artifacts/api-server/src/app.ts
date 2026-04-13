@@ -3,7 +3,6 @@ import compression from "compression";
 import cors from "cors";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import router from "./routes/index.js";
 
 const app: Express = express();
@@ -15,16 +14,8 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
-let currentDir: string;
-try {
-  currentDir = path.dirname(fileURLToPath(import.meta.url));
-} catch {
-  currentDir = __dirname || process.cwd();
-}
-
 const candidatePaths = [
-  path.resolve(currentDir, "../../deriv-quant/dist/public"),
-  path.resolve(process.cwd(), "artifacts/deriv-quant/dist/public"),
+  path.join(process.cwd(), "artifacts", "deriv-quant", "dist", "public"),
 ];
 
 const frontendDist = candidatePaths.find(p => fs.existsSync(p));

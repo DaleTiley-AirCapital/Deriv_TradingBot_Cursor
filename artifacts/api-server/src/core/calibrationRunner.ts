@@ -22,11 +22,9 @@
 import { backgroundDb, db, candlesTable, spikeEventsTable, platformStateTable } from "@workspace/db";
 import { eq, and, asc } from "drizzle-orm";
 import { writeFile, mkdir } from "fs/promises";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { join } from "path";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPORT_PATH = join(__dirname, "../../calibration-report.json");
+export const REPORT_PATH = join(process.cwd(), "artifacts", "api-server", "calibration-report.json");
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -1055,4 +1053,3 @@ export async function runNativeScoreCalibration(
   return report;
 }
 
-export { REPORT_PATH };
