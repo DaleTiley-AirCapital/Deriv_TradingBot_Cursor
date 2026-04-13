@@ -248,9 +248,9 @@ async function initDb(): Promise<void> {
       ('streaming',           'false'),
       ('disabled_strategies', ''),
       ('min_composite_score', '80'),
-      ('paper_min_composite_score', '80'),
-      ('demo_min_composite_score',  '85'),
-      ('real_min_composite_score',  '90'),
+      ('paper_min_composite_score', '60'),
+      ('demo_min_composite_score',  '65'),
+      ('real_min_composite_score',  '70'),
       ('min_ev_threshold',    '0.001'),
       ('min_rr_ratio',        '1.5'),
 
@@ -289,9 +289,9 @@ async function initDb(): Promise<void> {
 
   await db.execute(sql`
     INSERT INTO platform_state (key, value) VALUES ('min_composite_score', '80') ON CONFLICT (key) DO UPDATE SET value = '80';
-    UPDATE platform_state SET value = '80' WHERE key = 'paper_min_composite_score' AND CAST(value AS INTEGER) < 80;
-    UPDATE platform_state SET value = '85' WHERE key = 'demo_min_composite_score' AND CAST(value AS INTEGER) < 85;
-    UPDATE platform_state SET value = '90' WHERE key = 'real_min_composite_score' AND CAST(value AS INTEGER) < 90;
+    INSERT INTO platform_state (key, value) VALUES ('paper_min_composite_score', '60') ON CONFLICT (key) DO UPDATE SET value = '60';
+    INSERT INTO platform_state (key, value) VALUES ('demo_min_composite_score',  '65') ON CONFLICT (key) DO UPDATE SET value = '65';
+    INSERT INTO platform_state (key, value) VALUES ('real_min_composite_score',  '70') ON CONFLICT (key) DO UPDATE SET value = '70';
     UPDATE platform_state SET value = '80' WHERE key = 'ai_suggest_paper_min_composite_score' AND CAST(value AS INTEGER) < 80;
     UPDATE platform_state SET value = '85' WHERE key = 'ai_suggest_demo_min_composite_score' AND CAST(value AS INTEGER) < 85;
     UPDATE platform_state SET value = '90' WHERE key = 'ai_suggest_real_min_composite_score' AND CAST(value AS INTEGER) < 90;
