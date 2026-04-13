@@ -22,7 +22,7 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
   const states = await db.select().from(platformStateTable);
   const stateMap: Record<string, string> = {};
   for (const s of states) stateMap[s.key] = s.value;
-  const visibilityThreshold = parseFloat(stateMap["signal_visibility_threshold"] || "75");
+  const visibilityThreshold = parseFloat(stateMap["signal_visibility_threshold"] || "50");
 
   const conditions = [];
 
@@ -31,6 +31,7 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
     OR COALESCE(${signalLogTable.compositeScore}, 0) >= ${visibilityThreshold}
     OR ${signalLogTable.executionStatus} = 'blocked'
     OR ${signalLogTable.executionStatus} = 'rejected'
+    OR ${signalLogTable.rejectionReason} IS NOT NULL
   )`;
   conditions.push(visibilityCondition);
 

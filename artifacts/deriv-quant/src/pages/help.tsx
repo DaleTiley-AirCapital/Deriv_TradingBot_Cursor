@@ -32,25 +32,25 @@ const ENGINES: {
   { name: "R75 Reversal",      symbol: "R_75",     direction: "both", desc: "Fades exhausted moves on Volatility 75. Enters counter-trend at extreme range positions where MA deviation is at maximum. High score required." },
   { name: "R75 Breakout",      symbol: "R_75",     direction: "both", desc: "Captures ATR-surge breakouts on Volatility 75. Triggers when range expansion score exceeds the symbol's volatility profile threshold." },
   { name: "R100 Continuation", symbol: "R_100",    direction: "both", desc: "High-momentum trend following on Volatility 100 — calibrated for the higher-volatility index with larger position movement expectations." },
-  { name: "R100 Reversal",     symbol: "R_100",    direction: "both", desc: "Exhaustion reversal on Volatility 100. Same 5-dimension score as R75 Reversal but with a higher Real mode threshold due to sizing." },
+  { name: "R100 Reversal",     symbol: "R_100",    direction: "both", desc: "Exhaustion reversal on Volatility 100. Same 6-component native score structure as R75 Reversal, calibrated to R_100's higher volatility profile." },
   { name: "R100 Breakout",     symbol: "R_100",    direction: "both", desc: "ATR-burst range breakout on Volatility 100. Looks for volatility squeeze followed by directional expansion with confirmation." },
 ];
 
 const SCORE_GATES = [
-  { mode: "Paper", threshold: 85, color: "text-amber-400", note: "Simulated orders against paper capital" },
-  { mode: "Demo",  threshold: 90, color: "text-blue-400",  note: "Real orders against Deriv virtual account" },
-  { mode: "Real",  threshold: 92, color: "text-red-400",   note: "Live orders with real capital" },
+  { mode: "Paper", threshold: 85, safeMode: 60, color: "text-amber-400", note: "Simulated orders against paper capital" },
+  { mode: "Demo",  threshold: 90, safeMode: 65, color: "text-blue-400",  note: "Real orders against Deriv virtual account" },
+  { mode: "Real",  threshold: 92, safeMode: 70, color: "text-red-400",   note: "Live orders with real capital" },
 ];
 
 const FAQ_ITEMS: { q: string; a: string; icon: React.ReactNode }[] = [
   {
     q: "What are the TP/SL targets?",
-    a: "Take profit is calibrated to capture 50–200%+ moves. This is the PRIMARY exit — most trade lifecycle decisions are made relative to TP. The trailing stop (default 30%) is a SAFETY NET only — it triggers only once price has moved significantly in your favour. The 72-hour profitable exit closes trades after 72 hours if they're profitable but haven't reached TP — this is a capital efficiency backstop, not the primary strategy. Never change TP to smaller targets; that defeats the purpose of this system.",
+    a: "Take profit is calibrated to capture 50–200%+ moves. This is the PRIMARY exit — most trade lifecycle decisions are made relative to TP. The trailing stop is a SAFETY NET only — it activates only after price has moved at least 30% of the TP target distance, then trails at an ATR-proportional distance. There are NO time-based exits. Trades hold 9–44 days until TP, SL, or trailing stop closes them. Never change TP to smaller targets; that defeats the purpose of this system.",
     icon: <Target className="w-4 h-4 text-primary" />,
   },
   {
     q: "What is the difference between Paper, Demo, and Real modes?",
-    a: "Paper mode uses simulated orders against paper capital — no Deriv account required. Positions are tracked internally with floating PnL, no real money changes hands. Demo mode sends real orders to Deriv's virtual account (VRTC prefix). Real mode sends live orders using real capital. Each mode has its own score threshold: Paper ≥ 85, Demo ≥ 90, Real ≥ 92. These thresholds are not negotiable.",
+    a: "Paper mode uses simulated orders against paper capital — no Deriv account required. Positions are tracked internally with floating PnL, no real money changes hands. Demo mode sends real orders to Deriv's virtual account (VRTC prefix). Real mode sends live orders using real capital. Production score targets: Paper ≥ 85, Demo ≥ 90, Real ≥ 92. Safe-mode currently active: Paper ≥ 60, Demo ≥ 65, Real ≥ 70. The production targets are non-negotiable and will be enforced once engine calibration data supports them.",
     icon: <Shield className="w-4 h-4 text-primary" />,
   },
   {
@@ -59,18 +59,18 @@ const FAQ_ITEMS: { q: string; a: string; icon: React.ReactNode }[] = [
     icon: <Zap className="w-4 h-4 text-amber-400" />,
   },
   {
-    q: "What are the 5 scoring dimensions?",
-    a: "Every signal is scored on 5 independent dimensions, each contributing to the composite score (0–100): (1) Range Position — where price sits in the recent ATR-normalized range; (2) MA Deviation — distance from the primary moving average; (3) Volatility Profile — current volatility vs trailing 30-day percentile; (4) Range Expansion — recent candle body/range vs ATR, measures burst; (5) Directional Confirmation — price action moving in the signal direction. All five combine into one composite score.",
+    q: "How does native engine scoring work?",
+    a: "Each of the 8 engines computes its own 6-component native score (0–100) using dimensions specific to that symbol and entry type. For example, BOOM300/CRASH300 engines score cluster pressure, displacement, exhaustion, recovery quality, entry efficiency, and expected move magnitude. R_75/R_100 engines score trend quality, pullback quality, slope, structure, entry efficiency, and expected move. All six components combine into a single native score. There is no shared generic scoring path — each engine's dimensions are calibrated to that specific market behaviour.",
     icon: <BarChart3 className="w-4 h-4 text-primary" />,
   },
   {
-    q: "What does 'Pending Confirmation' mean?",
-    a: "Some engines require a signal to appear in multiple consecutive evaluation windows before firing an entry. This reduces false positives. A 'Pending' signal has crossed the composite threshold but hasn't yet accumulated the required consecutive confirmation count. The Engine Decisions page shows these in a separate state (pending) with a progress bar showing confirmations vs required.",
+    q: "What is the candidate lifecycle?",
+    a: "Signals progress through a lifecycle: idle → watch → qualified → tradeable → executed. A signal enters watch when it first crosses the engine gate. It must score consistently above the gate across multiple evaluation cycles to reach tradeable state. This multi-window confirmation prevents single-candle false positives. The Engine Decisions page shows the lifecycle state, score trend, and the specific gate that blocked or approved each signal.",
     icon: <Clock className="w-4 h-4 text-amber-400" />,
   },
   {
     q: "What is the AI Verdict?",
-    a: "After the engine scores a signal above threshold, a GPT-4o model independently evaluates it using regime context, all 5 scoring dimensions, and trade parameters. It returns Agree, Disagree, or Uncertain with reasoning. A Disagree does not automatically block the trade unless 'AI Verification' is enabled in settings — but it is always logged. 'Skipped' means the signal was blocked by a gate before reaching the AI layer.",
+    a: "After the engine scores a signal above threshold, a GPT-4o model independently evaluates it using regime context, all 6 scoring dimensions, and trade parameters. It returns Agree, Disagree, or Uncertain with reasoning. A Disagree does not automatically block the trade unless 'AI Verification' is enabled in settings — but it is always logged. 'Skipped' means the signal was blocked by a gate before reaching the AI layer.",
     icon: <Brain className="w-4 h-4 text-primary" />,
   },
   {
@@ -85,12 +85,12 @@ const FAQ_ITEMS: { q: string; a: string; icon: React.ReactNode }[] = [
   },
   {
     q: "What does the Coordinator do?",
-    a: "The V3 Coordinator is the decision layer between the signal engines and order execution. It receives scored signals, applies system-level gates (kill switch, drawdown limits, concurrent trade limits), coordinates with the AI layer, and routes approved signals to the Allocator. The Allocator then determines position sizing based on capital, equity %, and current portfolio state. The Engine Decisions page shows both coordinator and allocator outcomes.",
+    a: "For symbols with multiple engines (R_75, R_100), the V3 Symbol Coordinator resolves conflicts when multiple engines fire simultaneously. Priority: breakout > continuation > reversal. Direction conflicts are suppressed unless the confidence gap between engines is ≥ 0.12. The Coordinator output feeds the Portfolio Allocator, which gates the final entry based on capital, equity %, current portfolio state, and risk limits (kill switch, drawdown, concurrent trade caps). The Engine Decisions page shows coordinator and allocator outcomes.",
     icon: <Layers className="w-4 h-4 text-primary" />,
   },
   {
     q: "How do I read the scoring dimensions in the Decisions panel?",
-    a: "Each dimension shows a bar from 0 to 100. Higher bars are better in the signal direction. A dimension at 50 is neutral. The composite score is not a simple average — each dimension is weighted based on the engine type. Range Expansion is more heavily weighted for breakout engines. MA Deviation is more weighted for continuation engines. The raw score is before weighting; the composite score is after.",
+    a: "Each dimension shows a bar from 0 to 100. Higher bars are better. A dimension at 50 is neutral. The displayed dimensions are engine-specific — Boom/Crash engines show cluster pressure, displacement, exhaustion, etc. R_75/R_100 engines show trend quality, pullback quality, slope, etc. The composite score (native score) is a weighted combination of all six components. Weak components are called out explicitly in the rejection reason when a signal is blocked.",
     icon: <Activity className="w-4 h-4 text-primary" />,
   },
 ];
@@ -193,7 +193,7 @@ export default function Help() {
               </div>
             </div>
             <div>
-              <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-2">Score Thresholds</p>
+              <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mb-2">Production Targets</p>
               <div className="space-y-1">
                 {SCORE_GATES.map(g => (
                   <div key={g.mode} className="flex items-center justify-between text-xs">
@@ -204,10 +204,15 @@ export default function Help() {
               </div>
             </div>
           </div>
+          <div className="rounded-md bg-amber-500/5 border border-amber-500/20 px-3 py-2.5">
+            <p className="text-xs text-muted-foreground/90 leading-relaxed">
+              <strong className="text-amber-400">Safe-mode active:</strong> Engines are currently operating at Paper≥60 / Demo≥65 / Real≥70 while calibration data accumulates. The production targets (85/90/92) are non-negotiable and will be enforced once engine scores consistently reach them.
+            </p>
+          </div>
           <div className="rounded-md bg-primary/5 border border-primary/15 px-3 py-2.5">
             <p className="text-xs text-muted-foreground/90 leading-relaxed">
-              <strong className="text-primary">Exit hierarchy:</strong> TP hit (primary) → Trailing stop (safety) → 72h profitable exit (capital efficiency backstop).
-              The 72h rule does NOT override TP if price is moving toward it. Never reduce TP targets — the 50–200%+ mandate is non-negotiable.
+              <strong className="text-primary">Exit hierarchy:</strong> TP hit (primary) → ATR-proportional trailing stop (safety, activates after 30% of TP distance).
+              No time-based exits — trades hold 9–44 days. Never reduce TP targets — the 50–200%+ mandate is non-negotiable.
             </p>
           </div>
         </div>
@@ -220,13 +225,15 @@ export default function Help() {
             <div key={g.mode} className="rounded-lg border border-border/40 bg-card p-4">
               <p className={cn("text-sm font-bold", g.color)}>{g.mode}</p>
               <p className={cn("text-2xl font-bold tabular-nums mt-1", g.color)}>≥ {g.threshold}</p>
+              <p className="text-[11px] text-amber-400/80 font-mono mt-0.5">safe-mode: ≥ {g.safeMode}</p>
               <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">{g.note}</p>
             </div>
           ))}
         </div>
         <p className="text-xs text-muted-foreground/70 mt-2">
-          These thresholds are the minimum composite scores required for a signal to proceed to order placement.
-          They cannot be lowered — doing so undermines the statistical edge of the system.
+          Production targets (85/90/92) are non-negotiable minimums — enforced once engine calibration scores reach them.
+          Safe-mode values (60/65/70) are current operating gates while calibration accumulates.
+          See Research → Backtest for engine score distributions.
         </p>
       </Section>
 
@@ -255,30 +262,57 @@ export default function Help() {
         </div>
       </Section>
 
-      {/* 5-Dimension Scoring */}
-      <Section title="5-Dimension Scoring" icon={<BarChart3 className="w-5 h-5 text-primary" />}>
-        <div className="rounded-lg border border-border/40 bg-card p-4">
-          <div className="space-y-3.5">
-            {[
-              { dim: "Range Position",          desc: "Where price sits within the recent ATR-normalized range. Extremes (0 or 100) score higher for reversal engines; mid-range for continuation." },
-              { dim: "MA Deviation",            desc: "Distance of price from the primary moving average, normalized by ATR. High deviation signals continuation momentum or extreme exhaustion." },
-              { dim: "Volatility Profile",      desc: "Current volatility percentile vs the trailing 30-day history. Unusual volatility (high or low) is a precondition for several engines." },
-              { dim: "Range Expansion",         desc: "Recent candle body/range vs ATR. Measures burst activity — high expansion signals potential breakout energy." },
-              { dim: "Directional Confirmation",desc: "Price action moving in the intended signal direction. Prevents entries against immediate short-term momentum even if longer-term setup is valid." },
-            ].map(({ dim, desc }) => (
-              <div key={dim} className="flex gap-3">
-                <CheckCircle className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-foreground">{dim}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{desc}</p>
+      {/* Native Engine Scoring */}
+      <Section title="6-Component Native Engine Scoring" icon={<BarChart3 className="w-5 h-5 text-primary" />}>
+        <div className="rounded-lg border border-border/40 bg-card p-4 space-y-4">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Each engine scores its own 6 components specific to that symbol and entry type.
+            There is no shared generic scoring path — dimensions differ by engine.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider">Boom / Crash Engines</p>
+              {[
+                { dim: "Spike Cluster Pressure", desc: "Density of recent spikes in the relevant direction — measures how active the spike regime is." },
+                { dim: "Displacement",           desc: "How far price has moved in the intended direction from the cluster, normalized to range." },
+                { dim: "Exhaustion Quality",     desc: "Whether the prior counter-move shows exhaustion characteristics (small body, reversal wicks)." },
+                { dim: "Recovery Quality",       desc: "Price recovering toward the cluster after the exhaustion candle — confirms setup validity." },
+                { dim: "Entry Efficiency",       desc: "How close the current bar is to the optimal entry point within the setup structure." },
+                { dim: "Expected Move",          desc: "Projected magnitude of the continuation move as a percentage of recent range." },
+              ].map(({ dim, desc }) => (
+                <div key={dim} className="flex gap-2">
+                  <CheckCircle className="w-3.5 h-3.5 text-primary shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-medium text-foreground">{dim}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">{desc}</p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
+            <div className="space-y-2">
+              <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider">Volatility Engines (R_75 / R_100)</p>
+              {[
+                { dim: "Trend Quality",     desc: "Strength and consistency of the dominant trend direction over the evaluation window." },
+                { dim: "Pullback Quality",  desc: "Whether the current retracement is shallow and structured (good for continuation entries)." },
+                { dim: "Slope",             desc: "Gradient of the primary moving average — steep slope confirms directional momentum." },
+                { dim: "Structure",         desc: "Alignment of price with higher-timeframe support/resistance levels." },
+                { dim: "Entry Efficiency",  desc: "Proximity to the optimal entry point based on pullback depth and candle structure." },
+                { dim: "Expected Move",     desc: "Projected move magnitude as percentage of the recent swing range." },
+              ].map(({ dim, desc }) => (
+                <div key={dim} className="flex gap-2">
+                  <CheckCircle className="w-3.5 h-3.5 text-primary shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-medium text-foreground">{dim}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">{desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <p className="text-xs text-muted-foreground mt-4 pt-3 border-t border-border/30 leading-relaxed">
-            All five combine into a single <strong className="text-foreground">Composite Score (0–100)</strong>.
-            Multi-window confirmation requires the threshold to hold across N consecutive evaluation cycles,
-            preventing single-candle false positives.
+          <p className="text-xs text-muted-foreground pt-3 border-t border-border/30 leading-relaxed">
+            All six components combine into a single <strong className="text-foreground">Native Score (0–100)</strong>.
+            Weak components (below ~30) are called out explicitly in the Engine Decisions rejection reason.
+            Multi-window confirmation requires the score to hold across consecutive evaluation cycles.
           </p>
         </div>
       </Section>
@@ -295,7 +329,7 @@ export default function Help() {
             { page: "Overview",         path: "/",            desc: "System status, portfolio snapshot, mode summary, engine config, data health. Start here." },
             { page: "Engine Decisions", path: "/decisions",   desc: "Every signal decision — scored, classified by state (traded/pending/approved/rejected/blocked/suppressed), with coordinator reasoning and AI verdict." },
             { page: "Trades",           path: "/trades",      desc: "Open positions with floating PnL and progress to TP, closed trade history with exit reasons, attribution by symbol and engine." },
-            { page: "Research",         path: "/research",    desc: "AI market analysis and structured GPT-4o research reports per symbol." },
+            { page: "Research",         path: "/research",    desc: "Two tabs: AI Analysis (GPT-4o structured research reports per symbol) and Backtest (V3 isolated backtest engine — replay historical candles through live engines, export results as JSON)." },
             { page: "Data",             path: "/data",        desc: "Streaming state for all 28 symbols · candle coverage · data operations · top-up · ZIP export · runtime engine state." },
             { page: "Settings",         path: "/settings",    desc: "Trading mode activation, kill switch, capital, score thresholds, AI verification, streaming config." },
             { page: "Diagnostics",      path: "/diagnostics", desc: "Advanced debug access — raw feature vectors and kill switch. Operational runtime content lives in Data." },

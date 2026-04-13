@@ -1,0 +1,439 @@
+#106 — Final V3 Hardening Pass: Help/Docs Cleanup, Backtest JSON Export, Railway Rebuild Reset, and Engine Decisions Visibility Fix
+
+## What & Why
+The system is now substantially V3, Railway is live, the isolated backtest exists in the app, and paper mode can run.
+
+Before we bring back all the backtests for deeper tweaking, we need one final cleanup/hardening pass so that:
+- the repo/docs/skills all reflect current V3 truth
+- the backtest results can be exported cleanly as JSON
+- Railway has a deterministic rebuild/reset flow
+- the Engine Decisions tab correctly shows blocked/rejected signals that are already being scanned and logged
+
+This is the final V3 alignment pass before the next round of backtest analysis and engine tuning.
+
+---
+
+## STRICT SCOPE
+This task must do ONLY these five things:
+
+1. Update Help so it reflects current V3 truth
+2. Update all repo docs / skills / memory-like instructions / artifacts so there is no lingering stale version logic
+3. Add simple JSON export from the backtest UI/results
+4. Add a deterministic Railway rebuild/reset flow that preserves only ticks and candles, clears everything else, and re-seeds required V3 state
+5. Fix Engine Decisions visibility so blocked/rejected scanned signals actually appear in the Decisions tab
+
+Do NOT change engine logic.
+Do NOT change scoring formulas.
+Do NOT change thresholds used for trading (paper/demo/real safe-mode values stay as they are currently set).
+Do NOT redesign the UI.
+Do NOT add new strategy work.
+Do NOT touch live trade execution behavior except where required for signal-log visibility correctness.
+
+---
+
+## NON-NEGOTIABLE RULES
+
+### 1. No V2/V1/V-old leftovers
+If documentation, skill docs, repo instructions, or help text still describe old behavior, rewrite or remove them.
+Do not partially patch stale docs.
+Make them clean and current.
+
+### 2. No fake reset
+The rebuild/reset flow must be deterministic and explicit.
+It must clearly preserve:
+- ticks
+- candles
+
+It must clearly clear:
+- trades
+- signal_log
+- backtest_runs
+- backtest_trades
+- stale AI suggestion/cache state
+- obsolete runtime state
+
+### 3. No broad feature expansion
+This is not a redesign task.
+It is a finalization / cleanup / export / reset / visibility fix task.
+
+### 4. Fail loudly
+If docs conflict, fix them.
+If rebuild/reset would leave stale state, fix it.
+If blocked signals are being filtered out incorrectly, fix the visibility logic.
+Do not silently preserve old junk.
+
+---
+
+# PART 1 — HELP PAGE CLEANUP
+
+## T001 — Update Help to current V3 only
+Review the Help page and rewrite any stale references.
+
+Requirements:
+- current version must be described as V3
+- remove or rewrite any V2/V1 language
+- remove stale threshold references if they no longer reflect current working truth
+- reflect that the system now includes:
+  - 4 active trading symbols
+  - 8 live symbol-native engines
+  - Research → AI Analysis
+  - Research → Backtest
+  - Data console
+  - live/paper architecture as it exists now
+
+### Must be accurate
+Do not write speculative statements.
+If something is still provisional, say so clearly.
+
+---
+
+# PART 2 — REPO / DOCS / SKILLS / MEMORY CLEANUP
+
+## T002 — Audit all repo-governing docs and instruction files
+Inspect and update all repo-level docs/instructions, including but not limited to:
+- `replit.md`
+- `.agents/skills/deriv-trading-repo-guardian/SKILL.md`
+- any skill docs
+- any project memory/context docs inside the repo
+- any artifacts or markdown files used as operational guidance
+- any files that steer future AI agent work
+
+### Goal
+No lingering stale version truth.
+No stale thresholds.
+No “as of old task” statements if outdated.
+No mixed V2/V3 instructions.
+
+---
+
+## T003 — Rewrite stale docs fully where needed
+If a doc is materially stale, do not patch sentence-by-sentence.
+Rewrite it cleanly so it reflects current V3 truth only.
+
+### Required outcomes
+The cleaned docs must accurately reflect:
+- 4 active trading symbols
+- 8 live engines
+- V3-native live path
+- current scheduler/lifecycle reality
+- current data/backtest architecture
+- current UI ownership
+- current rebuild/reset truth
+- backtest availability in Research
+- that old backtest helper files are backtest-only, not live path
+
+### Important
+Do not preserve old threshold claims unless they are actually the live source of truth.
+Be accurate, not nostalgic.
+
+---
+
+## T004 — Remove or rewrite lingering version references
+Search for stale references like:
+- V1
+- V2
+- “old system”
+- superseded architecture notes
+- outdated route ownership
+- old threshold guidance
+- task-era statements that are no longer true
+
+If they are not intentionally historical, remove or rewrite them.
+
+If intentionally historical, mark them clearly as:
+- historical
+- archived
+- backtest-only
+- not part of live V3 path
+
+---
+
+# PART 3 — BACKTEST JSON EXPORT
+
+## T005 — Add simple JSON export from the Research Backtest tab
+The backtest engine is already working in the UI.
+Add a simple export action that outputs two JSON files:
+
+### File 1 — summary/header JSON
+Must include at minimum:
+- symbol
+- engine / engine set
+- date range
+- total trades
+- win rate
+- avg return
+- total return
+- max drawdown
+- trades per month
+- monthly return
+- any additional summary metrics already returned by backend
+
+### File 2 — trades JSON
+Must include full trade rows with:
+- symbol
+- engine
+- direction
+- entryTime
+- exitTime
+- entryPrice
+- exitPrice
+- holdDurationMinutes or equivalent
+- maxFavourableMove
+- maxDrawdown
+- exitReason
+- profitPercent
+
+---
+
+## T006 — Keep export simple
+Do NOT introduce ZIP unless trivial.
+Do NOT over-engineer.
+Simple JSON download is enough.
+
+### UI requirement
+The export action must be:
+- visible in Research → Backtest
+- disabled or hidden if no result exists
+- based on actual current backtest result
+- not fake
+
+---
+
+# PART 4 — RAILWAY REBUILD / RESET FLOW
+
+## T007 — Create deterministic Railway rebuild/reset script
+Create one explicit rebuild/reset script for Railway use.
+
+Suggested location:
+- `artifacts/api-server/scripts/v3-railway-rebuild.sql`
+or equivalent
+
+### Preserve only:
+- `ticks`
+- `candles`
+
+### Clear:
+- `trades`
+- `signal_log`
+- `backtest_runs`
+- `backtest_trades`
+- stale AI suggestion/cache state
+- obsolete platform_state keys
+- any runtime operational state that should not survive a clean rebuild
+
+### Re-seed / restore:
+- only the platform_state keys/settings required by current V3
+- no stale V2/V-old settings
+- no dead old state
+
+---
+
+## T008 — Make reset/rebuild re-runnable and explicit
+The rebuild/reset flow must:
+- be safe to rerun
+- document what it preserves
+- document what it clears
+- leave the system in a valid V3-ready state
+
+Do NOT make it automatic on every Railway boot unless explicitly enabled.
+
+Preferred:
+- manual command
+- or guarded env flag
+
+---
+
+## T009 — Add schema/setup truth check into rebuild path
+Because Railway has had runtime mismatches before, the rebuild/reset flow must also ensure required schema/state is consistent after reset.
+
+At minimum, if the current code expects columns like:
+- `candles.source`
+- `candles.is_interpolated`
+
+then rebuild/reset or startup verification must ensure the schema truly contains them before the app begins scanning.
+
+No false “setup complete” state.
+
+---
+
+# PART 5 — ENGINE DECISIONS VISIBILITY FIX
+
+## T010 — Fix execution_status written for blocked/rejected signals
+The Engine Decisions tab is currently showing no signals even though engines are scanning and generating rejected/blocked candidates.
+
+Root cause 1:
+When a signal is rejected before reaching allocator approval, the scheduler currently writes lifecycle state values like:
+- `idle`
+- `watch`
+- `qualified`
+
+into the `execution_status` column of `signal_log`.
+
+That is wrong for UI visibility.
+
+### Required fix
+In the blocked/rejected signal logging path in `scheduler.ts`:
+- keep lifecycle state passed to the candidate lifecycle manager exactly as-is
+- but write `execution_status: 'blocked'` into `signal_log` instead of the lifecycle state
+
+Lifecycle state is internal runtime state.
+`execution_status` is UI-facing semantic outcome.
+
+### Important
+Do NOT change lifecycle machine semantics.
+Only change what is persisted into the DB for signal visibility.
+
+---
+
+## T011 — Lower the default signal visibility threshold
+Root cause 2:
+The `signal_visibility_threshold` default is too high, so real rejected signals are hidden.
+
+### Required fix
+Change the default `signal_visibility_threshold` from:
+- 75
+to:
+- 50
+
+Update:
+- the signals/decisions route default
+- the startup/default platform_state seed value wherever this key is initialized
+
+So a fresh environment immediately shows sub-75 blocked signals.
+
+### Important
+This is NOT a trading-threshold change.
+It is only the UI visibility threshold for the Decisions tab.
+
+Do NOT change:
+- paper mode threshold
+- demo mode threshold
+- real mode threshold
+- engine gates
+
+---
+
+## T012 — Extend signal visibility condition to include rejection_reason
+Even with semantic `execution_status='blocked'`, the visibility query should also surface any signal that has a rejection reason.
+
+### Required fix
+In the signals/decisions route visibility query, add:
+- `rejection_reason IS NOT NULL`
+
+as an additional OR condition.
+
+Result:
+Any future signal that has a rejection reason should be visible in the Decisions tab, regardless of lifecycle state or raw score.
+
+---
+
+## T013 — Preserve current UI design
+Do NOT redesign the Decisions page.
+
+The page should simply begin showing:
+- blocked/rejected rows
+- correct reason labels
+- score/breakdown data already available
+
+No visual redesign required.
+
+---
+
+# PART 6 — VALIDATION
+
+## T014 — Validate Help/docs cleanup
+Confirm:
+- Help is current V3
+- `replit.md` is current V3
+- skill docs are current V3
+- there are no contradictory version/threshold/system claims left in active guidance
+
+---
+
+## T015 — Validate backtest JSON export
+Confirm:
+- run backtest in UI
+- export summary JSON
+- export trades JSON
+- files contain correct fields
+- no UI regression in Research
+
+---
+
+## T016 — Validate rebuild/reset flow
+Confirm:
+- rebuild/reset clears the intended tables/state
+- ticks and candles remain intact
+- required platform_state is restored correctly
+- app can start after rebuild/reset in a valid V3 state
+
+---
+
+## T017 — Validate Engine Decisions visibility
+Confirm all of the following:
+1. Engine Decisions tab now shows blocked/rejected scanned signals
+2. blocked/rejected rows appear even when lifecycle state is idle/watch/qualified internally
+3. rows with `allowed_flag = true` continue to appear as before
+4. rows with `rejection_reason IS NOT NULL` are visible
+5. lowering `signal_visibility_threshold` to 50 exposes current live rejections
+6. no live execution logic changed
+
+---
+
+# EXPLICIT OUT OF SCOPE
+
+Do NOT in this task:
+- change engine scoring
+- change trading thresholds
+- redesign lifecycle
+- redesign scheduler
+- redesign backtest logic
+- redesign UI broadly
+- add new quant research features
+- add new engines
+
+This task is only:
+- Help cleanup
+- docs/skills/instructions cleanup
+- backtest JSON export
+- Railway rebuild/reset flow
+- Engine Decisions visibility fix
+
+---
+
+# DONE CRITERIA
+
+This task is complete only if:
+1. Help reflects current V3 only
+2. repo docs / skills / guidance files reflect current V3 only
+3. stale old-version guidance is removed or clearly marked historical
+4. Research Backtest supports simple JSON export
+5. Railway rebuild/reset flow exists and is documented
+6. rebuild/reset preserves only ticks + candles
+7. rebuild/reset clears everything else required
+8. required V3 state is re-seeded correctly
+9. Engine Decisions now shows blocked/rejected scanned signals properly
+10. TypeScript/build passes
+11. Replit returns the final report in the exact structure below
+
+---
+
+## REQUIRED FINAL RESPONSE FORMAT
+
+### Task #106 complete
+1. Files changed
+2. Help page cleanup summary
+3. Docs / skills / repo-guidance cleanup summary
+4. Backtest JSON export implementation
+5. Railway rebuild/reset script details
+6. Preserved vs cleared tables/state
+7. Engine Decisions visibility fix summary
+8. Validation results
+9. TypeScript/build result
+10. Explicit confirmations:
+   - Help now reflects current V3 only
+   - repo docs/skills now reflect current V3 only
+   - no stale version guidance remains in active repo docs
+   - backtest JSON export works
+   - Railway rebuild/reset preserves only ticks + candles
+   - Engine Decisions now surfaces blocked/rejected signals correctly

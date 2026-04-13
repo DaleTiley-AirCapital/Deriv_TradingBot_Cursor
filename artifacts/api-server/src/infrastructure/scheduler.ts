@@ -161,10 +161,10 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
             rejectionReason: rejReason,
             mode: effectiveMode,
             aiVerdict: "skipped",
-            aiReasoning: `lifecycle:${lcResult.logReason}`,
+            aiReasoning: `lifecycle:${lcResult.logReason} | lifecycle_state:${lcStatus}`,
             regime: operationalRegime,
             regimeConfidence,
-            executionStatus: lcStatus,
+            executionStatus: "blocked",
             scoringDimensions: candidateScoringDims,
           });
           totalDecisionsLogged++;

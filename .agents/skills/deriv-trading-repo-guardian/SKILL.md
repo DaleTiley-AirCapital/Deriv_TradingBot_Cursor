@@ -27,7 +27,7 @@ app/            — routing, app wiring, dependency composition
 
 ---
 
-## V3 Live Architecture (current — as of Task #102)
+## V3 Live Architecture (current — as of Task #106)
 
 **The live path runs exclusively on V3 native-engine scoring. There is no V2 shared scoring path in the live system.**
 `strategies.ts` / `signalRouter.ts` / `scoring.ts` are BACKTEST-ONLY — not called in live scan.
@@ -73,6 +73,23 @@ positionManagementCycle:
 ### DB Notes
 - No schema changes for V3. `strategyName` field stores engine name. `notes` field has `"V3 HybridStaged | ..."` prefix.
 - `signalLogTable.strategyFamily` = `"v3_engine"` for V3 signals.
+
+### Score Thresholds (current state as of Task #106)
+- **Production targets (non-negotiable):** Paper ≥ 85, Demo ≥ 90, Real ≥ 92
+- **Safe-mode (current operating gates):** Paper ≥ 60, Demo ≥ 65, Real ≥ 70
+- Safe-mode is enforced in `index.ts` startup SQL via unconditional upsert. Do NOT change these startup upserts.
+- Safe-mode is temporary — production targets enforced once engine calibration scores consistently reach them.
+- Max observed engine scores (calibration): BOOM300/sell≈58, CRASH300/buy≈56, R_75≈83, R_100≈81.
+
+### Signal Visibility (Engine Decisions page)
+- `signal_visibility_threshold` = 50 (platform_state, seeded at startup via upsert using `LEAST(current, 50)`).
+- `GET /api/signals` shows rows where: `allowedFlag=true` OR `compositeScore ≥ 50` OR `executionStatus IN ('blocked','rejected')` OR `rejectionReason IS NOT NULL`.
+- Rejected lifecycle signals write `executionStatus='blocked'` with lifecycle state in `aiReasoning` field.
+
+### Frontend — Research Page (Task #92 + #106)
+- Research page has **two tabs**: AI Analysis tab and Backtest tab.
+- Backtest tab: `POST /api/backtest/v3/run` → renders summary metrics + per-symbol trades table + JSON export buttons (Summary and Trades).
+- Export functions use V3Trade fields: `entryTs`, `exitTs`, `nativeScore`, `pnlPct`, `holdBars`, etc.
 
 ---
 

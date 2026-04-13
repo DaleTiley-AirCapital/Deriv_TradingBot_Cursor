@@ -282,7 +282,8 @@ async function initDb(): Promise<void> {
       ('real_max_weekly_loss_pct',  '6'),
       ('real_max_drawdown_pct',     '12'),
       ('real_extraction_target_pct','50'),
-      ('real_correlated_family_cap','3')
+      ('real_correlated_family_cap','3'),
+      ('signal_visibility_threshold','50')
     ) AS defaults(key, value)
     WHERE NOT EXISTS (SELECT 1 FROM platform_state ps WHERE ps.key = defaults.key);
   `);
@@ -292,6 +293,7 @@ async function initDb(): Promise<void> {
     INSERT INTO platform_state (key, value) VALUES ('paper_min_composite_score', '60') ON CONFLICT (key) DO UPDATE SET value = '60';
     INSERT INTO platform_state (key, value) VALUES ('demo_min_composite_score',  '65') ON CONFLICT (key) DO UPDATE SET value = '65';
     INSERT INTO platform_state (key, value) VALUES ('real_min_composite_score',  '70') ON CONFLICT (key) DO UPDATE SET value = '70';
+    INSERT INTO platform_state (key, value) VALUES ('signal_visibility_threshold', '50') ON CONFLICT (key) DO UPDATE SET value = LEAST(platform_state.value::numeric, 50)::text;
     UPDATE platform_state SET value = '80' WHERE key = 'ai_suggest_paper_min_composite_score' AND CAST(value AS INTEGER) < 80;
     UPDATE platform_state SET value = '85' WHERE key = 'ai_suggest_demo_min_composite_score' AND CAST(value AS INTEGER) < 85;
     UPDATE platform_state SET value = '90' WHERE key = 'ai_suggest_real_min_composite_score' AND CAST(value AS INTEGER) < 90;

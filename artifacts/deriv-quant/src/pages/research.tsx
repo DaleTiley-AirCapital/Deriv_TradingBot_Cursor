@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import {
   FlaskConical, Brain, Play, RefreshCw,
   Loader2, CheckCircle, XCircle,
-  FileText, Clock, BarChart2, ChevronRight,
+  FileText, Clock, BarChart2, ChevronRight, Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -488,6 +488,63 @@ function BacktestTab() {
     ? Object.values(results).reduce((s, r) => s + r.trades.length, 0)
     : null;
 
+  function downloadJson(data: unknown, filename: string) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportSummary() {
+    if (!results) return;
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+    const summary = {
+      exported_at: new Date().toISOString(),
+      params: { symbol, startDate, endDate, minScore: minScore || "engine-default" },
+      symbols: Object.fromEntries(
+        Object.entries(results).map(([sym, r]) => [sym, {
+          totalBars: r.totalBars,
+          totalTrades: r.trades.length,
+          wins: r.trades.filter(t => t.pnlPct > 0).length,
+          losses: r.trades.filter(t => t.pnlPct <= 0).length,
+          winRate: r.trades.length > 0
+            ? +((r.trades.filter(t => t.pnlPct > 0).length / r.trades.length) * 100).toFixed(1)
+            : 0,
+          avgPnlPct: r.trades.length > 0
+            ? +(r.trades.reduce((s, t) => s + t.pnlPct, 0) / r.trades.length).toFixed(2)
+            : 0,
+          avgScore: r.trades.length > 0
+            ? +(r.trades.reduce((s, t) => s + (t.nativeScore ?? 0), 0) / r.trades.length).toFixed(1)
+            : 0,
+          bestTrade: r.trades.length > 0
+            ? +(Math.max(...r.trades.map(t => t.pnlPct))).toFixed(2)
+            : 0,
+          worstTrade: r.trades.length > 0
+            ? +(Math.min(...r.trades.map(t => t.pnlPct))).toFixed(2)
+            : 0,
+        }])
+      ),
+    };
+    downloadJson(summary, `bt-summary-${timestamp}.json`);
+  }
+
+  function exportTrades() {
+    if (!results) return;
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+    const allTrades = Object.entries(results).flatMap(([sym, r]) =>
+      r.trades.map(t => ({ symbol: sym, ...t }))
+    ).sort((a, b) => (a.entryTs ?? 0) - (b.entryTs ?? 0));
+    downloadJson({
+      exported_at: new Date().toISOString(),
+      params: { symbol, startDate, endDate, minScore: minScore || "engine-default" },
+      total_trades: allTrades.length,
+      trades: allTrades,
+    }, `bt-trades-${timestamp}.json`);
+  }
+
   return (
     <div className="space-y-5">
       {/* Controls */}
@@ -549,7 +606,7 @@ function BacktestTab() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={run}
             disabled={running}
@@ -560,6 +617,25 @@ function BacktestTab() {
               : <BarChart2 className="w-3.5 h-3.5" />}
             {running ? `Running… ${elapsed}s` : "Run Backtest"}
           </button>
+
+          {results !== null && totalTrades !== null && totalTrades > 0 && (
+            <>
+              <button
+                onClick={exportSummary}
+                className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export Summary JSON
+              </button>
+              <button
+                onClick={exportTrades}
+                className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export Trades JSON
+              </button>
+            </>
+          )}
 
           {running && (
             <p className="text-xs text-muted-foreground">

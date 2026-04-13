@@ -36,16 +36,17 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 - R_75 — `r75_reversal_engine`, `r75_continuation_engine`, `r75_breakout_engine` (coordinator resolves)
 - R_100 — `r100_reversal_engine`, `r100_breakout_engine`, `r100_continuation_engine` (coordinator resolves)
 
-**Mode Thresholds (non-negotiable):**
-- Paper: native score ≥ 85
-- Demo: native score ≥ 90
-- Real: native score ≥ 92
+**Mode Thresholds:**
+- Production targets (non-negotiable): Paper ≥ 85, Demo ≥ 90, Real ≥ 92
+- Safe-mode (current operating gates, enforced at startup): Paper ≥ 60, Demo ≥ 65, Real ≥ 70
+- Safe-mode is temporary: active while calibration data accumulates. Production targets are enforced once engine scores consistently reach them.
+- `signal_visibility_threshold`: 50 (startup upsert ensures existing environments are not locked at old 75 default)
 
 **Native Scoring (all 4 symbols):**
 Each engine computes a 6-component native score (0–100). `confidence = nativeScore / 100`. The mode threshold gates are enforced by `portfolioAllocatorV3.ts`. There is no shared V2 composite score path in the live system. `strategies.ts` / `signalRouter.ts` / `scoring.ts` are backtest-only.
 
 **UI/UX and Technical Implementations:**
-- **Frontend:** React, Vite, Tailwind CSS v4, shadcn/ui, Recharts. Active pages: Overview, Decisions, Trades, Research, Data, Settings, Help, Diagnostics.
+- **Frontend:** React, Vite, Tailwind CSS v4, shadcn/ui, Recharts. Active pages: Overview, Decisions, Trades, Research (AI Analysis + Backtest tabs), Data, Settings, Help, Diagnostics.
 - **Backend:** Express 5 for API services.
 - **Database:** PostgreSQL with Drizzle ORM.
 - **Trading Modes:** Supports three independent trading modes (Paper, Demo, Real) which can run simultaneously, each with independent capital allocation, risk limits, position sizing, and Deriv API tokens.
@@ -86,3 +87,8 @@ Deployed via Replit (current environment).
 2. **Execution Layer** (only with active modes): Trades are only placed when Paper, Demo, or Real mode is explicitly enabled.
 
 **Backtesting:** `strategies.ts`, `scoring.ts`, `signalRouter.ts` are BACKTEST-ONLY files used by `backtestEngine.ts` (runtimes/). They are not called in the live scan path. Do not add them to the live engine flow.
+The Research → Backtest tab calls `POST /api/backtest/v3/run` and renders results in the frontend. Export to JSON is available for both summary and per-trade data.
+
+**Scripts (`artifacts/api-server/scripts/`):**
+- `v3-runtime-reset.sql` — purges runtime tables (signal_log, trades, backtest_*); safe to re-run
+- `railway-rebuild.sql` — full platform_state seed for fresh Railway deploys; includes safe-mode threshold enforcement
