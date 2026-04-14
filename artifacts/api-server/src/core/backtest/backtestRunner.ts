@@ -38,7 +38,6 @@ import { classifyRegimeFromSamples } from "../regimeEngine.js";
 import {
   calculateSRFibTP,
   calculateSRFibSL,
-  calculateAdaptiveTrailingStop,
 } from "../tradeEngine.js";
 import { getSymbolIndicatorTimeframeMins } from "../features.js";
 import type { EngineResult } from "../engineTypes.js";
@@ -55,10 +54,8 @@ import {
 import { runEnginesAndCoordinate } from "../signalPipeline.js";
 import {
   evaluateBarExits,
-  calcTpProgress,
-  BREAKEVEN_THRESHOLD_PCT,
-  TRAILING_ACTIVATION_THRESHOLD_PCT,
   MAX_HOLD_MINS,
+  applyBarStateTransitions,
 } from "../tradeManagement.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -433,13 +430,30 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
   const maxDailyLossPct  = parseFloat(stateMap[`${modePrefix}_max_daily_loss_pct`] || stateMap["max_daily_loss_pct"] || "5") / 100;
   const maxWeeklyLossPct = parseFloat(stateMap[`${modePrefix}_max_weekly_loss_pct`] || stateMap["max_weekly_loss_pct"] || "10") / 100;
 
-  // ── Allocator parity gaps — declared once, carried through to the response ─
-  // These gates require cross-symbol live portfolio state that is unavailable
-  // in a single-symbol historical replay. Failing loud: each gap is logged as
-  // a console.warn so callers (CI, logs, UI) can see what was assumed.
+  // ── Running equity curve — used to compute maxDrawdownBreached per bar ───────
+  // Normalized to 1.0 start. Updated whenever a trade closes so each new entry
+  // evaluation sees the current drawdown level (not assumed false).
+  let simEquity     = 1.0;
+  let simEquityPeak = 1.0;
+  const maxDrawdownThresholdPct = parseFloat(
+    stateMap[`${modePrefix}_max_drawdown_pct`] || stateMap["max_drawdown_pct"] || "20"
+  ) / 100;
+
+  if (mode === "real") {
+    console.error(
+      `[BacktestRunner] REAL-MODE PARITY WARNING: ${symbol} backtest cannot achieve full ` +
+      `allocator parity — cross-symbol portfolio state (correlatedFamilyCapBreached, ` +
+      `multi-symbol equity curve) is unavailable in single-symbol replay. ` +
+      `Results are directionally valid but NOT safe for real-mode deployment decisions.`
+    );
+  }
+
+  // ── Simulation parity gaps carried in the response ────────────────────────
+  // maxDrawdownBreached: now computed from running single-symbol equity (not assumed false)
+  // correlatedFamilyCapBreached: provably false in single-symbol replay (no other symbols)
+  // maxOpenTrades: single-symbol sim always uses 1 — real setting may differ
   const runSimulationGaps: string[] = [
-    "maxDrawdownBreached=assumed_false(no_cross_symbol_equity_curve)",
-    "correlatedFamilyCapBreached=assumed_false(no_cross_symbol_positions)",
+    "correlatedFamilyCapBreached=always_false(single_symbol_no_correlated_positions)",
     "maxOpenTrades=1(single_symbol_sim_not_actual_platform_limit)",
   ];
   console.warn(
@@ -458,101 +472,65 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
       const ep = openTrade.entryPrice;
       const holdBars = i - openTrade.entryBar;
 
-      // Track peak price
-      const favorable = dir === "buy" ? bar.high : bar.low;
-      if (dir === "buy" && favorable > openTrade.peakPrice) {
-        openTrade.peakPrice = favorable;
-        openTrade.mfePeakBar = i;
-      }
-      if (dir === "sell" && favorable < openTrade.peakPrice) {
-        openTrade.peakPrice = favorable;
-        openTrade.mfePeakBar = i;
-      }
+      // ── Shared bar-state transitions (peak tracking, MFE/MAE, BE, trailing) ──
+      // Uses applyBarStateTransitions from tradeManagement.ts — identical logic
+      // consumed by both live manageOpenPositions and historical replay.
+      const prevPeakPrice = openTrade.peakPrice;
+      const barState = applyBarStateTransitions({
+        direction: dir,
+        entryPrice: ep,
+        tp: openTrade.tp,
+        barHigh: bar.high,
+        barLow: bar.low,
+        barClose: bar.close,
+        barOpen: bar.open,
+        stage: openTrade.stage,
+        sl: openTrade.sl,
+        peakPrice: openTrade.peakPrice,
+        mfePct: openTrade.mfePct,
+        maePct: openTrade.maePct,
+        adverseCandleCount: openTrade.adverseCandleCount,
+        atr14AtEntry: openTrade.atr14AtEntry,
+        instrumentFamily: openTrade.instrumentFamily,
+        emaSlope: openTrade.emaSlope,
+        spikeCount4h: openTrade.spikeCount4h,
+      });
 
-      // MFE / MAE
-      const barMfe = dir === "buy" ? (bar.high - ep) / ep : (ep - bar.low) / ep;
-      const barMae = dir === "buy" ? (bar.low - ep) / ep : (ep - bar.high) / ep;
-      if (barMfe > openTrade.mfePct) openTrade.mfePct = barMfe;
-      if (barMae < openTrade.maePct) openTrade.maePct = barMae;
+      openTrade.sl               = barState.sl;
+      openTrade.stage            = barState.stage;
+      openTrade.peakPrice        = barState.peakPrice;
+      openTrade.mfePct           = barState.mfePct;
+      openTrade.maePct           = barState.maePct;
+      openTrade.adverseCandleCount = barState.adverseCandleCount;
+      if (barState.peakPrice !== prevPeakPrice) openTrade.mfePeakBar = i;
 
-      // Adverse candle count
-      const barIsFavorable = dir === "buy" ? bar.close >= bar.open : bar.close <= bar.open;
-      openTrade.adverseCandleCount = barIsFavorable ? 0 : openTrade.adverseCandleCount + 1;
-
-      // ── Stage 1→2: Breakeven promotion ─────────────────────────────────
-      if (openTrade.stage === 1) {
-        const tpProgress = calcTpProgress({
+      if (barState.bePromoted) {
+        openTrade.mfePctAtBreakeven = barState.mfePctAtPromotion;
+        openTrade.beTriggeredBar    = i;
+        openTrade.tpProgressAtBe    = barState.tpProgressAtBe;
+        recordBehaviorEvent({
+          eventType: "breakeven_promoted",
+          symbol,
+          engineName: openTrade.winner.engineName,
           direction: dir,
-          entryPrice: ep,
-          currentPrice: bar.close,
-          tpPrice: openTrade.tp,
+          holdBarsAtPromotion: holdBars,
+          mfePctAtPromotion: barState.mfePctAtPromotion,
+          tpProgressAtPromotion: barState.tpProgressAtBe,
+          ts: bar.closeTs,
         });
-
-        if (tpProgress >= BREAKEVEN_THRESHOLD_PCT) {
-          const buffer = ep * 0.0005;
-          const beSlPrice = dir === "buy" ? ep + buffer : ep - buffer;
-          const slImproved = dir === "buy" ? beSlPrice > openTrade.sl : beSlPrice < openTrade.sl;
-          if (slImproved) {
-            openTrade.mfePctAtBreakeven = openTrade.mfePct;
-            openTrade.beTriggeredBar = i;
-            openTrade.tpProgressAtBe = tpProgress;
-            openTrade.sl = beSlPrice;
-            openTrade.stage = 2;
-            recordBehaviorEvent({
-              eventType: "breakeven_promoted",
-              symbol,
-              engineName: openTrade.winner.engineName,
-              direction: dir,
-              holdBarsAtPromotion: holdBars,
-              mfePctAtPromotion: openTrade.mfePct,
-              tpProgressAtPromotion: tpProgress,
-              ts: bar.closeTs,
-            });
-          }
-        }
       }
 
-      // ── Stage 2→3: Adaptive trailing stop ──────────────────────────────
-      if (openTrade.stage >= 2) {
-        const progress = calcTpProgress({
+      if (barState.trailingActivated) {
+        recordBehaviorEvent({
+          eventType: "trailing_activated",
+          symbol,
+          engineName: openTrade.winner.engineName,
           direction: dir,
-          entryPrice: ep,
-          currentPrice: bar.close,
-          tpPrice: openTrade.tp,
+          holdBarsAtActivation: holdBars,
+          mfePctAtActivation: barState.mfePct,
+          tpProgressAtActivation: barState.tpProgressAtTrailing,
+          ts: bar.closeTs,
         });
-
-        if (progress >= TRAILING_ACTIVATION_THRESHOLD_PCT) {
-          const wasStage2 = openTrade.stage === 2;
-          openTrade.stage = 3;
-
-          if (wasStage2) {
-            recordBehaviorEvent({
-              eventType: "trailing_activated",
-              symbol,
-              engineName: openTrade.winner.engineName,
-              direction: dir,
-              holdBarsAtActivation: holdBars,
-              mfePctAtActivation: openTrade.mfePct,
-              tpProgressAtActivation: progress,
-              ts: bar.closeTs,
-            });
-          }
-
-          const { newSl, updated } = calculateAdaptiveTrailingStop({
-            entryPrice: ep,
-            currentPrice: bar.close,
-            peakPrice: openTrade.peakPrice,
-            direction: dir,
-            currentSl: openTrade.sl,
-            tpPrice: openTrade.tp,
-            atr14Pct: openTrade.atr14AtEntry,
-            instrumentFamily: openTrade.instrumentFamily,
-            adverseCandleCount: openTrade.adverseCandleCount,
-            emaSlope: openTrade.emaSlope,
-            spikeCountAdverse4h: openTrade.spikeCount4h,
-          });
-          if (updated) openTrade.sl = newSl;
-        }
       }
 
       // ── Exit checks — uses shared evaluateBarExits (SL checked BEFORE TP) ──
@@ -624,6 +602,10 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
           closeTs: bar.closeTs * 1000,
           pnlUsd: finalPnl * SYNTHETIC_SIZE,
         });
+
+        // Update running equity curve for maxDrawdownBreached gate
+        simEquity *= (1 + finalPnl);
+        if (simEquity > simEquityPeak) simEquityPeak = simEquity;
 
         // Closed event for behavior profiler
         const closedEvent: ClosedEvent = {
@@ -738,9 +720,14 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
     const dailyLossLimitBreached  = dailyLossUsd  < -(maxDailyLossPct  * SYNTHETIC_SIZE);
     const weeklyLossLimitBreached = weeklyLossUsd < -(maxWeeklyLossPct * SYNTHETIC_SIZE);
 
+    // Drawdown gate: derived from the running single-symbol normalized equity curve.
+    // Computed fresh each bar from closed trades — same approach as dailyLossLimitBreached.
+    const currentDrawdownPct = simEquityPeak > 0 ? (simEquityPeak - simEquity) / simEquityPeak : 0;
+    const maxDrawdownBreached = currentDrawdownPct >= maxDrawdownThresholdPct;
+
     const simulationGaps = [
       "maxOpenTrades=1(single_symbol_sim)",
-      "correlatedFamilyCapBreached=assumed_false(no_cross_symbol_state)",
+      "correlatedFamilyCapBreached=always_false(single_symbol_no_correlated_positions)",
     ];
     const allocResult = evaluateSignalAdmission({
       symbol,
@@ -758,8 +745,8 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
       maxOpenTrades: 1,                  // gap: single-symbol sim
       dailyLossLimitBreached,            // computed from simulation trades
       weeklyLossLimitBreached,           // computed from simulation trades
-      maxDrawdownBreached: false,        // gap: no cross-symbol equity curve
-      correlatedFamilyCapBreached: false,// gap: no cross-symbol state
+      maxDrawdownBreached,               // computed from running single-symbol equity curve
+      correlatedFamilyCapBreached: false,// provably false: no correlated symbols in single-symbol sim
       simulationDefaults: simulationGaps,
     });
 

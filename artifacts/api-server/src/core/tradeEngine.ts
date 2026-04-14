@@ -5,7 +5,7 @@ import type { TradingMode } from "../infrastructure/deriv.js";
 import type { AllocationDecision } from "./signalRouter.js";
 import { checkAndAutoExtract } from "./extractionEngine.js";
 import { recordBehaviorEvent } from "./backtest/behaviorCapture.js";
-import { evaluateBarExits, MAX_HOLD_MINS } from "./tradeManagement.js";
+import { evaluateBarExits, MAX_HOLD_MINS, calculateAdaptiveTrailingStop } from "./tradeManagement.js";
 
 const MAX_OPEN_TRADES = 6;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
@@ -159,101 +159,6 @@ export function calculateSRFibSL(params: {
   return sl;
 }
 
-export function calculateAdaptiveTrailingStop(params: {
-  entryPrice: number;
-  currentPrice: number;
-  peakPrice: number;
-  direction: "buy" | "sell";
-  currentSl: number;
-  tpPrice: number;
-  atr14Pct: number;
-  instrumentFamily: "crash" | "boom" | "volatility";
-  adverseCandleCount: number;
-  emaSlope: number;
-  spikeCountAdverse4h?: number;
-}): { newSl: number; updated: boolean; reason?: string } {
-  const {
-    entryPrice, currentPrice, peakPrice, direction, currentSl, tpPrice,
-    atr14Pct, instrumentFamily, adverseCandleCount, emaSlope, spikeCountAdverse4h,
-  } = params;
-
-  const currentPnlPct = direction === "buy"
-    ? (currentPrice - entryPrice) / entryPrice
-    : (entryPrice - currentPrice) / entryPrice;
-
-  if (currentPnlPct <= 0) {
-    return { newSl: currentSl, updated: false };
-  }
-
-  const tpPct = direction === "buy"
-    ? (tpPrice - entryPrice) / entryPrice
-    : (entryPrice - tpPrice) / entryPrice;
-
-  if (tpPct <= 0) {
-    return { newSl: currentSl, updated: false };
-  }
-
-  const progress = currentPnlPct / tpPct;
-
-  if (progress < 0.30) {
-    return { newSl: currentSl, updated: false };
-  }
-
-  const isCrashBoom = instrumentFamily === "crash" || instrumentFamily === "boom";
-
-  let multiplier: number;
-  if (progress < 0.60) {
-    multiplier = isCrashBoom ? 3.0 : 2.0;
-  } else if (progress < 0.85) {
-    multiplier = isCrashBoom ? 2.0 : 1.5;
-  } else {
-    multiplier = isCrashBoom ? 1.5 : 1.0;
-  }
-
-  const emaFlipped = direction === "buy" ? emaSlope < -0.0002 : emaSlope > 0.0002;
-  const adverseCandles = adverseCandleCount >= 3;
-  const adverseSpikes = (spikeCountAdverse4h ?? 0) >= 3;
-
-  const reversalCount = [adverseCandles, emaFlipped, adverseSpikes].filter(Boolean).length;
-  if (reversalCount === 3) {
-    multiplier = 1.0;
-  } else if (reversalCount >= 1) {
-    multiplier = Math.max(1.0, multiplier - 0.5);
-  }
-
-  const minMultiplier = 2.0;
-  multiplier = Math.max(multiplier, minMultiplier);
-
-  const peakPnlPct = direction === "buy"
-    ? (peakPrice - entryPrice) / entryPrice
-    : (entryPrice - peakPrice) / entryPrice;
-
-  if (peakPnlPct <= 0) {
-    return { newSl: currentSl, updated: false };
-  }
-
-  const atr = Math.max(atr14Pct, 0.001);
-  const trailPct = peakPnlPct - (atr * multiplier);
-
-  if (trailPct <= 0) {
-    return { newSl: currentSl, updated: false };
-  }
-
-  let trailingSl: number;
-  if (direction === "buy") {
-    trailingSl = entryPrice * (1 + trailPct);
-    if (trailingSl > currentSl) {
-      return { newSl: trailingSl, updated: true, reason: `ATR×${multiplier.toFixed(1)} trail (progress=${(progress * 100).toFixed(0)}%, reversals=${reversalCount})` };
-    }
-  } else {
-    trailingSl = entryPrice * (1 - trailPct);
-    if (trailingSl < currentSl) {
-      return { newSl: trailingSl, updated: true, reason: `ATR×${multiplier.toFixed(1)} trail (progress=${(progress * 100).toFixed(0)}%, reversals=${reversalCount})` };
-    }
-  }
-
-  return { newSl: currentSl, updated: false };
-}
 
 export function calculateProfitTrailingStop(params: {
   entryPrice: number;
@@ -823,24 +728,40 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
       : exitReason === "stop_loss_hit" ? "sl_hit"
       : "max_duration";
 
+    const entryTsMs = trade.entryTs
+      ? new Date(trade.entryTs).getTime()
+      : (trade.createdAt ? new Date(trade.createdAt).getTime() : Date.now());
+    const exitTsMs = Date.now();
+    const holdBarsLive = Math.max(1, Math.round((exitTsMs - entryTsMs) / 60_000));
+
+    const projectedMovePct = (trade.tp && trade.entryPrice)
+      ? Math.abs(trade.tp - trade.entryPrice) / trade.entryPrice
+      : 0;
+
+    const maePctLive = (trade.sl && trade.entryPrice)
+      ? (direction === "buy"
+          ? -(trade.entryPrice - trade.sl) / trade.entryPrice
+          : -(trade.sl - trade.entryPrice) / trade.entryPrice)
+      : 0;
+
     const liveClosedEvent = {
       eventType: "closed" as const,
       symbol: trade.symbol,
       engineName: trade.strategyName,
       entryType: "live",
       direction,
-      regimeAtEntry: "unknown",
+      regimeAtEntry: "live_unknown",
       regimeConfidence: 0,
       nativeScore: Math.round((trade.confidence ?? 0) * 100),
-      projectedMovePct: 0,
-      entryTs: trade.createdAt ? Math.floor(trade.createdAt.getTime() / 1000) : 0,
-      exitTs: Math.floor(Date.now() / 1000),
-      holdBars: 0,
+      projectedMovePct,
+      entryTs: Math.floor(entryTsMs / 1000),
+      exitTs: Math.floor(exitTsMs / 1000),
+      holdBars: holdBarsLive,
       pnlPct,
       mfePct: mfePctLive,
-      maePct: 0,
+      maePct: maePctLive,
       mfePctAtBreakeven: 0,
-      barsToMfe: 0,
+      barsToMfe: holdBarsLive,
       barsToBreakeven: 0,
       exitReason: exitReasonNorm,
       slStage: 1 as const,

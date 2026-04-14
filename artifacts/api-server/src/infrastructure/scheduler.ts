@@ -639,34 +639,48 @@ async function watchScanCycle(): Promise<void> {
       if (nowMs - lastScan < behaviorCadenceMs) continue;
 
       // ── Gate 2: Trigger-state maturity check (behavior profile) ──────────
-      // Require watch candidates to have been observed for at least
-      // `recommendedMemoryWindowBars` minutes (= 1 bar per minute convention)
-      // before allowing the execution scan to proceed. This prevents
-      // hair-trigger execution on signals that haven't had time to develop
-      // the pattern strength expected by the historically-derived profile.
+      // Uses per-engine `recommendedMemoryWindowBars` from the derived behavior
+      // profile (1 bar = 1 min). For each "watch" candidate whose engine has a
+      // profile, require the candidate to have been observed for at least that
+      // many minutes before allowing the execution scan to proceed.
+      // "qualified" or "tradeable" candidates have already cleared the engine
+      // gate and are NOT deferred — the maturity window only guards "watch" state
+      // signals that are still developing.
       const profileRaw = stateMap[`behavior_profile_${sym}`];
       if (profileRaw) {
         try {
           const profile = JSON.parse(profileRaw) as BehaviorProfileSummary;
-          const minMaturityMins = profile.recommendedScanCadenceMins
-            ? profile.recommendedScanCadenceMins * 2   // require ≥2 cadence cycles of watch
-            : 0;
+          const watchOnlyCandidates = allWatchedCandidates.filter(
+            c => c.symbol === sym && c.status === "watch",
+          );
 
-          if (minMaturityMins > 0) {
-            const symCandidates = allWatchedCandidates.filter(
-              c => c.symbol === sym && (c.status === "watch" || c.status === "qualified"),
-            );
-            if (symCandidates.length > 0) {
-              const oldestMs = Math.min(...symCandidates.map(c => c.firstSeenAt.getTime()));
-              const watchDurationMins = (nowMs - oldestMs) / 60_000;
-              if (watchDurationMins < minMaturityMins) {
-                console.log(
-                  `[WatchScan] ${sym} | TRIGGER_MATURITY_GATE | ` +
-                  `watchDuration=${watchDurationMins.toFixed(1)}min < ` +
-                  `maturityRequired=${minMaturityMins}min | deferring execution scan`,
-                );
-                continue;
+          if (watchOnlyCandidates.length > 0) {
+            let shouldDefer = false;
+            let deferReason = "";
+
+            for (const cand of watchOnlyCandidates) {
+              const engineProf = profile.engineProfiles.find(
+                ep => ep.engineName === cand.engineName,
+              );
+              // Use per-engine memory window if available; fall back to symbol cadence × 2
+              const memWindowMins = engineProf?.recommendedMemoryWindowBars
+                ?? (profile.recommendedScanCadenceMins * 2);
+
+              if (memWindowMins > 0) {
+                const watchDurationMins = (nowMs - cand.firstSeenAt.getTime()) / 60_000;
+                if (watchDurationMins < memWindowMins) {
+                  shouldDefer = true;
+                  deferReason = `engine=${cand.engineName} watchDuration=${watchDurationMins.toFixed(1)}min < memoryWindow=${memWindowMins}min`;
+                  break;
+                }
               }
+            }
+
+            if (shouldDefer) {
+              console.log(
+                `[WatchScan] ${sym} | TRIGGER_MATURITY_GATE | ${deferReason} | deferring execution scan`,
+              );
+              continue;
             }
           }
         } catch {
