@@ -23,6 +23,7 @@ import {
   getBehaviorEvents,
   clearBehaviorEvents,
 } from "../core/backtest/behaviorCapture.js";
+import { reloadLiveBehaviorEventsForSymbol } from "../core/backtest/behaviorDb.js";
 import {
   deriveEngineProfile,
   deriveSymbolBehaviorProfile,
@@ -59,7 +60,12 @@ router.post("/behavior/profile", async (req, res): Promise<void> => {
   try {
     const symbols = symbol === "all" ? [...ACTIVE_SYMBOLS] : [symbol as string];
 
-    for (const sym of symbols) clearBehaviorEvents(sym);
+    // Clear in-memory events for each symbol, then reload durable live events
+    // so that existing live-trade history is merged into the new profile build.
+    for (const sym of symbols) {
+      clearBehaviorEvents(sym);
+      await reloadLiveBehaviorEventsForSymbol(sym);
+    }
 
     if (symbol === "all") {
       await runV3BacktestMulti(symbols, startTs, endTs, minScore, mode);
@@ -100,6 +106,7 @@ router.post("/behavior/profile/:symbol", async (req, res): Promise<void> => {
 
   try {
     clearBehaviorEvents(symbol);
+    await reloadLiveBehaviorEventsForSymbol(symbol);
     const req2: V3BacktestRequest = { symbol, startTs, endTs, minScore, mode };
     await runV3Backtest(req2);
     const profile = deriveSymbolBehaviorProfile(symbol);
@@ -136,8 +143,10 @@ router.post("/behavior/profile/:symbol/:engine", async (req, res): Promise<void>
   }
 
   try {
-    // Clear only this engine's events so other engines aren't affected
+    // Clear only this engine's events so other engines aren't affected, then
+    // reload durable live events for this symbol so live-trade history survives.
     clearBehaviorEvents(symbol, engine);
+    await reloadLiveBehaviorEventsForSymbol(symbol);
     // Must re-run full symbol backtest (engines for a symbol are evaluated together)
     const req2: V3BacktestRequest = { symbol, startTs, endTs, minScore, mode };
     await runV3Backtest(req2);

@@ -12,7 +12,7 @@
  */
 
 import { db, behaviorEventsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { recordBehaviorEvent, type BehaviorEvent } from "./behaviorCapture.js";
 
 /**
@@ -43,5 +43,33 @@ export async function loadLiveBehaviorEvents(): Promise<void> {
   } catch (err) {
     // Non-fatal — in-memory store works fine without historical DB data
     console.warn("[BehaviorDb] Could not load live behavior events from DB (non-fatal):", err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Reload durable live behavior events for a specific symbol back into the
+ * in-memory store.  Called after clearBehaviorEvents(symbol) during profile
+ * rebuild so that existing live-trade history is NOT lost when a new backtest
+ * replay populates the event store with historical events.
+ */
+export async function reloadLiveBehaviorEventsForSymbol(symbol: string): Promise<void> {
+  try {
+    const rows = await db.select().from(behaviorEventsTable)
+      .where(and(
+        eq(behaviorEventsTable.source, "live"),
+        eq(behaviorEventsTable.symbol, symbol),
+      ));
+    for (const row of rows) {
+      try {
+        const event = row.eventData as BehaviorEvent;
+        if (event && event.eventType && event.symbol && event.engineName) {
+          recordBehaviorEvent(event);
+        }
+      } catch {
+        // Skip malformed events
+      }
+    }
+  } catch {
+    // Non-fatal — profile rebuild proceeds with backtest events only
   }
 }

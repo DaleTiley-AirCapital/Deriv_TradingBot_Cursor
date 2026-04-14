@@ -660,6 +660,12 @@ async function watchScanCycle(): Promise<void> {
       // "qualified" or "tradeable" candidates have already cleared the engine
       // gate and are NOT deferred — the maturity window only guards "watch" state
       // signals that are still developing.
+      // Conservative fallback minimum watch duration when no behavior profile
+      // is persisted — prevents execution scans on brand-new watch candidates
+      // before any historical data is available to calibrate the maturity window.
+      // Once a real profile is derived and persisted, its per-engine values take over.
+      const FALLBACK_WATCH_MIN_MINS = 30;
+
       const profileRaw = stateMap[`behavior_profile_${sym}`];
       if (profileRaw) {
         try {
@@ -698,7 +704,28 @@ async function watchScanCycle(): Promise<void> {
             }
           }
         } catch {
-          // Profile parse error — allow scan to proceed without maturity gate
+          // Profile parse error — allow scan to proceed (corrupt profile is better
+          // than indefinitely blocking watch candidates)
+        }
+      } else {
+        // No behavior profile persisted yet — apply conservative fallback gate:
+        // require any "watch" state candidate to have been observed for at least
+        // FALLBACK_WATCH_MIN_MINS minutes before allowing the execution scan.
+        const watchOnlyCandidates = allWatchedCandidates.filter(
+          c => c.symbol === sym && c.status === "watch",
+        );
+        if (watchOnlyCandidates.length > 0) {
+          const immature = watchOnlyCandidates.find(
+            c => (nowMs - c.firstSeenAt.getTime()) / 60_000 < FALLBACK_WATCH_MIN_MINS,
+          );
+          if (immature) {
+            const watchDurationMins = ((nowMs - immature.firstSeenAt.getTime()) / 60_000).toFixed(1);
+            console.log(
+              `[WatchScan] ${sym} | FALLBACK_MATURITY_GATE | engine=${immature.engineName} ` +
+              `watchDuration=${watchDurationMins}min < fallback=${FALLBACK_WATCH_MIN_MINS}min | deferring`,
+            );
+            continue;
+          }
         }
       }
 
