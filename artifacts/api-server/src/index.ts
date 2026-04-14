@@ -5,6 +5,7 @@ import app from "./app.js";
 import { getDerivClientWithDbToken, getEnabledSymbols, ACTIVE_TRADING_SYMBOLS } from "./infrastructure/deriv.js";
 import { startScheduler } from "./infrastructure/scheduler.js";
 import { validateActiveSymbols } from "./infrastructure/symbolValidator.js";
+import { loadLiveBehaviorEvents } from "./core/backtest/behaviorDb.js";
 
 const rawPort = process.env["PORT"];
 
@@ -381,6 +382,7 @@ initDb()
       console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       startScheduler();
       autoStartStreaming();
+      loadLiveBehaviorEvents().catch(() => {});
     });
   })
   .catch((err) => {

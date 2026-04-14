@@ -8,3 +8,4 @@ export * from "./backtestTrades";
 export * from "./trades";
 export * from "./signalLog";
 export * from "./platformState";
+export * from "./behaviorEvents";

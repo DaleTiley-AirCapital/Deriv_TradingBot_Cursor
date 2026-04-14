@@ -49,20 +49,21 @@ import {
   recordBehaviorEvent,
   type ClosedEvent,
 } from "./behaviorCapture.js";
-
-// ── Mode score gates — mirrors portfolioAllocatorV3 min_composite_score defaults ──
-const MODE_SCORE_GATES: Record<string, number> = {
-  paper: 60,
-  demo:  65,
-  real:  70,
-};
+import {
+  evaluateSignalAdmission,
+  MODE_SCORE_GATES,
+} from "../allocatorCore.js";
+import {
+  evaluateBarExits,
+  calcTpProgress,
+  BREAKEVEN_THRESHOLD_PCT,
+  TRAILING_ACTIVATION_THRESHOLD_PCT,
+} from "../tradeManagement.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const STRUCTURAL_LOOKBACK = 1500;
-const MAX_HOLD_BARS = 43_200;             // 30 days in 1m bars
-const STAGE2_BREAKEVEN_THRESHOLD = 0.20;  // 20% of TP distance → promote to breakeven
-const STAGE3_TRAIL_THRESHOLD    = 0.30;  // 30% of TP distance → activate adaptive trail
+const MAX_HOLD_BARS = 43_200;  // 30 days in 1m bars
 const SYNTHETIC_EQUITY = 10_000;
 const SYNTHETIC_SIZE   = 1_500;          // 15% of synthetic equity (matches live default)
 const HTF_AVERAGING_WINDOW = 60;         // 60 feature samples ≈ 1 hour (matches live)
@@ -355,38 +356,19 @@ interface OpenTradeState {
   tpProgressAtBe: number;
 }
 
-// ── Backtest Allocator ────────────────────────────────────────────────────────
-// Pure function — mirrors portfolioAllocatorV3's score gate check without DB access.
-// Portfolio-state-dependent risk limits (daily loss, drawdown) are inapplicable in
-// isolated bar-by-bar replay (they are always satisfied in a single-trade simulation).
-
-interface BacktestAllocatorResult {
-  allowed: boolean;
-  rejectionReason: string | null;
-}
-
-function backtestAllocate(
-  nativeScore: number,
-  modeGate: number,
-  openTrade: OpenTradeState | null,
-  symbol: string,
-): BacktestAllocatorResult {
-  // Gate 1: Score must pass mode threshold (mirrors portfolioAllocatorV3 confidence check)
-  if (nativeScore < modeGate) {
-    return {
-      allowed: false,
-      rejectionReason: `score_below_mode_gate:${nativeScore}<${modeGate}`,
-    };
-  }
-  // Gate 2: One open trade per symbol (mirrors portfolioAllocatorV3 existingForSymbol check)
-  if (openTrade !== null) {
-    return {
-      allowed: false,
-      rejectionReason: `symbol_already_has_open_position:${symbol}`,
-    };
-  }
-  return { allowed: true, rejectionReason: null };
-}
+// ── Simulation gap documentation ──────────────────────────────────────────────
+// The following gates from portfolioAllocatorV3 cannot be replicated without
+// live portfolio state (DB access) and are set to assumed-safe defaults:
+//   - modeEnabled:      assumed true (can't verify mode is active without DB)
+//   - symbolEnabled:    assumed true (can't verify symbol enablement without DB)
+//   - maxOpenTrades:    set to 1 (single-symbol backtest; no cross-symbol tracking)
+//   - dailyLossLimitBreached:  assumed false (no cross-symbol portfolio PnL state)
+//   - weeklyLossLimitBreached: assumed false
+//   - maxDrawdownBreached:     assumed false
+//   - correlatedFamilyCapBreached: assumed false
+//   - killSwitchActive: assumed false
+// These are documented via simulationDefaults passed to evaluateSignalAdmission.
+// Score gate (gate 4) and one-per-symbol (gate 5) are fully simulated.
 
 // ── Core simulation loop ──────────────────────────────────────────────────────
 
@@ -478,13 +460,14 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
 
       // ── Stage 1→2: Breakeven promotion ─────────────────────────────────
       if (openTrade.stage === 1) {
-        const tpDist = Math.abs(openTrade.tp - ep);
-        const currentDist = dir === "buy"
-          ? Math.max(0, bar.close - ep)
-          : Math.max(0, ep - bar.close);
-        const tpProgress = tpDist > 0 ? currentDist / tpDist : 0;
+        const tpProgress = calcTpProgress({
+          direction: dir,
+          entryPrice: ep,
+          currentPrice: bar.close,
+          tpPrice: openTrade.tp,
+        });
 
-        if (tpProgress >= STAGE2_BREAKEVEN_THRESHOLD) {
+        if (tpProgress >= BREAKEVEN_THRESHOLD_PCT) {
           const buffer = ep * 0.0005;
           const beSlPrice = dir === "buy" ? ep + buffer : ep - buffer;
           const slImproved = dir === "buy" ? beSlPrice > openTrade.sl : beSlPrice < openTrade.sl;
@@ -510,14 +493,14 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
 
       // ── Stage 2→3: Adaptive trailing stop ──────────────────────────────
       if (openTrade.stage >= 2) {
-        const tpDist = Math.abs(openTrade.tp - ep);
-        const currentPnl = dir === "buy"
-          ? (bar.close - ep) / ep
-          : (ep - bar.close) / ep;
-        const tpPctVal = tpDist > 0 ? tpDist / ep : 0;
-        const progress = tpPctVal > 0 ? currentPnl / tpPctVal : 0;
+        const progress = calcTpProgress({
+          direction: dir,
+          entryPrice: ep,
+          currentPrice: bar.close,
+          tpPrice: openTrade.tp,
+        });
 
-        if (progress >= STAGE3_TRAIL_THRESHOLD) {
+        if (progress >= TRAILING_ACTIVATION_THRESHOLD_PCT) {
           const wasStage2 = openTrade.stage === 2;
           openTrade.stage = 3;
 
@@ -551,27 +534,22 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
         }
       }
 
-      // ── Exit checks ─────────────────────────────────────────────────────
-      let exitReason: V3BacktestTrade["exitReason"] | null = null;
-      let exitPrice = bar.close;
+      // ── Exit checks — uses shared evaluateBarExits (SL checked BEFORE TP) ──
+      // SL-first priority matches live manageOpenPositions (eliminates same-bar
+      // divergence where backtest used TP-first, live uses SL-first).
+      const barExit = evaluateBarExits({
+        direction: dir,
+        barHigh: bar.high,
+        barLow: bar.low,
+        barClose: bar.close,
+        tp: openTrade.tp,
+        sl: openTrade.sl,
+      });
 
-      // TP hit (check first — TP wins over SL on same bar)
-      const tpReached = dir === "buy" ? bar.high >= openTrade.tp : bar.low <= openTrade.tp;
-      if (tpReached) {
-        exitReason = "tp_hit";
-        exitPrice = openTrade.tp;
-      }
+      let exitReason: V3BacktestTrade["exitReason"] | null = barExit.exitReason;
+      let exitPrice = barExit.exitPrice;
 
-      // SL hit (check bar extremes)
-      if (!exitReason) {
-        const slBreached = dir === "buy" ? bar.low <= openTrade.sl : bar.high >= openTrade.sl;
-        if (slBreached) {
-          exitReason = "sl_hit";
-          exitPrice = openTrade.sl;
-        }
-      }
-
-      // Max duration
+      // Max duration (applies when barExit returns null)
       if (!exitReason && holdBars >= MAX_HOLD_BARS) {
         exitReason = "max_duration";
         exitPrice = bar.close;
@@ -717,14 +695,45 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
       conflictResolution,
     });
 
-    // Backtest allocator: mode score gate + one-per-symbol check
-    // (mirrors portfolioAllocatorV3 score gate + existingForSymbol check)
-    const allocResult = backtestAllocate(nativeScore, modeGate, openTrade, symbol);
+    // ── Shared admission evaluator (same logic as portfolioAllocatorV3) ─────
+    // Calls evaluateSignalAdmission from allocatorCore — the exact same function
+    // that live allocateV3Signal calls. Portfolio-state-dependent gates that
+    // cannot be computed without DB are set to assumed-safe defaults and
+    // listed in simulationGaps for full transparency.
+    const simulationGaps = [
+      "modeEnabled=assumed_true",
+      "symbolEnabled=assumed_true",
+      "maxOpenTrades=1(single_symbol_sim)",
+      "dailyLossLimitBreached=assumed_false",
+      "weeklyLossLimitBreached=assumed_false",
+      "maxDrawdownBreached=assumed_false",
+      "correlatedFamilyCapBreached=assumed_false",
+    ];
+    const allocResult = evaluateSignalAdmission({
+      symbol,
+      engineName: winner.engineName,
+      direction: winner.direction,
+      nativeScore,
+      confidence: winner.confidence,
+      mode,
+      minScoreGate: modeGate,
+      killSwitchActive: false,           // gap: can't verify without DB
+      modeEnabled: true,                 // gap: assumed active
+      symbolEnabled: true,               // gap: assumed enabled
+      openTradeForSymbol: openTrade !== null,
+      currentOpenCount: openTrade !== null ? 1 : 0,
+      maxOpenTrades: 1,                  // gap: single-symbol sim
+      dailyLossLimitBreached: false,     // gap: no portfolio PnL state
+      weeklyLossLimitBreached: false,    // gap: no portfolio PnL state
+      maxDrawdownBreached: false,        // gap: no portfolio PnL state
+      correlatedFamilyCapBreached: false,// gap: no cross-symbol state
+      simulationDefaults: simulationGaps,
+    });
 
     if (!allocResult.allowed) {
-      // Only count score gate rejections as "blocked by gate"
-      // Symbol-already-open rejections don't count (trade management, not signal quality)
-      if (allocResult.rejectionReason?.startsWith("score_below_mode_gate")) {
+      // Only count score gate rejections (stage 4) as "blocked by gate"
+      // symbol-already-open (stage 5) = trade management, not signal quality
+      if (allocResult.rejectionStage === 4) {
         signalsBlocked++;
         blockedByEngine[winner.engineName] = (blockedByEngine[winner.engineName] ?? 0) + 1;
         recordBehaviorEvent({

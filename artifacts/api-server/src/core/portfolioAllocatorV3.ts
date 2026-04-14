@@ -13,6 +13,7 @@ import { eq, and } from "drizzle-orm";
 import type { CoordinatorOutput } from "./engineTypes.js";
 import type { TradingMode } from "../infrastructure/deriv.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "../infrastructure/deriv.js";
+import { evaluateSignalAdmission, MODE_SCORE_GATES } from "./allocatorCore.js";
 
 export interface V3AllocationDecision {
   coordinatorOutput: CoordinatorOutput;
@@ -52,80 +53,76 @@ export async function allocateV3Signal(
     ...base, allowed: false, rejectionReason: reason, capitalAmount: 0, capitalAllocationPct: 0,
   });
 
-  // Kill switch
-  if (stateMap["kill_switch"] === "true") return deny("kill_switch_active");
-
-  // Mode-level enabled check — supports multiple key conventions:
-  // paper_mode_active="true" (V3 settings page), paper_mode="active", paper_enabled="true"
+  // ── Stage 1: Fetch all portfolio state from DB ────────────────────────────
   const modeEnabled =
     stateMap[`${prefix}_mode_active`] === "true" ||
     stateMap[`${prefix}_mode`] === "active" ||
     stateMap[`${prefix}_enabled`] === "true";
-  if (!modeEnabled) return deny(`mode_${mode}_not_active`);
 
-  // Symbol-level check
   const modeSymbolsRaw = stateMap[`${prefix}_enabled_symbols`] || stateMap["enabled_symbols"] || "";
   const modeSymbols = modeSymbolsRaw ? modeSymbolsRaw.split(",").map(s => s.trim()).filter(Boolean) : null;
-  if (modeSymbols && !modeSymbols.includes(symbol)) {
-    return deny(`symbol_${symbol}_not_enabled_for_${mode}`);
-  }
+  const symbolEnabled = !modeSymbols || modeSymbols.includes(symbol);
 
-  // Capital
   const capitalKey = getModeCapitalKey(mode);
   const capitalDefault = getModeCapitalDefault(mode);
   const totalCapital = Math.max(1, parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault));
 
-  // Open trades
   const openTrades = await db.select().from(tradesTable)
     .where(and(eq(tradesTable.status, "open"), eq(tradesTable.mode, mode)));
-
   const maxOpenTrades = parseInt(stateMap[`${prefix}_max_open_trades`] || stateMap["max_open_trades"] || "3");
-  if (openTrades.length >= maxOpenTrades) return deny(`max_open_trades_reached:${openTrades.length}/${maxOpenTrades}`);
+  const openTradeForSymbol = openTrades.some(t => t.symbol === symbol);
 
-  // No duplicate symbol+direction
-  const existingForSymbol = openTrades.filter(t => t.symbol === symbol);
-  if (existingForSymbol.length > 0) return deny(`symbol_already_has_open_position:${symbol}`);
-
-  // Risk guards
   const closedTrades = await db.select().from(tradesTable)
     .where(and(eq(tradesTable.status, "closed"), eq(tradesTable.mode, mode)));
-
   const now = Date.now();
   const dayStart = now - 86400000;
   const weekStart = now - 604800000;
-
   const dailyPnl = closedTrades
     .filter(t => t.exitTs && new Date(t.exitTs).getTime() > dayStart)
     .reduce((s, t) => s + (t.pnl ?? 0), 0);
   const weeklyPnl = closedTrades
     .filter(t => t.exitTs && new Date(t.exitTs).getTime() > weekStart)
     .reduce((s, t) => s + (t.pnl ?? 0), 0);
-
   const maxDailyLossPct  = parseFloat(stateMap[`${prefix}_max_daily_loss_pct`] || stateMap["max_daily_loss_pct"] || "5") / 100;
   const maxWeeklyLossPct = parseFloat(stateMap[`${prefix}_max_weekly_loss_pct`] || stateMap["max_weekly_loss_pct"] || "10") / 100;
   const maxDrawdownPct   = parseFloat(stateMap[`${prefix}_max_drawdown_pct`] || stateMap["max_drawdown_pct"] || "15") / 100;
-
-  if (dailyPnl < 0 && Math.abs(dailyPnl) / totalCapital >= maxDailyLossPct) {
-    return deny(`daily_loss_limit_reached:${(Math.abs(dailyPnl) / totalCapital * 100).toFixed(1)}%`);
-  }
-  if (weeklyPnl < 0 && Math.abs(weeklyPnl) / totalCapital >= maxWeeklyLossPct) {
-    return deny(`weekly_loss_limit_reached`);
-  }
-
-  // All open trade PnL for drawdown
   const unrealisedPnl = openTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
   const totalPnl = dailyPnl + unrealisedPnl;
-  if (totalPnl < 0 && Math.abs(totalPnl) / totalCapital >= maxDrawdownPct) {
-    return deny("max_drawdown_reached");
-  }
 
-  // ── Minimum confidence gate ────────────────────────────────────────────────
-  // For BOOM300 and CRASH300 engines: the primary gate is the engine-native score
-  // embedded in confidence. The secondary check here uses mode min_composite_score / 100
-  // as a floor. Rejection reasons are engine-specific when metadata is available.
-  const minScore = parseFloat(stateMap[`${prefix}_min_composite_score`] || stateMap["min_composite_score"] || "80");
-  const minConfidence = minScore / 100;
-  if (winner.confidence < minConfidence) {
+  // Use mode-specific gate from allocatorCore (single source of truth) or platformState override
+  const modeDefaultGate = MODE_SCORE_GATES[mode as string] ?? 60;
+  const minScore = parseFloat(stateMap[`${prefix}_min_composite_score`] || stateMap["min_composite_score"] || String(modeDefaultGate));
+  const nativeScore = Math.round(winner.confidence * 100);
+
+  // ── Stage 2: Core admission check via shared evaluator ────────────────────
+  // evaluateSignalAdmission enforces the same gate order as the live allocator.
+  // Both backtest and live call this function — single shared decision path.
+  const admissionResult = evaluateSignalAdmission({
+    symbol,
+    engineName: winner.engineName,
+    direction: winner.direction,
+    nativeScore,
+    confidence: winner.confidence,
+    mode: mode as "paper" | "demo" | "real",
+    minScoreGate: minScore,
+    killSwitchActive: stateMap["kill_switch"] === "true",
+    modeEnabled,
+    symbolEnabled,
+    openTradeForSymbol,
+    currentOpenCount: openTrades.length,
+    maxOpenTrades,
+    dailyLossLimitBreached: dailyPnl < 0 && Math.abs(dailyPnl) / totalCapital >= maxDailyLossPct,
+    weeklyLossLimitBreached: weeklyPnl < 0 && Math.abs(weeklyPnl) / totalCapital >= maxWeeklyLossPct,
+    maxDrawdownBreached: totalPnl < 0 && Math.abs(totalPnl) / totalCapital >= maxDrawdownPct,
+    correlatedFamilyCapBreached: false,
+    simulationDefaults: [],  // live path — no simulation defaults
+  });
+
+  if (!admissionResult.allowed) {
+    // For score gate (stage 4), build engine-specific rejection messages for observability
+    if (admissionResult.rejectionStage === 4) {
+      const minConfidence = minScore / 100;
+      if (winner.confidence < minConfidence) {
     // Build engine-specific rejection reason for BOOM300
     const isBoom300 = winner.engineName === "boom_expansion_engine";
     if (isBoom300 && winner.metadata) {
@@ -344,8 +341,12 @@ export async function allocateV3Signal(
       );
     }
 
-    return deny(`confidence_below_threshold:${winner.confidence.toFixed(3)}<${minConfidence.toFixed(3)}`);
-  }
+      return deny(`confidence_below_threshold:${winner.confidence.toFixed(3)}<${minConfidence.toFixed(3)}`);
+      }  // closes: if (winner.confidence < minConfidence)
+    }  // closes: if (admissionResult.rejectionStage === 4)
+    // Gates 1-3, 5-10: use the shared evaluator rejection reason directly
+    return deny(admissionResult.rejectionReason ?? "rejected_by_allocator");
+  }  // closes: if (!admissionResult.allowed)
 
   // ── Capital sizing ─────────────────────────────────────────────────────────
   // Base on equity_pct_per_trade, scaled by engine confidence

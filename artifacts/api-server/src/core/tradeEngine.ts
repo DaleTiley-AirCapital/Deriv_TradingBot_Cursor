@@ -1,4 +1,4 @@
-import { db, tradesTable, platformStateTable } from "@workspace/db";
+import { db, tradesTable, platformStateTable, behaviorEventsTable } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { getDerivClientForMode, getDerivClientWithDbToken, getModeCapitalKey, getModeCapitalDefault } from "../infrastructure/deriv.js";
 import type { TradingMode } from "../infrastructure/deriv.js";
@@ -792,8 +792,9 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
   console.log(`[TradeEngine] Closed trade #${tradeId} (${trade.symbol} ${trade.side} [${tradeMode}]) | Exit: ${exitPrice.toFixed(4)} | P&L: $${pnl.toFixed(2)} | Capital: $${currentCapital.toFixed(2)} → $${newCapital.toFixed(2)} | Reason: ${exitReason}`);
 
   // ── Live outcome scaffold: record closed event for behavior profiling ──────
-  // Allows behavior profiles to improve over time with real trade outcomes,
-  // not just backtest replay. Uses peakPrice as MFE approximation (live tracking).
+  // Durable storage: behavior events are persisted to the behavior_events table
+  // AND recorded in the in-memory store so the profiler can read them immediately.
+  // Uses peakPrice as MFE approximation (live tracking field already maintained).
   try {
     const pnlPct = direction === "buy"
       ? (exitPrice - trade.entryPrice) / trade.entryPrice
@@ -806,8 +807,8 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
       : exitReason === "stop_loss_hit" ? "sl_hit"
       : "max_duration";
 
-    recordBehaviorEvent({
-      eventType: "closed",
+    const liveClosedEvent = {
+      eventType: "closed" as const,
       symbol: trade.symbol,
       engineName: trade.strategyName,
       entryType: "live",
@@ -826,9 +827,24 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
       barsToMfe: 0,
       barsToBreakeven: 0,
       exitReason: exitReasonNorm,
-      slStage: 1,
+      slStage: 1 as const,
       conflictResolution: "live",
+      source: "live" as const,
+    };
+
+    // 1. In-memory record (immediate access for profiler)
+    recordBehaviorEvent(liveClosedEvent);
+
+    // 2. Durable DB persistence (survives restarts — used to build profiles
+    //    from historical live trades without needing a backtest replay)
+    db.insert(behaviorEventsTable).values({
+      symbol: trade.symbol,
+      engineName: trade.strategyName,
+      eventType: "closed",
       source: "live",
+      eventData: liveClosedEvent as Record<string, unknown>,
+    }).catch(err => {
+      console.warn("[TradeEngine] Behavior event persist failed (non-fatal):", err instanceof Error ? err.message : err);
     });
   } catch {
     // Non-fatal — behavior capture must never block trade execution
