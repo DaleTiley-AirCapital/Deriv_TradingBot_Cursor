@@ -588,10 +588,23 @@ async function weeklyAnalysisCycle(): Promise<void> {
 }
 
 /**
+ * Per-symbol last-watch-scan timestamps.
+ * Used by the behavior-guided cadence to throttle rescans per symbol independently.
+ * Populated by watchScanCycle; reset on scheduler restart.
+ */
+const watchLastScanMs: Record<string, number> = {};
+
+/**
  * Watch-mode cycle — runs every 60s.
  * Re-scans only symbols that have at least one watch/qualified/tradeable candidate.
  * Per-symbol, not per-candidate, so all engines for that symbol re-evaluate.
  * Also runs stale-candidate cleanup.
+ *
+ * Behavior-guided cadence discipline:
+ *   If `behavior_watch_cadence_${sym}` is set in platformState (written by the
+ *   POST /api/behavior/persist/:symbol endpoint from the behavior profiler), that
+ *   cadence overrides the baseline 60s interval for that specific symbol.
+ *   This ties live watch-mode execution discipline to empirically derived behavior profiles.
  */
 async function watchScanCycle(): Promise<void> {
   cleanupStale();
@@ -610,9 +623,18 @@ async function watchScanCycle(): Promise<void> {
     const killSwitch = stateMap["kill_switch"] === "true";
     if (killSwitch) return;
 
+    const nowMs = Date.now();
     for (const sym of watchSymbols) {
+      // Behavior-guided cadence: only re-scan if the behavior-recommended interval has elapsed
+      const behaviorCadenceMs = stateMap[`behavior_watch_cadence_${sym}`]
+        ? parseInt(stateMap[`behavior_watch_cadence_${sym}`], 10)
+        : WATCH_SCAN_INTERVAL_MS;
+      const lastScan = watchLastScanMs[sym] ?? 0;
+      if (nowMs - lastScan < behaviorCadenceMs) continue;
+
       try {
         await scanSingleSymbolV3(sym, stateMap);
+        watchLastScanMs[sym] = Date.now();
       } catch (err) {
         console.error(`[WatchScan] Error for ${sym}:`, err instanceof Error ? err.message : err);
       }

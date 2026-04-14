@@ -4,6 +4,7 @@ import { getDerivClientForMode, getDerivClientWithDbToken, getModeCapitalKey, ge
 import type { TradingMode } from "../infrastructure/deriv.js";
 import type { AllocationDecision } from "./signalRouter.js";
 import { checkAndAutoExtract } from "./extractionEngine.js";
+import { recordBehaviorEvent } from "./backtest/behaviorCapture.js";
 
 const MAX_OPEN_TRADES = 6;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
@@ -789,4 +790,47 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
     .onConflictDoUpdate({ target: platformStateTable.key, set: { value: String(newCapital), updatedAt: new Date() } });
 
   console.log(`[TradeEngine] Closed trade #${tradeId} (${trade.symbol} ${trade.side} [${tradeMode}]) | Exit: ${exitPrice.toFixed(4)} | P&L: $${pnl.toFixed(2)} | Capital: $${currentCapital.toFixed(2)} → $${newCapital.toFixed(2)} | Reason: ${exitReason}`);
+
+  // ── Live outcome scaffold: record closed event for behavior profiling ──────
+  // Allows behavior profiles to improve over time with real trade outcomes,
+  // not just backtest replay. Uses peakPrice as MFE approximation (live tracking).
+  try {
+    const pnlPct = direction === "buy"
+      ? (exitPrice - trade.entryPrice) / trade.entryPrice
+      : (trade.entryPrice - exitPrice) / trade.entryPrice;
+    const mfePctLive = direction === "buy"
+      ? Math.max(0, ((trade.peakPrice ?? trade.entryPrice) - trade.entryPrice) / trade.entryPrice)
+      : Math.max(0, (trade.entryPrice - (trade.peakPrice ?? trade.entryPrice)) / trade.entryPrice);
+    const exitReasonNorm: "tp_hit" | "sl_hit" | "max_duration" =
+      exitReason === "take_profit_hit" ? "tp_hit"
+      : exitReason === "stop_loss_hit" ? "sl_hit"
+      : "max_duration";
+
+    recordBehaviorEvent({
+      eventType: "closed",
+      symbol: trade.symbol,
+      engineName: trade.strategyName,
+      entryType: "live",
+      direction,
+      regimeAtEntry: "unknown",
+      regimeConfidence: 0,
+      nativeScore: Math.round((trade.confidence ?? 0) * 100),
+      projectedMovePct: 0,
+      entryTs: trade.createdAt ? Math.floor(trade.createdAt.getTime() / 1000) : 0,
+      exitTs: Math.floor(Date.now() / 1000),
+      holdBars: 0,
+      pnlPct,
+      mfePct: mfePctLive,
+      maePct: 0,
+      mfePctAtBreakeven: 0,
+      barsToMfe: 0,
+      barsToBreakeven: 0,
+      exitReason: exitReasonNorm,
+      slStage: 1,
+      conflictResolution: "live",
+      source: "live",
+    });
+  } catch {
+    // Non-fatal — behavior capture must never block trade execution
+  }
 }

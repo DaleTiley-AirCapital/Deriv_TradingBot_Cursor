@@ -445,12 +445,20 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
   try {
     let results: Record<string, unknown>;
 
+    const mode = req.body?.mode;
+    const validModes = [undefined, "paper", "demo", "real"];
+    if (!validModes.includes(mode)) {
+      res.status(400).json({ error: "mode must be one of: paper, demo, real" });
+      return;
+    }
+
     if (symbol === "all") {
       const multi = await runV3BacktestMulti(
         [...ACTIVE_SYMBOLS],
         parsedStart,
         parsedEnd,
         minScore,
+        mode,
       );
       results = multi as Record<string, unknown>;
     } else {
@@ -459,6 +467,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
         startTs: parsedStart,
         endTs: parsedEnd,
         minScore,
+        mode,
       });
       results = { [symbol]: single };
     }
