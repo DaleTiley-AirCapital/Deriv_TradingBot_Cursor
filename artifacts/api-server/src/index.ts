@@ -36,17 +36,19 @@ async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_ticks_symbol_ts ON ticks (symbol, epoch_ts DESC);
 
     CREATE TABLE IF NOT EXISTS candles (
-      id         SERIAL PRIMARY KEY,
-      symbol     TEXT NOT NULL,
-      timeframe  TEXT NOT NULL,
-      open_ts    DOUBLE PRECISION NOT NULL,
-      close_ts   DOUBLE PRECISION NOT NULL,
-      open       DOUBLE PRECISION NOT NULL,
-      high       DOUBLE PRECISION NOT NULL,
-      low        DOUBLE PRECISION NOT NULL,
-      close      DOUBLE PRECISION NOT NULL,
-      tick_count INTEGER NOT NULL DEFAULT 0,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      id              SERIAL PRIMARY KEY,
+      symbol          TEXT NOT NULL,
+      timeframe       TEXT NOT NULL,
+      open_ts         DOUBLE PRECISION NOT NULL,
+      close_ts        DOUBLE PRECISION NOT NULL,
+      open            DOUBLE PRECISION NOT NULL,
+      high            DOUBLE PRECISION NOT NULL,
+      low             DOUBLE PRECISION NOT NULL,
+      close           DOUBLE PRECISION NOT NULL,
+      tick_count      INTEGER NOT NULL DEFAULT 0,
+      source          TEXT NOT NULL DEFAULT 'historical',
+      is_interpolated BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_candles_symbol_tf_ts ON candles (symbol, timeframe, open_ts DESC);
 
@@ -194,6 +196,8 @@ async function initDb(): Promise<void> {
   `);
 
   const migrations = [
+    "ALTER TABLE candles ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'historical'",
+    "ALTER TABLE candles ADD COLUMN IF NOT EXISTS is_interpolated BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE trades ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION",
     "ALTER TABLE trades ADD COLUMN IF NOT EXISTS trailing_stop_pct DOUBLE PRECISION",
     "ALTER TABLE trades ADD COLUMN IF NOT EXISTS peak_price DOUBLE PRECISION",
@@ -222,6 +226,21 @@ async function initDb(): Promise<void> {
     }
   }
   console.log(`[DB] Ran ${migrations.length} column migrations.`);
+
+  // ── Explicit candles schema verification (fail-loud before scheduler starts) ──
+  const candlesColCheck = await db.execute(sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name = 'candles' AND column_name IN ('source', 'is_interpolated')
+  `);
+  const presentCols = (candlesColCheck.rows as Array<{ column_name: string }>).map(r => r.column_name);
+  const missingCols = ["source", "is_interpolated"].filter(c => !presentCols.includes(c));
+  if (missingCols.length > 0) {
+    throw new Error(
+      `[DB] FATAL: candles table is missing required columns after migration: ${missingCols.join(", ")}. ` +
+      "Cannot proceed — fix schema before restarting."
+    );
+  }
+  console.log("[DB] Candles schema verified: source and is_interpolated present.");
 
   const setupCheckRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "initial_setup_complete")).limit(1);
   const alreadySetUp = setupCheckRow.length > 0 && setupCheckRow[0].value === "true";

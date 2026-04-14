@@ -58,6 +58,7 @@ export async function checkOpenAiHealth(): Promise<{ configured: boolean; workin
 export interface SignalContext {
   symbol: string;
   direction: string;
+  mode: string;
   confidence: number;
   score: number;
   strategyName: string;
@@ -105,14 +106,17 @@ CONTEXT:
 - Sub-strategy: ${ctx.strategyName}
 - Instrument: ${ctx.symbol} (${ctx.instrumentFamily} family)
 - Direction: ${ctx.direction}
+- Trading Mode: ${ctx.mode}
 
 REGIME:
 - Current Regime: ${ctx.regimeState} (confidence: ${(ctx.regimeConfidence * 100).toFixed(0)}%)
 - Regime Gate: Active (strategy must match regime permissions)
 
 SCORES:
-- Composite Score: ${ctx.compositeScore.toFixed(0)}/100 (current gate: paper≥60, demo≥65, real≥70)
-- Model Score: ${(ctx.score * 100).toFixed(1)}% (min: 0.58-0.65 depending on family)
+- Composite Score: ${ctx.compositeScore.toFixed(0)}/100
+- Required gate for ${ctx.mode} mode: >=${ctx.mode === "paper" ? 60 : ctx.mode === "demo" ? 65 : 70}
+- Gate result: ${ctx.compositeScore >= (ctx.mode === "paper" ? 60 : ctx.mode === "demo" ? 65 : 70) ? "PASS — score meets the active mode gate" : "FAIL — score does not meet the active mode gate"}
+- Model Score: ${(ctx.score * 100).toFixed(1)}%
 - Confidence: ${(ctx.confidence * 100).toFixed(1)}%
 - Expected Value: ${(ctx.expectedValue * 100).toFixed(3)}%
 
@@ -135,12 +139,19 @@ TECHNICAL INDICATORS:
 - BB Width: ${ctx.bbWidth.toFixed(6)}
 - Z-Score: ${ctx.zScore.toFixed(3)}
 
-STRICT EVALUATION CRITERIA — DISAGREE unless ALL conditions met:
-1. Direction matches instrument family (CRASH=BUY, BOOM=SELL, Vol=either with trend confirmation)
-2. Multi-day structural setup confirmed (not just intraday noise)
-3. Price at genuine exhaustion/reversal point with structural confluence
-4. Sufficient room for 50%+ move to TP target
-5. Recent candles show genuine reversal/continuation pattern (not choppy noise)
+SCORE GATE RULE (CRITICAL — READ BEFORE EVALUATING):
+The system has already verified that this signal's composite score meets the ${ctx.mode} mode gate (>=${ctx.mode === "paper" ? 60 : ctx.mode === "demo" ? 65 : 70}).
+You MUST NOT re-apply any paper/demo/real score threshold in your evaluation.
+You MUST NOT disagree solely because the score is below another mode's gate (e.g., demo or real) when this is a ${ctx.mode} trade.
+You MUST NOT reference other mode thresholds in your reasoning.
+Your job is ONLY to evaluate signal quality and setup validity — NOT to gate-check the score again.
+
+STRICT EVALUATION CRITERIA — DISAGREE only if the setup itself is invalid:
+1. Direction does not match instrument family (CRASH=BUY, BOOM=SELL, Vol=either with trend confirmation)
+2. Setup is intraday noise — no genuine multi-day structural pattern
+3. Price is not at a genuine exhaustion/reversal point with structural confluence
+4. Insufficient room for 50%+ move to TP target
+5. Recent candles show choppy noise, not a genuine reversal/continuation pattern
 
 ${ctx.strategyFamily === "trend_continuation" ? "TREND CONTINUATION CHECK:\n- Is EMA slope strong and sustained (not just a blip)?\n- Has price pulled back to EMA without breaking structure?\n- Is 24h price change confirming trend direction (>1%)?\n- Is there room for continuation to major swing target?" : ""}${ctx.strategyFamily === "mean_reversion" ? "MEAN REVERSION CHECK:\n- Is price genuinely at 30d range extreme (within 3%)?\n- Has there been a sustained multi-day move (7d change >5%)?\n- Are RSI and z-score at genuine extremes?\n- Is liquidity sweep confirmed (if applicable)?" : ""}${ctx.strategyFamily === "spike_cluster_recovery" ? "SPIKE CLUSTER RECOVERY CHECK:\n- Is spike cluster dense enough (3+ in 4h window)?\n- Has 24h exhaustion move exceeded 5%?\n- Is reversal candle genuine (not just a pause)?\n- Is EMA slope flattening/reversing?" : ""}${ctx.strategyFamily === "swing_exhaustion" ? "SWING EXHAUSTION CHECK:\n- Has multi-day move exceeded 8% in 7 days?\n- Is price within 5% of 30d range extreme?\n- Has 24h momentum failed (no new high/low)?\n- Is EMA slope turning against the prior trend?" : ""}${ctx.strategyFamily === "trendline_breakout" ? "TRENDLINE BREAKOUT CHECK:\n- Does the trendline have 2+ confirmed touches?\n- Is breakout distance within 2.5x ATR (not too extended)?\n- Is momentum confirmed (candle body >30%, ATR accelerating)?\n- Is EMA slope aligned with breakout direction?" : ""}
 

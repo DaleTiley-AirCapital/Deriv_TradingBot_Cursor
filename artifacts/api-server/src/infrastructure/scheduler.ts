@@ -216,6 +216,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         const verdict = await verifySignal({
           symbol,
           direction: coordinatorOutput.resolvedDirection,
+          mode: effectiveMode,
           confidence: coordinatorOutput.coordinatorConfidence,
           score: coordinatorOutput.coordinatorConfidence,
           strategyName: winner.engineName,
