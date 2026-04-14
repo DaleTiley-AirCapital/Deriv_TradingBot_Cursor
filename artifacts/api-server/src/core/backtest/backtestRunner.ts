@@ -57,6 +57,7 @@ import {
   MAX_HOLD_MINS,
   applyBarStateTransitions,
 } from "../tradeManagement.js";
+import { getModeCapitalKey, getModeCapitalDefault } from "../../infrastructure/deriv.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -430,6 +431,14 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
   const maxDailyLossPct  = parseFloat(stateMap[`${modePrefix}_max_daily_loss_pct`] || stateMap["max_daily_loss_pct"] || "5") / 100;
   const maxWeeklyLossPct = parseFloat(stateMap[`${modePrefix}_max_weekly_loss_pct`] || stateMap["max_weekly_loss_pct"] || "10") / 100;
 
+  // totalCapital: read from platformState using same key/default as live allocator
+  // (portfolioAllocatorV3.ts getModeCapitalKey/getModeCapitalDefault).
+  // Loss limits are expressed as a % of total capital — using SYNTHETIC_SIZE (~1500)
+  // instead would cause gates to trigger at a completely different threshold.
+  const capitalKey = getModeCapitalKey(mode as "paper" | "demo" | "real");
+  const capitalDefault = getModeCapitalDefault(mode as "paper" | "demo" | "real");
+  const totalCapital = Math.max(1, parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault));
+
   // ── Running equity curve — used to compute maxDrawdownBreached per bar ───────
   // Normalized to 1.0 start. Updated whenever a trade closes so each new entry
   // evaluation sees the current drawdown level (not assumed false).
@@ -717,8 +726,9 @@ export async function runV3Backtest(req: V3BacktestRequest): Promise<V3BacktestR
     const weekStartTs  = nowTs - 7 * 86_400_000;
     const dailyLossUsd  = simClosedPnls.filter(p => p.closeTs >= dayStartTs).reduce((s, p) => s + p.pnlUsd, 0);
     const weeklyLossUsd = simClosedPnls.filter(p => p.closeTs >= weekStartTs).reduce((s, p) => s + p.pnlUsd, 0);
-    const dailyLossLimitBreached  = dailyLossUsd  < -(maxDailyLossPct  * SYNTHETIC_SIZE);
-    const weeklyLossLimitBreached = weeklyLossUsd < -(maxWeeklyLossPct * SYNTHETIC_SIZE);
+    // Mirror live portfolioAllocatorV3 formula: loss gates use totalCapital as denominator
+    const dailyLossLimitBreached  = dailyLossUsd  < 0 && Math.abs(dailyLossUsd)  / totalCapital >= maxDailyLossPct;
+    const weeklyLossLimitBreached = weeklyLossUsd < 0 && Math.abs(weeklyLossUsd) / totalCapital >= maxWeeklyLossPct;
 
     // Drawdown gate: derived from the running single-symbol normalized equity curve.
     // Computed fresh each bar from closed trades — same approach as dailyLossLimitBreached.

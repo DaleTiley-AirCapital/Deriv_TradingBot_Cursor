@@ -93,6 +93,21 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   const { winner } = coordinatorOutput;
   console.log(`[V3Scan] ${symbol} | regime=${operationalRegime}(${regimeConfidence.toFixed(2)}) | engine=${winner.engineName} | dir=${coordinatorOutput.resolvedDirection} | conf=${coordinatorOutput.coordinatorConfidence.toFixed(3)} | move=${(winner.projectedMovePct * 100).toFixed(1)}%`);
 
+  // Store per-symbol scan context for live trade management (tradeEngine.manageOpenPositions).
+  // The adaptive trailing stop uses emaSlope and spikeCount4h to adjust the trail multiplier.
+  // Writing these per scan ensures live management uses the most recent market context
+  // rather than placeholder 0-values.
+  const emaKey      = `${symbol}_scan_ema_slope`;
+  const spikeKey    = `${symbol}_scan_spike_count_4h`;
+  const emaVal      = String(features.emaSlope ?? 0);
+  const spikeVal    = String(features.spikeCount4h ?? 0);
+  Promise.all([
+    db.insert(platformStateTable).values({ key: emaKey, value: emaVal })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: emaVal, updatedAt: new Date() } }),
+    db.insert(platformStateTable).values({ key: spikeKey, value: spikeVal })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: spikeVal, updatedAt: new Date() } }),
+  ]).catch(() => {/* non-fatal */});
+
   const aiEnabled = stateMap["ai_verification_enabled"] === "true";
   const activeModes = getActiveModes(stateMap);
   const modesToProcess: TradingMode[] = activeModes.length > 0 ? activeModes : ["paper" as TradingMode];

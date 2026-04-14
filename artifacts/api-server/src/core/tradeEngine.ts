@@ -11,6 +11,15 @@ const MAX_OPEN_TRADES = 6;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
 const PROFIT_TRAILING_DRAWDOWN_PCT = 0.30;
 
+// Per-trade adverse-tick counter: incremented on each tick where price moved
+// against the position direction, reset on a favorable tick.
+// Mirrors the per-bar adverseCandleCount used in backtestRunner so the adaptive
+// trailing stop receives equivalent context in both live and replay paths.
+const liveAdverseCount = new Map<number, number>();
+
+// Last-seen price per trade: used to determine tick direction for adverse count.
+const livePrevPrice = new Map<number, number>();
+
 function classifyInstrumentFamily(symbol: string): "crash" | "boom" | "volatility" {
   if (symbol.startsWith("BOOM")) return "boom";
   if (symbol.startsWith("CRASH")) return "crash";
@@ -426,6 +435,17 @@ export async function manageOpenPositions(): Promise<void> {
   const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
   if (openTrades.length === 0) return;
 
+  // Read platformState once per cycle to get last-scan EMA slope and spike counts
+  // stored by the signal scanner. These give the adaptive trailing stop the same
+  // market context as the backtestRunner bar-level state machine.
+  let scanContextMap: Record<string, string> = {};
+  try {
+    const stateRows = await db.select().from(platformStateTable);
+    for (const r of stateRows) scanContextMap[r.key] = r.value;
+  } catch {
+    // Non-fatal — fall back to symbol defaults if platformState unavailable
+  }
+
   let fallbackClient;
   try {
     fallbackClient = await getDerivClientWithDbToken();
@@ -452,6 +472,24 @@ export async function manageOpenPositions(): Promise<void> {
         ? ((currentPrice - trade.entryPrice) / trade.entryPrice)
         : ((trade.entryPrice - currentPrice) / trade.entryPrice);
 
+      // ── Per-trade adverse tick tracking ──────────────────────────────────
+      // Mirrors backtestRunner's adverseCandleCount: count consecutive ticks
+      // where price moved against the position direction.
+      const prevPrice = livePrevPrice.get(trade.id) ?? currentPrice;
+      const priceMove = currentPrice - prevPrice;
+      const isFavorableTick = direction === "buy" ? priceMove >= 0 : priceMove <= 0;
+      const adverseCount = isFavorableTick
+        ? 0
+        : (liveAdverseCount.get(trade.id) ?? 0) + 1;
+      liveAdverseCount.set(trade.id, adverseCount);
+      livePrevPrice.set(trade.id, currentPrice);
+
+      // ── Last-scan EMA slope and spike count per symbol ────────────────────
+      // Stored by the signal scanner under ${symbol}_scan_ema_slope and
+      // ${symbol}_scan_spike_count_4h. Neutral defaults if not yet stored.
+      const emaSlope = parseFloat(scanContextMap[`${trade.symbol}_scan_ema_slope`] || "0");
+      const spikeCount4h = parseInt(scanContextMap[`${trade.symbol}_scan_spike_count_4h`] || "0", 10);
+
       const newPeak = direction === "buy"
         ? Math.max(trade.peakPrice ?? trade.entryPrice, currentPrice)
         : Math.min(trade.peakPrice ?? trade.entryPrice, currentPrice);
@@ -468,9 +506,9 @@ export async function manageOpenPositions(): Promise<void> {
         tpPrice: trade.tp,
         atr14Pct,
         instrumentFamily,
-        adverseCandleCount: 0,
-        emaSlope: 0,
-        spikeCountAdverse4h: 0,
+        adverseCandleCount: adverseCount,
+        emaSlope,
+        spikeCountAdverse4h: spikeCount4h,
       });
 
       let activeSl = trade.sl;
@@ -671,6 +709,10 @@ export async function openPositionV3(params: {
 }
 
 async function closePosition(tradeId: number, exitPrice: number, exitReason: string): Promise<void> {
+  // Clean up per-trade context state
+  liveAdverseCount.delete(tradeId);
+  livePrevPrice.delete(tradeId);
+
   const [trade] = await db.select().from(tradesTable).where(eq(tradesTable.id, tradeId));
   if (!trade) return;
 
