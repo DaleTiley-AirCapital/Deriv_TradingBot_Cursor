@@ -230,7 +230,7 @@ async function initDb(): Promise<void> {
   // ── Explicit candles schema verification (fail-loud before scheduler starts) ──
   const candlesColCheck = await db.execute(sql`
     SELECT column_name FROM information_schema.columns
-    WHERE table_name = 'candles' AND column_name IN ('source', 'is_interpolated')
+    WHERE table_schema = 'public' AND table_name = 'candles' AND column_name IN ('source', 'is_interpolated')
   `);
   const presentCols = (candlesColCheck.rows as Array<{ column_name: string }>).map(r => r.column_name);
   const missingCols = ["source", "is_interpolated"].filter(c => !presentCols.includes(c));
