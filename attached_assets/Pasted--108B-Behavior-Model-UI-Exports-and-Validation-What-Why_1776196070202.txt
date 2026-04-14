@@ -1,0 +1,246 @@
+#108B — Behavior Model UI, Exports, and Validation
+
+What & Why
+
+This is the UI/export/validation half of Task #108.
+
+It depends on #108A being complete first.
+
+The backend must already provide:
+	•	unified runtime behavior
+	•	behavior profile API
+	•	backtest using the unified live runtime
+
+This task exposes that capability in the UI and restores proper exports so the system becomes debuggable and usable.
+
+⸻
+
+Done looks like
+	•	Research has 3 tabs:
+	•	AI Analysis
+	•	Backtest
+	•	Behavior Model
+	•	Behavior Model tab works for all 4 active symbols
+	•	Backtest tab still works and uses the unified runtime endpoint/path
+	•	Backtest results can export:
+	•	trades
+	•	signals
+	•	Behavior Model can export:
+	•	profile JSON
+	•	Exports are real current results, not placeholders
+	•	No regression in existing Research functionality
+	•	TypeScript builds cleanly
+
+⸻
+
+Out of scope
+	•	redesigning AI Analysis
+	•	adding new symbols
+	•	full online learning UI
+	•	major cosmetic overhaul
+	•	engine/scoring redesign
+
+⸻
+
+NON-NEGOTIABLE RULES
+	•	DO NOT remove or break AI Analysis
+	•	DO NOT remove or break Backtest
+	•	Behavior Model must show real backend data
+	•	Backtest tab must still use the current V3 backtest route/path after #108A unification
+	•	Exports must download actual current results
+	•	Signals export must include blocked and allowed decisions, not only executed trades
+
+⸻
+
+Tasks
+
+1. Add Behavior Model tab to Research
+
+Extend the Research page tab navigation to include:
+	•	Behavior Model
+
+Research should now include:
+	•	AI Analysis
+	•	Backtest
+	•	Behavior Model
+
+Do not hide it in Diagnostics.
+
+⸻
+
+2. Build BehaviorModelTab UI
+
+The tab must allow:
+	•	symbol selection:
+	•	BOOM300
+	•	CRASH300
+	•	R_75
+	•	R_100
+	•	engine/strategy selection filtered by valid symbol strategies
+	•	run / refresh profile action
+	•	profile result rendering
+
+Results must show real backend profile fields, including:
+	•	event count
+	•	avg hold duration
+	•	MAE/MFE distributions
+	•	time-to-MFE
+	•	extension probability
+	•	failure/invalidation stats
+	•	recommended rolling memory window
+	•	recommended scan cadence
+	•	recommended development timing
+
+Show a clear no-data message if insufficient history exists.
+
+⸻
+
+3. Add Export Profile JSON button
+
+Wire a button that downloads the current behavior profile from:
+	•	GET /api/behavior/export/:symbol/:engine
+
+No fake exports.
+Only enable when a valid profile exists.
+
+⸻
+
+4. Keep Backtest tab working with unified runtime
+
+Do not redesign the Backtest tab unnecessarily.
+
+Confirm it still:
+	•	runs the V3 backtest endpoint/path
+	•	shows summary
+	•	shows trades
+	•	reflects the unified runtime from #108A
+
+⸻
+
+5. Add Export Signals JSON to Backtest
+
+Add an Export Signals JSON action to Backtest.
+
+This must export the signal history for the selected symbol/time range.
+
+Signals export must include:
+	•	blocked decisions
+	•	allowed decisions
+	•	executed decisions
+
+At minimum fields should include:
+	•	symbol
+	•	strategy/engine
+	•	direction
+	•	timestamp
+	•	score
+	•	composite/native score if available
+	•	allowed_flag
+	•	rejection_reason
+	•	mode
+	•	ai_verdict
+	•	execution_status
+	•	any other relevant fields already present
+
+⸻
+
+6. Add/verify signals export API endpoint
+
+If not already present, add a route such as:
+	•	GET /api/signals/export?symbol=...&startTs=...&endTs=...
+
+Return signal log rows for that symbol/range as JSON.
+
+Do not return mock data.
+This must represent actual signal history.
+
+⸻
+
+7. Keep trade export working and clear
+
+Backtest export must continue to support clean trade export.
+
+Trades export must include at minimum:
+	•	symbol
+	•	engine/strategy
+	•	direction
+	•	entry time / price
+	•	exit time / price
+	•	hold duration
+	•	MFE / MAE
+	•	pnl
+	•	exit reason
+	•	management state if available
+
+If JSON export already exists, keep it.
+If cleanup is needed, make it clean and consistent.
+
+⸻
+
+8. Clearly separate exports
+
+In the UI and implementation, clearly separate:
+	•	Signals export
+	•	Trades export
+	•	Behavior profile export
+
+Do not mix them together.
+Each export should represent one truth domain.
+
+⸻
+
+9. Validate all Research tabs
+
+Confirm end-to-end:
+	•	AI Analysis works
+	•	Backtest works
+	•	Behavior Model works
+	•	exports work
+	•	no Research regression
+
+⸻
+
+10. Validate all 4 active symbols in Behavior Model
+
+Run the profile for:
+	•	BOOM300
+	•	CRASH300
+	•	R_75
+	•	R_100
+
+Confirm the UI renders results correctly, or a clear insufficient-data message if needed.
+
+⸻
+
+Relevant files
+
+At minimum inspect/change:
+	•	artifacts/deriv-quant/src/pages/research.tsx
+	•	artifacts/api-server/src/routes/backtest.ts
+	•	artifacts/api-server/src/routes/signals.ts
+	•	artifacts/api-server/src/routes/index.ts
+
+And any small helper components needed for the new tab.
+
+⸻
+
+Required final response format
+
+Task #108B complete
+	1.	Files changed
+	2.	Research tab additions
+	3.	Behavior Model UI summary
+	4.	Backtest tab parity confirmation
+	5.	Signals export implementation
+	6.	Trades export confirmation
+	7.	Behavior profile export implementation
+	8.	Validation results
+	9.	TypeScript/build result
+	10.	Explicit confirmations:
+
+	•	Research now includes Behavior Model
+	•	Backtest still works using the unified runtime path
+	•	signals export includes blocked and allowed decisions
+	•	trades export works
+	•	behavior profile export works
+	•	no Research regression was introduced

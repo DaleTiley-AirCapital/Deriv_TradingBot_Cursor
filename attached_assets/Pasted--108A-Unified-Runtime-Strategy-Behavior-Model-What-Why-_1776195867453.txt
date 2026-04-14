@@ -1,0 +1,429 @@
+#108A — Unified Runtime + Strategy Behavior Model
+
+What & Why
+
+This is the backend foundation task.
+
+We must stop having:
+	•	one live trading system
+	•	one separate backtest system
+	•	one separate idea of hybrid management
+	•	one separate idea of signal maturity
+
+From this task onward there must be one runtime logic path:
+	•	Live = same runtime on live data
+	•	Backtest = same runtime on historical data
+
+The only difference allowed is:
+	•	broker execution vs simulated fills
+
+At the same time, we must build the Strategy Behavior Model for all 4 active symbols so the system can derive:
+	•	rolling memory window
+	•	scan cadence
+	•	trigger timing
+	•	expected hold duration
+	•	expected MAE/MFE
+	•	extension probability
+	•	invalidation behavior
+
+from actual historical behavior of each strategy.
+
+This task is backend only.
+
+⸻
+
+Symbols in scope
+
+Active symbols only:
+	•	BOOM300
+	•	CRASH300
+	•	R_75
+	•	R_100
+
+⸻
+
+Strategies in scope
+
+BOOM300
+	•	boom expansion / exhaustion continuation behavior currently supported by live V3
+
+CRASH300
+	•	crash expansion / reversal-up behavior
+	•	any currently live-supported secondary short logic only if already in V3
+
+R_75
+	•	reversal
+	•	continuation
+	•	breakout
+
+R_100
+	•	reversal
+	•	continuation
+	•	breakout
+
+⸻
+
+Done looks like
+	•	Live and backtest use the same signal path
+	•	Live and backtest use the same allocator allow/block path
+	•	Live and backtest use the same trade-management path
+	•	No separate backtest-only exit model remains
+	•	A behavior modeling backend exists for all 4 active symbols and their valid engines
+	•	Behavior profiles are derived from actual historical replay of the unified runtime
+	•	Behavior profiles return:
+	•	event count
+	•	average hold duration
+	•	MAE/MFE distributions
+	•	time-to-MFE
+	•	extension probability
+	•	failure/invalidation behavior
+	•	recommended rolling memory window
+	•	recommended scan cadence
+	•	API endpoints exist for:
+	•	build/refresh profile
+	•	fetch profile
+	•	export profile JSON
+	•	Live outcome scaffolding exists so actual live trades/signals can later refine the model
+	•	TypeScript builds cleanly
+	•	Live scheduler still boots and runs
+
+⸻
+
+Out of scope
+	•	UI work
+	•	Excel/CSV export
+	•	Full online learning / drift engine
+	•	Changing engine-native scoring formulas
+	•	Changing trading thresholds
+	•	Adding new symbols
+	•	Cosmetic refactors
+	•	Legacy V2 backtest engine
+
+⸻
+
+NON-NEGOTIABLE RULES
+	•	DO NOT break the live scheduler
+	•	DO NOT break the live trade path
+	•	DO NOT remove or rename the current V3 backtest endpoint if the UI depends on it
+	•	DO NOT keep a separate backtest-only trade-management model
+	•	DO NOT build behavior profiles from an independent research-only tagging logic that differs from live
+	•	DO NOT let watched candidates open trades in a candle-by-candle spam manner
+	•	FAIL LOUD if parity cannot be achieved cleanly
+
+⸻
+
+Tasks
+
+1. Audit and document all live/backtest divergences
+
+Review the real current paths and list every divergence between:
+	•	signal generation
+	•	score handling
+	•	allocator gating
+	•	trade admission
+	•	TP/SL generation
+	•	breakeven logic
+	•	trailing logic
+	•	timeout logic
+	•	one-open-trade-per-symbol logic
+	•	signal maturity / watch-mode execution
+
+At minimum inspect:
+	•	artifacts/api-server/src/infrastructure/scheduler.ts
+	•	artifacts/api-server/src/core/tradeEngine.ts
+	•	artifacts/api-server/src/core/hybridTradeManager.ts
+	•	artifacts/api-server/src/core/backtest/backtestRunner.ts
+	•	artifacts/api-server/src/core/portfolioAllocatorV3.ts
+	•	related unified runtime files if introduced
+
+This divergence list must be included in the final response.
+
+⸻
+
+2. Extract a shared runtime decision/execution layer
+
+Create a shared core runtime module that both live and historical replay use.
+
+This shared layer must handle:
+	•	feature evaluation
+	•	engine scoring
+	•	coordinator / winner selection
+	•	allocator allow/block decision
+	•	signal state progression
+	•	trade setup
+	•	trade management state transitions
+	•	close conditions
+
+It must support:
+	•	live
+	•	historical_simulation
+
+But the logic must be shared.
+
+No backtest-only execution behavior.
+
+⸻
+
+3. Refactor historical replay to use the exact live runtime path
+
+Replace the current divergent backtest flow so that historical replay uses:
+	•	same signal path
+	•	same allocator allow/block logic
+	•	same trade-admission logic
+	•	same trade-management logic
+
+The only acceptable difference is:
+	•	broker execution is simulated instead of sent live
+
+No synthetic leg1 / hard-SL / MFE model may remain if live does not use that exact same logic.
+
+⸻
+
+4. Unify trade-management logic
+
+If needed, extract the live trade-management logic into shared pure modules so that:
+	•	live calls it with live market updates
+	•	historical replay calls it bar-by-bar
+
+This shared logic must include:
+	•	SL behavior
+	•	TP behavior
+	•	breakeven promotion
+	•	trailing behavior
+	•	timeout/expiry behavior
+	•	close-condition evaluation
+
+After this task, there must not be:
+	•	one trade manager for live
+	•	another different one for backtest
+
+⸻
+
+5. Historical replay must use allocator gating
+
+Backtest may simulate fills, but it must NOT bypass:
+	•	allocator allow/block logic
+	•	mode-specific gating
+	•	trade admission controls
+
+Historical replay must answer:
+“What would the live system have done on this historical data?”
+
+That means it must respect the same allow/block path as live.
+
+⸻
+
+6. Enforce and document one-open-trade-per-symbol rule
+
+If V3 intends one open trade per symbol at a time, enforce that consistently in both:
+	•	live runtime
+	•	historical replay
+
+If the current intended rule is different, document the actual rule clearly and make both paths match it.
+
+Do not allow backtest and live to differ here.
+
+⸻
+
+7. Build the behavior event capture layer from unified replay
+
+Build the behavior modeling pipeline from the outputs of the unified runtime.
+
+This means the profile must be built from:
+	•	candidate detections
+	•	blocked/allowed states
+	•	executed trades
+	•	post-entry candle behavior
+	•	management path
+	•	exit path
+
+Do NOT build it from a separate disconnected tagger that could drift from live logic.
+
+You may still create helper modules for event tagging, but they must be driven by the same runtime outputs and same engine definitions.
+
+⸻
+
+8. Build lifecycle profiler for each symbol-strategy
+
+For each valid strategy on each symbol, profile the full lifecycle from historical replay:
+
+Before entry
+	•	lead-in duration
+	•	setup build time
+	•	pattern shape before trigger
+	•	strengthening / weakening behavior
+
+During trade
+	•	MAE path
+	•	MFE path
+	•	hold duration
+	•	time to first meaningful move
+	•	time to peak
+	•	retracements during move
+	•	whether move is fast / slow / stepped / explosive
+
+After close / after peak
+	•	whether extension continued
+	•	whether it mean-reverted
+	•	whether runner behavior existed
+	•	whether re-entry followed
+	•	whether trailing would have improved outcome
+
+⸻
+
+9. Derive per-symbol, per-strategy behavior profiles
+
+Aggregate the profiled events into a data-derived behavior model for each symbol-strategy.
+
+At minimum include:
+	•	event count
+	•	average hold bars
+	•	MAE distributions (p25/p50/p75/p90)
+	•	MFE distributions (p25/p50/p75/p90)
+	•	time-to-MFE distributions
+	•	failure/invalidation stats
+	•	extension probability after initial success
+	•	recommended rolling memory window
+	•	recommended scan cadence
+	•	recommended expected development timing
+
+No hardcoded assumptions.
+
+⸻
+
+10. Derive rolling memory windows from historical behavior
+
+For each symbol-strategy, derive the rolling memory horizon the live system should analyze.
+
+This must be strategy-specific.
+
+Examples:
+	•	reversal may need longer structural memory
+	•	continuation may need shorter trend memory
+	•	breakout may need compression/release memory
+
+Do not use one global memory size.
+
+⸻
+
+11. Derive scan cadence from historical behavior
+
+For each symbol-strategy, derive the recommended live evaluation cadence.
+
+This should reflect:
+	•	how quickly the setup matures
+	•	how quickly valid trigger conditions strengthen
+	•	how much noise exists before true activation
+
+Do not let all strategies inherit the same scan cadence if the data says otherwise.
+
+⸻
+
+12. Fix watch-mode execution discipline
+
+Current live behavior suggests watched candidates can be re-evaluated too aggressively and open trades too early.
+
+Review watch-mode behavior and ensure:
+	•	watched candidates may be rescored more frequently
+	•	but execution only happens when the candidate is near a historically valid trigger activation state
+	•	not on every minute-level fluctuation
+
+This must use the derived behavior model:
+	•	rolling memory horizon
+	•	trigger strengthening profile
+	•	expected setup maturation
+
+The system must stop behaving candle-by-candle noisy once a symbol enters watch mode.
+
+⸻
+
+13. Add behavior profile API routes
+
+Add backend routes:
+	•	POST /api/behavior/profile
+	•	build or refresh profile for symbol + engine/strategy
+	•	GET /api/behavior/profile/:symbol/:engine
+	•	fetch existing profile
+	•	GET /api/behavior/export/:symbol/:engine
+	•	export profile JSON
+
+Keep route design simple and V3-consistent.
+
+⸻
+
+14. Add live outcome scaffold
+
+Add lightweight storage so live trades/signals can later refine the behavior model.
+
+At minimum capture enough to support future updates:
+	•	signal context
+	•	entry
+	•	exit
+	•	realized MAE/MFE if available
+	•	realized duration
+	•	exit reason
+
+This can be:
+	•	a minimal new table
+	•	or a careful extension of existing logging
+
+Keep it lightweight. Do not overbuild online learning now.
+
+⸻
+
+15. Validate no live regression
+
+Confirm:
+	•	live scheduler still runs
+	•	live system still scans
+	•	live system can still open/manage trades
+	•	current V3 routes continue working
+	•	V3 backtest route still works
+	•	new behavior endpoints work
+
+⸻
+
+Relevant files
+
+At minimum inspect/change:
+	•	artifacts/api-server/src/core/backtest/backtestRunner.ts
+	•	artifacts/api-server/src/core/backtest/featureSlice.ts
+	•	artifacts/api-server/src/core/tradeEngine.ts
+	•	artifacts/api-server/src/core/hybridTradeManager.ts
+	•	artifacts/api-server/src/core/portfolioAllocatorV3.ts
+	•	artifacts/api-server/src/core/engineRouterV3.ts
+	•	artifacts/api-server/src/core/engineRegistry.ts
+	•	artifacts/api-server/src/core/regimeEngine.ts
+	•	artifacts/api-server/src/infrastructure/scheduler.ts
+	•	artifacts/api-server/src/routes/backtest.ts
+	•	artifacts/api-server/src/routes/index.ts
+
+Touch additional files only if necessary.
+
+⸻
+
+Required final response format
+
+Task #108A complete
+	1.	Files changed
+	2.	Live/backtest divergences removed
+	3.	Shared runtime layer summary
+	4.	Unified trade-management summary
+	5.	Allocator parity confirmation
+	6.	One-open-trade-per-symbol rule confirmation
+	7.	Strategy behavior model implementation summary
+	8.	Symbols/strategies covered
+	9.	Rolling memory derivation summary
+	10.	Scan cadence derivation summary
+	11.	Watch-mode execution discipline fix
+	12.	Behavior API routes added
+	13.	Live outcome scaffold summary
+	14.	Validation results
+	15.	TypeScript/build result
+	16.	Explicit confirmations:
+
+	•	live and backtest now use the same runtime logic
+	•	no backtest-only hardcoded trade-management path remains
+	•	backtest respects allocator allow/block logic
+	•	behavior profiles exist for all 4 active symbols
+	•	watch-mode no longer behaves like minute-level signal spam
