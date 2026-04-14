@@ -550,7 +550,8 @@ function BacktestTab() {
     const startTs = Math.floor(new Date(startDate + "T00:00:00Z").getTime() / 1000);
     const endTs   = Math.floor(new Date(endDate   + "T23:59:59Z").getTime() / 1000);
     const params = new URLSearchParams({ startTs: String(startTs), endTs: String(endTs) });
-    const isAllSymbols = !symbol || symbol === "ALL";
+    // "all" is the sentinel value for all-symbols mode; do not send it as a symbol filter
+    const isAllSymbols = !symbol || symbol === "all";
     if (!isAllSymbols) params.set("symbol", symbol);
     try {
       const data = await apiFetch(`signals/export?${params.toString()}`);
@@ -649,15 +650,19 @@ function BacktestTab() {
                 <Download className="w-3.5 h-3.5" />
                 Export Trades JSON
               </button>
-              <button
-                onClick={exportSignals}
-                className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
-                title="Export all live signal decisions (allowed + blocked + executed) for the selected date range from the signal log"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Export Signals JSON
-              </button>
             </>
+          )}
+
+          {/* Signals export is gated only on valid date inputs — includes blocked + allowed, not just executed trades */}
+          {startDate && endDate && (
+            <button
+              onClick={exportSignals}
+              className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
+              title="Export all live signal decisions (allowed + blocked + executed) for the selected date range from the signal log"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Export Signals JSON
+            </button>
           )}
 
           {running && (
@@ -855,6 +860,7 @@ function EngineProfileCard({ ep }: { ep: EngineProfile }) {
 function BehaviorModelTab() {
   const behaviorSymbols = Object.keys(BEHAVIOR_SYMBOL_ENGINES);
   const [symbol, setSymbol] = useState("BOOM300");
+  const [engine, setEngine] = useState(BEHAVIOR_SYMBOL_ENGINES["BOOM300"][0]);
   const [loading, setLoading] = useState(false);
   const [building, setBuilding] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -862,6 +868,14 @@ function BehaviorModelTab() {
   const [err, setErr] = useState<string | null>(null);
   const [buildMsg, setBuildMsg] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function handleSymbolChange(sym: string) {
+    setSymbol(sym);
+    setEngine(BEHAVIOR_SYMBOL_ENGINES[sym][0]);
+    setBuildMsg(null);
+    setErr(null);
+    setProfile(null);
+  }
 
   useEffect(() => {
     fetchCachedProfile(symbol);
@@ -876,7 +890,7 @@ function BehaviorModelTab() {
       const d = await apiFetch(`behavior/profile/${sym}`);
       setProfile(d as BehaviorProfileSummary);
     } catch {
-      // 404 = no profile yet — not an error to display loudly
+      // 404 = no profile yet — shown as empty state, not an error
     } finally {
       setLoading(false);
     }
@@ -908,9 +922,9 @@ function BehaviorModelTab() {
   function exportProfileJson() {
     if (!profile) return;
     const ts = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
-    fetch(`${BASE}api/behavior/export/${symbol}`)
+    fetch(`${BASE}api/behavior/export/${symbol}/${engine}`)
       .then(r => r.json())
-      .then(data => downloadBehaviorJson(data, `behavior-profile-${symbol}-${ts}.json`))
+      .then(data => downloadBehaviorJson(data, `behavior-profile-${symbol}-${engine}-${ts}.json`))
       .catch(() => {});
   }
 
@@ -924,6 +938,8 @@ function BehaviorModelTab() {
     URL.revokeObjectURL(url);
   }
 
+  const engines = BEHAVIOR_SYMBOL_ENGINES[symbol] ?? [];
+
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
@@ -932,7 +948,7 @@ function BehaviorModelTab() {
           <p className="text-xs text-muted-foreground leading-relaxed">
             Derives per-engine behavioral profiles from historical backtest replay using the live V3 runtime.
             Shows MFE/MAE distributions, time-to-peak, extension probability, signal gating, and runtime guidance
-            (scan cadence, memory window). Run Profile to rebuild from the last 90 days.
+            (scan cadence, memory window). Select a symbol and engine, then run to rebuild from the last 90 days.
           </p>
         </div>
 
@@ -941,10 +957,21 @@ function BehaviorModelTab() {
             <span className="text-xs text-muted-foreground">Symbol:</span>
             <select
               value={symbol}
-              onChange={e => { setSymbol(e.target.value); setBuildMsg(null); setErr(null); }}
+              onChange={e => handleSymbolChange(e.target.value)}
               className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
               {behaviorSymbols.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">Engine:</span>
+            <select
+              value={engine}
+              onChange={e => setEngine(e.target.value)}
+              className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+            >
+              {engines.map(eng => <option key={eng} value={eng}>{eng}</option>)}
             </select>
           </div>
 
@@ -961,6 +988,7 @@ function BehaviorModelTab() {
             <button
               onClick={exportProfileJson}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
+              title={`Export behavioral profile for ${symbol} / ${engine}`}
             >
               <Download className="w-3.5 h-3.5" />
               Export Profile JSON
