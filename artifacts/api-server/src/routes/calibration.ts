@@ -211,7 +211,7 @@ router.get("/calibration/aggregate/:symbol", async (req, res): Promise<void> => 
 
   try {
     const aggregate = await buildCalibrationAggregate(symbol);
-    res.json(aggregate);
+    res.json({ ok: true, ...aggregate });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Aggregate build failed";
     res.status(500).json({ error: message });

@@ -58,40 +58,46 @@ export async function runExtractionPass(
   const capturable    = triggerOnlyRows.map(r => r.captureablePct);
 
   // Honest fit: a move is "captured" only if BOTH precursor fired AND trigger pass ran.
-  // This mirrors the same definition used in calibrationAggregator.ts.
-  const triggerMoveIdSet = new Set(triggerOnlyRows.map(r => r.moveId));
-  const captured  = precursorRows.filter(r => r.engineWouldFire && triggerMoveIdSet.has(r.moveId)).length;
-  const fitScore  = moves.length > 0 ? captured / moves.length : 0;
-  // Keep engineFired separately for prompt context (how many precursors would fire alone)
-  const engineFired = precursorRows.filter(r => r.engineWouldFire).length;
+  // Use DISTINCT moveIds (Set) so duplicate rows from force=true reruns never inflate counts.
+  const triggerMoveIdSet    = new Set(triggerOnlyRows.map(r => r.moveId));
+  const precursorFiredIdSet = new Set(precursorRows.filter(r => r.engineWouldFire).map(r => r.moveId));
+  const capturedIdSet       = new Set([...precursorFiredIdSet].filter(mid => triggerMoveIdSet.has(mid)));
+  const captured            = capturedIdSet.size;
+  const fitScore            = moves.length > 0 ? captured / moves.length : 0;
+  // engineFired = distinct moveIds where precursor alone would fire (for prompt context)
+  const engineFired         = precursorFiredIdSet.size;
 
   const byType: Record<string, number> = {};
   for (const m of moves) byType[m.moveType] = (byType[m.moveType] ?? 0) + 1;
 
-  // Comprehensive miss-reason aggregation across three paths:
-  //   1. Precursor miss: engine would NOT fire (missedReason from precursor pass)
-  //   2. Trigger gap: precursor fired but no trigger row ran (trigger pass never executed)
-  //   3. Trigger failure: trigger ran but captureablePct == 0 (move was not capturable)
+  // Comprehensive miss-reason aggregation — three paths, all deduped by moveId.
+  //   1. Precursor miss: engine would NOT fire (missedReason from AI)
+  //   2. Trigger gap: precursor fired but no trigger row ran
+  //   3. Trigger failure: trigger ran but captureablePct == 0
+  // precursorFiredIdSet already deduped above.
   const reasonMap: Record<string, number> = {};
 
-  // Path 1 — Precursor-level misses (explicit missedReason from AI)
+  // Path 1 — Precursor-level misses: one reason per moveId (first seen)
+  const seenMissedIds = new Set<number>();
   for (const p of precursorRows) {
-    if (!p.engineWouldFire && p.missedReason) {
+    if (!p.engineWouldFire && p.missedReason && !seenMissedIds.has(p.moveId)) {
+      seenMissedIds.add(p.moveId);
       reasonMap[p.missedReason] = (reasonMap[p.missedReason] ?? 0) + 1;
     }
   }
 
-  // Path 2 — Precursor fired but no trigger row exists → trigger pass was never run
-  const precursorFiredMoveIds = new Set(precursorRows.filter(r => r.engineWouldFire).map(r => r.moveId));
-  const triggerGapCount = [...precursorFiredMoveIds].filter(mid => !triggerMoveIdSet.has(mid)).length;
+  // Path 2 — Precursor fired but no trigger row exists
+  const triggerGapCount = [...precursorFiredIdSet].filter(mid => !triggerMoveIdSet.has(mid)).length;
   if (triggerGapCount > 0) {
     reasonMap["trigger_pass_not_run"] = (reasonMap["trigger_pass_not_run"] ?? 0) + triggerGapCount;
   }
 
-  // Path 3 — Trigger ran but captureablePct == 0 (move was technically unreachable)
-  const triggerFailCount = triggerOnlyRows.filter(r => precursorFiredMoveIds.has(r.moveId) && r.captureablePct === 0).length;
-  if (triggerFailCount > 0) {
-    reasonMap["trigger_zero_captureable"] = (reasonMap["trigger_zero_captureable"] ?? 0) + triggerFailCount;
+  // Path 3 — Trigger ran but captureablePct == 0 (deduped by moveId via Set)
+  const triggerZeroIds = new Set(
+    triggerOnlyRows.filter(r => precursorFiredIdSet.has(r.moveId) && r.captureablePct === 0).map(r => r.moveId),
+  );
+  if (triggerZeroIds.size > 0) {
+    reasonMap["trigger_zero_captureable"] = (reasonMap["trigger_zero_captureable"] ?? 0) + triggerZeroIds.size;
   }
 
   const missReasons: Array<{ reason: string; count: number }> = Object.entries(reasonMap)
@@ -241,11 +247,14 @@ Respond with ONLY valid JSON:
     const typeMoves   = moves.filter(m => m.moveType === mt);
     const typePcts    = typeMoves.map(m => m.movePct * 100);
     const typeHours   = typeMoves.map(m => m.holdingMinutes / 60);
-    // Honest fit per move-type: both precursor fired AND trigger ran for that move
-    const typeMoveIdSet = new Set(typeMoves.map(m => m.id));
-    const typeTriggered = new Set(triggerOnlyRows.filter(r => typeMoveIdSet.has(r.moveId)).map(r => r.moveId));
-    const typeCaptured  = precursorRows.filter(r => typeMoveIdSet.has(r.moveId) && r.engineWouldFire && typeTriggered.has(r.moveId)).length;
-    const typeFitScore  = typeMoves.length > 0 ? typeCaptured / typeMoves.length : 0;
+    // Honest fit per move-type: both precursor fired AND trigger ran for that move.
+    // Use distinct moveIds to prevent inflation from force=true reruns.
+    const typeMoveIdSet  = new Set(typeMoves.map(m => m.id));
+    const typeTriggered  = new Set(triggerOnlyRows.filter(r => typeMoveIdSet.has(r.moveId)).map(r => r.moveId));
+    // precursorFiredIdSet already deduped globally — intersect with this type's move IDs
+    const typeFiredSet   = new Set([...precursorFiredIdSet].filter(mid => typeMoveIdSet.has(mid)));
+    const typeCaptured   = [...typeFiredSet].filter(mid => typeTriggered.has(mid)).length;
+    const typeFitScore   = typeMoves.length > 0 ? typeCaptured / typeMoves.length : 0;
 
     await db
       .insert(strategyCalibrationProfilesTable)
