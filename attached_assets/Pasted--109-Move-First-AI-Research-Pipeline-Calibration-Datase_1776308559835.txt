@@ -1,0 +1,727 @@
+#109 — Move-First AI Research Pipeline, Calibration Dataset, and Engine/Trade-Management Feeddown
+
+## What & Why
+The current “Behavior Model” is answering the wrong question.
+
+Right now the code in:
+- `artifacts/api-server/src/routes/behavior.ts`
+- `artifacts/api-server/src/core/backtest/behaviorProfiler.ts`
+- `artifacts/api-server/src/core/backtest/behaviorCapture.ts`
+is profiling the events produced by the current engines/backtest runtime.
+
+That means it is effectively asking:
+- “what happens after the engine fires?”
+
+But that is NOT what we want.
+
+We want a move-first calibration system that asks:
+- “what are the major, tradeable moves in the historical data?”
+- “which of those are breakout / continuation / reversal?”
+- “what did the market look like before they started?”
+- “how did they behave during the move?”
+- “what trade-management pattern would have extracted the most capital?”
+- “what engine entry rules capture those moves best with the highest achievable selectivity?”
+
+This task builds that layer.
+
+IMPORTANT:
+- AI is RESEARCH ONLY
+- AI must NOT run in the live trading loop
+- AI must NOT decide live entries/exits in real time
+- AI must be used offline / asynchronous / batch-only to enrich calibration data and derive strategy intelligence
+
+This task must repurpose / replace the current behavior-model approach so it becomes:
+- move-first
+- strategy-first
+- profitability-first
+- calibration data that feeds DOWN into engines, scoring, trade health, and trade management
+
+---
+
+## CORE OBJECTIVE
+
+Build a multi-pass AI research pipeline that:
+
+1. identifies the major historical moves in the data first
+2. labels each move by strategy family:
+   - breakout
+   - continuation
+   - reversal
+3. runs multiple AI enrichment passes over each move and its lead-in
+4. builds a structured calibration dataset
+5. derives the best engine calibration / scoring / trade-management path from that dataset
+6. exposes results in the UI
+7. exports the results
+8. makes it easy to add more symbols later
+
+---
+
+## TARGETS
+
+### Optimization targets
+The research system should optimize toward:
+- only taking trades where expected extracted move is >= 5%
+- maximizing monthly simulated return, targeting >= 50% monthly if the data truly supports it
+- maximizing selectivity and move capture, not micro-signal frequency
+
+### Historical-fit target
+The system should aim to approach:
+- near-100% fit on the HISTORICAL MOVES IT FLAGS AS VALID TARGET MOVES
+
+Important:
+- do NOT fake 100%
+- do NOT report 100% unless the actual calibration result truly achieves it
+- do NOT overfit silently
+- always report actual best achieved fit honestly
+
+Meaning:
+The AI/calibration loop must keep refining until it either:
+- captures all flagged target moves with the strategy definition
+OR
+- can prove why some target moves are not consistently capturable under one coherent rule set
+
+The goal is:
+- find the best achievable historical profitability path
+- not generate pretty but fake results
+
+---
+
+## NON-NEGOTIABLE RULES
+
+### 1. AI is research-only
+AI must NOT be added to:
+- live trade loop
+- live entry approval
+- live exit approval
+- live signal verification
+
+AI is only for:
+- offline move labeling
+- offline precursor analysis
+- offline trade-behavior analysis
+- offline calibration
+- offline strategy/profile refinement
+
+### 2. Move-first, not signal-first
+The pipeline must detect moves first.
+It must NOT start by profiling current engine firings.
+
+### 3. Replace or repurpose current Behavior Model
+The current Behavior Model is based on replayed engine events.
+That logic must not remain the primary calibration model.
+
+You may keep parts of it as:
+- downstream validation
+- comparison layer
+- debug diagnostics
+
+But the new primary model must be move-first.
+
+### 4. No hardcoded TP/SL assumptions
+Trade behavior must be learned from the data.
+No fixed:
+- leg1 percentages
+- fixed trailing percentages
+- fixed hard stop percentages
+- fixed hold windows
+unless those are empirically derived and then stored as outputs
+
+### 5. The resulting dataset must feed DOWN into the system
+The output of this research pipeline must be usable by:
+- engine calibration
+- scoring refinement
+- trade opening logic
+- trade health monitoring
+- trade management logic
+
+### 6. Easy to add symbols later
+Do NOT make the pipeline hardcoded to only the current 4 symbols.
+Build it so additional symbols can be profiled with the same flow later.
+
+---
+
+# PART 1 — AUDIT CURRENT RESEARCH / MODEL CODE
+
+## T001 — Audit the current behavior/research path
+Inspect and document how the current model works today, including at minimum:
+
+- `artifacts/api-server/src/routes/behavior.ts`
+- `artifacts/api-server/src/core/backtest/behaviorProfiler.ts`
+- `artifacts/api-server/src/core/backtest/behaviorCapture.ts`
+- `artifacts/api-server/src/core/backtest/backtestRunner.ts`
+- any AI analysis route/job already present in the repo
+- any Research tab backend route that currently powers “AI Analysis”
+
+### Required outcome
+Document clearly:
+- what the current behavior model is deriving
+- why it is signal-first instead of move-first
+- which pieces can be reused
+- which pieces must be replaced
+- which pieces should become downstream validation only
+
+This summary must appear in the final response.
+
+---
+
+# PART 2 — NEW CALIBRATION DATASET LAYER
+
+## T002 — Add calibration tables
+Add a new calibration/research dataset layer in the DB.
+
+Suggested tables (or equivalent names):
+
+### A. `detected_moves`
+Stores the major historical moves we want to study.
+
+Required fields:
+- id
+- symbol
+- strategy_family_candidate
+- direction
+- move_start_ts
+- move_trigger_ts
+- move_peak_ts
+- move_end_ts
+- magnitude_pct
+- duration_bars
+- duration_minutes
+- quality_score
+- tradable_flag
+- detection_version
+- created_at
+- updated_at
+
+### B. `move_precursor_passes`
+Stores AI/code analysis of the lead-in before each move.
+
+Required fields:
+- id
+- move_id
+- pass_number
+- pass_type
+- window_start_ts
+- window_end_ts
+- input_summary_json
+- output_summary_json
+- extracted_patterns_json
+- confidence
+- model_name
+- created_at
+
+### C. `move_behavior_passes`
+Stores analysis of how the move behaves after entry.
+
+Required fields:
+- id
+- move_id
+- strategy_family
+- phase_name
+- behavior_summary_json
+- timing_summary_json
+- mae_mfe_summary_json
+- trade_management_clues_json
+- confidence
+- model_name
+- created_at
+
+### D. `strategy_calibration_profiles`
+Stores aggregated outputs by symbol + strategy.
+
+Required fields:
+- id
+- symbol
+- strategy_family
+- profile_version
+- move_count
+- target_move_threshold_pct
+- recommended_entry_model_json
+- recommended_scoring_model_json
+- recommended_memory_model_json
+- recommended_scan_model_json
+- recommended_trade_management_json
+- expected_hold_profile_json
+- expected_move_profile_json
+- expected_trade_health_profile_json
+- historical_fit_summary_json
+- profitability_summary_json
+- created_at
+- updated_at
+
+### E. `calibration_pass_runs`
+Stores full job runs and diagnostics.
+
+Required fields:
+- id
+- symbol
+- strategy_family
+- run_type
+- pass_count
+- status
+- started_at
+- completed_at
+- summary_json
+- notes
+
+Use equivalent schema names if you prefer, but the functional separation must exist.
+
+---
+
+# PART 3 — MOVE DETECTION (DETERMINISTIC, CODE-FIRST)
+
+## T003 — Build deterministic move detector
+Before AI does anything, code must identify the major historical moves in the dataset.
+
+This move detector must:
+- operate on raw/enriched candle data already in the DB
+- identify significant tradeable moves
+- suppress micro noise
+- prefer moves that are:
+  - large enough
+  - structured enough
+  - long enough / clear enough
+  - realistically extractable
+
+This move detector must be configurable by:
+- symbol
+- strategy family
+- minimum magnitude
+- minimum cleanliness / quality
+
+### Important
+This is NOT the live engine.
+It is the historical move finder.
+
+The output of this step populates `detected_moves`.
+
+---
+
+## T004 — Label detected moves into strategy families
+For each detected move, assign:
+- breakout
+- continuation
+- reversal
+- unknown / discard if unclear
+
+This first labeling pass can be deterministic / rule-based, but it must be stored so later AI passes can confirm or refine it.
+
+---
+
+## T005 — Add move-quality ranking
+Each detected move should be ranked for quality/tradability.
+
+The ranking must help separate:
+- major clean moves we WANT
+from
+- messy or marginal moves we do NOT want the live engines trading
+
+This ranking should be stored in `detected_moves.quality_score`.
+
+---
+
+# PART 4 — AI MULTI-PASS RESEARCH PIPELINE
+
+## T006 — Build AI pass runner
+Build an asynchronous research job runner that can process moves in batches using GPT-4o API (or the currently configured OpenAI model), outside the trading loop.
+
+The AI runner must:
+- split work into multiple passes
+- store every pass result in the DB
+- support reruns
+- support partial reruns
+- be resumable
+- avoid one giant request that times out
+
+---
+
+## T007 — Pass 1: Precursor discovery
+For each detected move, analyze the candles BEFORE the move.
+
+The goal:
+- identify recurring precursor structures
+- identify setup-building behavior
+- identify what differentiates strong moves from false starts
+- identify timeframe / duration of buildup
+- identify whether precursor pattern matures early, late, suddenly, or gradually
+
+Output should include:
+- precursor pattern summary
+- setup maturity clues
+- candidate feature relationships
+- lead-in timing clues
+
+Store results in `move_precursor_passes`.
+
+---
+
+## T008 — Pass 2: Trigger-zone analysis
+For each move, identify the best trigger zone.
+
+The goal:
+- determine where the move should actually have been entered
+- identify how early is too early
+- identify what “fully matured setup” looks like
+- identify what confirmation should exist at activation time
+- determine how much rolling memory is needed to see it properly
+
+This pass should specifically target:
+- fewer signals
+- higher quality signals
+- later but better activation if needed
+- avoiding micro re-entries on the same move
+
+Store results in `move_precursor_passes` or a dedicated trigger pass field.
+
+---
+
+## T009 — Pass 3: In-move behavior analysis
+For each move, analyze behavior DURING the move.
+
+The goal:
+- identify how the move normally develops after entry
+- whether it accelerates or steps
+- what normal retracements look like
+- what adverse movement is normal before success
+- how long the move normally takes to mature
+- when trailing would help vs hurt
+- when pyramiding would help
+
+This pass must produce the clues needed for:
+- trade health
+- dynamic TP/SL
+- dynamic hold logic
+- dynamic trailing / protection
+- pyramid add logic
+
+Store results in `move_behavior_passes`.
+
+---
+
+## T010 — Pass 4: Best extraction path
+For each strategy_family + symbol, compare multiple extraction paths across the detected moves.
+
+The goal:
+- determine what trade management extracts the most capital from the targeted moves
+- not just highest win rate
+- but highest practical profitability path
+
+This pass must test and compare:
+- more selective entries
+- different entry timing models
+- different invalidation models
+- different hold-time models
+- different runner logic
+- different protection logic
+- pyramiding suitability
+
+### Important
+This is NOT live trading.
+This is offline calibration comparison.
+
+The output must estimate:
+- expected trade profitability
+- expected monthly return
+- expected annualized return
+- win rate
+- average extracted move
+- capital efficiency
+- drawdown implications
+
+Store aggregated results in `strategy_calibration_profiles`.
+
+---
+
+## T011 — Multi-pass refinement loop
+This is critical.
+
+The calibration system must not stop after one pass.
+
+It must keep refining per symbol + strategy until:
+- the strategy captures all or nearly all target moves it is supposed to capture
+- historical fit is maximized honestly
+- profitability path is clearly ranked
+- the best calibration profile is identified
+
+### Important
+Do NOT fake 100%.
+Do NOT force impossible results.
+But DO keep iterating until the best achievable fit and profitability path is found and explicitly reported.
+
+The final output must say something like:
+- target moves identified
+- target moves captured by best calibration
+- missed moves and why
+- overfit risk
+- best profitability path
+- recommended live calibration
+
+---
+
+# PART 5 — FEEDDOWN INTO ENGINES / SCORING / TRADE MANAGEMENT
+
+## T012 — Build calibration-to-engine feed layer
+The output profiles must feed into engine calibration.
+
+At minimum, the calibration profile must be able to provide:
+- recommended entry timing model
+- recommended strategy memory window
+- recommended scan cadence
+- recommended minimum quality rules
+- recommended scoring emphasis
+- recommended trade health logic
+- recommended trade management logic
+
+This feed layer must be structured so current engines can consume it later.
+
+---
+
+## T013 — Build calibration-to-scoring feed layer
+The calibration profile must help define:
+- what a high-quality setup looks like
+- which dimensions matter most
+- what strong precursor maturity looks like
+- what strong trigger quality looks like
+- what weak/noisy micro-move patterns look like
+
+This is what should eventually refine scoring.
+
+Do NOT rewrite scoring formulas in this task.
+Just create the feeddown structure.
+
+---
+
+## T014 — Build calibration-to-trade-health feed layer
+The calibration profile must feed into live trade-health expectations:
+
+For an open trade, the system should later be able to ask:
+- is this move behaving like a healthy version of this setup?
+- is it early but normal?
+- is it weak and likely failing?
+- is it extending unusually well?
+- is a pyramid add justified?
+- is the move mature and near exhaustion?
+
+Again:
+Do NOT fully replace live trade management in this task.
+Build the feeddown layer and output schema so it can be consumed next.
+
+---
+
+# PART 6 — UI EXPOSURE
+
+## T015 — Replace or repurpose the current Behavior Model tab
+The current Behavior Model tab is not giving the user what is needed.
+
+It must be replaced or heavily repurposed so it becomes a **Move Calibration** tab.
+
+Suggested name:
+- `Move Calibration`
+or
+- `Strategy Calibration`
+
+### It must show:
+- detected move count
+- target move set by symbol + strategy
+- precursor analysis summary
+- trigger-zone summary
+- in-move behavior summary
+- best extraction path summary
+- recommended:
+  - memory window
+  - scan cadence
+  - entry model
+  - trade management model
+- historical fit summary
+- profitability summary
+
+This must be understandable and actionable.
+
+Not just raw event stats.
+
+---
+
+## T016 — Add run controls in UI
+The UI must let the user:
+- choose symbol
+- choose strategy family
+- choose run scope:
+  - detect moves only
+  - run precursor passes
+  - run behavior passes
+  - run full calibration
+- rerun specific passes
+- view pass history/logs
+
+This is important because the process may take many passes.
+
+---
+
+## T017 — Add profile comparison UI
+The UI must let the user compare:
+- current engine behavior
+vs
+- target move behavior
+vs
+- recommended calibration output
+
+That is how we will see where the system is missing the bus.
+
+---
+
+# PART 7 — EXPORTS
+
+## T018 — Export calibration data
+Add export support for:
+- detected moves
+- precursor pass outputs
+- behavior pass outputs
+- final calibration profile
+- comparison summary
+
+Formats:
+- JSON mandatory
+- CSV/Excel if easy
+
+---
+
+## T019 — Keep signals/trades export available
+Do NOT remove the working signals/trades exports.
+We still need those for debugging.
+
+But now also add calibration exports so the system becomes actually diagnosable.
+
+---
+
+# PART 8 — INCREMENTAL LIVE LEARNING SCAFFOLD
+
+## T020 — Add live-to-calibration ingestion scaffold
+As live trades and signals occur, the system must be able to append them into the calibration dataset later.
+
+This task only needs to create the scaffold:
+- enough storage / linkage so future passes can compare:
+  - historical move behavior
+  - current live realized behavior
+
+Do NOT build full online learning yet.
+Just prepare for it.
+
+---
+
+# PART 9 — VALIDATION
+
+## T021 — Validate move-first operation
+Prove the new calibration pipeline is move-first, not signal-first.
+
+Show explicitly:
+- detected moves are created before AI passes
+- AI passes operate on detected moves
+- final profiles derive from move dataset, not only current engine firings
+
+---
+
+## T022 — Validate all 4 active symbols
+Run the pipeline for:
+- BOOM300
+- CRASH300
+- R_75
+- R_100
+
+At least enough to prove the flow works end-to-end.
+
+---
+
+## T023 — Validate output usefulness
+Confirm the UI now answers:
+- what moves are we targeting?
+- what does the precursor look like?
+- what is the best trigger zone?
+- what is the best extraction path?
+- what are the recommended memory / cadence / management settings?
+- what monthly/annual profitability path is best according to the calibration?
+
+---
+
+## T024 — Validate honest reporting
+The system must honestly report:
+- target move count
+- captured move count
+- missed move count
+- best achieved fit
+- best achieved profitability path
+
+No fake 100%.
+No fake 50% monthly return claim unless the calibration actually supports it.
+
+---
+
+# EXPLICIT OUT OF SCOPE
+
+Do NOT in this task:
+- put AI into the live trading loop
+- rewrite all live engines immediately
+- rewrite scoring formulas immediately
+- replace live trade manager immediately
+- add new retail symbols beyond the current 4
+- build full autonomous online learning
+- do cosmetic UI-only changes without backend substance
+
+This task is about:
+- move-first calibration
+- AI research passes
+- calibration dataset
+- actionable calibration output
+- UI exposure
+- export
+
+---
+
+# RELEVANT EXISTING CODE TO INSPECT
+
+At minimum inspect:
+- `artifacts/api-server/src/routes/behavior.ts`
+- `artifacts/api-server/src/core/backtest/behaviorProfiler.ts`
+- `artifacts/api-server/src/core/backtest/behaviorCapture.ts`
+- `artifacts/api-server/src/core/backtest/backtestRunner.ts`
+- any AI analysis route/job currently backing the Research tab
+- `artifacts/deriv-quant/src/pages/research.tsx`
+
+And repurpose/replace the current behavior modeling approach appropriately.
+
+---
+
+# DONE CRITERIA
+
+This task is complete only if:
+1. move detection exists and populates a move dataset
+2. AI multi-pass calibration runs against detected moves
+3. the current signal-first behavior model is no longer the primary calibration model
+4. calibration profiles are produced per symbol + strategy
+5. profiles include actionable engine/scoring/trade-management recommendations
+6. the UI exposes this clearly
+7. exports work
+8. the system reports best-fit / best-profitability path honestly
+9. TypeScript/build passes
+10. Replit returns the final report in the exact structure below
+
+---
+
+## REQUIRED FINAL RESPONSE FORMAT
+
+### Task #109 complete
+1. Files changed
+2. Current behavior-model audit summary
+3. New calibration tables added
+4. Deterministic move detection summary
+5. AI pass pipeline summary
+6. Passes implemented and what each does
+7. Calibration profile output summary
+8. UI changes summary
+9. Export implementation summary
+10. Validation results
+11. TypeScript/build result
+12. Explicit confirmations:
+   - AI is research-only and not in the live trading loop
+   - calibration is now move-first, not signal-first
+   - current behavior model is no longer the primary calibration model
+   - calibration outputs feed down into engines/scoring/trade-health/trade-management
+   - the system reports actual best achieved fit and profitability honestly
