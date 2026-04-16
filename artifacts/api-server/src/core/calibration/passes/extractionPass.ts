@@ -23,6 +23,8 @@ import {
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { getOpenAIClient } from "../../../infrastructure/openai.js";
+import { PRIMARY_MODEL } from "../../ai/aiConfig.js";
+import { retrieveContext } from "../../ai/contextRetriever.js";
 
 function median(arr: number[]): number {
   if (arr.length === 0) return 0;
@@ -132,7 +134,12 @@ export async function runExtractionPass(
   const topTriggers   = extractTopConditions(triggerOnlyRows);
 
   // Build prompt for rule extraction
-  const prompt = `You are extracting structural trading rules from completed calibration analysis.
+  const retrievedCtx = await retrieveContext(
+    `${symbol} calibration extraction structural rules engine gaps scoring holdability`,
+    5,
+  ).catch(() => "");
+
+  const prompt = `${retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : ""}You are extracting structural trading rules from completed calibration analysis.
 
 Symbol: ${symbol}
 Analysis window: ${moves.length} detected moves
@@ -190,7 +197,7 @@ Respond with ONLY valid JSON:
 
   const client = await getOpenAIClient();
   const response = await client.chat.completions.create({
-    model: "gpt-4o",
+    model: PRIMARY_MODEL,
     messages: [{ role: "user", content: prompt }],
     max_tokens: 900,
     temperature: 0.3,

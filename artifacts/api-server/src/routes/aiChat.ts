@@ -1,31 +1,11 @@
 import { Router, type IRouter } from "express";
 import { db, platformStateTable, tradesTable, signalLogTable } from "@workspace/db";
 import { eq, and, gte, desc } from "drizzle-orm";
-import { createDecipheriv, scryptSync } from "crypto";
 import OpenAI from "openai";
+import { getOpenAIClient } from "../infrastructure/openai.js";
+import { PRIMARY_MODEL } from "../core/ai/aiConfig.js";
 
 const router: IRouter = Router();
-
-const ENC_KEY_SOURCE = process.env["DATABASE_URL"] || process.env["ENCRYPTION_SECRET"];
-const ENC_DERIVED_KEY = ENC_KEY_SOURCE ? scryptSync(ENC_KEY_SOURCE, "deriv-quant-salt", 32) : null;
-
-function decryptStoredSecret(stored: string): string {
-  if (!stored.startsWith("enc:") || !ENC_DERIVED_KEY) return stored;
-  const parts = stored.split(":");
-  if (parts.length !== 3) return stored;
-  const iv = Buffer.from(parts[1], "hex");
-  const decipher = createDecipheriv("aes-256-cbc", ENC_DERIVED_KEY, iv);
-  let decrypted = decipher.update(parts[2], "hex", "utf8");
-  decrypted += decipher.final("utf8");
-  return decrypted;
-}
-
-async function getOpenAIClient(): Promise<OpenAI> {
-  const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "openai_api_key"));
-  const raw = rows[0]?.value || null;
-  if (!raw) throw new Error("OpenAI API key not configured");
-  return new OpenAI({ apiKey: decryptStoredSecret(raw) });
-}
 
 async function getCurrentSettings(): Promise<Record<string, string>> {
   const rows = await db.select().from(platformStateTable);
@@ -723,7 +703,7 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
     ];
 
     let response = await client.chat.completions.create({
-      model: "gpt-4o",
+      model: PRIMARY_MODEL,
       messages: chatMessages,
       tools,
       max_tokens: 1500,
@@ -813,7 +793,7 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
       }
 
       response = await client.chat.completions.create({
-        model: "gpt-4o",
+        model: PRIMARY_MODEL,
         messages: chatMessages,
         tools,
         max_tokens: 1500,

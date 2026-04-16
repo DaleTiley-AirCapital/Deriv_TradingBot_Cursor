@@ -16,6 +16,7 @@ import exportRouter from "./export";
 import versionRouter from "./version";
 import behaviorRouter from "./behavior";
 import calibrationRouter from "./calibration";
+import aiContextRouter from "./aiContext.js";
 
 const router: IRouter = Router();
 
@@ -36,5 +37,6 @@ router.use(exportRouter);
 router.use(versionRouter);
 router.use(behaviorRouter);
 router.use(calibrationRouter);
+router.use(aiContextRouter);
 
 export default router;

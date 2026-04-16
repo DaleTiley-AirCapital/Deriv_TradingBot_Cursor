@@ -28,6 +28,8 @@ import { eq, and, gte, asc, desc, min, max, count } from "drizzle-orm";
 import { getOpenAIClient } from "../infrastructure/openai.js";
 import { ACTIVE_TRADING_SYMBOLS } from "../infrastructure/deriv.js";
 import { extractStrategies } from "./strategyExtractor.js";
+import { PRIMARY_MODEL } from "./ai/aiConfig.js";
+import { retrieveContext } from "./ai/contextRetriever.js";
 
 const DEFAULT_WINDOW_DAYS = 365;
 const MAX_CANDLES_FOR_ANALYSIS = 15_000;
@@ -523,11 +525,20 @@ Respond ONLY with valid JSON (no markdown, no preamble). All string values must 
 
   let parsed: ParsedResult;
 
+  const retrievedCtx = await retrieveContext(
+    `${symbol} ${isBoomCrash ? "boom crash spike cluster" : "volatility mean reversion"} strategy analysis swing moves`,
+    5,
+  ).catch(() => "");
+
+  const enhancedPrompt = retrievedCtx
+    ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n${prompt}`
+    : prompt;
+
   try {
     const client = await getOpenAIClient();
     const response = await client.chat.completions.create({
-      model: "gpt-4o",
-      messages: [{ role: "user", content: prompt }],
+      model: PRIMARY_MODEL,
+      messages: [{ role: "user", content: enhancedPrompt }],
       max_tokens: 3000,
       temperature: 0.25,
     });

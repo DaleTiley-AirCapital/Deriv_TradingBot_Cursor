@@ -75,7 +75,7 @@ function SymbolSelect({ value, onChange, label }: { value: string; onChange: (s:
 
 function AiAnalysisTab() {
   const [symbol, setSymbol] = useState("CRASH300");
-  const [windowDays, setWindowDays] = useState(365);
+  const [windowDays, setWindowDays] = useState(90);
   const [running, setRunning] = useState(false);
   const [bgStarted, setBgStarted] = useState(false);
   const [result, setResult] = useState<any | null>(null);
@@ -129,7 +129,7 @@ function AiAnalysisTab() {
         <div>
           <h3 className="text-sm font-semibold">AI Research Analysis</h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Runs a GPT-4o structured analysis on stored candle data for the selected symbol.
+            Runs a structured analysis on stored candle data for the selected symbol.
             Extracts swing patterns, move size distribution, frequency, and behavioral drift.
             Produces a research report. <strong className="text-foreground">Sync mode blocks until complete (~10–30s).</strong>
           </p>
@@ -138,13 +138,16 @@ function AiAnalysisTab() {
           <SymbolSelect value={symbol} onChange={s => { setSymbol(s); setResult(null); }} label="Symbol:" />
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">Window:</span>
-            {[90, 180, 365].map(d => (
-              <button key={d} onClick={() => setWindowDays(d)}
-                className={cn("px-2 py-1 rounded border text-xs transition-colors",
-                  windowDays === d ? "border-primary/40 bg-primary/10 text-primary" : "border-border/40 text-muted-foreground hover:border-border")}>
-                {d}d
-              </button>
-            ))}
+            {([30, 90, 180, 270, 365] as const).map((d, i) => {
+              const labels = ["1mo", "3mo", "6mo", "9mo", "12mo"];
+              return (
+                <button key={d} onClick={() => setWindowDays(d)}
+                  className={cn("px-2 py-1 rounded border text-xs transition-colors",
+                    windowDays === d ? "border-primary/40 bg-primary/10 text-primary" : "border-border/40 text-muted-foreground hover:border-border")}>
+                  {labels[i]}
+                </button>
+              );
+            })}
           </div>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
@@ -947,7 +950,7 @@ interface PassStatusResult {
 
 function MoveCalibrationTab() {
   const [symbol, setSymbol] = useState("BOOM300");
-  const [windowDays, setWindowDays] = useState(30);
+  const [windowDays, setWindowDays] = useState(90);
   const [minMovePct, setMinMovePct] = useState(0.05);
   const [clearExisting, setClearExisting] = useState(true);
   const [strategyFamily, setStrategyFamily] = useState("all");
@@ -1269,7 +1272,13 @@ function MoveCalibrationTab() {
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Symbol</span>
             <select
               value={symbol}
-              onChange={e => { setSymbol(e.target.value); setDetectResult(null); setDetectErr(null); }}
+              onChange={e => {
+                const s = e.target.value;
+                setSymbol(s);
+                setDetectResult(null);
+                setDetectErr(null);
+                if (s !== "R_75" && s !== "R_100") setStrategyFamily(sf => sf === "breakout" ? "all" : sf);
+              }}
               className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
               {CALIB_SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
@@ -1283,7 +1292,11 @@ function MoveCalibrationTab() {
               onChange={e => setWindowDays(Number(e.target.value))}
               className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
-              {[14, 30, 60, 90, 180].map(d => <option key={d} value={d}>{d}d</option>)}
+              <option value={30}>1mo (30d)</option>
+              <option value={90}>3mo (90d)</option>
+              <option value={180}>6mo (180d)</option>
+              <option value={270}>9mo (270d)</option>
+              <option value={365}>12mo (365d)</option>
             </select>
           </div>
 
@@ -1295,9 +1308,11 @@ function MoveCalibrationTab() {
               className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
               <option value="all">All families</option>
-              <option value="breakout">Breakout</option>
-              <option value="continuation">Continuation</option>
               <option value="reversal">Reversal</option>
+              <option value="continuation">Continuation</option>
+              {(symbol === "R_75" || symbol === "R_100") && (
+                <option value="breakout">Breakout</option>
+              )}
             </select>
           </div>
 
@@ -1482,7 +1497,23 @@ function MoveCalibrationTab() {
             {/* Domain A — Current Engine Behavior (signal-first, from behavior layer) */}
             <DomainCard title="Current Engine Behavior" icon={<Activity className="w-3.5 h-3.5 text-amber-400" />}>
               {!behaviorProfile ? (
-                <p className="text-[11px] text-muted-foreground">No behavior profile available. Use <code className="text-[10px] bg-muted px-1 py-0.5 rounded font-mono">/api/behavior/profile/{symbol}</code> to build one.</p>
+                <div className="space-y-2">
+                  <p className="text-[11px] text-muted-foreground">No behavior profile available.</p>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await apiFetch(`behavior/profile/${symbol}`, { method: "POST" });
+                        const beh = await apiFetch(`behavior/profile/${symbol}`).catch(() => null);
+                        setBehaviorProfile(beh ?? null);
+                      } catch (err) {
+                        console.error("[BehaviorProfile] Build failed:", err);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border/50 text-muted-foreground text-[11px] hover:border-border hover:bg-muted/30 transition-colors"
+                  >
+                    Build Profile
+                  </button>
+                </div>
               ) : (
                 <>
                   <StatRow label="Total trades" value={behaviorProfile.totalTrades} />

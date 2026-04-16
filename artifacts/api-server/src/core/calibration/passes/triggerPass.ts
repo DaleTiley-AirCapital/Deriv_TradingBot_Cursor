@@ -16,6 +16,8 @@ import {
 } from "@workspace/db";
 import { eq, and, gte, lte, asc } from "drizzle-orm";
 import { getOpenAIClient } from "../../../infrastructure/openai.js";
+import { PRIMARY_MODEL } from "../../ai/aiConfig.js";
+import { retrieveContext } from "../../ai/contextRetriever.js";
 
 const TRIGGER_SCAN_BARS = 48;
 
@@ -64,7 +66,12 @@ export async function runTriggerPass(
 
   const totalMoveRange = Math.abs(move.endPrice - move.startPrice);
 
-  const prompt = `You are analyzing the opening bars of a confirmed structural market move.
+  const retrievedCtx = await retrieveContext(
+    `${move.symbol} ${move.moveType} ${move.direction} trigger entry earliest confirmation`,
+    4,
+  ).catch(() => "");
+
+  const prompt = `${retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : ""}You are analyzing the opening bars of a confirmed structural market move.
 
 Symbol: ${move.symbol} | Direction: ${move.direction.toUpperCase()}
 Total move: ${(move.movePct * 100).toFixed(1)}% from ${move.startPrice.toFixed(4)} to ${move.endPrice.toFixed(4)}
@@ -98,7 +105,7 @@ Respond with ONLY valid JSON:
 
   const client = await getOpenAIClient();
   const response = await client.chat.completions.create({
-    model: "gpt-4o",
+    model: PRIMARY_MODEL,
     messages: [{ role: "user", content: prompt }],
     max_tokens: 400,
     temperature: 0.2,

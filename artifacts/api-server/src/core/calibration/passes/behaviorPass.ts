@@ -16,6 +16,8 @@ import {
 } from "@workspace/db";
 import { eq, and, gte, lte, asc } from "drizzle-orm";
 import { getOpenAIClient } from "../../../infrastructure/openai.js";
+import { PRIMARY_MODEL } from "../../ai/aiConfig.js";
+import { retrieveContext } from "../../ai/contextRetriever.js";
 
 const MAX_BEHAVIOR_BARS = 200;
 
@@ -78,7 +80,12 @@ export async function runBehaviorPass(
     prevClose = c.close;
   }
 
-  const prompt = `You are profiling the internal behavior of a confirmed market move for a long-hold trading system.
+  const retrievedCtx = await retrieveContext(
+    `${move.symbol} ${move.moveType} ${move.direction} behavior holdability long-hold`,
+    4,
+  ).catch(() => "");
+
+  const prompt = `${retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : ""}You are profiling the internal behavior of a confirmed market move for a long-hold trading system.
 
 Symbol: ${move.symbol} | Direction: ${move.direction.toUpperCase()}
 Total move: ${(move.movePct * 100).toFixed(1)}% | Duration: ${(move.holdingMinutes / 60).toFixed(1)}h (${candles.length} bars captured)
@@ -111,7 +118,7 @@ Respond with ONLY valid JSON:
 
   const client = await getOpenAIClient();
   const response = await client.chat.completions.create({
-    model: "gpt-4o",
+    model: PRIMARY_MODEL,
     messages: [{ role: "user", content: prompt }],
     max_tokens: 400,
     temperature: 0.2,

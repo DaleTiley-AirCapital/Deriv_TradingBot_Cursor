@@ -122,7 +122,7 @@ async function createRunRecord(
       totalMoves,
       processedMoves: 0,
       failedMoves: 0,
-      metaJson: { model: "gpt-4o", startedAt: new Date().toISOString() },
+      metaJson: { model: "gpt-5.1", startedAt: new Date().toISOString() },
     })
     .returning({ id: calibrationPassRunsTable.id });
   return row.id;

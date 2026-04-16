@@ -16,6 +16,8 @@ import {
 } from "@workspace/db";
 import { eq, and, gte, lte, asc } from "drizzle-orm";
 import { getOpenAIClient } from "../../../infrastructure/openai.js";
+import { PRIMARY_MODEL } from "../../ai/aiConfig.js";
+import { retrieveContext } from "../../ai/contextRetriever.js";
 
 const PRECURSOR_LOOKBACK_BARS = 96;
 
@@ -100,7 +102,12 @@ export async function runPrecursorPass(
 
   const context = move.contextJson as Record<string, unknown>;
 
-  const prompt = `You are analyzing market data for a Deriv synthetic index calibration system.
+  const retrievedCtx = await retrieveContext(
+    `${move.symbol} ${move.moveType} ${move.direction} precursor conditions lead-in ${move.leadInShape}`,
+    4,
+  ).catch(() => "");
+
+  const prompt = `${retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : ""}You are analyzing market data for a Deriv synthetic index calibration system.
 Symbol: ${move.symbol} | Move: ${move.direction.toUpperCase()} ${(move.movePct * 100).toFixed(1)}% over ${(move.holdingMinutes / 60).toFixed(1)}h
 Move type: ${move.moveType} | Quality: ${move.qualityTier} (score ${move.qualityScore.toFixed(0)}/100)
 Lead-in shape: ${move.leadInShape} | EMA slope at start: ${context?.emaSlope ?? "N/A"}
@@ -133,7 +140,7 @@ Respond with ONLY valid JSON:
 
   const client = await getOpenAIClient();
   const response = await client.chat.completions.create({
-    model: "gpt-4o",
+    model: PRIMARY_MODEL,
     messages: [{ role: "user", content: prompt }],
     max_tokens: 500,
     temperature: 0.25,

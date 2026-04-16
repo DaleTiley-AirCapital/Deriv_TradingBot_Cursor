@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { db, platformStateTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { createDecipheriv, scryptSync } from "crypto";
+import { PRIMARY_MODEL } from "../core/ai/aiConfig.js";
 
 const ENC_KEY_SOURCE = process.env["DATABASE_URL"] || process.env["ENCRYPTION_SECRET"];
 if (!ENC_KEY_SOURCE) {
@@ -44,7 +45,7 @@ export async function checkOpenAiHealth(): Promise<{ configured: boolean; workin
 
     const client = new OpenAI({ apiKey: key });
     const response = await client.chat.completions.create({
-      model: "gpt-4o",
+      model: PRIMARY_MODEL,
       messages: [{ role: "user", content: "Reply with OK" }],
       max_tokens: 5,
     });
@@ -261,7 +262,7 @@ Respond with ONLY valid JSON:
 
   try {
     const response = await client.chat.completions.create({
-      model: "gpt-4o",
+      model: PRIMARY_MODEL,
       messages: [{ role: "user", content: prompt }],
       max_tokens: 600,
       temperature: 0.4,
