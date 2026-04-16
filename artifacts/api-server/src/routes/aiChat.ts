@@ -4,6 +4,7 @@ import { eq, and, gte, desc } from "drizzle-orm";
 import OpenAI from "openai";
 import { getOpenAIClient } from "../infrastructure/openai.js";
 import { PRIMARY_MODEL } from "../core/ai/aiConfig.js";
+import { retrieveContext } from "../core/ai/contextRetriever.js";
 
 const router: IRouter = Router();
 
@@ -695,7 +696,11 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
     const client = await getOpenAIClient();
 
     const dynamicContext = await buildDynamicContext();
-    const fullSystemPrompt = SYSTEM_KNOWLEDGE + "\n" + dynamicContext;
+    const lastUserMsg = [...messages].reverse().find((m: { role: string }) => m.role === "user");
+    const retrievalQuery = typeof lastUserMsg?.content === "string" ? lastUserMsg.content.slice(0, 500) : "strategy analysis trading";
+    const retrievedCtx = await retrieveContext(retrievalQuery, 6).catch(() => "");
+    const retrievedSection = retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : "";
+    const fullSystemPrompt = retrievedSection + SYSTEM_KNOWLEDGE + "\n" + dynamicContext;
 
     const chatMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: "system", content: fullSystemPrompt },

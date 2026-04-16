@@ -139,7 +139,7 @@ function AiAnalysisTab() {
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">Window:</span>
             {([30, 90, 180, 270, 365] as const).map((d, i) => {
-              const labels = ["1mo", "3mo", "6mo", "9mo", "12mo"];
+              const labels = ["1 month", "3 months", "6 months", "9 months", "12 months"];
               return (
                 <button key={d} onClick={() => setWindowDays(d)}
                   className={cn("px-2 py-1 rounded border text-xs transition-colors",
@@ -971,6 +971,7 @@ function MoveCalibrationTab() {
   } | null>(null);
 
   const [behaviorProfile, setBehaviorProfile] = useState<BehaviorOverview | null>(null);
+  const [buildingProfile, setBuildingProfile] = useState(false);
   const [calibProfile, setCalibProfile] = useState<CalibrationProfile | null>(null);
   const [domainLoading, setDomainLoading] = useState(false);
 
@@ -1277,7 +1278,7 @@ function MoveCalibrationTab() {
                 setSymbol(s);
                 setDetectResult(null);
                 setDetectErr(null);
-                if (s !== "R_75" && s !== "R_100") setStrategyFamily(sf => sf === "breakout" ? "all" : sf);
+                setStrategyFamily("all");
               }}
               className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
@@ -1292,11 +1293,11 @@ function MoveCalibrationTab() {
               onChange={e => setWindowDays(Number(e.target.value))}
               className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
-              <option value={30}>1mo (30d)</option>
-              <option value={90}>3mo (90d)</option>
-              <option value={180}>6mo (180d)</option>
-              <option value={270}>9mo (270d)</option>
-              <option value={365}>12mo (365d)</option>
+              <option value={30}>1 month</option>
+              <option value={90}>3 months</option>
+              <option value={180}>6 months</option>
+              <option value={270}>9 months</option>
+              <option value={365}>12 months</option>
             </select>
           </div>
 
@@ -1500,18 +1501,23 @@ function MoveCalibrationTab() {
                 <div className="space-y-2">
                   <p className="text-[11px] text-muted-foreground">No behavior profile available.</p>
                   <button
+                    disabled={buildingProfile}
                     onClick={async () => {
+                      setBuildingProfile(true);
                       try {
                         await apiFetch(`behavior/profile/${symbol}`, { method: "POST" });
                         const beh = await apiFetch(`behavior/profile/${symbol}`).catch(() => null);
                         setBehaviorProfile(beh ?? null);
                       } catch (err) {
                         console.error("[BehaviorProfile] Build failed:", err);
+                      } finally {
+                        setBuildingProfile(false);
                       }
                     }}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border/50 text-muted-foreground text-[11px] hover:border-border hover:bg-muted/30 transition-colors"
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border/50 text-muted-foreground text-[11px] hover:border-border hover:bg-muted/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Build Profile
+                    {buildingProfile ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                    {buildingProfile ? "Building…" : "Build Profile"}
                   </button>
                 </div>
               ) : (

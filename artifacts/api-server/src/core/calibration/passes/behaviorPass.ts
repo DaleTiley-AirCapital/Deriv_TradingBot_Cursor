@@ -82,7 +82,7 @@ export async function runBehaviorPass(
 
   const retrievedCtx = await retrieveContext(
     `${move.symbol} ${move.moveType} ${move.direction} behavior holdability long-hold`,
-    4,
+    6,
   ).catch(() => "");
 
   const prompt = `${retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : ""}You are profiling the internal behavior of a confirmed market move for a long-hold trading system.

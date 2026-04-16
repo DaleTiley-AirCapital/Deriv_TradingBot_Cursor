@@ -104,7 +104,7 @@ export async function runPrecursorPass(
 
   const retrievedCtx = await retrieveContext(
     `${move.symbol} ${move.moveType} ${move.direction} precursor conditions lead-in ${move.leadInShape}`,
-    4,
+    6,
   ).catch(() => "");
 
   const prompt = `${retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : ""}You are analyzing market data for a Deriv synthetic index calibration system.

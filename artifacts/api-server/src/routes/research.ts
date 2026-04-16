@@ -6,6 +6,7 @@ import { getApiSymbol } from "../infrastructure/symbolValidator.js";
 import { runSymbolBacktest } from "../runtimes/backtestEngine.js";
 import { isOpenAIConfigured, getOpenAIClient } from "../infrastructure/openai.js";
 import { PRIMARY_MODEL } from "../core/ai/aiConfig.js";
+import { retrieveContext } from "../core/ai/contextRetriever.js";
 
 const router: IRouter = Router();
 
@@ -507,10 +508,12 @@ ${configJson ? JSON.stringify(configJson, null, 2) : "N/A"}
 Answer the user's question about this backtest concisely and with specific data references. If asked about patterns, cite specific trade numbers and times.`;
 
     const client = await getOpenAIClient();
+    const retrievedCtx = await retrieveContext(`${message} backtest analysis`, 6).catch(() => "");
+    const retrievedSection = retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : "";
     const response = await client.chat.completions.create({
       model: PRIMARY_MODEL,
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: retrievedSection + systemPrompt },
         { role: "user", content: message },
       ],
       max_tokens: 800,

@@ -13,8 +13,12 @@ import {
   indexStrategyContext,
   indexCalibrationContext,
 } from "../core/ai/contextRetriever.js";
+import { isOpenAIConfigured } from "../infrastructure/openai.js";
 
 const router: IRouter = Router();
+
+let lastIndexAt = 0;
+const INDEX_COOLDOWN_MS = 30 * 60 * 1000;
 
 const ALL_SOURCES = ["repo", "schema", "strategy", "calibration"] as const;
 type SourceName = typeof ALL_SOURCES[number];
@@ -27,6 +31,17 @@ const SOURCE_FNS: Record<SourceName, () => Promise<number>> = {
 };
 
 router.post("/ai/index-context", async (req, res): Promise<void> => {
+  if (!isOpenAIConfigured()) {
+    res.status(503).json({ error: "OpenAI not configured — cannot index context" });
+    return;
+  }
+  const now = Date.now();
+  if (now - lastIndexAt < INDEX_COOLDOWN_MS) {
+    const waitSecs = Math.ceil((INDEX_COOLDOWN_MS - (now - lastIndexAt)) / 1000);
+    res.status(429).json({ error: `Rate limited — context was indexed recently. Retry in ${waitSecs}s.` });
+    return;
+  }
+
   const { sources } = req.body as { sources?: string[] };
   const requested: SourceName[] = Array.isArray(sources) && sources.length > 0
     ? sources.filter((s): s is SourceName => ALL_SOURCES.includes(s as SourceName))
@@ -53,6 +68,7 @@ router.post("/ai/index-context", async (req, res): Promise<void> => {
     }
   }
 
+  lastIndexAt = Date.now();
   res.json({
     indexed: requested,
     totalChunks,

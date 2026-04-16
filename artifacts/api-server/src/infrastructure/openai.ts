@@ -169,7 +169,7 @@ Respond with ONLY valid JSON:
 }`;
 
   const response = await client.chat.completions.create({
-    model: "gpt-4o",
+    model: PRIMARY_MODEL,
     messages: [{ role: "user", content: prompt }],
     max_tokens: 300,
     temperature: 0.3,

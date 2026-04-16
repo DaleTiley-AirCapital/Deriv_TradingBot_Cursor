@@ -136,7 +136,7 @@ export async function runExtractionPass(
   // Build prompt for rule extraction
   const retrievedCtx = await retrieveContext(
     `${symbol} calibration extraction structural rules engine gaps scoring holdability`,
-    5,
+    6,
   ).catch(() => "");
 
   const prompt = `${retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : ""}You are extracting structural trading rules from completed calibration analysis.

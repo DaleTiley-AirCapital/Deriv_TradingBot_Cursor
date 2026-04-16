@@ -527,7 +527,7 @@ Respond ONLY with valid JSON (no markdown, no preamble). All string values must 
 
   const retrievedCtx = await retrieveContext(
     `${symbol} ${isBoomCrash ? "boom crash spike cluster" : "volatility mean reversion"} strategy analysis swing moves`,
-    5,
+    8,
   ).catch(() => "");
 
   const enhancedPrompt = retrievedCtx

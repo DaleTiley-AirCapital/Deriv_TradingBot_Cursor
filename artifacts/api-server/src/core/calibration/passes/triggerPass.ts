@@ -68,7 +68,7 @@ export async function runTriggerPass(
 
   const retrievedCtx = await retrieveContext(
     `${move.symbol} ${move.moveType} ${move.direction} trigger entry earliest confirmation`,
-    4,
+    6,
   ).catch(() => "");
 
   const prompt = `${retrievedCtx ? `=== RETRIEVED SYSTEM CONTEXT ===\n${retrievedCtx}\n\n` : ""}You are analyzing the opening bars of a confirmed structural market move.
