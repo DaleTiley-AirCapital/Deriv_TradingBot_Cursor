@@ -961,6 +961,7 @@ function MoveCalibrationTab() {
   const [targetMovesStats, setTargetMovesStats] = useState<{
     totalMoves: number;
     medianMagnitudePct: number | null;
+    medianQualityScore: number | null;
     moveTypeDistribution: Record<string, number>;
     qualityDistribution: Record<string, number>;
   } | null>(null);
@@ -1016,16 +1017,21 @@ function MoveCalibrationTab() {
       setBehaviorProfile(beh ?? null);
       setCalibProfile(calib ?? null);
 
-      // Compute Target Moves stats directly from the moves endpoint (constraint #9)
-      const rawMoves: Array<{ magnitudePct?: number | string | null; moveType?: string | null; qualityTier?: string | null }> =
+      // Compute Target Moves stats directly from the moves endpoint (constraint #9 — source: /api/calibration/moves/:symbol)
+      const rawMoves: Array<{ movePct?: number | string | null; moveType?: string | null; qualityTier?: string | null; qualityScore?: number | string | null }> =
         rawMovesResp?.moves ?? [];
       if (rawMoves.length > 0) {
         const mags = rawMoves
-          .map(m => Number(m.magnitudePct ?? 0))
+          .map(m => Number(m.movePct ?? 0))
           .filter(v => !isNaN(v))
           .sort((a, b) => a - b);
         const mid = Math.floor(mags.length / 2);
         const medianMag = mags.length > 0 ? mags[mid] : null;
+        const qualScores = rawMoves
+          .map(m => Number(m.qualityScore ?? 0))
+          .filter(v => !isNaN(v))
+          .sort((a, b) => a - b);
+        const medianQuality = qualScores.length > 0 ? qualScores[Math.floor(qualScores.length / 2)] : null;
         const moveTypeDist = rawMoves.reduce<Record<string, number>>((acc, m) => {
           const t = String(m.moveType ?? "unknown");
           acc[t] = (acc[t] ?? 0) + 1;
@@ -1039,6 +1045,7 @@ function MoveCalibrationTab() {
         setTargetMovesStats({
           totalMoves: rawMoves.length,
           medianMagnitudePct: medianMag,
+          medianQualityScore: medianQuality,
           moveTypeDistribution: moveTypeDist,
           qualityDistribution: qualityDist,
         });
@@ -1522,6 +1529,12 @@ function MoveCalibrationTab() {
                     label="Median magnitude %"
                     value={targetMovesStats.medianMagnitudePct != null
                       ? `${(targetMovesStats.medianMagnitudePct * 100).toFixed(2)}%`
+                      : "—"}
+                  />
+                  <StatRow
+                    label="Median quality score"
+                    value={targetMovesStats.medianQualityScore != null
+                      ? targetMovesStats.medianQualityScore.toFixed(1)
                       : "—"}
                   />
                   {/* Avg hold from aggregate (computed from same moves table) */}

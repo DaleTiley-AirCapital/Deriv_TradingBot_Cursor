@@ -17,6 +17,9 @@
  */
 
 import { Router, type IRouter } from "express";
+import { db } from "@workspace/db";
+import { movePrecursorPassesTable, moveBehaviorPassesTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import { ACTIVE_SYMBOLS } from "../core/engineTypes.js";
 import { detectAndStoreMoves, getDetectedMoves } from "../core/calibration/moveDetector.js";
 import {
@@ -378,10 +381,12 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
       filename = `calibration_moves_${symbol}_${ts}.json`;
 
     } else if (exportType === "passes") {
-      // Return both run-header metadata AND per-move-type calibration profiles (precursor/trigger/behavior/extraction results)
-      const [runs, profiles] = await Promise.all([
+      // Return run headers + raw per-move pass records (precursor pass + behavior/trigger passes)
+      const [runs, profiles, precursorRaw, behaviorRaw] = await Promise.all([
         getAllPassRuns(symbol),
         getAllCalibrationProfiles(symbol),
+        db.select().from(movePrecursorPassesTable).where(eq(movePrecursorPassesTable.symbol, symbol)),
+        db.select().from(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol)),
       ]);
       response = {
         symbol,
@@ -389,8 +394,15 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
         exportedAt: new Date().toISOString(),
         runCount: runs.length,
         runs,
-        passResults: {
-          description: "Per-move-type calibration profiles derived from all AI passes (precursor, trigger, in-move behavior, extraction).",
+        rawPassRecords: {
+          description: "Raw AI pass records per detected move — precursor (Pass 1) and behavior/trigger (Passes 2+3).",
+          precursorPassCount: precursorRaw.length,
+          precursorPasses: precursorRaw,
+          behaviorPassCount: behaviorRaw.length,
+          behaviorPasses: behaviorRaw,
+        },
+        profileSummaries: {
+          description: "Aggregated calibration profiles per move type from all passes (extraction pass output).",
           profileCount: profiles.length,
           profiles,
         },
