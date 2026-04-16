@@ -15,6 +15,7 @@ import researchRouter from "./research";
 import exportRouter from "./export";
 import versionRouter from "./version";
 import behaviorRouter from "./behavior";
+import calibrationRouter from "./calibration";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(researchRouter);
 router.use(exportRouter);
 router.use(versionRouter);
 router.use(behaviorRouter);
+router.use(calibrationRouter);
 
 export default router;

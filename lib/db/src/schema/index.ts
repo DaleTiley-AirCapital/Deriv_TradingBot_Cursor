@@ -9,3 +9,8 @@ export * from "./trades";
 export * from "./signalLog";
 export * from "./platformState";
 export * from "./behaviorEvents";
+export * from "./detectedMoves";
+export * from "./movePrecursorPasses";
+export * from "./moveBehaviorPasses";
+export * from "./strategyCalibrationProfiles";
+export * from "./calibrationPassRuns";

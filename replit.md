@@ -60,7 +60,17 @@ Each engine computes a 6-component native score (0–100). `confidence = nativeS
 - **Extraction Engine:** Manages capital cycles, targeting profit percentages for auto-extraction.
 - **Symbol Diagnostics:** `/api/diagnostics/symbols` endpoint shows per-symbol stream health.
 
-**Database Schema:** Key tables: `ticks`, `candles`, `spike_events`, `features`, `model_runs`, `backtest_trades`, `backtest_runs`, `trades`, `signal_log`, `platform_state`.
+**Move-First Calibration System (Task #109A — completed):**
+A move-first calibration pipeline that detects structural price moves from raw candle data (excluding interpolated rows), runs 4-pass AI analysis per move, and produces honest fit reports and feeddown schemas. Behavior model (signal-first) remains intact as secondary comparison layer.
+- **Detected Moves** (`core/calibration/moveDetector.ts`): Threshold-based zigzag swing detector with structural context (lead-in shape, directional persistence, range expansion, spike count). Quality tiers A/B/C/D.
+- **AI Passes** (`core/calibration/passes/`): 4 passes — precursor (pre-move conditions), trigger (earliest entry), behavior (move progression), extraction (cross-move rule distillation).
+- **Pass Runner** (`core/calibration/calibrationPassRunner.ts`): Async, resumable, per-move error isolation, progress tracking.
+- **Aggregator** (`core/calibration/calibrationAggregator.ts`): Honest fit reporting — targetMoves vs capturedMoves vs missedMoves, never inflated.
+- **Feeddown Layer** (`core/calibration/feeddown.ts`): READ-ONLY accessors — getEngineCalibration, getScoringCalibration, getTradeHealthCalibration, getFullCalibrationExport. Not wired to live execution.
+- **Routes** (`routes/calibration.ts`): 11 endpoints under `/api/calibration/*`.
+- **DB Tables**: `detected_moves`, `move_precursor_passes`, `move_behavior_passes`, `strategy_calibration_profiles`, `calibration_pass_runs`.
+
+**Database Schema:** Key tables: `ticks`, `candles`, `spike_events`, `features`, `model_runs`, `backtest_trades`, `backtest_runs`, `trades`, `signal_log`, `platform_state`, `behavior_events`, `detected_moves`, `move_precursor_passes`, `move_behavior_passes`, `strategy_calibration_profiles`, `calibration_pass_runs`.
 
 ### CRITICAL DESIGN MANDATES — DO NOT VIOLATE
 1. **TP is PRIMARY exit** targeting full spike magnitude (50-200%+). Trailing stop is SAFETY NET ONLY. NEVER dilute this to 0.01-0.3% targets.

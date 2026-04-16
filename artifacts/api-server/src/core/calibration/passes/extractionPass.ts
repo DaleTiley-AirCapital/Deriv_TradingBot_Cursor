@@ -1,0 +1,287 @@
+/**
+ * extractionPass.ts — AI Pass 4: Cross-Move Rule Extraction
+ *
+ * Runs ONCE per symbol (not per-move) after precursor+trigger+behavior passes
+ * are complete. Synthesizes findings across all detected moves to extract:
+ *   - Repeatable structural rules for entry (IF-THEN format)
+ *   - Engine gaps (moves the current engine set would consistently miss)
+ *   - Score calibration guidance (what score level aligns with move quality)
+ *   - Hold duration guidance (how long moves last vs system TP targets)
+ *   - Honest fit summary (what % of moves are covered by current engines)
+ *
+ * Output is stored in strategy_calibration_profiles (move_type="all").
+ * This is read-only feeddown — it does NOT modify engine logic.
+ */
+
+import { db } from "@workspace/db";
+import {
+  detectedMovesTable,
+  movePrecursorPassesTable,
+  moveBehaviorPassesTable,
+  strategyCalibrationProfilesTable,
+  type DetectedMoveRow,
+} from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { getOpenAIClient } from "../../../infrastructure/openai.js";
+
+function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
+}
+
+export async function runExtractionPass(
+  symbol: string,
+  moves: DetectedMoveRow[],
+  runId: number,
+): Promise<void> {
+  if (moves.length === 0) return;
+
+  const precursorRows = await db
+    .select()
+    .from(movePrecursorPassesTable)
+    .where(eq(movePrecursorPassesTable.symbol, symbol));
+
+  const triggerRows = await db
+    .select()
+    .from(moveBehaviorPassesTable)
+    .where(eq(moveBehaviorPassesTable.symbol, symbol));
+
+  const behaviorRows = triggerRows.filter(r => r.passName === "behavior");
+  const triggerOnlyRows = triggerRows.filter(r => r.passName === "trigger");
+
+  // Compute aggregate stats
+  const movePcts      = moves.map(m => m.movePct * 100);
+  const holdHours     = moves.map(m => m.holdingMinutes / 60);
+  const holdability   = behaviorRows.map(r => r.holdabilityScore);
+  const capturable    = triggerOnlyRows.map(r => r.captureablePct);
+
+  const engineFired = precursorRows.filter(r => r.engineWouldFire).length;
+  const fitScore    = moves.length > 0 ? engineFired / moves.length : 0;
+
+  const byType: Record<string, number> = {};
+  for (const m of moves) byType[m.moveType] = (byType[m.moveType] ?? 0) + 1;
+
+  const missReasons: Array<{ reason: string; count: number }> = [];
+  const reasonMap: Record<string, number> = {};
+  for (const p of precursorRows) {
+    if (p.missedReason) reasonMap[p.missedReason] = (reasonMap[p.missedReason] ?? 0) + 1;
+  }
+  for (const [reason, count] of Object.entries(reasonMap)) {
+    missReasons.push({ reason, count });
+  }
+  missReasons.sort((a, b) => b.count - a.count);
+
+  const behaviorPatterns: Record<string, number> = {};
+  for (const r of behaviorRows) {
+    behaviorPatterns[r.behaviorPattern] = (behaviorPatterns[r.behaviorPattern] ?? 0) + 1;
+  }
+
+  const topConditions = extractTopConditions(precursorRows);
+  const topTriggers   = extractTopConditions(triggerOnlyRows);
+
+  // Build prompt for rule extraction
+  const prompt = `You are extracting structural trading rules from completed calibration analysis.
+
+Symbol: ${symbol}
+Analysis window: ${moves.length} detected moves
+Move size range: ${Math.min(...movePcts).toFixed(1)}% – ${Math.max(...movePcts).toFixed(1)}% (median ${median(movePcts).toFixed(1)}%)
+Hold duration range: ${Math.min(...holdHours).toFixed(1)}h – ${Math.max(...holdHours).toFixed(1)}h
+Move types: ${JSON.stringify(byType)}
+Engine coverage (current engines would fire): ${(fitScore * 100).toFixed(0)}% of detected moves
+
+Average holdability score: ${holdability.length > 0 ? (holdability.reduce((a, b) => a + b, 0) / holdability.length).toFixed(2) : 'N/A'}
+Average capturable fraction: ${capturable.length > 0 ? (capturable.reduce((a, b) => a + b, 0) / capturable.length * 100).toFixed(1) : 'N/A'}%
+
+Top precursor conditions (across all moves):
+${topConditions.slice(0, 5).map(c => `  - ${c.name} (seen in ${c.count} moves)`).join('\n') || '  None identified'}
+
+Top trigger conditions (across all moves):
+${topTriggers.slice(0, 5).map(c => `  - ${c.name} (seen in ${c.count} moves)`).join('\n') || '  None identified'}
+
+Behavior patterns: ${JSON.stringify(behaviorPatterns)}
+
+Miss reasons (why current engines would not fire on ${Math.round((1 - fitScore) * moves.length)} moves):
+${missReasons.slice(0, 3).map(r => `  - "${r.reason}" (${r.count} moves)`).join('\n') || '  None'}
+
+SYSTEM CONSTRAINTS (non-negotiable):
+- TP targets: 50–200%+ moves only. No scalp suggestions.
+- Hold: 3–44 days. Long hold IS the system.
+- Score gates: Paper≥60, Demo≥65, Real≥70
+- Instruments: CRASH300, BOOM300, R_75, R_100 only
+- AI output is RESEARCH ONLY — not wired to live execution
+
+TASK: Extract calibration intelligence.
+
+Respond with ONLY valid JSON:
+{
+  "structuralRules": [
+    {"rule": "<IF [condition] AND [condition] THEN [entry signal]>", "moveTypeTarget": "breakout|continuation|reversal|all", "confidence": "high|medium|low"}
+  ],
+  "engineGaps": [
+    {"description": "<what pattern current engines miss>", "frequency": <estimated % of moves>, "suggestedFix": "<research suggestion, NOT a code change>"}
+  ],
+  "scoringCalibration": {
+    "highQualityMoveMinScore": <suggested min score for A-tier moves>,
+    "mediumQualityMoveMinScore": <suggested min score for B-tier moves>,
+    "reasoning": "<1-2 sentences>"
+  },
+  "holdDurationCalibration": {
+    "p25Hours": <25th percentile hold hours>,
+    "p50Hours": <median>,
+    "p75Hours": <75th percentile>,
+    "systemCompatibility": "excellent|good|marginal|poor",
+    "reasoning": "<1-2 sentences>"
+  },
+  "overallFitNarrative": "<2-3 sentences: honest assessment of how well the current system covers the detected moves and what the primary gaps are>",
+  "topImprovementOpportunity": "<1 sentence: single most impactful calibration change — must be research output, not a live code change>"
+}`;
+
+  const client = await getOpenAIClient();
+  const response = await client.chat.completions.create({
+    model: "gpt-4o",
+    messages: [{ role: "user", content: prompt }],
+    max_tokens: 900,
+    temperature: 0.3,
+  });
+
+  const raw = response.choices[0]?.message?.content?.trim() ?? "";
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON in extraction pass response");
+  const parsed = JSON.parse(match[0]);
+
+  const feeddownSchema = {
+    structuralRules:        parsed.structuralRules ?? [],
+    engineGaps:             parsed.engineGaps ?? [],
+    scoringCalibration:     parsed.scoringCalibration ?? {},
+    holdDurationCalibration: parsed.holdDurationCalibration ?? {},
+    overallFitNarrative:    parsed.overallFitNarrative ?? "",
+    topImprovementOpportunity: parsed.topImprovementOpportunity ?? "",
+    rawExtraction:          parsed,
+  };
+
+  const avgMovePct      = movePcts.length  > 0 ? movePcts.reduce((a, b) => a + b, 0) / movePcts.length : 0;
+  const avgHoldHours    = holdHours.length > 0 ? holdHours.reduce((a, b) => a + b, 0) / holdHours.length : 0;
+  const avgCaptureable  = capturable.length > 0 ? capturable.reduce((a, b) => a + b, 0) / capturable.length : 0;
+  const avgHoldability  = holdability.length > 0 ? holdability.reduce((a, b) => a + b, 0) / holdability.length : 0;
+
+  await db
+    .insert(strategyCalibrationProfilesTable)
+    .values({
+      symbol,
+      moveType:           "all",
+      windowDays:         90,
+      targetMoves:        moves.length,
+      capturedMoves:      engineFired,
+      missedMoves:        moves.length - engineFired,
+      fitScore,
+      missReasons,
+      avgMovePct,
+      medianMovePct:      median(movePcts),
+      avgHoldingHours:    avgHoldHours,
+      avgCaptureablePct:  avgCaptureable,
+      avgHoldabilityScore: avgHoldability,
+      engineCoverage:     buildEngineCoverage(precursorRows),
+      precursorSummary:   topConditions.slice(0, 10),
+      triggerSummary:     topTriggers.slice(0, 10),
+      feeddownSchema,
+      lastRunId:          runId,
+    })
+    .onConflictDoUpdate({
+      target: [strategyCalibrationProfilesTable.symbol, strategyCalibrationProfilesTable.moveType],
+      set: {
+        targetMoves:        moves.length,
+        capturedMoves:      engineFired,
+        missedMoves:        moves.length - engineFired,
+        fitScore,
+        missReasons,
+        avgMovePct,
+        medianMovePct:      median(movePcts),
+        avgHoldingHours:    avgHoldHours,
+        avgCaptureablePct:  avgCaptureable,
+        avgHoldabilityScore: avgHoldability,
+        engineCoverage:     buildEngineCoverage(precursorRows),
+        precursorSummary:   topConditions.slice(0, 10),
+        triggerSummary:     topTriggers.slice(0, 10),
+        feeddownSchema,
+        lastRunId:          runId,
+        generatedAt:        new Date(),
+      },
+    });
+
+  // Also upsert per-moveType profiles (deterministic aggregates only)
+  const types = [...new Set(moves.map(m => m.moveType))];
+  for (const mt of types) {
+    const typeMoves   = moves.filter(m => m.moveType === mt);
+    const typePcts    = typeMoves.map(m => m.movePct * 100);
+    const typeHours   = typeMoves.map(m => m.holdingMinutes / 60);
+    const typeEngFire = precursorRows.filter(r => {
+      const mv = moves.find(m => m.id === r.moveId);
+      return mv?.moveType === mt && r.engineWouldFire;
+    }).length;
+
+    await db
+      .insert(strategyCalibrationProfilesTable)
+      .values({
+        symbol,
+        moveType:        mt,
+        windowDays:      90,
+        targetMoves:     typeMoves.length,
+        capturedMoves:   typeEngFire,
+        missedMoves:     typeMoves.length - typeEngFire,
+        fitScore:        typeMoves.length > 0 ? typeEngFire / typeMoves.length : 0,
+        avgMovePct:      typePcts.length  > 0 ? typePcts.reduce((a, b) => a + b, 0) / typePcts.length : 0,
+        medianMovePct:   median(typePcts),
+        avgHoldingHours: typeHours.length > 0 ? typeHours.reduce((a, b) => a + b, 0) / typeHours.length : 0,
+        lastRunId:       runId,
+      })
+      .onConflictDoUpdate({
+        target: [strategyCalibrationProfilesTable.symbol, strategyCalibrationProfilesTable.moveType],
+        set: {
+          targetMoves:     typeMoves.length,
+          capturedMoves:   typeEngFire,
+          missedMoves:     typeMoves.length - typeEngFire,
+          fitScore:        typeMoves.length > 0 ? typeEngFire / typeMoves.length : 0,
+          avgMovePct:      typePcts.length  > 0 ? typePcts.reduce((a, b) => a + b, 0) / typePcts.length : 0,
+          medianMovePct:   median(typePcts),
+          avgHoldingHours: typeHours.length > 0 ? typeHours.reduce((a, b) => a + b, 0) / typeHours.length : 0,
+          lastRunId:       runId,
+          generatedAt:     new Date(),
+        },
+      });
+  }
+}
+
+function extractTopConditions(
+  rows: Array<{ precursorConditions?: unknown; triggerConditions?: unknown }>,
+): Array<{ name: string; count: number }> {
+  const counts: Record<string, number> = {};
+  for (const row of rows) {
+    const conditions = (row.precursorConditions ?? row.triggerConditions) as Array<{ condition: string }> | null;
+    if (!Array.isArray(conditions)) continue;
+    for (const c of conditions) {
+      if (c?.condition) counts[c.condition] = (counts[c.condition] ?? 0) + 1;
+    }
+  }
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }));
+}
+
+function buildEngineCoverage(
+  precursorRows: Array<{ engineMatched: string | null; engineWouldFire: boolean; missedReason: string | null }>,
+): Record<string, { matched: number; fired: number; missRate: number }> {
+  const coverage: Record<string, { matched: number; fired: number; missRate: number }> = {};
+  for (const r of precursorRows) {
+    const engine = r.engineMatched ?? "none";
+    if (!coverage[engine]) coverage[engine] = { matched: 0, fired: 0, missRate: 0 };
+    coverage[engine].matched++;
+    if (r.engineWouldFire) coverage[engine].fired++;
+  }
+  for (const k of Object.keys(coverage)) {
+    const m = coverage[k].matched;
+    coverage[k].missRate = m > 0 ? (m - coverage[k].fired) / m : 0;
+  }
+  return coverage;
+}
