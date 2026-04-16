@@ -897,6 +897,7 @@ interface AggregateResult {
     avgHoldHours: number;
     avgCaptureablePct: number;
     avgHoldabilityScore: number;
+    avgMfe: number | null;
     missReasons: Array<{ reason: string; count: number }>;
     engineCoverage: Record<string, { matched: number; fired: number; missRate: number }>;
     qualityDistribution: Record<string, number>;
@@ -1511,6 +1512,15 @@ function MoveCalibrationTab() {
                       ))}
                     </div>
                   )}
+                  {aggregate?.overall?.avgMfe != null && (
+                    <div className="mt-1.5 pt-1.5 border-t border-border/20">
+                      <StatRow
+                        label="Avg MFE (structural)"
+                        value={`${aggregate.overall.avgMfe.toFixed(2)}%`}
+                      />
+                      <p className="text-[9px] text-muted-foreground/60 mt-0.5">From behavior pass · max favorable excursion per move</p>
+                    </div>
+                  )}
                   <p className="text-[10px] text-muted-foreground mt-2">
                     Updated {new Date(behaviorProfile.lastUpdated).toLocaleDateString()}
                   </p>
@@ -1677,6 +1687,46 @@ function MoveCalibrationTab() {
                       </details>
                     );
                   })()}
+                  {/* Pass 3: In-Move Behavior Card — behavior pass structural metrics */}
+                  <details className="mt-1.5 pt-1.5 border-t border-border/20" open>
+                    <summary className="text-[10px] text-violet-400/80 uppercase tracking-wide cursor-pointer hover:text-violet-300">
+                      Pass 3 · In-Move Behavior
+                    </summary>
+                    <div className="mt-1 space-y-0.5">
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-muted-foreground">Avg capturable %</span>
+                        <span className="font-mono text-foreground">{(calibProfile.avgCaptureablePct * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-muted-foreground">Avg holdability</span>
+                        <span className="font-mono text-foreground">{calibProfile.avgHoldabilityScore.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-muted-foreground">Avg hold (hrs)</span>
+                        <span className="font-mono text-foreground">{calibProfile.avgHoldingHours.toFixed(1)}</span>
+                      </div>
+                      {aggregate?.overall?.avgMfe != null && (
+                        <div className="flex justify-between text-[11px]">
+                          <span className="text-muted-foreground">Avg MFE</span>
+                          <span className="font-mono text-emerald-400">{aggregate.overall.avgMfe.toFixed(2)}%</span>
+                        </div>
+                      )}
+                      {aggregate?.overall?.behaviorPatterns && Object.keys(aggregate.overall.behaviorPatterns).length > 0 && (
+                        <div className="mt-0.5">
+                          <p className="text-[10px] text-muted-foreground mb-0.5">Move behavior patterns</p>
+                          {Object.entries(aggregate.overall.behaviorPatterns)
+                            .sort((a, b) => b[1] - a[1])
+                            .slice(0, 5)
+                            .map(([pattern, cnt]) => (
+                              <div key={pattern} className="flex justify-between text-[11px]">
+                                <span className="text-muted-foreground capitalize">{pattern}</span>
+                                <span className="font-mono text-foreground">{cnt}</span>
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  </details>
                   {calibProfile.feeddownSchema && (() => {
                     const fd = calibProfile.feeddownSchema as Record<string, unknown>;
                     const scanCadence = fd["scanCadenceMins"] ?? fd["scanCadenceRecommendation"] ?? fd["scanCadence"];

@@ -49,6 +49,7 @@ export interface CalibrationAggregateSummary {
     avgHoldHours: number;
     avgCaptureablePct: number;
     avgHoldabilityScore: number;
+    avgMfe: number | null;
     missReasons: Array<{ reason: string; count: number }>;
     engineCoverage: Record<string, { matched: number; fired: number; missRate: number }>;
     qualityDistribution: Record<string, number>;
@@ -183,6 +184,7 @@ export async function buildCalibrationAggregate(
   const holdHours   = moves.map(m => m.holdingMinutes / 60);
   const captureable = triggerRows.map(r => r.captureablePct);
   const holdability = behaviorOnly.map(r => r.holdabilityScore);
+  const mfePcts     = behaviorOnly.map(r => r.maxFavorablePct * 100);
 
   const qualityDist: Record<string, number> = {};
   const leadInShapes: Record<string, number> = {};
@@ -252,6 +254,7 @@ export async function buildCalibrationAggregate(
       avgHoldHours:        holdHours.length > 0 ? holdHours.reduce((a, b) => a + b, 0) / holdHours.length : 0,
       avgCaptureablePct:   captureable.length > 0 ? captureable.reduce((a, b) => a + b, 0) / captureable.length : 0,
       avgHoldabilityScore: holdability.length > 0 ? holdability.reduce((a, b) => a + b, 0) / holdability.length : 0,
+      avgMfe:              mfePcts.length > 0 ? mfePcts.reduce((a, b) => a + b, 0) / mfePcts.length : null,
       missReasons,
       engineCoverage:      engCovMap,
       qualityDistribution: qualityDist,
