@@ -1146,6 +1146,112 @@ function downloadJson(data: unknown, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+interface DetectResult {
+  symbol: string;
+  detected: number;
+  savedToDb: number;
+  windowDays: number;
+  movesDetected?: number;
+  totalCandlesScanned?: number;
+  interpolatedExcluded?: number;
+  movesByType?: Record<string, number>;
+  movesByTier?: Record<string, number>;
+}
+
+interface MoveTypeStats {
+  count: number;
+  avgMovePct: number;
+  medianMovePct: number;
+  avgHoldHours: number;
+  engineCoverage: number;
+  avgCaptureablePct: number;
+  avgHoldabilityScore: number;
+}
+
+interface AggregateResult {
+  symbol: string;
+  totalMoves: number;
+  byMoveType: Record<string, MoveTypeStats>;
+  overall: {
+    targetMoves: number;
+    capturedMoves: number;
+    missedMoves: number;
+    fitScore: number;
+    avgMovePct: number;
+    medianMovePct: number;
+    avgHoldHours: number;
+    avgCaptureablePct: number;
+    avgHoldabilityScore: number;
+    missReasons: Array<{ reason: string; count: number }>;
+    engineCoverage: Record<string, { matched: number; fired: number; missRate: number }>;
+    qualityDistribution: Record<string, number>;
+    behaviorPatterns: Record<string, number>;
+    leadInShapes: Record<string, number>;
+    directionSplit: { up: number; down: number };
+  };
+  generatedAt: string;
+}
+
+interface TierData {
+  count: number;
+  avgMovePct: number;
+  suggestedMinScore?: number;
+  [key: string]: unknown;
+}
+
+interface ScoringResult {
+  symbol: string;
+  scores?: Record<string, number>;
+  [key: string]: TierData | string | Record<string, number> | undefined;
+}
+
+interface HealthResult {
+  symbol: string;
+  avgHoldingHours?: number;
+  p25HoldHours?: number;
+  p50HoldHours?: number;
+  p75HoldHours?: number;
+  avgCaptureablePct: number;
+  systemCompatibility?: string;
+  topBehaviorPatterns: Array<{ pattern: string; count: number }>;
+}
+
+interface EngineRow {
+  engineName?: string;
+  matchedMoves: number;
+  wouldFireCount: number;
+  fireRate: number;
+  avgMissMovePct: number;
+  topMissReasons?: string[];
+}
+
+interface DetectedMove {
+  id: number;
+  symbol: string;
+  moveType: string;
+  qualityTier: string;
+  qualityScore?: number;
+  direction: string;
+  movePct: number;
+  holdingMinutes: number;
+  leadInShape: string;
+  startTs: number;
+}
+
+interface PassStatusResult {
+  runId: number;
+  status: string;
+  passName?: string;
+  totalMoves?: number;
+  processedMoves?: number;
+  processed?: number;
+  succeeded?: number;
+  failed?: number;
+  errors?: string[];
+  errorSummary?: string;
+  completedAt?: string;
+}
+
 function MoveCalibrationTab() {
   const [symbol, setSymbol] = useState("BOOM300");
   const [windowDays, setWindowDays] = useState(30);
@@ -1153,20 +1259,20 @@ function MoveCalibrationTab() {
   const [clearExisting, setClearExisting] = useState(true);
 
   const [detecting, setDetecting] = useState(false);
-  const [detectResult, setDetectResult] = useState<any | null>(null);
+  const [detectResult, setDetectResult] = useState<DetectResult | null>(null);
   const [detectErr, setDetectErr] = useState<string | null>(null);
 
-  const [aggregate, setAggregate] = useState<any | null>(null);
+  const [aggregate, setAggregate] = useState<AggregateResult | null>(null);
   const [aggLoading, setAggLoading] = useState(false);
 
-  const [scoring, setScoring] = useState<any | null>(null);
-  const [health, setHealth] = useState<any | null>(null);
+  const [scoring, setScoring] = useState<ScoringResult | null>(null);
+  const [health, setHealth] = useState<HealthResult | null>(null);
   const [domainLoading, setDomainLoading] = useState(false);
 
-  const [engines, setEngines] = useState<any[]>([]);
+  const [engines, setEngines] = useState<EngineRow[]>([]);
   const [engineLoading, setEngineLoading] = useState(false);
 
-  const [moves, setMoves] = useState<any[]>([]);
+  const [moves, setMoves] = useState<DetectedMove[]>([]);
   const [movesLoading, setMovesLoading] = useState(false);
   const [moveTypeFilter, setMoveTypeFilter] = useState("all");
   const [tierFilter, setTierFilter] = useState<string>("");
@@ -1178,7 +1284,7 @@ function MoveCalibrationTab() {
   const [maxMoves, setMaxMoves] = useState("");
   const [passBusy, setPassBusy] = useState(false);
   const [passRunId, setPassRunId] = useState<number | null>(null);
-  const [passStatus, setPassStatus] = useState<any | null>(null);
+  const [passStatus, setPassStatus] = useState<PassStatusResult | null>(null);
   const [passErr, setPassErr] = useState<string | null>(null);
   const passIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1250,8 +1356,8 @@ function MoveCalibrationTab() {
         loadDomains(symbol),
         loadMoves(symbol, moveTypeFilter, tierFilter),
       ]);
-    } catch (e: any) {
-      setDetectErr(e.message);
+    } catch (e: unknown) {
+      setDetectErr(e instanceof Error ? e.message : "Detection failed");
     } finally {
       setDetecting(false);
     }
@@ -1294,8 +1400,8 @@ function MoveCalibrationTab() {
         setPassBusy(false);
         await Promise.all([loadDomains(symbol), loadMoves(symbol, moveTypeFilter, tierFilter)]);
       }
-    } catch (e: any) {
-      setPassErr(e.message);
+    } catch (e: unknown) {
+      setPassErr(e instanceof Error ? e.message : "Pass run failed");
       setPassBusy(false);
     }
   };
@@ -1305,8 +1411,8 @@ function MoveCalibrationTab() {
     try {
       const d = await apiFetch(endpoint);
       downloadJson(d, filename);
-    } catch (e: any) {
-      alert(`Export failed: ${e.message}`);
+    } catch (e: unknown) {
+      alert(`Export failed: ${e instanceof Error ? e.message : "Unknown error"}`);
     } finally {
       setExportBusy(p => ({ ...p, [key]: false }));
     }
@@ -1435,7 +1541,7 @@ function MoveCalibrationTab() {
                   <StatRow label="Direction up/down" value={`${aggregate.overall?.directionSplit?.up ?? 0} / ${aggregate.overall?.directionSplit?.down ?? 0}`} />
                   <div className="mt-1.5 pt-1.5 border-t border-border/20 space-y-0.5">
                     <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">By move type</p>
-                    {Object.entries(aggregate.byMoveType ?? {}).map(([type, stats]: [string, any]) => (
+                    {Object.entries(aggregate.byMoveType ?? {}).map(([type, stats]) => (
                       <div key={type} className="flex items-center justify-between text-[11px]">
                         <TypePill type={type} />
                         <span className="font-mono text-foreground">{stats.count}× · {(stats.avgMovePct * 100).toFixed(1)}%</span>
@@ -1484,7 +1590,7 @@ function MoveCalibrationTab() {
                     <>
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Tier breakdown</p>
                       {TIERS.map(t => {
-                        const td = scoring[`tier${t}`];
+                        const td = scoring[`tier${t}`] as TierData | undefined;
                         if (!td) return null;
                         return (
                           <div key={t} className="flex items-start gap-2 py-0.5">
@@ -1502,7 +1608,7 @@ function MoveCalibrationTab() {
                                   </div>
                                   <div className="flex justify-between">
                                     <span className="text-muted-foreground">Suggested min score</span>
-                                    <span className="font-mono text-foreground">{td.suggestedMinScore}</span>
+                                    <span className="font-mono text-foreground">{td.suggestedMinScore ?? "—"}</span>
                                   </div>
                                 </>
                               )}
@@ -1515,10 +1621,10 @@ function MoveCalibrationTab() {
                   {health && (
                     <div className="mt-1.5 pt-1.5 border-t border-border/20 space-y-0.5">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Trade health</p>
-                      <StatRow label="Avg hold (hrs)" value={health.avgHoldingHours?.toFixed(1)} />
-                      <StatRow label="p25 hold (hrs)" value={health.p25HoldHours?.toFixed(1)} />
-                      <StatRow label="p50 hold (hrs)" value={health.p50HoldHours?.toFixed(1)} />
-                      <StatRow label="p75 hold (hrs)" value={health.p75HoldHours?.toFixed(1)} />
+                      <StatRow label="Avg hold (hrs)" value={health.avgHoldingHours?.toFixed(1) ?? "—"} />
+                      <StatRow label="p25 hold (hrs)" value={health.p25HoldHours?.toFixed(1) ?? "—"} />
+                      <StatRow label="p50 hold (hrs)" value={health.p50HoldHours?.toFixed(1) ?? "—"} />
+                      <StatRow label="p75 hold (hrs)" value={health.p75HoldHours?.toFixed(1) ?? "—"} />
                       <StatRow label="Avg capturable %" value={`${(health.avgCaptureablePct * 100)?.toFixed(1)}%`} />
                       {health.systemCompatibility && (
                         <StatRow label="Compatibility" value={health.systemCompatibility} />
@@ -1526,7 +1632,7 @@ function MoveCalibrationTab() {
                       {health.topBehaviorPatterns?.length > 0 && (
                         <div className="mt-1 pt-1 border-t border-border/20">
                           <p className="text-[10px] text-muted-foreground mb-0.5">Top patterns</p>
-                          {health.topBehaviorPatterns.slice(0, 3).map((p: any) => (
+                          {health.topBehaviorPatterns.slice(0, 3).map((p) => (
                             <div key={p.pattern} className="flex justify-between text-[11px]">
                               <span className="text-muted-foreground truncate max-w-[120px]">{p.pattern}</span>
                               <span className="font-mono text-foreground">{p.count}</span>
@@ -1546,16 +1652,16 @@ function MoveCalibrationTab() {
                 <p className="text-[11px] text-muted-foreground">No engine coverage data. Run AI passes first.</p>
               ) : (
                 <div className="space-y-3">
-                  {engines.map((eng: any) => (
+                  {engines.map((eng) => (
                     <div key={eng.engineName ?? "unknown"} className="space-y-0.5">
                       <p className="text-[10px] font-semibold text-foreground">{eng.engineName ?? "—"}</p>
                       <StatRow label="Matched moves" value={eng.matchedMoves} />
                       <StatRow label="Would fire" value={eng.wouldFireCount} />
                       <StatRow label="Fire rate" value={`${(eng.fireRate * 100).toFixed(1)}%`} />
                       <StatRow label="Avg miss move %" value={`${(eng.avgMissMovePct * 100).toFixed(1)}%`} />
-                      {eng.topMissReasons?.length > 0 && (
+                      {(eng.topMissReasons?.length ?? 0) > 0 && (
                         <div className="text-[10px] text-muted-foreground mt-0.5">
-                          Miss: {eng.topMissReasons.slice(0, 2).join(" · ")}
+                          Miss: {(eng.topMissReasons ?? []).slice(0, 2).join(" · ")}
                         </div>
                       )}
                     </div>
@@ -1723,7 +1829,7 @@ function MoveCalibrationTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {displayedMoves.map((m: any) => (
+                  {displayedMoves.map((m) => (
                     <tr key={m.id} className="border-b border-border/20 hover:bg-muted/20 transition-colors">
                       <td className="px-4 py-1.5"><TypePill type={m.moveType} /></td>
                       <td className="px-3 py-1.5"><TierPill tier={m.qualityTier} /></td>

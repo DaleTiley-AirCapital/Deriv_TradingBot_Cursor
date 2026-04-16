@@ -110,21 +110,36 @@ export async function buildCalibrationAggregate(
   const behaviorById  = new Map(behaviorOnly.map(b => [b.moveId, b]));
 
   // ── Honest coverage calculation ────────────────────────────────────────────
-  // A move is "captured" only if BOTH:
+  // A move is "captured" only if ALL three conditions hold:
   //   1. precursor pass ran and engineWouldFire=true
-  //   2. trigger pass ran for the same moveId (confirming entry was identified)
+  //   2. trigger pass ran for the same moveId
+  //   3. trigger pass captureablePct > 0  (the move was genuinely reachable)
   //
-  // We use DISTINCT moveIds (Set) so that duplicate rows from force=true reruns
-  // never inflate the captured count. Each move is counted at most once.
+  // Moves where captureablePct === 0 are classified as miss reason
+  // "trigger_zero_captureable" and must NOT be in capturedMoves, otherwise
+  // fitScore can exceed 1 or miss counts go negative.
+  //
+  // We use DISTINCT moveId Sets so force=true reruns never inflate counts.
   const triggerMoveIds = new Set(triggerRows.map(t => t.moveId));
+
+  // Build a set of moveIds where trigger ran but captureablePct === 0.
+  const triggerZeroIds = new Set(
+    triggerRows
+      .filter(r => r.captureablePct === 0)
+      .map(r => r.moveId),
+  );
 
   // Deduplicate: one precursor row per moveId (keep the most-permissive — if any
   // row for a moveId has engineWouldFire=true, that moveId counts as fired).
-  const precursorFiredSet  = new Set(precursorRows.filter(r => r.engineWouldFire).map(r => r.moveId));
-  const capturedMoveIdSet  = new Set([...precursorFiredSet].filter(mid => triggerMoveIds.has(mid)));
-  const capturedMoves      = capturedMoveIdSet.size;
-  const missedMoves        = moves.length - capturedMoves;
-  const fitScore           = moves.length > 0 ? capturedMoves / moves.length : 0;
+  const precursorFiredSet = new Set(precursorRows.filter(r => r.engineWouldFire).map(r => r.moveId));
+
+  // capturedMoves = precursor fired ∩ trigger ran ∩ captureablePct > 0
+  const capturedMoveIdSet = new Set(
+    [...precursorFiredSet].filter(mid => triggerMoveIds.has(mid) && !triggerZeroIds.has(mid)),
+  );
+  const capturedMoves = capturedMoveIdSet.size;
+  const missedMoves   = moves.length - capturedMoves;
+  const fitScore      = moves.length > 0 ? capturedMoves / moves.length : 0;
 
   // ── Miss reason aggregation (three miss paths, deduped by moveId) ──────────
   // Path 1 — Precursor-level misses (explicit missedReason from AI)
@@ -141,10 +156,10 @@ export async function buildCalibrationAggregate(
   if (triggerGapMoveIds.length > 0) {
     reasonMap["trigger_pass_not_run"] = (reasonMap["trigger_pass_not_run"] ?? 0) + triggerGapMoveIds.length;
   }
-  // Path 3 — Trigger ran but captureablePct == 0 → move was technically unreachable
-  const triggerZeroIds = new Set(triggerRows.filter(r => precursorFiredSet.has(r.moveId) && r.captureablePct === 0).map(r => r.moveId));
-  if (triggerZeroIds.size > 0) {
-    reasonMap["trigger_zero_captureable"] = (reasonMap["trigger_zero_captureable"] ?? 0) + triggerZeroIds.size;
+  // Path 3 — Trigger ran but captureablePct === 0 (and precursor fired) → unreachable
+  const zeroCapturePrecursorFired = [...triggerZeroIds].filter(mid => precursorFiredSet.has(mid));
+  if (zeroCapturePrecursorFired.length > 0) {
+    reasonMap["trigger_zero_captureable"] = (reasonMap["trigger_zero_captureable"] ?? 0) + zeroCapturePrecursorFired.length;
   }
   const missReasons = Object.entries(reasonMap)
     .sort((a, b) => b[1] - a[1])

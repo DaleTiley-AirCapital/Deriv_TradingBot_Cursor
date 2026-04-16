@@ -68,11 +68,19 @@ export async function runExtractionPass(
   const holdability   = behaviorRows.map(r => r.holdabilityScore);
   const capturable    = triggerOnlyRows.map(r => r.captureablePct);
 
-  // Honest fit: a move is "captured" only if BOTH precursor fired AND trigger pass ran.
-  // Use DISTINCT moveIds (Set) so duplicate rows from force=true reruns never inflate counts.
+  // Honest fit: a move is "captured" only if ALL THREE hold:
+  //   1. precursor ran and engineWouldFire=true
+  //   2. trigger pass ran for that moveId
+  //   3. trigger captureablePct > 0  (the move was genuinely reachable)
+  // Moves with captureablePct === 0 are NOT captured — they go to miss reason
+  // "trigger_zero_captureable". Using distinct moveId Sets prevents force=true reruns
+  // from inflating counts and ensures fitScore ≤ 1 and missedMoves ≥ 0 always.
   const triggerMoveIdSet    = new Set(triggerOnlyRows.map(r => r.moveId));
+  const triggerZeroIdSet    = new Set(triggerOnlyRows.filter(r => r.captureablePct === 0).map(r => r.moveId));
   const precursorFiredIdSet = new Set(precursorRows.filter(r => r.engineWouldFire).map(r => r.moveId));
-  const capturedIdSet       = new Set([...precursorFiredIdSet].filter(mid => triggerMoveIdSet.has(mid)));
+  const capturedIdSet       = new Set(
+    [...precursorFiredIdSet].filter(mid => triggerMoveIdSet.has(mid) && !triggerZeroIdSet.has(mid)),
+  );
   const captured            = capturedIdSet.size;
   const fitScore            = moves.length > 0 ? captured / moves.length : 0;
   // engineFired = distinct moveIds where precursor alone would fire (for prompt context)
@@ -269,10 +277,14 @@ Respond with ONLY valid JSON:
     // Honest fit per move-type: both precursor fired AND trigger ran for that move.
     // Use distinct moveIds to prevent inflation from force=true reruns.
     const typeMoveIdSet  = new Set(typeMoves.map(m => m.id));
+    // Trigger rows scoped to this move type's IDs
     const typeTriggered  = new Set(triggerOnlyRows.filter(r => typeMoveIdSet.has(r.moveId)).map(r => r.moveId));
+    // Zero-captureable IDs scoped to this move type
+    const typeZeroIds    = new Set(triggerOnlyRows.filter(r => typeMoveIdSet.has(r.moveId) && r.captureablePct === 0).map(r => r.moveId));
     // precursorFiredIdSet already deduped globally — intersect with this type's move IDs
     const typeFiredSet   = new Set([...precursorFiredIdSet].filter(mid => typeMoveIdSet.has(mid)));
-    const typeCaptured   = [...typeFiredSet].filter(mid => typeTriggered.has(mid)).length;
+    // Captured = precursor fired ∩ trigger ran ∩ captureablePct > 0 (honest)
+    const typeCaptured   = [...typeFiredSet].filter(mid => typeTriggered.has(mid) && !typeZeroIds.has(mid)).length;
     const typeFitScore   = typeMoves.length > 0 ? typeCaptured / typeMoves.length : 0;
 
     await db
@@ -336,7 +348,9 @@ function buildProfitabilitySummary(
     const typeMoves   = moves.filter(m => m.moveType === mt);
     const typeMoveIds = new Set(typeMoves.map(m => m.id));
     const typeFired   = [...precursorFiredIdSet].filter(mid => typeMoveIds.has(mid));
-    const typeCapt    = typeFired.filter(mid => triggerMoveIds.has(mid)).length;
+    // Exclude zero-captureable moves so profitability fitScore matches honest-fit
+    const typeZeroIds = new Set(triggerOnlyRows.filter(r => typeMoveIds.has(r.moveId) && r.captureablePct === 0).map(r => r.moveId));
+    const typeCapt    = typeFired.filter(mid => triggerMoveIds.has(mid) && !typeZeroIds.has(mid)).length;
     const fs          = typeMoves.length > 0 ? typeCapt / typeMoves.length : 0;
     const avgPct      = typeMoves.length > 0 ? typeMoves.reduce((s, m) => s + m.movePct, 0) / typeMoves.length : 0;
     const typeTriggers = triggerOnlyRows.filter(r => typeMoveIds.has(r.moveId));
