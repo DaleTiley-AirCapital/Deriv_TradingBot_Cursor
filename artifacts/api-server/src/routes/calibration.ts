@@ -123,20 +123,30 @@ router.post("/calibration/run-passes/:symbol", async (req, res): Promise<void> =
     return;
   }
 
-  const {
-    windowDays = 90,
-    passName = "all",
-    minTier,
-    moveType,
-    maxMoves,
-    force = false,
-  } = req.body ?? {};
+  const body = req.body ?? {};
 
-  if (!VALID_PASS_NAMES.includes(passName as PassName)) {
-    res.status(400).json({ error: `Invalid passName. Valid: ${VALID_PASS_NAMES.join(", ")}` });
+  // Accept both original field names and spec-aligned aliases.
+  // strategyFamily maps to moveType (same concept — "breakout"|"continuation"|"reversal"|"unknown"|"all")
+  // passNumber (1=precursor, 2=trigger, 3=behavior, 4=extraction) maps to passName.
+  const PASS_NUMBER_MAP: Record<number, PassName> = { 1: "precursor", 2: "trigger", 3: "behavior", 4: "extraction" };
+  const windowDays: number = Number(body.windowDays ?? 90);
+  const resolvedPassName: PassName = (() => {
+    if (body.passNumber !== undefined) return PASS_NUMBER_MAP[Number(body.passNumber)] ?? "all";
+    return (body.passName as PassName) ?? "all";
+  })();
+  const resolvedMoveType: string | undefined = (() => {
+    const raw = body.strategyFamily ?? body.moveType;
+    return raw ? String(raw) : undefined;
+  })();
+  const minTier:  string | undefined = body.minTier ? String(body.minTier) : undefined;
+  const maxMoves: number | undefined = body.maxMoves ? Number(body.maxMoves) : undefined;
+  const force:    boolean            = Boolean(body.force ?? false);
+
+  if (!VALID_PASS_NAMES.includes(resolvedPassName)) {
+    res.status(400).json({ error: `Invalid passName/passNumber. Valid passNames: ${VALID_PASS_NAMES.join(", ")}` });
     return;
   }
-  if (minTier && !VALID_TIERS.includes(String(minTier))) {
+  if (minTier && !VALID_TIERS.includes(minTier)) {
     res.status(400).json({ error: `Invalid minTier. Valid: A, B, C, D` });
     return;
   }
@@ -144,12 +154,12 @@ router.post("/calibration/run-passes/:symbol", async (req, res): Promise<void> =
   try {
     const result = await runCalibrationPasses({
       symbol,
-      windowDays: Number(windowDays),
-      passName:   passName as PassName,
+      windowDays,
+      passName:   resolvedPassName,
       minTier:    minTier as "A" | "B" | "C" | "D" | undefined,
-      moveType:   moveType ? String(moveType) : undefined,
-      maxMoves:   maxMoves ? Number(maxMoves) : undefined,
-      force:      Boolean(force),
+      moveType:   resolvedMoveType,
+      maxMoves,
+      force,
     });
     res.json({ ok: true, ...result });
   } catch (err) {
@@ -218,32 +228,46 @@ router.get("/calibration/aggregate/:symbol", async (req, res): Promise<void> => 
   }
 });
 
-// ── GET /api/calibration/profile/:symbol/:moveType ────────────────────────────
+// ── GET /api/calibration/profile/:symbol/:strategy ────────────────────────────
+// :strategy accepts either the spec-aligned name ("breakout", "continuation",
+// "reversal", "unknown", "all") or the legacy :moveType param — they are the
+// same value space. Both routes are registered so old callers still work.
 
-router.get("/calibration/profile/:symbol/:moveType", async (req, res): Promise<void> => {
-  const { symbol, moveType } = req.params;
+async function handleProfileRequest(
+  symbol: string,
+  strategy: string,
+  res: import("express").Response,
+): Promise<void> {
   if (!VALID_SYMBOLS.includes(symbol as typeof ACTIVE_SYMBOLS[number])) {
     res.status(400).json({ error: `Invalid symbol. Valid: ${VALID_SYMBOLS.join(", ")}` });
     return;
   }
-  if (!VALID_MOVE_TYPES.includes(moveType)) {
-    res.status(400).json({ error: `Invalid moveType. Valid: ${VALID_MOVE_TYPES.join(", ")}` });
+  if (!VALID_MOVE_TYPES.includes(strategy)) {
+    res.status(400).json({ error: `Invalid strategy/moveType. Valid: ${VALID_MOVE_TYPES.join(", ")}` });
     return;
   }
-
   try {
-    const profile = await getCalibrationProfile(symbol, moveType);
+    const profile = await getCalibrationProfile(symbol, strategy);
     if (!profile) {
       res.status(404).json({
-        error: `No calibration profile for ${symbol}/${moveType}. Run POST /api/calibration/detect-moves then /api/calibration/run-passes first.`,
+        error: `No calibration profile for ${symbol}/${strategy}. Run POST /api/calibration/detect-moves then /api/calibration/run-passes first.`,
       });
       return;
     }
-    res.json(profile);
+    res.json({ ok: true, ...profile });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Profile fetch failed";
     res.status(500).json({ error: message });
   }
+}
+
+router.get("/calibration/profile/:symbol/:strategy", async (req, res): Promise<void> => {
+  await handleProfileRequest(req.params.symbol, req.params.strategy, res);
+});
+
+// Legacy alias (kept for backward compat — :moveType and :strategy are the same value space)
+router.get("/calibration/profile/:symbol/:moveType", async (req, res): Promise<void> => {
+  await handleProfileRequest(req.params.symbol, req.params.moveType, res);
 });
 
 // ── GET /api/calibration/profiles/:symbol ─────────────────────────────────────

@@ -54,6 +54,11 @@ export const strategyCalibrationProfilesTable = pgTable("strategy_calibration_pr
   precursorSummary:     jsonb("precursor_summary"),
   triggerSummary:       jsonb("trigger_summary"),
   feeddownSchema:       jsonb("feeddown_schema"),
+  // Profitability summary: simulated-return estimates ranked by extraction path.
+  // Populated by the extraction pass after all AI passes complete.
+  // Schema: { paths: [{ name, estimatedMonthlyReturnPct, captureablePct, holdDays, confidence }],
+  //           topPath: string, estimatedFitAdjustedReturn: number }
+  profitabilitySummary: jsonb("profitability_summary"),
   lastRunId:            integer("last_run_id"),
   generatedAt:          timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

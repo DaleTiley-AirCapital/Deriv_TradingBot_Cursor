@@ -34,6 +34,16 @@ const BOOM_CRASH_SYMBOLS = ["BOOM300", "CRASH300"];
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+export interface TriggerZoneSnapshot {
+  bodyPct: number;          // |close - open| / open at trigger candle
+  upperWickPct: number;     // (high - max(open,close)) / open
+  lowerWickPct: number;     // (min(open,close) - low) / open
+  isBullishClose: boolean;  // close > open
+  bbPosition: number;       // 0..1 position within BB band at trigger bar
+  confirmationBars: number; // bars immediately after start where direction holds
+  momentumAtStart: number;  // |close - open| / ATR at trigger candle (impulse ratio)
+}
+
 export interface DetectedMove {
   symbol: string;
   direction: "up" | "down";
@@ -52,6 +62,7 @@ export interface DetectedMove {
   qualityScore: number;
   qualityTier: "A" | "B" | "C" | "D";
   contextJson: object;
+  triggerZoneJson: TriggerZoneSnapshot;
 }
 
 export interface MoveDetectionResult {
@@ -209,6 +220,57 @@ function scoreAndTier(move: {
   return { qualityScore: score, qualityTier };
 }
 
+// ── Trigger zone snapshot ─────────────────────────────────────────────────────
+//
+// Deterministically captures candle-level characteristics at the first bar of
+// the move — body/wick geometry, BB band position, and short-term momentum.
+// This is stored as a first-class field so downstream passes can correlate
+// structural entry signals without needing to re-fetch raw candle data.
+
+function calcTriggerZone(
+  candles: CandleSlim[],
+  startIdx: number,
+  atrAtStart: number,
+): TriggerZoneSnapshot {
+  const c = candles[startIdx];
+  const bodySize    = Math.abs(c.close - c.open);
+  const bodyPct     = c.open > 0 ? bodySize / c.open : 0;
+  const topBody     = Math.max(c.open, c.close);
+  const botBody     = Math.min(c.open, c.close);
+  const upperWickPct = c.open > 0 ? (c.high - topBody) / c.open : 0;
+  const lowerWickPct = c.open > 0 ? (botBody - c.low)  / c.open : 0;
+  const isBullishClose = c.close >= c.open;
+  const momentumAtStart = atrAtStart > 0 ? bodySize / atrAtStart : 0;
+
+  // BB position: where is close within the BB band (0 = lower band, 1 = upper band)
+  const bbW = calcBbWidth(candles, startIdx);
+  const mid = candles.slice(Math.max(0, startIdx - 20), startIdx + 1)
+    .reduce((s, x) => s + x.close, 0) / Math.min(20, startIdx + 1);
+  const bbHalfWidth = mid * bbW / 4;  // bbWidth is 2*std / mean, so std = mean*bbW/4 approx
+  const bbPosition  = bbHalfWidth > 0
+    ? Math.min(1, Math.max(0, (c.close - (mid - bbHalfWidth)) / (2 * bbHalfWidth)))
+    : 0.5;
+
+  // Confirmation bars: how many of the next 5 bars move in the same direction
+  let confirmationBars = 0;
+  const lookFwd = Math.min(5, candles.length - startIdx - 1);
+  for (let i = 1; i <= lookFwd; i++) {
+    const delta = candles[startIdx + i].close - candles[startIdx + i - 1].close;
+    if (isBullishClose && delta > 0) confirmationBars++;
+    if (!isBullishClose && delta < 0) confirmationBars++;
+  }
+
+  return {
+    bodyPct:          parseFloat(bodyPct.toFixed(6)),
+    upperWickPct:     parseFloat(upperWickPct.toFixed(6)),
+    lowerWickPct:     parseFloat(lowerWickPct.toFixed(6)),
+    isBullishClose,
+    bbPosition:       parseFloat(bbPosition.toFixed(4)),
+    confirmationBars,
+    momentumAtStart:  parseFloat(momentumAtStart.toFixed(4)),
+  };
+}
+
 // ── Spike count for BOOM/CRASH ─────────────────────────────────────────────────
 
 function countSpikes(
@@ -352,6 +414,8 @@ function recordMove(
     holdingMinutes,
   });
 
+  const triggerZoneJson = calcTriggerZone(candles, startIdx, atrStart);
+
   moves.push({
     symbol,
     direction,
@@ -377,6 +441,7 @@ function recordMove(
       swingBars,
       approxMonthFromTs: new Date(candles[startIdx].openTs * 1000).toISOString().slice(0, 7),
     },
+    triggerZoneJson,
   });
 }
 
@@ -457,6 +522,7 @@ export async function detectAndStoreMoves(
       windowDays,
       isInterpolatedExcluded: true,
       contextJson:            m.contextJson,
+      triggerZoneJson:        m.triggerZoneJson,
     }));
 
     const BATCH = 100;

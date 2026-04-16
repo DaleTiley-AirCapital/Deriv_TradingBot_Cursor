@@ -197,6 +197,12 @@ Respond with ONLY valid JSON:
   const avgCaptureable  = capturable.length > 0 ? capturable.reduce((a, b) => a + b, 0) / capturable.length : 0;
   const avgHoldability  = holdability.length > 0 ? holdability.reduce((a, b) => a + b, 0) / holdability.length : 0;
 
+  // ── Profitability summary ──────────────────────────────────────────────────
+  // Ranks extraction paths (by move type) by their estimated monthly return.
+  // Estimated monthly return = (avgMovePct * fitScore * avgCaptureablePct) / (avgHoldHours / 720)
+  // This is a research estimate only — not wired to live trading.
+  const profitabilitySummary = buildProfitabilitySummary(moves, precursorFiredIdSet, triggerMoveIdSet, triggerOnlyRows);
+
   await db
     .insert(strategyCalibrationProfilesTable)
     .values({
@@ -217,6 +223,7 @@ Respond with ONLY valid JSON:
       precursorSummary:   topConditions.slice(0, 10),
       triggerSummary:     topTriggers.slice(0, 10),
       feeddownSchema,
+      profitabilitySummary,
       lastRunId:          runId,
     })
     .onConflictDoUpdate({
@@ -236,6 +243,7 @@ Respond with ONLY valid JSON:
         precursorSummary:   topConditions.slice(0, 10),
         triggerSummary:     topTriggers.slice(0, 10),
         feeddownSchema,
+        profitabilitySummary,
         lastRunId:          runId,
         generatedAt:        new Date(),
       },
@@ -286,6 +294,64 @@ Respond with ONLY valid JSON:
         },
       });
   }
+}
+
+// ── Profitability summary builder ─────────────────────────────────────────────
+// Ranks extraction paths by estimated monthly return (research estimate only).
+// Formula per path (moveType):
+//   estimatedMonthlyReturnPct = (avgMovePct * fitScore * avgCaptureablePct) / (avgHoldDays / 30)
+// Capped at realistic values; flagged with confidence based on sample size.
+
+function buildProfitabilitySummary(
+  moves: DetectedMoveRow[],
+  precursorFiredIdSet: Set<number>,
+  triggerMoveIds: Set<number>,
+  triggerOnlyRows: Array<{ moveId: number; captureablePct: number }>,
+): {
+  paths: Array<{
+    name: string;
+    estimatedMonthlyReturnPct: number;
+    fitScore: number;
+    captureablePct: number;
+    holdDays: number;
+    moveCount: number;
+    confidence: "high" | "medium" | "low";
+  }>;
+  topPath: string;
+  estimatedFitAdjustedReturn: number;
+} {
+  const types = [...new Set(moves.map(m => m.moveType))];
+  const paths = types.map(mt => {
+    const typeMoves   = moves.filter(m => m.moveType === mt);
+    const typeMoveIds = new Set(typeMoves.map(m => m.id));
+    const typeFired   = [...precursorFiredIdSet].filter(mid => typeMoveIds.has(mid));
+    const typeCapt    = typeFired.filter(mid => triggerMoveIds.has(mid)).length;
+    const fs          = typeMoves.length > 0 ? typeCapt / typeMoves.length : 0;
+    const avgPct      = typeMoves.length > 0 ? typeMoves.reduce((s, m) => s + m.movePct, 0) / typeMoves.length : 0;
+    const typeTriggers = triggerOnlyRows.filter(r => typeMoveIds.has(r.moveId));
+    const avgCapt     = typeTriggers.length > 0 ? typeTriggers.reduce((s, r) => s + r.captureablePct, 0) / typeTriggers.length : 0;
+    const avgHoldDays = typeMoves.length > 0 ? typeMoves.reduce((s, m) => s + m.holdingMinutes / 1440, 0) / typeMoves.length : 1;
+    const estimatedMonthlyReturnPct = avgHoldDays > 0
+      ? Math.min(500, (avgPct * 100 * fs * Math.max(0, avgCapt)) / (avgHoldDays / 30))
+      : 0;
+    const confidence: "high" | "medium" | "low" =
+      typeMoves.length >= 20 ? "high" :
+      typeMoves.length >= 8  ? "medium" : "low";
+    return {
+      name: mt,
+      estimatedMonthlyReturnPct: parseFloat(estimatedMonthlyReturnPct.toFixed(2)),
+      fitScore: parseFloat(fs.toFixed(4)),
+      captureablePct: parseFloat(avgCapt.toFixed(4)),
+      holdDays: parseFloat(avgHoldDays.toFixed(2)),
+      moveCount: typeMoves.length,
+      confidence,
+    };
+  }).sort((a, b) => b.estimatedMonthlyReturnPct - a.estimatedMonthlyReturnPct);
+
+  const topPath = paths[0]?.name ?? "unknown";
+  const estimatedFitAdjustedReturn = paths.reduce((best, p) => Math.max(best, p.estimatedMonthlyReturnPct), 0);
+
+  return { paths, topPath, estimatedFitAdjustedReturn };
 }
 
 function extractTopConditions(

@@ -49,6 +49,12 @@ export const detectedMovesTable = pgTable("detected_moves", {
   windowDays:              integer("window_days").notNull().default(90),
   isInterpolatedExcluded:  boolean("is_interpolated_excluded").notNull().default(true),
   contextJson:             jsonb("context_json"),
+  // Candle-level characteristics around the trigger zone (first bar of the move).
+  // Captures body size, wick ratios, momentum confirmation candles, and BB position
+  // at the exact trigger point — used for future pass-level correlation.
+  // Schema: { bodyPct, upperWickPct, lowerWickPct, isBullishClose, bbPosition,
+  //           confirmationBars: number, momentumAtStart: number }
+  triggerZoneJson:         jsonb("trigger_zone_json"),
   detectedAt:              timestamp("detected_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("idx_detected_moves_symbol_ts").on(table.symbol, table.startTs),
