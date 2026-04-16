@@ -1408,8 +1408,12 @@ function MoveCalibrationTab() {
               {passStatus.failedMoves   != null && <span>Failed: <strong className="text-foreground">{passStatus.failedMoves}</strong></span>}
               {passStatus.passName                  && <span>Pass: <strong className="text-foreground">{passStatus.passName}</strong></span>}
             </div>
-            {passStatus.errorSummary && (
-              <p className="text-[11px] text-red-400">{passStatus.errorSummary}</p>
+            {passStatus.errorSummary != null && (
+              <p className="text-[11px] text-red-400">
+                {typeof passStatus.errorSummary === "string"
+                  ? passStatus.errorSummary
+                  : JSON.stringify(passStatus.errorSummary)}
+              </p>
             )}
           </div>
         )}
@@ -1447,6 +1451,12 @@ function MoveCalibrationTab() {
                           <div className="flex justify-between text-[11px]">
                             <span className="text-muted-foreground">Trades / WR</span>
                             <span className="font-mono text-foreground">{ep.tradeCount} · {(ep.winRate * 100).toFixed(1)}%</span>
+                          </div>
+                          <div className="flex justify-between text-[11px]">
+                            <span className="text-muted-foreground">Avg PnL % (extracted)</span>
+                            <span className={cn("font-mono", ep.avgPnlPct >= 0 ? "text-emerald-400" : "text-red-400")}>
+                              {(ep.avgPnlPct * 100).toFixed(2)}%
+                            </span>
                           </div>
                           <div className="flex justify-between text-[11px]">
                             <span className="text-muted-foreground">Signals/day</span>
@@ -1536,14 +1546,63 @@ function MoveCalibrationTab() {
                       </pre>
                     </div>
                   )}
-                  {calibProfile.feeddownSchema && (
-                    <div className="mt-1.5 pt-1.5 border-t border-border/20">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Recommended settings (entry · trade mgmt)</p>
-                      <pre className="text-[10px] font-mono text-muted-foreground bg-muted/20 rounded p-1.5 overflow-x-auto max-h-32 whitespace-pre-wrap break-all">
-                        {JSON.stringify(calibProfile.feeddownSchema, null, 2)}
-                      </pre>
-                    </div>
-                  )}
+                  {calibProfile.feeddownSchema && (() => {
+                    const fd = calibProfile.feeddownSchema as Record<string, unknown>;
+                    const scanCadence = fd["scanCadenceMins"] ?? fd["scanCadenceRecommendation"] ?? fd["scanCadence"];
+                    const memWindow = fd["memoryWindowDays"] ?? fd["lookbackDays"] ?? fd["memoryWindow"];
+                    const entryModel = fd["entryModel"] ?? fd["entryModelSummary"] ?? fd["entryModelDescription"];
+                    const tradeMgmt = fd["tradeManagement"] ?? fd["tradeManagementModel"] ?? fd["tradeManagementDescription"];
+                    const knownKeys = new Set(["scanCadenceMins","scanCadenceRecommendation","scanCadence","memoryWindowDays","lookbackDays","memoryWindow","entryModel","entryModelSummary","entryModelDescription","tradeManagement","tradeManagementModel","tradeManagementDescription"]);
+                    const remainderKeys = Object.keys(fd).filter(k => !knownKeys.has(k));
+                    return (
+                      <div className="mt-1.5 pt-1.5 border-t border-border/20 space-y-1">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Recommended Settings</p>
+                        {scanCadence != null && (
+                          <div className="flex justify-between text-[11px]">
+                            <span className="text-muted-foreground">Scan cadence</span>
+                            <span className="font-mono text-foreground">{String(scanCadence)}</span>
+                          </div>
+                        )}
+                        {memWindow != null && (
+                          <div className="flex justify-between text-[11px]">
+                            <span className="text-muted-foreground">Memory window</span>
+                            <span className="font-mono text-foreground">{String(memWindow)}</span>
+                          </div>
+                        )}
+                        {entryModel != null && (
+                          <div className="mt-1">
+                            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Entry model</span>
+                            <p className="text-[11px] text-foreground mt-0.5 bg-muted/20 rounded p-1">
+                              {typeof entryModel === "string" ? entryModel : JSON.stringify(entryModel)}
+                            </p>
+                          </div>
+                        )}
+                        {tradeMgmt != null && (
+                          <div className="mt-1">
+                            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Trade management</span>
+                            <p className="text-[11px] text-foreground mt-0.5 bg-muted/20 rounded p-1">
+                              {typeof tradeMgmt === "string" ? tradeMgmt : JSON.stringify(tradeMgmt)}
+                            </p>
+                          </div>
+                        )}
+                        {remainderKeys.length > 0 && (
+                          <details className="mt-1">
+                            <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground">
+                              More fields ({remainderKeys.length})
+                            </summary>
+                            <pre className="text-[10px] font-mono text-muted-foreground bg-muted/20 rounded p-1.5 mt-1 overflow-x-auto max-h-28 whitespace-pre-wrap break-all">
+                              {JSON.stringify(Object.fromEntries(remainderKeys.map(k => [k, fd[k]])), null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                        {!scanCadence && !memWindow && !entryModel && !tradeMgmt && (
+                          <pre className="text-[10px] font-mono text-muted-foreground bg-muted/20 rounded p-1.5 overflow-x-auto max-h-32 whitespace-pre-wrap break-all">
+                            {JSON.stringify(calibProfile.feeddownSchema, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {engines.length > 0 && (
                     <div className="mt-1.5 pt-1.5 border-t border-border/20 space-y-1">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Engine coverage</p>
@@ -1593,7 +1652,14 @@ function MoveCalibrationTab() {
                   <StatRow label="Fit score" value={`${(aggregate.overall.fitScore * 100).toFixed(1)}%`} />
                   <StatRow label="Avg move %" value={`${(aggregate.overall.avgMovePct * 100).toFixed(2)}%`} />
                   <StatRow label="Avg capturable %" value={`${(aggregate.overall.avgCaptureablePct * 100).toFixed(1)}%`} />
+                  <StatRow
+                    label="Avg extracted (est.)"
+                    value={`${(aggregate.overall.avgMovePct * aggregate.overall.avgCaptureablePct * 100).toFixed(2)}%`}
+                  />
                   <StatRow label="Holdability score" value={aggregate.overall.avgHoldabilityScore.toFixed(2)} />
+                  {behaviorProfile && (
+                    <StatRow label="Engine win rate" value={`${(behaviorProfile.overallWinRate * 100).toFixed(1)}%`} />
+                  )}
                 </>
               )}
               {(aggregate?.overall?.missReasons?.length ?? 0) > 0 && (
