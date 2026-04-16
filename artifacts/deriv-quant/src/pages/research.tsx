@@ -970,6 +970,10 @@ function MoveCalibrationTab() {
   const [tierFilter, setTierFilter] = useState<string>("");
   const [movesExpanded, setMovesExpanded] = useState(false);
 
+  const [scope, setScope] = useState<"detect" | "passes" | "full">("detect");
+  const [runElapsed, setRunElapsed] = useState(0);
+  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const [passName, setPassName] = useState("all");
   const [passMinTier, setPassMinTier] = useState("");
   const [passMoveType, setPassMoveType] = useState("all");
@@ -1049,13 +1053,26 @@ function MoveCalibrationTab() {
   }, [strategyFamily]);
 
   useEffect(() => {
-    return () => { if (passIntervalRef.current) clearInterval(passIntervalRef.current); };
+    return () => {
+      if (passIntervalRef.current) clearInterval(passIntervalRef.current);
+      if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
+    };
   }, []);
 
-  const detectMoves = async () => {
+  const startElapsed = () => {
+    setRunElapsed(0);
+    if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
+    elapsedIntervalRef.current = setInterval(() => setRunElapsed(s => s + 1), 1000);
+  };
+  const stopElapsed = () => {
+    if (elapsedIntervalRef.current) { clearInterval(elapsedIntervalRef.current); elapsedIntervalRef.current = null; }
+  };
+
+  const detectMoves = async (): Promise<boolean> => {
     setDetecting(true);
     setDetectErr(null);
     setDetectResult(null);
+    startElapsed();
     try {
       const d = await apiFetch(`calibration/detect-moves/${symbol}`, {
         method: "POST",
@@ -1067,10 +1084,13 @@ function MoveCalibrationTab() {
         loadDomains(symbol),
         loadMoves(symbol, moveTypeFilter, tierFilter),
       ]);
+      return true;
     } catch (e: unknown) {
       setDetectErr(e instanceof Error ? e.message : "Detection failed");
+      return false;
     } finally {
       setDetecting(false);
+      stopElapsed();
     }
   };
 
@@ -1082,6 +1102,7 @@ function MoveCalibrationTab() {
         setPassStatus(s);
         if (s.status === "completed" || s.status === "failed") {
           clearInterval(passIntervalRef.current!);
+          stopElapsed();
           setPassBusy(false);
           await Promise.all([loadDomains(symbol), loadMoves(symbol, moveTypeFilter, tierFilter), loadRuns(symbol)]);
         }
@@ -1089,12 +1110,14 @@ function MoveCalibrationTab() {
     }, 4000);
   };
 
-  const runPasses = async () => {
+  const runPasses = async (overridePassName?: string): Promise<boolean> => {
     setPassBusy(true);
     setPassErr(null);
     setPassStatus(null);
+    startElapsed();
     try {
-      const body: Record<string, unknown> = { windowDays, passName };
+      const pn = overridePassName ?? passName;
+      const body: Record<string, unknown> = { windowDays, passName: pn };
       if (passMinTier) body.minTier = passMinTier;
       if (passMoveType && passMoveType !== "all") body.moveType = passMoveType;
       if (maxMoves && !isNaN(Number(maxMoves))) body.maxMoves = Number(maxMoves);
@@ -1109,11 +1132,26 @@ function MoveCalibrationTab() {
       } else {
         setPassStatus(d);
         setPassBusy(false);
+        stopElapsed();
         await Promise.all([loadDomains(symbol), loadMoves(symbol, moveTypeFilter, tierFilter)]);
       }
+      return true;
     } catch (e: unknown) {
       setPassErr(e instanceof Error ? e.message : "Pass run failed");
       setPassBusy(false);
+      stopElapsed();
+      return false;
+    }
+  };
+
+  const runScope = async () => {
+    if (scope === "detect") {
+      await detectMoves();
+    } else if (scope === "passes") {
+      await runPasses();
+    } else {
+      const ok = await detectMoves();
+      if (ok) await runPasses();
     }
   };
 
@@ -1129,14 +1167,50 @@ function MoveCalibrationTab() {
     }
   };
 
-  const displayedMoves = movesExpanded ? moves : moves.slice(0, 10);
+  const displayedMoves = movesExpanded ? moves : moves.slice(0, 20);
+
+  const movesMagnitudeSummary = (() => {
+    if (moves.length === 0) return null;
+    const sorted = [...moves].map(m => m.movePct).sort((a, b) => a - b);
+    const idx = (p: number) => sorted[Math.min(Math.floor(sorted.length * p), sorted.length - 1)];
+    return {
+      min: sorted[0],
+      p25: idx(0.25),
+      median: idx(0.5),
+      p75: idx(0.75),
+      p90: idx(0.9),
+      max: sorted[sorted.length - 1],
+      count: sorted.length,
+    };
+  })();
 
   return (
     <div className="space-y-5">
 
       {/* ── Controls ── */}
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Move Detection Controls</h3>
+        {/* Scope row */}
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Calibration Controls</h3>
+          <div className="flex items-center gap-1 bg-background border border-border/50 rounded-lg p-0.5">
+            {(["detect", "passes", "full"] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setScope(s)}
+                className={cn(
+                  "text-[11px] px-2.5 py-1 rounded-md transition-colors font-medium",
+                  scope === s
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {s === "detect" ? "Detect Moves Only" : s === "passes" ? "Run All Passes" : "Full Calibration"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Shared controls */}
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex flex-col gap-1">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Symbol</span>
@@ -1161,17 +1235,6 @@ function MoveCalibrationTab() {
           </div>
 
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Min Move %</span>
-            <select
-              value={minMovePct}
-              onChange={e => setMinMovePct(Number(e.target.value))}
-              className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-            >
-              {[0.02, 0.03, 0.05, 0.08, 0.10].map(p => <option key={p} value={p}>{(p * 100).toFixed(0)}%</option>)}
-            </select>
-          </div>
-
-          <div className="flex flex-col gap-1">
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Strategy Family</span>
             <select
               value={strategyFamily}
@@ -1185,27 +1248,88 @@ function MoveCalibrationTab() {
             </select>
           </div>
 
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer self-end pb-1.5">
-            <input
-              type="checkbox"
-              checked={clearExisting}
-              onChange={e => setClearExisting(e.target.checked)}
-              className="accent-primary"
-            />
-            Clear existing
-          </label>
+          {/* Detect-specific controls */}
+          {(scope === "detect" || scope === "full") && (
+            <>
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Min Move %</span>
+                <select
+                  value={minMovePct}
+                  onChange={e => setMinMovePct(Number(e.target.value))}
+                  className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+                >
+                  {[0.02, 0.03, 0.05, 0.08, 0.10].map(p => <option key={p} value={p}>{(p * 100).toFixed(0)}%</option>)}
+                </select>
+              </div>
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer self-end pb-1.5">
+                <input
+                  type="checkbox"
+                  checked={clearExisting}
+                  onChange={e => setClearExisting(e.target.checked)}
+                  className="accent-primary"
+                />
+                Clear existing
+              </label>
+            </>
+          )}
 
+          {/* Pass-specific controls */}
+          {(scope === "passes" || scope === "full") && (
+            <>
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Pass</span>
+                <select
+                  value={passName}
+                  onChange={e => setPassName(e.target.value)}
+                  className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+                >
+                  {PASS_NAMES.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Min Tier</span>
+                <select
+                  value={passMinTier}
+                  onChange={e => setPassMinTier(e.target.value)}
+                  className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+                >
+                  <option value="">Any</option>
+                  {TIERS.map(t => <option key={t} value={t}>Tier {t}+</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Max Moves</span>
+                <input
+                  type="number"
+                  value={maxMoves}
+                  onChange={e => setMaxMoves(e.target.value)}
+                  placeholder="all"
+                  className="w-20 text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+                />
+              </div>
+            </>
+          )}
+
+          {/* Unified Run button */}
           <button
-            onClick={detectMoves}
-            disabled={detecting}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 disabled:opacity-50 self-end"
+            onClick={runScope}
+            disabled={detecting || passBusy}
+            className={cn(
+              "flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold hover:opacity-90 disabled:opacity-50 self-end",
+              scope === "full"
+                ? "bg-emerald-600 text-white"
+                : scope === "passes"
+                ? "bg-amber-500/80 text-black"
+                : "bg-primary text-primary-foreground"
+            )}
           >
-            {detecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-            {detecting ? "Detecting…" : "Detect Moves"}
+            {(detecting || passBusy) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            {detecting ? "Detecting…" : passBusy ? "Running passes…" :
+              scope === "detect" ? "Detect Moves" : scope === "passes" ? "Run AI Passes" : "Run Full Calibration"}
           </button>
 
           <button
-            onClick={() => { loadDomains(symbol); loadMoves(symbol, moveTypeFilter, tierFilter); }}
+            onClick={() => { loadDomains(symbol); loadMoves(symbol, moveTypeFilter, tierFilter); loadRuns(symbol); }}
             disabled={aggLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border self-end"
           >
@@ -1213,6 +1337,19 @@ function MoveCalibrationTab() {
             Refresh
           </button>
         </div>
+
+        {/* Elapsed timer */}
+        {(detecting || passBusy) && runElapsed > 0 && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Elapsed: <strong className="text-foreground font-mono">{runElapsed}s</strong>
+            {passBusy && passStatus && passStatus.totalMoves !== undefined && (
+              <span className="ml-2">
+                · Pass {passStatus.passName} · {passStatus.processed ?? 0}/{passStatus.totalMoves} moves
+              </span>
+            )}
+          </div>
+        )}
 
         {detectErr && <ErrorBox msg={detectErr} />}
         {detectResult && (
@@ -1240,6 +1377,39 @@ function MoveCalibrationTab() {
             </div>
           </div>
         )}
+
+        {passErr && <ErrorBox msg={passErr} />}
+
+        {passStatus && (
+          <div className={cn(
+            "rounded-lg border p-3 space-y-1.5",
+            passStatus.status === "completed" ? "bg-green-500/10 border-green-500/20" :
+            passStatus.status === "failed"    ? "bg-red-500/10 border-red-500/20" :
+            "bg-primary/5 border-primary/20"
+          )}>
+            <div className="flex items-center gap-2">
+              {passBusy && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />}
+              {passStatus.status === "completed" && <CheckCircle className="w-3.5 h-3.5 text-green-400" />}
+              {passStatus.status === "failed"    && <XCircle    className="w-3.5 h-3.5 text-red-400"   />}
+              <span className="text-xs font-semibold text-foreground">
+                {passStatus.status === "running"   ? "Passes running…" :
+                 passStatus.status === "completed" ? "Passes completed" :
+                 passStatus.status === "failed"    ? "Pass run failed" :
+                 `Status: ${passStatus.status}`}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+              {passStatus.totalMoves  !== undefined && <span>Total: <strong className="text-foreground">{passStatus.totalMoves}</strong></span>}
+              {passStatus.processed   !== undefined && <span>Processed: <strong className="text-foreground">{passStatus.processed}</strong></span>}
+              {passStatus.succeeded   !== undefined && <span>Succeeded: <strong className="text-foreground">{passStatus.succeeded}</strong></span>}
+              {passStatus.failed      !== undefined && <span>Failed: <strong className="text-foreground">{passStatus.failed}</strong></span>}
+              {passStatus.passName                  && <span>Pass: <strong className="text-foreground">{passStatus.passName}</strong></span>}
+            </div>
+            {passStatus.errorSummary && (
+              <p className="text-[11px] text-red-400">{passStatus.errorSummary}</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── 3-Domain Comparison ── */}
@@ -1256,7 +1426,7 @@ function MoveCalibrationTab() {
             {/* Domain A — Current Engine Behavior (signal-first, from behavior layer) */}
             <DomainCard title="Current Engine Behavior" icon={<Activity className="w-3.5 h-3.5 text-amber-400" />}>
               {!behaviorProfile ? (
-                <p className="text-[11px] text-muted-foreground">No behavior profile. Run behavior profile from the Behavior Model tab to populate.</p>
+                <p className="text-[11px] text-muted-foreground">No behavior profile available. Use <code className="text-[10px] bg-muted px-1 py-0.5 rounded font-mono">/api/behavior/profile/{symbol}</code> to build one.</p>
               ) : (
                 <>
                   <StatRow label="Total trades" value={behaviorProfile.totalTrades} />
@@ -1347,6 +1517,30 @@ function MoveCalibrationTab() {
                   <StatRow label="Avg hold (hrs)" value={calibProfile.avgHoldingHours.toFixed(1)} />
                   <StatRow label="Avg capturable %" value={`${(calibProfile.avgCaptureablePct * 100).toFixed(1)}%`} />
                   <StatRow label="Holdability score" value={calibProfile.avgHoldabilityScore.toFixed(2)} />
+                  {calibProfile.precursorSummary && (
+                    <div className="mt-1.5 pt-1.5 border-t border-border/20">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Precursor summary</p>
+                      <pre className="text-[10px] font-mono text-muted-foreground bg-muted/20 rounded p-1.5 overflow-x-auto max-h-24 whitespace-pre-wrap break-all">
+                        {JSON.stringify(calibProfile.precursorSummary, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                  {calibProfile.triggerSummary && (
+                    <div className="mt-1.5 pt-1.5 border-t border-border/20">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Trigger summary</p>
+                      <pre className="text-[10px] font-mono text-muted-foreground bg-muted/20 rounded p-1.5 overflow-x-auto max-h-24 whitespace-pre-wrap break-all">
+                        {JSON.stringify(calibProfile.triggerSummary, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                  {calibProfile.feeddownSchema && (
+                    <div className="mt-1.5 pt-1.5 border-t border-border/20">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Recommended settings (entry · trade mgmt)</p>
+                      <pre className="text-[10px] font-mono text-muted-foreground bg-muted/20 rounded p-1.5 overflow-x-auto max-h-32 whitespace-pre-wrap break-all">
+                        {JSON.stringify(calibProfile.feeddownSchema, null, 2)}
+                      </pre>
+                    </div>
+                  )}
                   {engines.length > 0 && (
                     <div className="mt-1.5 pt-1.5 border-t border-border/20 space-y-1">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Engine coverage</p>
@@ -1394,6 +1588,9 @@ function MoveCalibrationTab() {
                   <StatRow label="Captured moves" value={aggregate.overall.capturedMoves} />
                   <StatRow label="Missed moves" value={aggregate.overall.missedMoves} />
                   <StatRow label="Fit score" value={`${(aggregate.overall.fitScore * 100).toFixed(1)}%`} />
+                  <StatRow label="Avg move %" value={`${(aggregate.overall.avgMovePct * 100).toFixed(2)}%`} />
+                  <StatRow label="Avg capturable %" value={`${(aggregate.overall.avgCaptureablePct * 100).toFixed(1)}%`} />
+                  <StatRow label="Holdability score" value={aggregate.overall.avgHoldabilityScore.toFixed(2)} />
                 </>
               )}
               {(aggregate?.overall?.missReasons?.length ?? 0) > 0 && (
@@ -1459,104 +1656,6 @@ function MoveCalibrationTab() {
         </div>
       )}
 
-      {/* ── AI Passes ── */}
-      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Run AI Calibration Passes</h3>
-        <div className="flex flex-wrap gap-3 items-end">
-          <div className="flex flex-col gap-1">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Pass</span>
-            <select
-              value={passName}
-              onChange={e => setPassName(e.target.value)}
-              className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-            >
-              {PASS_NAMES.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Min Tier</span>
-            <select
-              value={passMinTier}
-              onChange={e => setPassMinTier(e.target.value)}
-              className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-            >
-              <option value="">Any</option>
-              {TIERS.map(t => <option key={t} value={t}>Tier {t}+</option>)}
-            </select>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Move Type</span>
-            <select
-              value={passMoveType}
-              onChange={e => setPassMoveType(e.target.value)}
-              className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-            >
-              {MOVE_TYPES_FILTER.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </div>
-
-          <div className="flex flex-col gap-1">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Max Moves</span>
-            <input
-              type="number"
-              value={maxMoves}
-              onChange={e => setMaxMoves(e.target.value)}
-              placeholder="all"
-              className="w-20 text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-            />
-          </div>
-
-          <button
-            onClick={runPasses}
-            disabled={passBusy}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/80 text-black text-xs font-medium hover:opacity-90 disabled:opacity-50 self-end"
-          >
-            {passBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            {passBusy ? "Running passes…" : "Run AI Passes"}
-          </button>
-        </div>
-
-        <p className="text-[11px] text-muted-foreground">
-          AI passes use GPT-4o to analyze each detected move. "all" runs precursor → trigger → behavior → extraction in sequence.
-          Expects detected moves to already exist. May take several minutes for large move sets.
-        </p>
-
-        {passErr && <ErrorBox msg={passErr} />}
-
-        {passStatus && (
-          <div className={cn(
-            "rounded-lg border p-3 space-y-1.5",
-            passStatus.status === "completed" ? "bg-green-500/10 border-green-500/20" :
-            passStatus.status === "failed"    ? "bg-red-500/10 border-red-500/20" :
-            "bg-primary/5 border-primary/20"
-          )}>
-            <div className="flex items-center gap-2">
-              {passBusy && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />}
-              {passStatus.status === "completed" && <CheckCircle className="w-3.5 h-3.5 text-green-400" />}
-              {passStatus.status === "failed"    && <XCircle    className="w-3.5 h-3.5 text-red-400"   />}
-              <span className="text-xs font-semibold text-foreground">
-                {passStatus.status === "running"   ? "Passes running…" :
-                 passStatus.status === "completed" ? "Passes completed" :
-                 passStatus.status === "failed"    ? "Pass run failed" :
-                 `Status: ${passStatus.status}`}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-              {passStatus.totalMoves  !== undefined && <span>Total: <strong className="text-foreground">{passStatus.totalMoves}</strong></span>}
-              {passStatus.processed   !== undefined && <span>Processed: <strong className="text-foreground">{passStatus.processed}</strong></span>}
-              {passStatus.succeeded   !== undefined && <span>Succeeded: <strong className="text-foreground">{passStatus.succeeded}</strong></span>}
-              {passStatus.failed      !== undefined && <span>Failed: <strong className="text-foreground">{passStatus.failed}</strong></span>}
-              {passStatus.passName                  && <span>Pass: <strong className="text-foreground">{passStatus.passName}</strong></span>}
-            </div>
-            {passStatus.errorSummary && (
-              <p className="text-[11px] text-red-400">{passStatus.errorSummary}</p>
-            )}
-          </div>
-        )}
-      </div>
-
       {/* ── Detected Moves List ── */}
       <div className="rounded-xl border border-border/50 bg-card">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/30">
@@ -1587,6 +1686,20 @@ function MoveCalibrationTab() {
         {movesLoading && (
           <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin" />Loading moves…
+          </div>
+        )}
+
+        {!movesLoading && movesMagnitudeSummary && (
+          <div className="px-4 py-2.5 border-b border-border/20 bg-muted/10">
+            <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px]">
+              <span className="text-muted-foreground uppercase tracking-wide text-[10px] font-medium self-center">Magnitude</span>
+              <span>Min: <strong className="font-mono text-foreground">{(movesMagnitudeSummary.min * 100).toFixed(2)}%</strong></span>
+              <span>P25: <strong className="font-mono text-foreground">{(movesMagnitudeSummary.p25 * 100).toFixed(2)}%</strong></span>
+              <span>Median: <strong className="font-mono text-foreground">{(movesMagnitudeSummary.median * 100).toFixed(2)}%</strong></span>
+              <span>P75: <strong className="font-mono text-foreground">{(movesMagnitudeSummary.p75 * 100).toFixed(2)}%</strong></span>
+              <span>P90: <strong className="font-mono text-primary">{(movesMagnitudeSummary.p90 * 100).toFixed(2)}%</strong></span>
+              <span>Max: <strong className="font-mono text-emerald-400">{(movesMagnitudeSummary.max * 100).toFixed(2)}%</strong></span>
+            </div>
           </div>
         )}
 
@@ -1746,12 +1859,18 @@ function MoveCalibrationTab() {
                       <th className="text-left px-3 py-2 font-medium">Moves</th>
                       <th className="text-left px-3 py-2 font-medium">Processed</th>
                       <th className="text-left px-3 py-2 font-medium">Failed</th>
+                      <th className="text-left px-3 py-2 font-medium">Elapsed</th>
                       <th className="text-left px-3 py-2 font-medium">Window</th>
                       <th className="text-left px-3 py-2 font-medium">Started</th>
+                      <th className="text-left px-3 py-2 font-medium"></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {runs.slice(0, 20).map((run) => (
+                    {runs.slice(0, 20).map((run) => {
+                      const elapsedSec = run.startedAt && run.completedAt
+                        ? Math.round((new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime()) / 1000)
+                        : null;
+                      return (
                       <tr key={run.id} className="border-b border-border/20 hover:bg-muted/20 transition-colors">
                         <td className="px-4 py-1.5 font-mono text-muted-foreground">#{run.id}</td>
                         <td className="px-3 py-1.5 font-mono text-foreground">{run.passName}</td>
@@ -1769,12 +1888,27 @@ function MoveCalibrationTab() {
                         <td className="px-3 py-1.5 font-mono text-foreground">{run.totalMoves ?? "—"}</td>
                         <td className="px-3 py-1.5 font-mono text-foreground">{run.processedMoves ?? "—"}</td>
                         <td className="px-3 py-1.5 font-mono text-foreground">{run.failedMoves ?? "—"}</td>
+                        <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                          {elapsedSec !== null ? `${elapsedSec}s` : "—"}
+                        </td>
                         <td className="px-3 py-1.5 font-mono text-muted-foreground">{run.windowDays}d</td>
                         <td className="px-3 py-1.5 text-muted-foreground">
                           {run.startedAt ? new Date(run.startedAt).toLocaleString() : "—"}
                         </td>
+                        <td className="px-3 py-1.5">
+                          <button
+                            onClick={() => { setPassName(run.passName); setScope("passes"); void runPasses(run.passName); }}
+                            disabled={passBusy || detecting}
+                            className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-border/50 text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-40 transition-colors"
+                            title={`Rerun pass "${run.passName}"`}
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            Rerun
+                          </button>
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
