@@ -16,7 +16,6 @@ import {
 } from "@workspace/db";
 import { eq, and, gte, lte, asc } from "drizzle-orm";
 import { chatComplete } from "../../../infrastructure/openai.js";
-import { PRIMARY_MODEL } from "../../ai/aiConfig.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
 
 const MAX_BEHAVIOR_BARS = 200;

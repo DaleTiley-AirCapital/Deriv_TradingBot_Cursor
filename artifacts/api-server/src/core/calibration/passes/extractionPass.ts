@@ -23,7 +23,6 @@ import {
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { chatComplete } from "../../../infrastructure/openai.js";
-import { PRIMARY_MODEL } from "../../ai/aiConfig.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
 
 function median(arr: number[]): number {
