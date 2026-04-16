@@ -2,8 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, platformStateTable, tradesTable, signalLogTable } from "@workspace/db";
 import { eq, and, gte, desc } from "drizzle-orm";
 import OpenAI from "openai";
-import { getOpenAIClient } from "../infrastructure/openai.js";
-import { PRIMARY_MODEL } from "../core/ai/aiConfig.js";
+import { chatComplete } from "../infrastructure/openai.js";
 import { retrieveContext } from "../core/ai/contextRetriever.js";
 
 const router: IRouter = Router();
@@ -693,8 +692,6 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
       return;
     }
 
-    const client = await getOpenAIClient();
-
     const dynamicContext = await buildDynamicContext();
     const lastUserMsg = [...messages].reverse().find((m: { role: string }) => m.role === "user");
     const retrievalQuery = typeof lastUserMsg?.content === "string" ? lastUserMsg.content.slice(0, 500) : "strategy analysis trading";
@@ -707,8 +704,7 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
       ...messages,
     ];
 
-    let response = await client.chat.completions.create({
-      model: PRIMARY_MODEL,
+    let response = await chatComplete({
       messages: chatMessages,
       tools,
       max_tokens: 1500,
@@ -797,8 +793,7 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
         });
       }
 
-      response = await client.chat.completions.create({
-        model: PRIMARY_MODEL,
+      response = await chatComplete({
         messages: chatMessages,
         tools,
         max_tokens: 1500,

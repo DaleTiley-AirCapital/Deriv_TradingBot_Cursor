@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { db, platformStateTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { createDecipheriv, scryptSync } from "crypto";
-import { PRIMARY_MODEL } from "../core/ai/aiConfig.js";
+import { PRIMARY_MODEL, FALLBACK_MODEL } from "../core/ai/aiConfig.js";
 
 const ENC_KEY_SOURCE = process.env["DATABASE_URL"] || process.env["ENCRYPTION_SECRET"];
 if (!ENC_KEY_SOURCE) {
@@ -38,14 +38,38 @@ export async function getOpenAIClient(): Promise<OpenAI> {
   return new OpenAI({ apiKey: key });
 }
 
+/**
+ * chatComplete — wraps client.chat.completions.create with automatic FALLBACK_MODEL retry.
+ * If PRIMARY_MODEL returns a 403/404/model_not_found/quota error, retries with FALLBACK_MODEL.
+ * Use this instead of calling client.chat.completions.create directly with PRIMARY_MODEL.
+ */
+export async function chatComplete(
+  params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model"> & { model?: string },
+): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  const client = await getOpenAIClient();
+  const primaryParams = { ...params, model: params.model ?? PRIMARY_MODEL };
+  try {
+    return await client.chat.completions.create(primaryParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+  } catch (err) {
+    const status = (err as { status?: number })?.status;
+    const code   = (err as { error?: { code?: string } })?.error?.code;
+    const isFallbackCandidate =
+      status === 403 || status === 404 ||
+      code === "model_not_found" || code === "insufficient_quota" || code === "model_not_available";
+    if (isFallbackCandidate && (params.model === PRIMARY_MODEL || params.model == null)) {
+      console.warn(`[AI] PRIMARY_MODEL (${PRIMARY_MODEL}) error (${status}/${code ?? ""}), falling back to ${FALLBACK_MODEL}`);
+      return await client.chat.completions.create({ ...params, model: FALLBACK_MODEL } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+    }
+    throw err;
+  }
+}
+
 export async function checkOpenAiHealth(): Promise<{ configured: boolean; working: boolean; error?: string }> {
   try {
     const key = await getOpenAIKey();
     if (!key) return { configured: false, working: false };
 
-    const client = new OpenAI({ apiKey: key });
-    const response = await client.chat.completions.create({
-      model: PRIMARY_MODEL,
+    const response = await chatComplete({
       messages: [{ role: "user", content: "Reply with OK" }],
       max_tokens: 5,
     });
@@ -93,8 +117,6 @@ export interface AIVerdict {
 }
 
 export async function verifySignal(ctx: SignalContext): Promise<AIVerdict> {
-  const client = await getOpenAIClient();
-
   const prompt = `You are a quantitative trading AI for a LOW-FREQUENCY, HIGH-PROBABILITY capital extraction system on Deriv synthetic indices.
 
 This system trades RARELY and holds for HOURS/DAYS targeting 50-200%+ moves. Only approve signals with genuine multi-day breakout edge. NEVER approve scalp setups or weak signals.
@@ -168,8 +190,7 @@ Respond with ONLY valid JSON:
   "reasoning": "<1-2 sentence explanation. If disagreeing, state which specific criterion failed.>"
 }`;
 
-  const response = await client.chat.completions.create({
-    model: PRIMARY_MODEL,
+  const response = await chatComplete({
     messages: [{ role: "user", content: prompt }],
     max_tokens: 300,
     temperature: 0.3,
@@ -218,8 +239,6 @@ export interface BacktestAnalysis {
 }
 
 export async function analyseBacktest(metrics: BacktestMetrics): Promise<BacktestAnalysis> {
-  const client = await getOpenAIClient();
-
   const prompt = `You are a quantitative finance analyst reviewing a backtest for a LOW-FREQUENCY capital extraction system (V2) on Deriv synthetic indices.
 
 V2 TRADE MANAGEMENT CONTEXT:
@@ -261,8 +280,7 @@ Respond with ONLY valid JSON:
 }`;
 
   try {
-    const response = await client.chat.completions.create({
-      model: PRIMARY_MODEL,
+    const response = await chatComplete({
       messages: [{ role: "user", content: prompt }],
       max_tokens: 600,
       temperature: 0.4,

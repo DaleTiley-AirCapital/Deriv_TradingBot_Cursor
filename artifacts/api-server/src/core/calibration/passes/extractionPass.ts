@@ -22,7 +22,7 @@ import {
   type DetectedMoveRow,
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
-import { getOpenAIClient } from "../../../infrastructure/openai.js";
+import { chatComplete } from "../../../infrastructure/openai.js";
 import { PRIMARY_MODEL } from "../../ai/aiConfig.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
 
@@ -195,9 +195,7 @@ Respond with ONLY valid JSON:
   "topImprovementOpportunity": "<1 sentence: single most impactful calibration change — must be research output, not a live code change>"
 }`;
 
-  const client = await getOpenAIClient();
-  const response = await client.chat.completions.create({
-    model: PRIMARY_MODEL,
+  const response = await chatComplete({
     messages: [{ role: "user", content: prompt }],
     max_tokens: 900,
     temperature: 0.3,

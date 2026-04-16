@@ -28,10 +28,63 @@ import { EMBEDDING_MODEL, MAX_RETRIEVAL_CHARS } from "./aiConfig.js";
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const WORKSPACE_ROOT = resolve(__dirname, "../../../../../");
 
-function safeRead(relPath: string, maxChars = 6000): string {
+function safeRead(relPath: string, maxChars = 40_000): string {
   const full = join(WORKSPACE_ROOT, relPath);
   if (!existsSync(full)) return `[File not found: ${relPath}]`;
   return readFileSync(full, "utf-8").slice(0, maxChars);
+}
+
+/**
+ * Split a TypeScript/JS file into function/export-level chunks.
+ * Returns an array of { id, text } where each chunk represents one
+ * logical unit (export function, export const, class, etc.).
+ * Falls back to a single chunk if no split boundaries are found.
+ */
+function chunkByFunctions(
+  relPath: string,
+  baseId: string,
+  maxCharsPerChunk = 5_000,
+): Array<{ id: string; text: string }> {
+  const content = safeRead(relPath, 80_000);
+  if (content.startsWith("[File not found")) {
+    return [{ id: baseId, text: content }];
+  }
+
+  const lines = content.split("\n");
+  const chunks: Array<{ id: string; text: string }> = [];
+  let currentLines: string[] = [];
+  let chunkIndex = 0;
+  let currentName = "header";
+
+  const BOUNDARY = /^(export\s+(async\s+)?function\s+(\w+)|export\s+(const|let|var)\s+(\w+)|export\s+(class|interface|type|enum)\s+(\w+)|\/\/\s*─{10,})/;
+
+  function flush() {
+    const text = currentLines.join("\n").trim();
+    if (text.length > 50) {
+      chunks.push({
+        id: `${baseId}:chunk-${chunkIndex}-${currentName}`,
+        text: `# Source: ${relPath} — ${currentName}\n\n${text.slice(0, maxCharsPerChunk)}`,
+      });
+      chunkIndex++;
+    }
+    currentLines = [];
+  }
+
+  for (const line of lines) {
+    const match = BOUNDARY.exec(line);
+    if (match && currentLines.length > 0) {
+      flush();
+      const fnName = match[3] ?? match[5] ?? match[7] ?? "section";
+      currentName = fnName.replace(/[^a-z0-9_]/gi, "-").slice(0, 40);
+    }
+    currentLines.push(line);
+  }
+  flush();
+
+  if (chunks.length === 0) {
+    return [{ id: baseId, text: `# Source: ${relPath}\n\n${content.slice(0, maxCharsPerChunk)}` }];
+  }
+  return chunks;
 }
 
 // ── Embedding ─────────────────────────────────────────────────────────────────
@@ -144,18 +197,22 @@ export async function indexRepoContext(): Promise<number> {
     { id: "repo:extraction-pass",  relPath: "artifacts/api-server/src/core/calibration/passes/extractionPass.ts",  meta: { type: "calibration_pass" } },
     { id: "repo:pass-runner",      relPath: "artifacts/api-server/src/core/calibration/calibrationPassRunner.ts",  meta: { type: "calibration" } },
     { id: "repo:openai-infra",     relPath: "artifacts/api-server/src/infrastructure/openai.ts",                   meta: { type: "infrastructure" } },
+    { id: "repo:backtest-engine",  relPath: "artifacts/api-server/src/runtimes/backtestEngine.ts",                 meta: { type: "backtest" } },
+    { id: "repo:ai-context",       relPath: "artifacts/api-server/src/routes/aiContext.ts",                        meta: { type: "route" } },
   ];
 
   let count = 0;
   for (const { id, relPath, meta } of fileSources) {
-    const content = safeRead(relPath);
-    await upsertChunk({
-      sourceType: "code",
-      sourceId: id,
-      contentText: `# Source: ${relPath}\n\n${content}`,
-      metadata: meta,
-    });
-    count++;
+    const chunks = chunkByFunctions(relPath, id);
+    for (const chunk of chunks) {
+      await upsertChunk({
+        sourceType: "code",
+        sourceId: chunk.id,
+        contentText: chunk.text,
+        metadata: meta,
+      });
+      count++;
+    }
   }
   return count;
 }
@@ -172,17 +229,21 @@ export async function indexSchemaContext(): Promise<number> {
     { id: "schema:move-behavior-passes",    relPath: "lib/db/src/schema/moveBehaviorPasses.ts" },
     { id: "schema:move-precursor-passes",   relPath: "lib/db/src/schema/movePrecursorPasses.ts" },
     { id: "schema:backtest-runs",           relPath: "lib/db/src/schema/backtestRuns.ts" },
+    { id: "schema:signal-log",             relPath: "lib/db/src/schema/signalLog.ts" },
+    { id: "schema:platform-state",         relPath: "lib/db/src/schema/platformState.ts" },
   ];
 
   let count = 0;
   for (const { id, relPath } of schemaFiles) {
-    const content = safeRead(relPath);
-    await upsertChunk({
-      sourceType: "schema",
-      sourceId: id,
-      contentText: `# Schema: ${relPath}\n\n${content}`,
-    });
-    count++;
+    const chunks = chunkByFunctions(relPath, id);
+    for (const chunk of chunks) {
+      await upsertChunk({
+        sourceType: "schema",
+        sourceId: chunk.id,
+        contentText: chunk.text.replace(/^# Source:/, "# Schema:"),
+      });
+      count++;
+    }
   }
   return count;
 }

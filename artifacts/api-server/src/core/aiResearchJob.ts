@@ -25,7 +25,7 @@
 import { backgroundDb } from "@workspace/db";
 import { candlesTable } from "@workspace/db";
 import { eq, and, gte, asc, desc, min, max, count } from "drizzle-orm";
-import { getOpenAIClient } from "../infrastructure/openai.js";
+import { chatComplete } from "../infrastructure/openai.js";
 import { ACTIVE_TRADING_SYMBOLS } from "../infrastructure/deriv.js";
 import { extractStrategies } from "./strategyExtractor.js";
 import { PRIMARY_MODEL } from "./ai/aiConfig.js";
@@ -535,9 +535,7 @@ Respond ONLY with valid JSON (no markdown, no preamble). All string values must 
     : prompt;
 
   try {
-    const client = await getOpenAIClient();
-    const response = await client.chat.completions.create({
-      model: PRIMARY_MODEL,
+    const response = await chatComplete({
       messages: [{ role: "user", content: enhancedPrompt }],
       max_tokens: 3000,
       temperature: 0.25,

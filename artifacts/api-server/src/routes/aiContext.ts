@@ -31,7 +31,7 @@ const SOURCE_FNS: Record<SourceName, () => Promise<number>> = {
 };
 
 router.post("/ai/index-context", async (req, res): Promise<void> => {
-  if (!isOpenAIConfigured()) {
+  if (!(await isOpenAIConfigured())) {
     res.status(503).json({ error: "OpenAI not configured — cannot index context" });
     return;
   }

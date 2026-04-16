@@ -15,7 +15,7 @@ import {
   type DetectedMoveRow,
 } from "@workspace/db";
 import { eq, and, gte, lte, asc } from "drizzle-orm";
-import { getOpenAIClient } from "../../../infrastructure/openai.js";
+import { chatComplete } from "../../../infrastructure/openai.js";
 import { PRIMARY_MODEL } from "../../ai/aiConfig.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
 
@@ -138,9 +138,7 @@ Respond with ONLY valid JSON:
   "confidenceScore": <0.0-1.0>
 }`;
 
-  const client = await getOpenAIClient();
-  const response = await client.chat.completions.create({
-    model: PRIMARY_MODEL,
+  const response = await chatComplete({
     messages: [{ role: "user", content: prompt }],
     max_tokens: 500,
     temperature: 0.25,
