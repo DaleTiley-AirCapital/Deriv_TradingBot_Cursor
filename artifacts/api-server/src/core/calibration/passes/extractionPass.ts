@@ -57,8 +57,13 @@ export async function runExtractionPass(
   const holdability   = behaviorRows.map(r => r.holdabilityScore);
   const capturable    = triggerOnlyRows.map(r => r.captureablePct);
 
+  // Honest fit: a move is "captured" only if BOTH precursor fired AND trigger pass ran.
+  // This mirrors the same definition used in calibrationAggregator.ts.
+  const triggerMoveIdSet = new Set(triggerOnlyRows.map(r => r.moveId));
+  const captured  = precursorRows.filter(r => r.engineWouldFire && triggerMoveIdSet.has(r.moveId)).length;
+  const fitScore  = moves.length > 0 ? captured / moves.length : 0;
+  // Keep engineFired separately for prompt context (how many precursors would fire alone)
   const engineFired = precursorRows.filter(r => r.engineWouldFire).length;
-  const fitScore    = moves.length > 0 ? engineFired / moves.length : 0;
 
   const byType: Record<string, number> = {};
   for (const m of moves) byType[m.moveType] = (byType[m.moveType] ?? 0) + 1;
@@ -173,8 +178,8 @@ Respond with ONLY valid JSON:
       moveType:           "all",
       windowDays:         90,
       targetMoves:        moves.length,
-      capturedMoves:      engineFired,
-      missedMoves:        moves.length - engineFired,
+      capturedMoves:      captured,
+      missedMoves:        moves.length - captured,
       fitScore,
       missReasons,
       avgMovePct,
@@ -192,8 +197,8 @@ Respond with ONLY valid JSON:
       target: [strategyCalibrationProfilesTable.symbol, strategyCalibrationProfilesTable.moveType],
       set: {
         targetMoves:        moves.length,
-        capturedMoves:      engineFired,
-        missedMoves:        moves.length - engineFired,
+        capturedMoves:      captured,
+        missedMoves:        moves.length - captured,
         fitScore,
         missReasons,
         avgMovePct,
@@ -216,10 +221,11 @@ Respond with ONLY valid JSON:
     const typeMoves   = moves.filter(m => m.moveType === mt);
     const typePcts    = typeMoves.map(m => m.movePct * 100);
     const typeHours   = typeMoves.map(m => m.holdingMinutes / 60);
-    const typeEngFire = precursorRows.filter(r => {
-      const mv = moves.find(m => m.id === r.moveId);
-      return mv?.moveType === mt && r.engineWouldFire;
-    }).length;
+    // Honest fit per move-type: both precursor fired AND trigger ran for that move
+    const typeMoveIdSet = new Set(typeMoves.map(m => m.id));
+    const typeTriggered = new Set(triggerOnlyRows.filter(r => typeMoveIdSet.has(r.moveId)).map(r => r.moveId));
+    const typeCaptured  = precursorRows.filter(r => typeMoveIdSet.has(r.moveId) && r.engineWouldFire && typeTriggered.has(r.moveId)).length;
+    const typeFitScore  = typeMoves.length > 0 ? typeCaptured / typeMoves.length : 0;
 
     await db
       .insert(strategyCalibrationProfilesTable)
@@ -228,9 +234,9 @@ Respond with ONLY valid JSON:
         moveType:        mt,
         windowDays:      90,
         targetMoves:     typeMoves.length,
-        capturedMoves:   typeEngFire,
-        missedMoves:     typeMoves.length - typeEngFire,
-        fitScore:        typeMoves.length > 0 ? typeEngFire / typeMoves.length : 0,
+        capturedMoves:   typeCaptured,
+        missedMoves:     typeMoves.length - typeCaptured,
+        fitScore:        typeFitScore,
         avgMovePct:      typePcts.length  > 0 ? typePcts.reduce((a, b) => a + b, 0) / typePcts.length : 0,
         medianMovePct:   median(typePcts),
         avgHoldingHours: typeHours.length > 0 ? typeHours.reduce((a, b) => a + b, 0) / typeHours.length : 0,
@@ -240,9 +246,9 @@ Respond with ONLY valid JSON:
         target: [strategyCalibrationProfilesTable.symbol, strategyCalibrationProfilesTable.moveType],
         set: {
           targetMoves:     typeMoves.length,
-          capturedMoves:   typeEngFire,
-          missedMoves:     typeMoves.length - typeEngFire,
-          fitScore:        typeMoves.length > 0 ? typeEngFire / typeMoves.length : 0,
+          capturedMoves:   typeCaptured,
+          missedMoves:     typeMoves.length - typeCaptured,
+          fitScore:        typeFitScore,
           avgMovePct:      typePcts.length  > 0 ? typePcts.reduce((a, b) => a + b, 0) / typePcts.length : 0,
           medianMovePct:   median(typePcts),
           avgHoldingHours: typeHours.length > 0 ? typeHours.reduce((a, b) => a + b, 0) / typeHours.length : 0,

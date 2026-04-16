@@ -201,7 +201,7 @@ router.get("/calibration/runs/:symbol", async (req, res): Promise<void> => {
 
   try {
     const runs = await getAllPassRuns(symbol);
-    res.json({ symbol, runCount: runs.length, runs });
+    res.json({ ok: true, symbol, runCount: runs.length, runs });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Runs fetch failed";
     res.status(500).json({ error: message });

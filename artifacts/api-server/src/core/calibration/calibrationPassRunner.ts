@@ -181,6 +181,7 @@ export async function runCalibrationPasses(
 
   const errors: Array<{ moveId: number; pass: string; error: string }> = [];
   let processedMoves = 0;
+  let skippedMoves   = 0;  // moves where every requested pass was already complete
 
   const perMovePasses: Exclude<PassName, "all">[] =
     passName === "all"
@@ -188,8 +189,12 @@ export async function runCalibrationPasses(
       : passName !== "extraction" ? [passName] : [];
 
   for (const move of filteredMoves) {
-    let moveFailed = false;
-    let moveSkipped = true;
+    let moveFailed  = false;
+    // A move is only "skipped" if it has per-move passes to run AND every one was already done.
+    // For extraction-only runs (perMovePasses==[]), there are no per-move passes so skip tracking
+    // doesn't apply — moves are not counted at all (they're aggregated in the extraction step).
+    let allPassesDone = perMovePasses.length > 0;
+
     for (const pass of perMovePasses) {
       // Skip-completed: if force=false and this pass already ran for this move, skip it
       if (!force) {
@@ -199,7 +204,8 @@ export async function runCalibrationPasses(
             : await hasBehaviorPass(move.id, pass as "trigger" | "behavior");
         if (alreadyDone) continue;
       }
-      moveSkipped = false;
+      // At least one pass needs to run for this move → not fully skipped
+      allPassesDone = false;
       try {
         await runPassForMove(move, pass, runId);
       } catch (err) {
@@ -211,10 +217,17 @@ export async function runCalibrationPasses(
         });
       }
     }
-    if (!moveSkipped && !moveFailed) processedMoves++;
 
-    // Checkpoint progress every 10 moves
-    if ((processedMoves + errors.length) % 10 === 0) {
+    if (perMovePasses.length > 0) {
+      if (allPassesDone) {
+        skippedMoves++;
+      } else if (!moveFailed) {
+        processedMoves++;
+      }
+    }
+
+    // Checkpoint progress every 10 active moves
+    if ((processedMoves + errors.length) % 10 === 0 && (processedMoves + errors.length) > 0) {
       await updateRunRecord(runId, processedMoves, errors.length, "running", errors);
     }
   }
@@ -232,10 +245,12 @@ export async function runCalibrationPasses(
     }
   }
 
-  const failedMoves = filteredMoves.length - processedMoves;
+  // failedMoves = total − processed − skipped (skipped are not failures, they were already done)
+  const effectiveMoves = filteredMoves.length - skippedMoves;
+  const failedMoves    = effectiveMoves > 0 ? effectiveMoves - processedMoves : 0;
   const status: "completed" | "partial" | "failed" =
-    failedMoves === 0 ? "completed" :
-    processedMoves > 0 ? "partial" : "failed";
+    errors.length === 0 ? "completed" :
+    processedMoves > 0  ? "partial"   : "failed";
 
   await updateRunRecord(runId, processedMoves, failedMoves, status, errors);
 

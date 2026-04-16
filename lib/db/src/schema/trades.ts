@@ -30,6 +30,9 @@ export const tradesTable = pgTable("trades", {
   tradeStage: integer("trade_stage").notNull().default(1),   // 1=initial, 2=breakeven, 3=trailing
   mfePct: doublePrecision("mfe_pct").notNull().default(0),   // max favourable excursion %
   maePct: doublePrecision("mae_pct").notNull().default(0),   // max adverse excursion %
+  // Optional linkage to a detected calibration move (research scaffold — no live behavior).
+  // Populated only after manual or automated correlation; null by default.
+  calibrationMoveId: integer("calibration_move_id"),
 });
 
 export const insertTradeSchema = createInsertSchema(tradesTable).omit({ id: true, createdAt: true });

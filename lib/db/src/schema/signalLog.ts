@@ -30,6 +30,9 @@ export const signalLogTable = pgTable("signal_log", {
   expectedHoldDays: doublePrecision("expected_hold_days"),
   captureRate: doublePrecision("capture_rate"),
   empiricalWinRate: doublePrecision("empirical_win_rate"),
+  // Optional linkage to a detected calibration move (research scaffold — no live behavior).
+  // Allows future correlation between live signals and historically detected moves.
+  calibrationMoveId: integer("calibration_move_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
