@@ -930,17 +930,18 @@ interface DetectedMove {
 }
 
 interface PassStatusResult {
-  runId: number;
+  id: number;
+  symbol?: string;
   status: string;
-  passName?: string;
-  totalMoves?: number;
-  processedMoves?: number;
-  processed?: number;
-  succeeded?: number;
-  failed?: number;
+  passName?: string | null;
+  totalMoves?: number | null;
+  processedMoves?: number | null;
+  failedMoves?: number | null;
+  windowDays?: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
   errors?: string[];
-  errorSummary?: string;
-  completedAt?: string;
+  errorSummary?: string | null;
 }
 
 function MoveCalibrationTab() {
@@ -990,16 +991,17 @@ function MoveCalibrationTab() {
 
   const [exportBusy, setExportBusy] = useState<Record<string, boolean>>({});
 
-  const loadDomains = useCallback(async (sym: string) => {
+  const loadDomains = useCallback(async (sym: string, family?: string) => {
     setAggLoading(true);
     setDomainLoading(true);
     setEngineLoading(true);
+    const profilePath = (family && family !== "all") ? family : "all";
     try {
       const [agg, eng, beh, calib] = await Promise.all([
         apiFetch(`calibration/aggregate/${sym}`).catch(() => null),
         apiFetch(`calibration/engine/${sym}`).catch(() => null),
         apiFetch(`behavior/profile/${sym}`).catch(() => null),
-        apiFetch(`calibration/profile/${sym}/all`).catch(() => null),
+        apiFetch(`calibration/profile/${sym}/${profilePath}`).catch(() => null),
       ]);
       setAggregate(agg);
       setEngines(eng?.engines ?? []);
@@ -1039,7 +1041,7 @@ function MoveCalibrationTab() {
   }, []);
 
   useEffect(() => {
-    loadDomains(symbol);
+    loadDomains(symbol, strategyFamily);
     loadMoves(symbol, moveTypeFilter, tierFilter);
     loadRuns(symbol);
   }, [symbol]);
@@ -1050,6 +1052,7 @@ function MoveCalibrationTab() {
 
   useEffect(() => {
     setMoveTypeFilter(strategyFamily);
+    loadDomains(symbol, strategyFamily);
   }, [strategyFamily]);
 
   useEffect(() => {
@@ -1081,7 +1084,7 @@ function MoveCalibrationTab() {
       });
       setDetectResult(d);
       await Promise.all([
-        loadDomains(symbol),
+        loadDomains(symbol, strategyFamily),
         loadMoves(symbol, moveTypeFilter, tierFilter),
       ]);
       return true;
@@ -1100,11 +1103,11 @@ function MoveCalibrationTab() {
       try {
         const s = await apiFetch(`calibration/run-status/${runId}`);
         setPassStatus(s);
-        if (s.status === "completed" || s.status === "failed") {
+        if (s.status === "completed" || s.status === "failed" || s.status === "partial") {
           clearInterval(passIntervalRef.current!);
           stopElapsed();
           setPassBusy(false);
-          await Promise.all([loadDomains(symbol), loadMoves(symbol, moveTypeFilter, tierFilter), loadRuns(symbol)]);
+          await Promise.all([loadDomains(symbol, strategyFamily), loadMoves(symbol, moveTypeFilter, tierFilter), loadRuns(symbol)]);
         }
       } catch {}
     }, 4000);
@@ -1119,7 +1122,8 @@ function MoveCalibrationTab() {
       const pn = overridePassName ?? passName;
       const body: Record<string, unknown> = { windowDays, passName: pn };
       if (passMinTier) body.minTier = passMinTier;
-      if (passMoveType && passMoveType !== "all") body.moveType = passMoveType;
+      const effectiveMoveType = passMoveType !== "all" ? passMoveType : (strategyFamily !== "all" ? strategyFamily : undefined);
+      if (effectiveMoveType) body.moveType = effectiveMoveType;
       if (maxMoves && !isNaN(Number(maxMoves))) body.maxMoves = Number(maxMoves);
       const d = await apiFetch(`calibration/run-passes/${symbol}`, {
         method: "POST",
@@ -1133,7 +1137,7 @@ function MoveCalibrationTab() {
         setPassStatus(d);
         setPassBusy(false);
         stopElapsed();
-        await Promise.all([loadDomains(symbol), loadMoves(symbol, moveTypeFilter, tierFilter)]);
+        await Promise.all([loadDomains(symbol, strategyFamily), loadMoves(symbol, moveTypeFilter, tierFilter)]);
       }
       return true;
     } catch (e: unknown) {
@@ -1329,7 +1333,7 @@ function MoveCalibrationTab() {
           </button>
 
           <button
-            onClick={() => { loadDomains(symbol); loadMoves(symbol, moveTypeFilter, tierFilter); loadRuns(symbol); }}
+            onClick={() => { loadDomains(symbol, strategyFamily); loadMoves(symbol, moveTypeFilter, tierFilter); loadRuns(symbol); }}
             disabled={aggLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border self-end"
           >
@@ -1345,7 +1349,7 @@ function MoveCalibrationTab() {
             Elapsed: <strong className="text-foreground font-mono">{runElapsed}s</strong>
             {passBusy && passStatus && passStatus.totalMoves !== undefined && (
               <span className="ml-2">
-                · Pass {passStatus.passName} · {passStatus.processed ?? 0}/{passStatus.totalMoves} moves
+                · Pass {passStatus.passName ?? "all"} · {passStatus.processedMoves ?? 0}/{passStatus.totalMoves} moves
               </span>
             )}
           </div>
@@ -1399,10 +1403,9 @@ function MoveCalibrationTab() {
               </span>
             </div>
             <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-              {passStatus.totalMoves  !== undefined && <span>Total: <strong className="text-foreground">{passStatus.totalMoves}</strong></span>}
-              {passStatus.processed   !== undefined && <span>Processed: <strong className="text-foreground">{passStatus.processed}</strong></span>}
-              {passStatus.succeeded   !== undefined && <span>Succeeded: <strong className="text-foreground">{passStatus.succeeded}</strong></span>}
-              {passStatus.failed      !== undefined && <span>Failed: <strong className="text-foreground">{passStatus.failed}</strong></span>}
+              {passStatus.totalMoves    != null && <span>Total: <strong className="text-foreground">{passStatus.totalMoves}</strong></span>}
+              {passStatus.processedMoves != null && <span>Processed: <strong className="text-foreground">{passStatus.processedMoves}</strong></span>}
+              {passStatus.failedMoves   != null && <span>Failed: <strong className="text-foreground">{passStatus.failedMoves}</strong></span>}
               {passStatus.passName                  && <span>Pass: <strong className="text-foreground">{passStatus.passName}</strong></span>}
             </div>
             {passStatus.errorSummary && (
