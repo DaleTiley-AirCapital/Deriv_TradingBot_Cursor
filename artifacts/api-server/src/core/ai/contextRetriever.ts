@@ -21,12 +21,10 @@ import { db, aiContextEmbeddingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { readFileSync, existsSync } from "fs";
 import { resolve, join } from "path";
-import { fileURLToPath } from "url";
 import { getOpenAIClient } from "../../infrastructure/openai.js";
 import { EMBEDDING_MODEL, MAX_RETRIEVAL_CHARS } from "./aiConfig.js";
 
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const WORKSPACE_ROOT = resolve(__dirname, "../../../../../");
+const WORKSPACE_ROOT = resolve(process.cwd());
 
 function safeRead(relPath: string, maxChars = 40_000): string {
   const full = join(WORKSPACE_ROOT, relPath);

@@ -1,5 +1,12 @@
 # Deriv Trading - Long Hold V3
 
+## Canonical Documentation
+
+- Current operating policy: `docs/current-operating-policy.md`
+- API parity status: `docs/api-parity-checklist.md`
+- Local operator runbook: `docs/operator-runbook.md`
+- Source-of-truth ownership map: `docs/source-of-truth.md`
+
 ## Overview
 
 Deriv Trading - Long Hold V3 is a quantitative trading research and execution platform for Deriv synthetic indices, focusing on Boom, Crash, and Volatility markets. Core mandate: **large capital, long hold, max profit** targeting 50-200%+ moves. The platform uses 8 symbol-native engines across 4 active symbols, a symbol coordinator, and a 3-stage hybrid trade manager. TP is the primary exit; ATR-proportional adaptive trailing stop is safety net ONLY. No time-based exits — trades hold 9-44 days.
@@ -40,6 +47,7 @@ The platform is built as a pnpm workspace monorepo using TypeScript, featuring a
 - Paper: native score ≥ 60, Demo: native score ≥ 65, Real: native score ≥ 70
 - Gates are enforced at startup via unconditional upsert and will be raised as engine calibration data accumulates.
 - `signal_visibility_threshold`: 50 (startup upsert ensures existing environments are not locked at old 75 default)
+- Historical threshold discussions (for example 80/85/90 or 85/90/92) should be treated as policy/calibration context unless explicitly adopted as live operating gates.
 
 **Native Scoring (all 4 symbols):**
 Each engine computes a 6-component native score (0–100). `confidence = nativeScore / 100`. The mode threshold gates are enforced by `portfolioAllocatorV3.ts`. There is no shared V2 composite score path in the live system. `strategies.ts` / `signalRouter.ts` / `scoring.ts` are backtest-only.

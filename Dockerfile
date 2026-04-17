@@ -5,6 +5,7 @@ WORKDIR /app
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY tsconfig.base.json tsconfig.json ./
+COPY scripts/                    ./scripts/
 COPY lib/                        ./lib/
 COPY artifacts/deriv-quant/      ./artifacts/deriv-quant/
 
@@ -25,6 +26,7 @@ WORKDIR /app
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY tsconfig.base.json tsconfig.json ./
+COPY scripts/                    ./scripts/
 COPY lib/                        ./lib/
 COPY artifacts/                  ./artifacts/
 

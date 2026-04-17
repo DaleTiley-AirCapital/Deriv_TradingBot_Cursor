@@ -707,7 +707,7 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
     let response = await chatComplete({
       messages: chatMessages,
       tools,
-      max_tokens: 1500,
+      max_completion_tokens: 1500,
     });
 
     let attempts = 0;
@@ -796,7 +796,7 @@ router.post("/ai/chat", async (req, res): Promise<void> => {
       response = await chatComplete({
         messages: chatMessages,
         tools,
-        max_tokens: 1500,
+        max_completion_tokens: 1500,
       });
     }
 

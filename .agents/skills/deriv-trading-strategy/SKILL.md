@@ -7,6 +7,12 @@ description: Complete trading strategy research, philosophy, and calibration dat
 
 > **This file is the SINGLE SOURCE OF TRUTH.** All trading code, strategy thresholds, scoring parameters, TP/SL calculations, and AI behavior must conform to this document. If code contradicts this skill, the code is wrong.
 
+## Runtime Policy Reference
+
+- Canonical current runtime policy snapshot: `docs/current-operating-policy.md`
+- This skill includes strategy doctrine and historical calibration policy context.
+- If a threshold appears to conflict across docs, treat `docs/current-operating-policy.md` as the authoritative current operating-state declaration until policy is formally updated.
+
 ---
 
 ## Section 1 — Core Philosophy & Mandates
@@ -34,12 +40,19 @@ Only 4 symbols are traded: **CRASH300, BOOM300, R_75, R_100**
 
 All other symbols are for data collection and research only.
 
-### Scoring Thresholds (DO NOT CHANGE)
+### Scoring Thresholds (Historical Strategy Policy Baseline)
 | Mode | Min Composite Score |
 |------|-------------------|
 | Paper | **80** |
 | Demo | **85** |
 | Real | **90** |
+
+### Current Runtime Operating Gates
+| Mode | Current Live Gate |
+|------|-------------------|
+| Paper | **60** |
+| Demo | **65** |
+| Real | **70** |
 
 ### Critical Mandates — NEVER VIOLATE
 1. TP targets 50-200%+ full spike magnitude — NEVER reduce

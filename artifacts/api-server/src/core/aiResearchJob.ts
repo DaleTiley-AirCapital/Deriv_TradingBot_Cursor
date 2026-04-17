@@ -34,6 +34,19 @@ import { retrieveContext } from "./ai/contextRetriever.js";
 const DEFAULT_WINDOW_DAYS = 365;
 const MAX_CANDLES_FOR_ANALYSIS = 15_000;
 
+function extractAndParseJson(text: string): Record<string, unknown> {
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON found in OpenAI response");
+  const jsonText = match[0];
+  try {
+    return JSON.parse(jsonText) as Record<string, unknown>;
+  } catch {
+    // Best-effort cleanup for common LLM JSON defects (trailing commas)
+    const cleaned = jsonText.replace(/,\s*([}\]])/g, "$1");
+    return JSON.parse(cleaned) as Record<string, unknown>;
+  }
+}
+
 export interface PriceSwing {
   direction: "up" | "down";
   startTs: number;
@@ -537,15 +550,34 @@ Respond ONLY with valid JSON (no markdown, no preamble). All string values must 
   try {
     const response = await chatComplete({
       messages: [{ role: "user", content: enhancedPrompt }],
-      max_tokens: 3000,
+      max_completion_tokens: 3000,
       temperature: 0.25,
     });
 
     rawText = response.choices[0]?.message?.content?.trim() ?? "";
-    const match = rawText.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("No JSON found in OpenAI response");
-
-    const p = JSON.parse(match[0]) as Partial<ParsedResult>;
+    let p: Partial<ParsedResult>;
+    try {
+      p = extractAndParseJson(rawText) as Partial<ParsedResult>;
+    } catch {
+      // One strict repair attempt to prevent hard-failing Research tab.
+      const repair = await chatComplete({
+        messages: [
+          { role: "system", content: "You repair malformed JSON. Return valid JSON only, no markdown, no explanation." },
+          {
+            role: "user",
+            content:
+              "Fix the JSON below so it is strict valid JSON and preserves all fields. " +
+              "Return only the corrected JSON object.\n\n" +
+              rawText,
+          },
+        ],
+        max_completion_tokens: 3000,
+        temperature: 0,
+      });
+      const repairedText = repair.choices[0]?.message?.content?.trim() ?? "";
+      p = extractAndParseJson(repairedText) as Partial<ParsedResult>;
+      rawText = repairedText;
+    }
 
     parsed = {
       summary:              String(p.summary             ?? ""),

@@ -261,7 +261,7 @@ function SymbolStreamRow({ sym, diag, coverage, onToggle }: {
         {coverage ? formatAge(coverage.newestDate) : "—"}
       </td>
       <td className="py-2.5 px-4">
-        {isActive && (
+        {(effectiveState !== "no_data") && (
           <button
             onClick={toggle}
             disabled={busy}
@@ -537,6 +537,75 @@ function CleanCanonicalTab() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatus }) {
+  const [symbol, setSymbol] = useState("BOOM1000");
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  const noDataSymbols = useMemo(() => {
+    const map = new Map((statusData?.symbols ?? []).map(s => [s.symbol, s.totalCandles]));
+    return ALL_28_SYMBOLS.filter(s => (map.get(s) ?? 0) === 0);
+  }, [statusData]);
+
+  useEffect(() => {
+    if (noDataSymbols.length > 0 && !noDataSymbols.includes(symbol)) {
+      setSymbol(noDataSymbols[0]);
+    }
+  }, [noDataSymbols, symbol]);
+
+  const startDownload = async () => {
+    setRunning(true);
+    setErr(null);
+    setOk(null);
+    try {
+      const d = await apiFetch("research/data-top-up?background=true", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol }),
+      });
+      setOk(d.message ?? `Historical download started for ${symbol}`);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
+      <div className="flex items-start gap-3">
+        <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center shrink-0">
+          <Download className="w-5 h-5 text-blue-400" />
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold">Download Historical Data (Per Symbol)</h3>
+          <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed max-w-xl">
+            Backfills missing history for any symbol, including research-only symbols. Use this to bootstrap symbols that currently show no data.
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-3 flex-wrap">
+        <SymbolSelectFull value={symbol} onChange={setSymbol} />
+        <button
+          onClick={startDownload}
+          disabled={running}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg border border-blue-500/40 bg-blue-500/12 text-blue-400 text-xs font-semibold hover:bg-blue-500/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {running
+            ? <><Loader2 className="w-4 h-4 animate-spin" /> Starting...</>
+            : <><Download className="w-4 h-4" /> Download Historical Data for {symbol}</>}
+        </button>
+        <span className="text-[11px] text-muted-foreground">
+          No-data symbols: <span className="font-semibold text-foreground">{noDataSymbols.length}</span>
+        </span>
+      </div>
+      {err && <ErrorBox msg={err} />}
+      {ok && <SuccessBox msg={ok} />}
     </div>
   );
 }
@@ -1029,6 +1098,17 @@ export default function DataManager() {
 
   const diagSymbols = diagData?.symbols ?? [];
   const streamingCount = diagSymbols.filter(d => d.streamingState === "streaming").length;
+  const activeDiag = ACTIVE_SYMBOLS.map(sym => diagSymbols.find(d => d.symbol === sym || d.configured === sym)).filter(Boolean) as SymbolDiagnostic[];
+  const activeStreamingCount = activeDiag.filter(d => d.streamingState === "streaming").length;
+  const activePausedCount = activeDiag.filter(d => d.streamingState === "disabled" || d.streamingState === "available").length;
+  const staleActiveCount = activeDiag.filter(d => {
+    if (d.streamingState !== "streaming" || !d.lastTick) return false;
+    return Date.now() - d.lastTick > 120_000;
+  }).length;
+  const oldestActiveTickTs = activeDiag
+    .map(d => d.lastTick ?? 0)
+    .filter(ts => ts > 0)
+    .sort((a, b) => a - b)[0] ?? null;
 
   async function toggleStream(sym: string, enable: boolean) {
     await apiFetch(`diagnostics/symbols/${sym}/streaming`, {
@@ -1117,10 +1197,31 @@ export default function DataManager() {
                 All {allSymbolRows.length} symbols · Active trading symbols highlighted · Toggle streaming per active symbol
               </p>
             </div>
-            <button onClick={() => refetchDiag()}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground border border-border/40 hover:border-border transition-colors">
-              <RefreshCw className="w-3 h-3" /> Refresh
-            </button>
+            <div className="flex items-center gap-2">
+              <span className={cn(
+                "inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] border",
+                staleActiveCount > 0
+                  ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                  : "bg-green-500/10 text-green-400 border-green-500/30"
+              )}>
+                Live {activeStreamingCount}/{ACTIVE_SYMBOLS.length}
+                {activePausedCount > 0 && <span className="text-muted-foreground">· paused {activePausedCount}</span>}
+              </span>
+              <span className={cn(
+                "inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] border",
+                staleActiveCount > 0
+                  ? "bg-red-500/10 text-red-400 border-red-500/30"
+                  : "bg-muted/20 text-muted-foreground border-border/40"
+              )}>
+                {oldestActiveTickTs
+                  ? `Oldest tick ${formatAge(new Date(oldestActiveTickTs).toISOString())}`
+                  : "No tick data"}
+              </span>
+              <button onClick={() => refetchDiag()}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground border border-border/40 hover:border-border transition-colors">
+                <RefreshCw className="w-3 h-3" /> Refresh
+              </button>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -1168,7 +1269,12 @@ export default function DataManager() {
       {tab === "coverage" && <CoverageAllGrid />}
 
       {/* ── Data Operations ── */}
-      {tab === "ops" && <CleanCanonicalTab />}
+      {tab === "ops" && (
+        <div className="space-y-4">
+          <CleanCanonicalTab />
+          <HistoricalDownloadCard statusData={researchData} />
+        </div>
+      )}
 
       {/* ── Export ── */}
       {tab === "export" && <ExportTab />}

@@ -360,6 +360,7 @@ class DerivClient {
     const apiSymbol = tick.symbol;
     const configuredSymbol = this.apiToConfiguredMap.get(apiSymbol) || apiSymbol;
     const { epoch, quote } = tick;
+    if (isSymbolStreamingDisabled(configuredSymbol)) return;
 
     recordTick(configuredSymbol, quote, epoch);
 
@@ -390,6 +391,22 @@ class DerivClient {
     if (!this._authorized) throw new Error("Not authorized");
     console.log(`[Deriv] Subscribing to ticks for ${symbol}...`);
     await this.send({ ticks: symbol, subscribe: 1 });
+  }
+
+  async ensureSymbolStreaming(configuredSymbol: string): Promise<void> {
+    if (isSymbolStreamingDisabled(configuredSymbol)) {
+      throw new Error(`Streaming is disabled for ${configuredSymbol}`);
+    }
+    if (this.subscribedSymbols.has(configuredSymbol)) return;
+    const apiSymbol = this.configuredToApiSymbol(configuredSymbol);
+    await this.subscribeToTicks(apiSymbol);
+    this.subscribedSymbols.add(configuredSymbol);
+    markSymbolSubscribed(configuredSymbol);
+  }
+
+  disableSymbolStreaming(configuredSymbol: string): void {
+    this.subscribedSymbols.delete(configuredSymbol);
+    markSymbolError(configuredSymbol, "Streaming disabled by operator");
   }
 
   async getTickHistory(symbol: string, count = 5000): Promise<DerivTickHistory | null> {
@@ -1043,7 +1060,7 @@ export function getModeCapitalKey(mode: TradingMode): string {
 
 export function getModeCapitalDefault(mode: TradingMode): string {
   switch (mode) {
-    case "paper": return "10000";
+    case "paper": return "600";
     case "demo": return "600";
     case "real": return "600";
   }

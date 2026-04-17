@@ -477,9 +477,10 @@ export async function runV3Backtest(
   const stateMap: Record<string, string> = {};
   for (const r of platformRows) stateMap[r.key] = r.value;
 
-  // ── Platform flag derivation — identical logic to portfolioAllocatorV3 ──────
-  // Must use the same key names and same boolean evaluation so that backtest
-  // and live can never diverge on mode/symbol/kill-switch admission.
+  // ── Backtest isolation behavior ──────────────────────────────────────────────
+  // Backtest should replay entry/exit quality logic without being blocked by
+  // live runtime toggles (kill switch/mode active/symbol enabled), otherwise
+  // it can return 0 trades simply because runtime mode is OFF.
   const modePrefix = { paper: "paper", demo: "demo", real: "real" }[mode] ?? "paper";
 
   // ── Min score gate — identical precedence to allocateV3Signal ────────────────
@@ -490,14 +491,9 @@ export async function runV3Backtest(
   const gateFomState    = stateMap[`${modePrefix}_min_composite_score`] || stateMap["min_composite_score"];
   const modeGate        = req.minScore ?? (gateFomState ? parseFloat(gateFomState) : modeDefaultGate);
 
-  const killSwitchActive = stateMap["kill_switch"] === "true";
-  const modeEnabled =
-    stateMap[`${modePrefix}_mode_active`] === "true" ||
-    stateMap[`${modePrefix}_mode`] === "active" ||
-    stateMap[`${modePrefix}_enabled`] === "true";
-  const modeSymbolsRaw = stateMap[`${modePrefix}_enabled_symbols`] || stateMap["enabled_symbols"] || "";
-  const modeSymbols = modeSymbolsRaw ? modeSymbolsRaw.split(",").map(s => s.trim()).filter(Boolean) : null;
-  const symbolEnabled = !modeSymbols || modeSymbols.includes(symbol);
+  const killSwitchActive = false;
+  const modeEnabled = true;
+  const symbolEnabled = true;
 
   const instrumentFamily = getInstrumentFamily(symbol);
   const htfMins = getSymbolIndicatorTimeframeMins(symbol);
@@ -1049,15 +1045,8 @@ export async function runV3BacktestMulti(
   const gateFomState   = stateMap[`${modePrefix}_min_composite_score`] || stateMap["min_composite_score"];
   const sharedModeGate = minScore ?? (gateFomState ? parseFloat(gateFomState) : (MODE_SCORE_GATES[_mode] ?? 60));
 
-  const sharedKillSwitch  = stateMap["kill_switch"] === "true";
-  const sharedModeEnabled =
-    stateMap[`${modePrefix}_mode_active`] === "true" ||
-    stateMap[`${modePrefix}_mode`]        === "active" ||
-    stateMap[`${modePrefix}_enabled`]     === "true";
-  const modeSymbolsRaw = stateMap[`${modePrefix}_enabled_symbols`] || stateMap["enabled_symbols"] || "";
-  const modeSymbols    = modeSymbolsRaw
-    ? modeSymbolsRaw.split(",").map((s: string) => s.trim()).filter(Boolean)
-    : null;
+  const sharedKillSwitch  = false;
+  const sharedModeEnabled = true;
 
   const sharedMaxOpenTrades = parseInt(
     stateMap[`${modePrefix}_max_open_trades`] || stateMap["max_open_trades"] || "3", 10,
@@ -1118,7 +1107,7 @@ export async function runV3BacktestMulti(
       modeGate:               sharedModeGate,
       killSwitchActive:       sharedKillSwitch,
       modeEnabled:            sharedModeEnabled,
-      symbolEnabled:          !modeSymbols || modeSymbols.includes(sym),
+      symbolEnabled:          true,
       maxOpenTrades:          sharedMaxOpenTrades,
       totalCapital:           sharedCapital,
       maxDailyLossPct:        sharedMaxDailyLoss,

@@ -1,10 +1,11 @@
 import { Router, type IRouter } from "express";
 import { eq, and, inArray, count, sql } from "drizzle-orm";
 import { db, candlesTable, backtestRunsTable, backtestTradesTable, platformStateTable, tradesTable, signalLogTable, ticksTable, spikeEventsTable, featuresTable, modelRunsTable } from "@workspace/db";
-import { getDerivClientWithDbToken, getDbApiToken, getDbApiTokenForMode, ACTIVE_TRADING_SYMBOLS } from "../infrastructure/deriv.js";
-import { checkOpenAiHealth, isOpenAIConfigured, analyseBacktest, type BacktestMetrics } from "../infrastructure/openai.js";
-import { runBacktestSimulation, runSymbolBacktest } from "../runtimes/backtestEngine.js";
+import { getDerivClientWithDbToken, getDbApiTokenForMode, ACTIVE_TRADING_SYMBOLS } from "../infrastructure/deriv.js";
+import { checkOpenAiHealth, isOpenAIConfigured } from "../infrastructure/openai.js";
 import { getApiSymbol, validateActiveSymbols } from "../infrastructure/symbolValidator.js";
+import { reconcileSymbolData } from "../core/dataIntegrity.js";
+import { runNativeScoreCalibration } from "../core/calibrationRunner.js";
 
 const router: IRouter = Router();
 
@@ -27,12 +28,10 @@ let setupProgress: SetupProgress = {
 };
 
 const MAX_PROGRESS_EVENTS = 2000;
-const STRATEGIES = ["trend_continuation", "mean_reversion", "spike_cluster_recovery", "swing_exhaustion", "trendline_breakout"] as const;
 const GRANULARITY_1M = 60;
 const GRANULARITY_5M = 300;
 const MAX_BATCH = 5000;
 const MAX_CONSECUTIVE_ERRORS = 5;
-const DEFAULT_CAPITAL = 600;
 const API_RATE_DELAY_MS = 150;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
 const MIN_SYMBOLS_FOR_PROCEED = Math.ceil(ACTIVE_TRADING_SYMBOLS.length * 0.5);
@@ -133,13 +132,12 @@ router.get("/setup/status", async (_req, res): Promise<void> => {
       })
     );
 
-    const [btResult] = await db.select({ n: count() }).from(backtestRunsTable);
-    const backtestCount = btResult?.n ?? 0;
-    const expectedBacktests = ACTIVE_TRADING_SYMBOLS.length * STRATEGIES.length;
-
     const totalCandles = symbolCounts.reduce((s, r) => s + r.count, 0);
     const hasEnoughData = symbolCounts.filter(r => r.count >= 100).length >= Math.ceil(ACTIVE_TRADING_SYMBOLS.length * 0.5);
-    const hasInitialBacktests = backtestCount >= Math.ceil(ACTIVE_TRADING_SYMBOLS.length * 0.5);
+
+    const calibrationRows = await db.select().from(platformStateTable)
+      .where(eq(platformStateTable.key, "calibration_last_run")).limit(1);
+    const hasInitialCalibration = calibrationRows.length > 0 && !!calibrationRows[0].value;
 
     const setupRow = await db.select().from(platformStateTable)
       .where(eq(platformStateTable.key, "initial_setup_complete")).limit(1);
@@ -150,11 +148,9 @@ router.get("/setup/status", async (_req, res): Promise<void> => {
       totalCandles,
       symbolCounts,
       hasEnoughData,
-      hasInitialBacktests,
-      backtestCount,
-      expectedBacktests,
+      hasInitialCalibration,
       initialSetupComplete: initialSetupDone,
-      setupComplete: initialSetupDone && hasEnoughData && hasInitialBacktests,
+      setupComplete: initialSetupDone && hasEnoughData && hasInitialCalibration,
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
@@ -303,7 +299,7 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
     send({
       phase: "backfill_start",
       stage: "backfill",
-      message: `Step 1 of 6: Downloading history for ${ACTIVE_TRADING_SYMBOLS.length} symbols (~${grandTotalExpected.toLocaleString()} total records)...`,
+      message: `Step 1 of 5: Downloading history for ${ACTIVE_TRADING_SYMBOLS.length} symbols (~${grandTotalExpected.toLocaleString()} total records)...`,
       totalSymbols: ACTIVE_TRADING_SYMBOLS.length,
       connectedCount: ACTIVE_TRADING_SYMBOLS.length,
       grandTotalExpected,
@@ -598,258 +594,82 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
       ? rawEnabled.filter(s => ACTIVE_TRADING_SYMBOLS.includes(s))
       : [...ACTIVE_TRADING_SYMBOLS]
     ).filter(s => !uniqueFailedSymbols.includes(s));
-    const initialCapital = parseFloat(stateMap["total_capital"] || String(DEFAULT_CAPITAL));
-
-    const btTotal = enabledSymbols.length;
+    const reconcileTotal = enabledSymbols.length;
+    let reconcileCompleted = 0;
     send({
-      phase: "backtest_start", stage: "backtest",
-      btTotal, overallPct: 40,
-      message: `Step 2 of 6: Running all ${STRATEGIES.length} strategies on ${enabledSymbols.length} symbols — ${btTotal} backtests (1 per symbol)`,
+      phase: "canonical_start",
+      stage: "canonical",
+      overallPct: 40,
+      reconcileTotal,
+      message: `Step 2 of 5: Running canonical data reconcile for ${reconcileTotal} symbols...`,
     });
-
-    const strategyAgg: Record<string, {
-      sharpeSum: number; sharpeCount: number;
-      tpSum: number; slSum: number; holdSum: number;
-      equitySum: number; drawdownSum: number; winRateSum: number; count: number;
-    }> = {};
-    for (const strat of STRATEGIES) {
-      strategyAgg[strat] = { sharpeSum: 0, sharpeCount: 0, tpSum: 0, slSum: 0, holdSum: 0, equitySum: 0, drawdownSum: 0, winRateSum: 0, count: 0 };
-    }
-
-    const comboResults: { strategy: string; symbol: string; sharpe: number; winRate: number; profitFactor: number; avgHold: number; score: number }[] = [];
-    let btCompleted = 0;
-    const btStart = Date.now();
 
     for (const symbol of enabledSymbols) {
       try {
-        const btResult = await runSymbolBacktest(symbol, initialCapital, "balanced");
-
-        const [row] = await db.insert(backtestRunsTable).values({
-          strategyName: "all_strategies",
+        send({
+          phase: "canonical_symbol_start",
+          stage: "canonical",
           symbol,
-          initialCapital,
-          totalReturn: btResult.portfolioMetrics.totalReturn,
-          netProfit: btResult.portfolioMetrics.netProfit,
-          winRate: btResult.portfolioMetrics.winRate,
-          profitFactor: btResult.portfolioMetrics.profitFactor,
-          maxDrawdown: btResult.portfolioMetrics.maxDrawdown,
-          tradeCount: btResult.portfolioMetrics.tradeCount,
-          avgHoldingHours: btResult.portfolioMetrics.avgHoldingHours,
-          expectancy: btResult.portfolioMetrics.expectancy,
-          sharpeRatio: btResult.portfolioMetrics.sharpeRatio,
-          configJson: {
-            allocationMode: "balanced",
-            symbol,
-            strategies: btResult.profitableStrategies.map(s => s.strategyName),
-            source: "initial-setup",
-          },
-          metricsJson: {
-            equityCurve: btResult.portfolioMetrics.equityCurve,
-            strategyBreakdown: btResult.profitableStrategies,
-          },
-          status: "completed",
-        }).returning();
+          reconcileCompleted,
+          reconcileTotal,
+          overallPct: 40 + Math.round((reconcileCompleted / Math.max(reconcileTotal, 1)) * 35),
+          message: `Reconciling ${symbol}: repairing gaps and rebuilding enriched timeframes...`,
+        });
 
-        if (row && btResult.trades.length > 0) {
-          const profitableTrades = btResult.trades.filter(t =>
-            btResult.profitableStrategies.some(s => s.strategyName === t.strategyName)
-          );
-          for (let i = 0; i < profitableTrades.length; i += 500) {
-            const batch = profitableTrades.slice(i, i + 500);
-            await db.insert(backtestTradesTable).values(
-              batch.map(t => ({
-                backtestRunId: row.id, entryTs: t.entryTs, exitTs: t.exitTs,
-                direction: t.direction, entryPrice: t.entryPrice, exitPrice: t.exitPrice,
-                pnl: t.pnl, exitReason: t.exitReason,
-              }))
-            );
-          }
-        }
-
-        for (const ps of btResult.profitableStrategies) {
-          const r = strategyAgg[ps.strategyName as keyof typeof strategyAgg];
-          if (!r) continue;
-          r.count++;
-          if (ps.sharpeRatio > 0) { r.sharpeSum += ps.sharpeRatio; r.sharpeCount++; }
-          r.holdSum += ps.avgHoldingHours;
-          r.winRateSum += ps.winRate;
-          if (ps.profitFactor > 0 && ps.profitFactor !== Infinity) {
-            r.tpSum += Math.min(Math.max(1.5 + ps.profitFactor * 0.4, 1.2), 4.0);
-            r.slSum += Math.min(Math.max(1.0 / ps.profitFactor, 0.5), 2.0);
-          } else { r.tpSum += 2.0; r.slSum += 1.0; }
-          r.equitySum += Math.min(Math.max(ps.winRate * 20, 8), 15);
-
-          if (ps.tradeCount >= 3) {
-            const comboScore = (ps.sharpeRatio * 0.4) + (ps.winRate * 0.25) + (ps.profitFactor * 0.2) + (ps.expectancy * 0.15);
-            comboResults.push({
-              strategy: ps.strategyName, symbol,
-              sharpe: ps.sharpeRatio, winRate: ps.winRate,
-              profitFactor: ps.profitFactor, avgHold: ps.avgHoldingHours,
-              score: comboScore,
-            });
-          }
-        }
-      } catch { /* skip */ }
-
-      btCompleted++;
-      const btElapsed = (Date.now() - btStart) / 1000;
-      const btRate = btCompleted / btElapsed;
-      const btRemaining = btRate > 0 ? Math.ceil((btTotal - btCompleted) / btRate) : 0;
-      const overallPct = 40 + Math.round((btCompleted / btTotal) * 30);
-
-      send({
-        phase: "backtest_progress", stage: "backtest",
-        btCompleted, btTotal, candleTotal,
-        strategy: "all_strategies", symbol, overallPct,
-        estRemainingSec: btRemaining,
-        message: `Backtesting all strategies on ${symbol} (${btCompleted}/${btTotal})`,
-      });
-    }
-
-    for (const sym of enabledSymbols) {
-      const symCombos = comboResults.filter(c => c.symbol === sym);
-      if (symCombos.length === 0) continue;
-      const bestCombo = [...symCombos].sort((a, b) => b.score - a.score)[0];
-      const avgWinRate = symCombos.reduce((s, c) => s + c.winRate, 0) / symCombos.length;
-      const avgPf = symCombos.reduce((s, c) => s + c.profitFactor, 0) / symCombos.length;
-      const avgHold = symCombos.reduce((s, c) => s + c.avgHold, 0) / symCombos.length;
-      send({
-        phase: "backtest_symbol_summary", stage: "backtest",
-        symbol: sym,
-        tradeCount: symCombos.length,
-        bestStrategy: bestCombo.strategy,
-        bestScore: bestCombo.score,
-        avgWinRate, avgProfitFactor: avgPf, avgHoldHours: avgHold,
-        message: `${sym}: ${symCombos.length} profitable strategies — best=${bestCombo.strategy} (WR=${(bestCombo.winRate * 100).toFixed(0)}%, PF=${bestCombo.profitFactor.toFixed(2)})`,
-      });
-    }
-
-    send({
-      phase: "ai_review_start", stage: "ai_review", overallPct: 70,
-      message: `Step 3 of 6: AI reviewing backtest results per symbol...`,
-    });
-
-    const sortedCombos = [...comboResults].sort((a, b) => b.score - a.score);
-
-    const aiAvailable = await isOpenAIConfigured();
-    const symbolReviews: Record<string, { bestStrategy: string; bestScore: number; winRate: number; profitFactor: number; aiSummary?: string; aiSuggestions?: string[] }> = {};
-    for (let si = 0; si < enabledSymbols.length; si++) {
-      const sym = enabledSymbols[si];
-      const symCombos = comboResults.filter(c => c.symbol === sym).sort((a, b) => b.score - a.score);
-      const best = symCombos[0];
-      const review: typeof symbolReviews[string] = best
-        ? { bestStrategy: best.strategy, bestScore: best.score, winRate: best.winRate, profitFactor: best.profitFactor }
-        : { bestStrategy: "none", bestScore: 0, winRate: 0, profitFactor: 0 };
-
-      if (aiAvailable && best) {
-        try {
-          const btRows = await db.select().from(backtestRunsTable)
-            .where(and(eq(backtestRunsTable.symbol, sym), eq(backtestRunsTable.strategyName, "all_strategies"), eq(backtestRunsTable.status, "completed")));
-          const btRow = btRows[btRows.length - 1];
-          if (btRow) {
-            const metrics: BacktestMetrics = {
-              id: btRow.id,
-              strategyName: btRow.strategyName,
-              symbol: btRow.symbol,
-              initialCapital: btRow.initialCapital,
-              totalReturn: btRow.totalReturn ?? 0,
-              netProfit: btRow.netProfit ?? 0,
-              winRate: btRow.winRate ?? 0,
-              profitFactor: btRow.profitFactor ?? 0,
-              maxDrawdown: btRow.maxDrawdown ?? 0,
-              tradeCount: btRow.tradeCount ?? 0,
-              avgHoldingHours: btRow.avgHoldingHours ?? 0,
-              expectancy: btRow.expectancy ?? 0,
-              sharpeRatio: btRow.sharpeRatio ?? 0,
-            };
-            const analysis = await analyseBacktest(metrics);
-            review.aiSummary = analysis.summary;
-            review.aiSuggestions = analysis.suggestions;
-          }
-        } catch (aiErr) {
-          console.warn(`[Setup] AI review failed for ${sym}:`, aiErr instanceof Error ? aiErr.message : aiErr);
-          review.aiSummary = "AI review unavailable";
-        }
+        const reconcile = await reconcileSymbolData(symbol, client);
+        reconcileCompleted++;
+        send({
+          phase: "canonical_symbol_complete",
+          stage: "canonical",
+          symbol,
+          reconcileCompleted,
+          reconcileTotal,
+          overallPct: 40 + Math.round((reconcileCompleted / Math.max(reconcileTotal, 1)) * 35),
+          improvementDelta: reconcile.postCheck.improvementDelta,
+          inserted: reconcile.repair.candlesInserted,
+          message: `Reconciled ${symbol}: +${reconcile.postCheck.improvementDelta} base candles (${reconcile.repair.candlesInserted} repaired inserts)`,
+        });
+      } catch (err) {
+        reconcileCompleted++;
+        send({
+          phase: "canonical_symbol_error",
+          stage: "canonical",
+          symbol,
+          reconcileCompleted,
+          reconcileTotal,
+          overallPct: 40 + Math.round((reconcileCompleted / Math.max(reconcileTotal, 1)) * 35),
+          message: `Reconcile error for ${symbol}: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
-
-      symbolReviews[sym] = review;
-
-      send({
-        phase: "ai_review_symbol", stage: "ai_review",
-        symbol: sym, symbolIndex: si, totalSymbols: enabledSymbols.length,
-        overallPct: 70 + Math.round(((si + 1) / enabledSymbols.length) * 10),
-        bestStrategy: review.bestStrategy,
-        bestScore: review.bestScore,
-        winRate: review.winRate,
-        profitFactor: review.profitFactor,
-        aiSummary: review.aiSummary || null,
-        aiSuggestions: review.aiSuggestions || null,
-        message: review.aiSummary
-          ? `AI Review ${sym}: ${review.aiSummary.slice(0, 120)}`
-          : `Reviewed ${sym}: best=${review.bestStrategy} (score=${review.bestScore.toFixed(2)}, WR=${(review.winRate * 100).toFixed(1)}%)`,
-      });
     }
 
     send({
-      phase: "ai_review_complete", stage: "ai_review", overallPct: 80,
-      message: `Step 3 complete — ${enabledSymbols.length} symbols reviewed${aiAvailable ? " with AI analysis" : ""}.`,
+      phase: "canonical_complete",
+      stage: "canonical",
+      overallPct: 75,
+      reconcileCompleted,
+      reconcileTotal,
+      message: `Step 2 complete — canonical reconcile finished for ${reconcileCompleted}/${reconcileTotal} symbols.`,
     });
 
     send({
-      phase: "optimising", stage: "optimise", overallPct: 80,
-      message: "Step 4 of 6: Computing AI-optimised trading parameters...",
+      phase: "calibration_start",
+      stage: "calibration",
+      overallPct: 76,
+      message: "Step 3 of 5: Running move calibration...",
     });
-    const topCombos = sortedCombos.slice(0, Math.min(6, sortedCombos.length));
-    const realStrategies = [...new Set(topCombos.map(c => c.strategy))];
-    const realSymbols = [...new Set(topCombos.map(c => c.symbol))];
-    const allStrategies = STRATEGIES.join(",");
-    const allSymbols = ACTIVE_TRADING_SYMBOLS.join(",");
-
-    const bestAvgHold = topCombos.length > 0
-      ? topCombos.reduce((s, c) => s + c.avgHold, 0) / topCombos.length : 72;
-    const bestPf = topCombos.length > 0
-      ? topCombos.reduce((s, c) => s + c.profitFactor, 0) / topCombos.length : 1.5;
-
-    const optTpStrong = parseFloat(Math.min(Math.max(1.8 + bestPf * 0.5, 2.5), 4.0).toFixed(2));
-    const optTpMed = parseFloat(Math.min(Math.max(1.5 + bestPf * 0.35, 2.0), 3.5).toFixed(2));
-    const optTpWeak = parseFloat(Math.min(Math.max(1.2 + bestPf * 0.25, 1.5), 2.5).toFixed(2));
-    const optSl = parseFloat(Math.min(Math.max(0.8, 1.0 / bestPf), 1.5).toFixed(2));
-    const optHold = parseFloat(Math.max(48, Math.min(bestAvgHold * 1.3, 168)).toFixed(1));
-    const optEquity = parseFloat(Math.min(Math.max(8, 12), 16).toFixed(2));
-
-    const aiSuggestions: Record<string, string> = {};
-    aiSuggestions["paper_equity_pct_per_trade"] = String(optEquity);
-    aiSuggestions["demo_equity_pct_per_trade"] = String(Math.max(optEquity * 0.7, 8));
-    aiSuggestions["real_equity_pct_per_trade"] = String(Math.max(optEquity * 0.5, 5));
-
-    if (realStrategies.length > 0) {
-      aiSuggestions["real_enabled_strategies"] = realStrategies.join(",");
-    }
-    if (realSymbols.length > 0) {
-      aiSuggestions["real_enabled_symbols"] = realSymbols.join(",");
-    }
-
-    for (const [key, value] of Object.entries(aiSuggestions)) {
-      const suggestKey = `ai_suggest_${key}`;
-      await db.insert(platformStateTable).values({ key: suggestKey, value })
-        .onConflictDoUpdate({ target: platformStateTable.key, set: { value, updatedAt: new Date() } });
-    }
-
-    await db.insert(platformStateTable).values({ key: "ai_optimised_at", value: new Date().toISOString() })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: new Date().toISOString(), updatedAt: new Date() } });
-    await db.insert(platformStateTable).values({ key: "ai_recommended_strategies", value: realStrategies.join(",") })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: realStrategies.join(","), updatedAt: new Date() } });
-    await db.insert(platformStateTable).values({ key: "ai_recommended_symbols", value: realSymbols.join(",") })
-      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: realSymbols.join(","), updatedAt: new Date() } });
-
+    const calibrationReport = await runNativeScoreCalibration(false);
     send({
-      phase: "optimise_complete", stage: "optimise", overallPct: 88,
-      message: "Step 4 complete — AI-optimised settings saved.",
+      phase: "calibration_complete",
+      stage: "calibration",
+      overallPct: 88,
+      enginesAnalyzed: calibrationReport.enginesAnalyzed ?? 0,
+      message: `Step 3 complete — move calibration finished (${calibrationReport.enginesAnalyzed ?? 0} engines analyzed).`,
     });
 
     send({
       phase: "streaming_start", stage: "streaming", overallPct: 90,
-      message: "Step 5 of 6: Starting live data stream...",
+      message: "Step 4 of 5: Starting live data stream...",
     });
 
     try {
@@ -878,15 +698,15 @@ async function runSetupInBackground(send: (data: Record<string, unknown>) => voi
 
     send({
       phase: "streaming_complete", stage: "streaming", overallPct: 95,
-      message: `Step 5 complete — streaming ${ACTIVE_TRADING_SYMBOLS.length} symbols.`,
+      message: `Step 4 complete — streaming ${ACTIVE_TRADING_SYMBOLS.length} symbols.`,
     });
 
     const totalSec = Math.round((Date.now() - globalStart) / 1000);
     send({
       phase: "complete", stage: "complete", overallPct: 100,
-      candleTotal, btCompleted, btTotal,
+      candleTotal, reconcileCompleted, reconcileTotal,
       failedSymbols: failedSymbols.map(f => ({ symbol: f.symbol, error: f.error, timeframe: f.timeframe })),
-      message: `Step 6 of 6: Complete — ${candleTotal.toLocaleString()} candles, ${btCompleted} backtests, settings optimised, streaming live (${totalSec}s)`,
+      message: `Step 5 of 5: Ready — ${candleTotal.toLocaleString()} candles, canonical data cleaned, move calibration complete, streaming live (${totalSec}s)`,
     });
 
     setupProgress.running = false;

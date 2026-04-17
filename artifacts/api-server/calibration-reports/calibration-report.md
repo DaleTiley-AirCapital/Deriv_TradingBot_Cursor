@@ -1,6 +1,9 @@
 # Native Score Calibration Report
 **Generated:** 2026-04-13 | **Task #104** | **All 4 Active Symbols**
 
+> Current runtime operating gates are tracked in `docs/current-operating-policy.md`.
+> This report contains calibration analysis context and historical floor policy discussion.
+
 ---
 
 ## Executive Summary

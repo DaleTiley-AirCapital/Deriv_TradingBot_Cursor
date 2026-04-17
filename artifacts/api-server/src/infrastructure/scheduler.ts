@@ -20,6 +20,17 @@ const DEFAULT_SYMBOLS = ACTIVE_TRADING_SYMBOLS;
 const DEFAULT_SCAN_INTERVAL_MS = 300_000;
 const WATCH_SCAN_INTERVAL_MS = 60_000;
 const DEFAULT_STAGGER_SECONDS = 10;
+let scanCycleRunning = false;
+let positionCycleRunning = false;
+let watchCycleRunning = false;
+
+function formatDbErr(err: unknown): string {
+  const base = err instanceof Error ? err.message : String(err);
+  const cause = (err as { cause?: unknown })?.cause;
+  if (!cause) return base;
+  const causeMsg = cause instanceof Error ? cause.message : String(cause);
+  return `${base} | cause: ${causeMsg}`;
+}
 
 async function dbWithRetry<T>(fn: () => Promise<T>, label: string, maxAttempts = 3): Promise<T> {
   let lastErr: unknown;
@@ -28,8 +39,11 @@ async function dbWithRetry<T>(fn: () => Promise<T>, label: string, maxAttempts =
       return await fn();
     } catch (err) {
       lastErr = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[Scheduler] DB retry ${attempt}/${maxAttempts} for "${label}": ${msg}`);
+      const msg = formatDbErr(err);
+      // Avoid log storms under persistent DB failures.
+      if (attempt === maxAttempts) {
+        console.warn(`[Scheduler] DB retry ${attempt}/${maxAttempts} for "${label}": ${msg}`);
+      }
       if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 1000 * attempt));
     }
   }
@@ -351,6 +365,8 @@ async function scheduleStaggeredScan(symbols: string[], staggerMs: number): Prom
 }
 
 async function scanCycle(): Promise<void> {
+  if (scanCycleRunning) return;
+  scanCycleRunning = true;
   try {
     const states = await dbWithRetry(
       () => db.select().from(platformStateTable),
@@ -400,11 +416,15 @@ async function scanCycle(): Promise<void> {
       }
     }
   } catch (err) {
-    console.error("[Scheduler] Scan error:", err instanceof Error ? err.message : err);
+    console.error("[Scheduler] Scan error:", formatDbErr(err));
+  } finally {
+    scanCycleRunning = false;
   }
 }
 
 async function positionManagementCycle(): Promise<void> {
+  if (positionCycleRunning) return;
+  positionCycleRunning = true;
   try {
     const states = await dbWithRetry(
       () => db.select().from(platformStateTable),
@@ -422,7 +442,9 @@ async function positionManagementCycle(): Promise<void> {
     // promoteBreakevenSls is superseded — breakeven is now embedded in the shared state machine.
     await manageOpenPositions();
   } catch (err) {
-    console.error("[Scheduler] Position management error:", err instanceof Error ? err.message : err);
+    console.error("[Scheduler] Position management error:", formatDbErr(err));
+  } finally {
+    positionCycleRunning = false;
   }
 }
 
@@ -623,6 +645,8 @@ const watchLastScanMs: Record<string, number> = {};
  *   This ties live watch-mode execution discipline to empirically derived behavior profiles.
  */
 async function watchScanCycle(): Promise<void> {
+  if (watchCycleRunning) return;
+  watchCycleRunning = true;
   cleanupStale();
 
   const watchSymbols = getSymbolsNeedingWatchScan();
@@ -737,7 +761,9 @@ async function watchScanCycle(): Promise<void> {
       }
     }
   } catch (err) {
-    console.error("[WatchScan] Cycle error:", err instanceof Error ? err.message : err);
+    console.error("[WatchScan] Cycle error:", formatDbErr(err));
+  } finally {
+    watchCycleRunning = false;
   }
 }
 

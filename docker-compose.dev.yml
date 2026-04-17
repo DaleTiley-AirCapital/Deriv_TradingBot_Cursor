@@ -1,0 +1,89 @@
+services:
+  deps:
+    image: node:24-slim
+    container_name: forex-bot-deps-dev
+    working_dir: /workspace
+    command: >
+      sh -lc "npm install -g pnpm &&
+              pnpm install"
+    volumes:
+      - ./:/workspace
+      - workspace_node_modules:/workspace/node_modules
+      - api_node_modules:/workspace/artifacts/api-server/node_modules
+      - web_node_modules:/workspace/artifacts/deriv-quant/node_modules
+      - lib_node_modules:/workspace/lib/node_modules
+
+  postgres:
+    image: postgres:16
+    container_name: forex-bot-postgres-dev
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: forexbot
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d forexbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    image: node:24-slim
+    container_name: forex-bot-api-dev
+    working_dir: /workspace
+    depends_on:
+      deps:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/forexbot
+      NODE_ENV: development
+      SERVE_FRONTEND: "false"
+    command: >
+      sh -lc "npm install -g pnpm &&
+              pnpm --filter @workspace/api-server run dev"
+    volumes:
+      - ./:/workspace
+      - workspace_node_modules:/workspace/node_modules
+      - api_node_modules:/workspace/artifacts/api-server/node_modules
+      - lib_node_modules:/workspace/lib/node_modules
+    ports:
+      - "8081:8080"
+
+  web:
+    image: node:24-slim
+    container_name: forex-bot-web-dev
+    working_dir: /workspace
+    depends_on:
+      deps:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    environment:
+      PORT: "5173"
+      BASE_PATH: /
+      API_HOST: api
+      API_PORT: "8080"
+      NODE_ENV: development
+    command: >
+      sh -lc "npm install -g pnpm &&
+              pnpm --filter @workspace/deriv-quant run dev"
+    volumes:
+      - ./:/workspace
+      - workspace_node_modules:/workspace/node_modules
+      - web_node_modules:/workspace/artifacts/deriv-quant/node_modules
+      - lib_node_modules:/workspace/lib/node_modules
+    ports:
+      - "5173:5173"
+
+volumes:
+  pgdata_dev:
+  workspace_node_modules:
+  api_node_modules:
+  web_node_modules:
+  lib_node_modules:

@@ -289,7 +289,7 @@ async function initDb(): Promise<void> {
       ('min_ev_threshold',    '0.001'),
       ('min_rr_ratio',        '1.5'),
 
-      ('paper_capital',               '10000'),
+      ('paper_capital',               '600'),
       ('paper_equity_pct_per_trade',  '30'),
       ('paper_max_open_trades',       '4'),
       ('paper_allocation_mode',       'aggressive'),
@@ -329,6 +329,7 @@ async function initDb(): Promise<void> {
     INSERT INTO platform_state (key, value) VALUES ('demo_min_composite_score',  '65') ON CONFLICT (key) DO UPDATE SET value = '65';
     INSERT INTO platform_state (key, value) VALUES ('real_min_composite_score',  '70') ON CONFLICT (key) DO UPDATE SET value = '70';
     INSERT INTO platform_state (key, value) VALUES ('signal_visibility_threshold', '50') ON CONFLICT (key) DO UPDATE SET value = LEAST(platform_state.value::numeric, 50)::text;
+    UPDATE platform_state SET value = '600' WHERE key = 'paper_capital' AND value = '10000';
     UPDATE platform_state SET value = '60' WHERE key = 'ai_suggest_paper_min_composite_score' AND CAST(value AS INTEGER) < 60;
     UPDATE platform_state SET value = '65' WHERE key = 'ai_suggest_demo_min_composite_score' AND CAST(value AS INTEGER) < 65;
     UPDATE platform_state SET value = '70' WHERE key = 'ai_suggest_real_min_composite_score' AND CAST(value AS INTEGER) < 70;

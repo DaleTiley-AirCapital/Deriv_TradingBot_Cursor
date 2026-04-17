@@ -1,5 +1,11 @@
 # Repository Guardrails
 
+Canonical policy links:
+
+- Current runtime operating policy: `docs/current-operating-policy.md`
+- Documentation guardrails: `docs/docs-guardrails.md`
+- Source-of-truth ownership map: `docs/source-of-truth.md`
+
 ## What exists
 
 Two runnable verification scripts:

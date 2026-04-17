@@ -53,7 +53,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   ai_recommended_symbols: "",
 
   paper_mode_active: "false",
-  paper_capital: "10000",
+  paper_capital: "600",
   paper_equity_pct_per_trade: "30",
   paper_max_open_trades: "4",
   paper_allocation_mode: "aggressive",

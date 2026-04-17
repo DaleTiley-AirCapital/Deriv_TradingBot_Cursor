@@ -35,6 +35,25 @@ const LEAD_IN_BARS = 60;            // bars before move start for context
 const ATR_PERIOD = 14;              // bars for ATR calculation
 const BOOM_CRASH_SYMBOLS = ["BOOM300", "CRASH300"];
 
+function isMissingRelationError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: string }).code;
+  const msg = (err as { message?: string }).message ?? "";
+  return code === "42P01" || msg.includes("does not exist");
+}
+
+async function safeDeleteForSymbol(op: () => Promise<unknown>, label: string): Promise<void> {
+  try {
+    await op();
+  } catch (err) {
+    if (isMissingRelationError(err)) {
+      console.warn(`[MoveDetector] Skip delete for ${label}: relation missing`);
+      return;
+    }
+    throw err;
+  }
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface TriggerZoneSnapshot {
@@ -506,14 +525,22 @@ export async function detectAndStoreMoves(
     // Cascade-delete all dependent calibration rows first so stale pass data
     // from old move IDs never contaminates subsequent honest-fit calculations.
     // Order: profiles → precursor/behavior passes → detected moves
-    await db.delete(strategyCalibrationProfilesTable)
-      .where(eq(strategyCalibrationProfilesTable.symbol, symbol));
-    await db.delete(movePrecursorPassesTable)
-      .where(eq(movePrecursorPassesTable.symbol, symbol));
-    await db.delete(moveBehaviorPassesTable)
-      .where(eq(moveBehaviorPassesTable.symbol, symbol));
-    await db.delete(detectedMovesTable)
-      .where(eq(detectedMovesTable.symbol, symbol));
+    await safeDeleteForSymbol(
+      () => db.delete(strategyCalibrationProfilesTable).where(eq(strategyCalibrationProfilesTable.symbol, symbol)),
+      "strategy_calibration_profiles",
+    );
+    await safeDeleteForSymbol(
+      () => db.delete(movePrecursorPassesTable).where(eq(movePrecursorPassesTable.symbol, symbol)),
+      "move_precursor_passes",
+    );
+    await safeDeleteForSymbol(
+      () => db.delete(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol)),
+      "move_behavior_passes",
+    );
+    await safeDeleteForSymbol(
+      () => db.delete(detectedMovesTable).where(eq(detectedMovesTable.symbol, symbol)),
+      "detected_moves",
+    );
   }
 
   let savedToDb = 0;

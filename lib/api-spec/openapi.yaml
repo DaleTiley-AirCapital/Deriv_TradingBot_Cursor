@@ -27,6 +27,20 @@ tags:
     description: Platform configuration and trading parameters
   - name: account
     description: Deriv account info and trading mode
+  - name: setup
+    description: Initial setup and bootstrap workflows
+  - name: research
+    description: Research, data integrity, and AI analysis workflows
+  - name: calibration
+    description: Move-first calibration endpoints
+  - name: diagnostics
+    description: Runtime and data diagnostics endpoints
+  - name: ai
+    description: AI chat and context indexing endpoints
+  - name: behavior
+    description: Behavior profiling endpoints
+  - name: export
+    description: Research/export data endpoints
 paths:
   /healthz:
     get:
@@ -820,6 +834,395 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PlatformOverview"
+
+  /version:
+    get:
+      operationId: getVersion
+      tags: [diagnostics]
+      summary: Get backend version metadata
+      responses:
+        "200":
+          description: Version payload
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /settings/openai-health:
+    get:
+      operationId: getOpenAiHealth
+      tags: [settings]
+      summary: Check OpenAI key health from backend
+      responses:
+        "200":
+          description: OpenAI health
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /settings/ai-apply-suggestion:
+    post:
+      operationId: applyAiSuggestion
+      tags: [settings]
+      summary: Apply a pending AI suggestion to settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Suggestion applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+
+  /settings/paper-reset:
+    post:
+      operationId: resetPaperMode
+      tags: [settings]
+      summary: Reset paper-mode runtime/trade state
+      responses:
+        "200":
+          description: Paper mode reset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+
+  /backtest/portfolio:
+    post:
+      operationId: runPortfolioBacktest
+      tags: [backtest]
+      summary: Run portfolio-level backtest across symbols
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Portfolio backtest result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /backtest/v3/run:
+    post:
+      operationId: runBacktestV3
+      tags: [backtest]
+      summary: Run V3 engine-native backtest workflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: V3 backtest result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /signals/features/{symbol}:
+    get:
+      operationId: getSignalFeaturesForSymbol
+      tags: [signals]
+      summary: Get latest computed feature snapshot for a symbol
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Symbol feature snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /signals/export:
+    get:
+      operationId: exportSignals
+      tags: [signals]
+      summary: Export signal review rows with filters
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Signal export payload
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /setup/status:
+    get:
+      operationId: getSetupStatus
+      tags: [setup]
+      summary: Get setup and bootstrap completion status
+      responses:
+        "200":
+          description: Setup status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /setup/preflight:
+    post:
+      operationId: runSetupPreflight
+      tags: [setup]
+      summary: Validate setup prerequisites before initialise
+      responses:
+        "200":
+          description: Preflight result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /setup/progress:
+    get:
+      operationId: getSetupProgress
+      tags: [setup]
+      summary: Stream or poll setup progress state
+      responses:
+        "200":
+          description: Setup progress
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /setup/initialise:
+    post:
+      operationId: initialiseSetup
+      tags: [setup]
+      summary: Perform initial platform setup
+      responses:
+        "200":
+          description: Setup initialise result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /setup/reset:
+    post:
+      operationId: resetSetup
+      tags: [setup]
+      summary: Reset setup workflow state
+      responses:
+        "200":
+          description: Setup reset result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /ai/chat:
+    post:
+      operationId: postAiChat
+      tags: [ai]
+      summary: Conversational AI assistant endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: AI chat response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /ai/index-context:
+    post:
+      operationId: indexAiContext
+      tags: [ai]
+      summary: Index repository/schema/context chunks for retrieval
+      responses:
+        "200":
+          description: Indexing status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /ai/index-status:
+    get:
+      operationId: getAiIndexStatus
+      tags: [ai]
+      summary: Get AI context index status
+      responses:
+        "200":
+          description: Index status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /diagnostics/symbols:
+    get:
+      operationId: getSymbolDiagnostics
+      tags: [diagnostics]
+      summary: Get per-symbol stream/health diagnostics
+      responses:
+        "200":
+          description: Symbol diagnostics
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /diagnostics/data-integrity:
+    get:
+      operationId: getDataIntegritySummary
+      tags: [diagnostics]
+      summary: Get aggregate data integrity report
+      responses:
+        "200":
+          description: Data integrity summary
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /research/data-status:
+    get:
+      operationId: getResearchDataStatus
+      tags: [research]
+      summary: Get research data coverage by symbol
+      responses:
+        "200":
+          description: Research data status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /research/ai-analyze:
+    post:
+      operationId: runAiResearchAnalyze
+      tags: [research]
+      summary: Run synchronous AI research analysis for symbol
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                windowDays:
+                  type: number
+              required: [symbol]
+      responses:
+        "200":
+          description: AI research report
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /research/ai-analyze/background:
+    post:
+      operationId: runAiResearchAnalyzeBackground
+      tags: [research]
+      summary: Start background AI research analysis for symbol
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                symbol:
+                  type: string
+                windowDays:
+                  type: number
+              required: [symbol]
+      responses:
+        "200":
+          description: Background job started
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /research/ai-analyze/status:
+    get:
+      operationId: getAiResearchAnalyzeStatus
+      tags: [research]
+      summary: Get background AI research job status
+      responses:
+        "200":
+          description: AI research status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /calibration/profiles/{symbol}:
+    get:
+      operationId: getCalibrationProfiles
+      tags: [calibration]
+      summary: Get calibration profiles for a symbol
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Calibration profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
 
 components:
   schemas:

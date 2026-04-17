@@ -48,11 +48,33 @@ export async function chatComplete(
 ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
   const client = await getOpenAIClient();
   const primaryParams = { ...params, model: params.model ?? PRIMARY_MODEL };
+  const maxTokens = typeof params.max_completion_tokens === "number"
+    ? params.max_completion_tokens
+    : undefined;
   try {
     return await client.chat.completions.create(primaryParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
   } catch (err) {
     const status = (err as { status?: number })?.status;
     const code   = (err as { error?: { code?: string } })?.error?.code;
+    const message = err instanceof Error ? err.message : String(err);
+    const hitOutputLimit =
+      status === 400 &&
+      maxTokens !== undefined &&
+      /max_tokens|model output limit/i.test(message);
+
+    if (hitOutputLimit) {
+      const bumped = Math.min(Math.max(maxTokens * 2, maxTokens + 500), 16_000);
+      if (bumped > maxTokens) {
+        console.warn(
+          `[AI] Output limit reached at ${maxTokens} tokens for model ${(primaryParams as { model?: string }).model ?? "unknown"}; retrying with ${bumped}.`,
+        );
+        return await client.chat.completions.create({
+          ...primaryParams,
+          max_completion_tokens: bumped,
+        } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+      }
+    }
+
     const isFallbackCandidate =
       status === 403 || status === 404 ||
       code === "model_not_found" || code === "insufficient_quota" || code === "model_not_available";
@@ -71,7 +93,7 @@ export async function checkOpenAiHealth(): Promise<{ configured: boolean; workin
 
     const response = await chatComplete({
       messages: [{ role: "user", content: "Reply with OK" }],
-      max_tokens: 5,
+      max_completion_tokens: 5,
     });
     const ok = !!response.choices[0]?.message?.content;
     return { configured: true, working: ok };
@@ -192,7 +214,7 @@ Respond with ONLY valid JSON:
 
   const response = await chatComplete({
     messages: [{ role: "user", content: prompt }],
-    max_tokens: 300,
+    max_completion_tokens: 300,
     temperature: 0.3,
   });
 
@@ -282,7 +304,7 @@ Respond with ONLY valid JSON:
   try {
     const response = await chatComplete({
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 600,
+      max_completion_tokens: 600,
       temperature: 0.4,
     });
 

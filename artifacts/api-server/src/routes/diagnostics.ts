@@ -16,6 +16,7 @@ import {
 } from "../core/dataIntegrity.js";
 import { getEnrichmentStatus } from "../core/candleEnrichment.js";
 import { ALL_SYMBOLS } from "../infrastructure/deriv.js";
+import { getDerivClientWithDbToken } from "../infrastructure/deriv.js";
 import { db, platformStateTable } from "@workspace/db";
 import { candlesTable } from "@workspace/db";
 import { inArray, and, gte, count, min, max, sql } from "drizzle-orm";
@@ -88,8 +89,20 @@ router.post("/diagnostics/symbols/:symbol/streaming", async (req, res) => {
 
     if (enabled) {
       enableSymbolStreaming(symbol);
+      const client = await getDerivClientWithDbToken();
+      await client.ensureSymbolStreaming(symbol);
+      await db.insert(platformStateTable).values({ key: "streaming", value: "true" })
+        .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "true", updatedAt: new Date() } });
+      await db.insert(platformStateTable).values({ key: "last_sync_at", value: new Date().toISOString() })
+        .onConflictDoUpdate({ target: platformStateTable.key, set: { value: new Date().toISOString(), updatedAt: new Date() } });
     } else {
       disableSymbolStreaming(symbol);
+      try {
+        const client = await getDerivClientWithDbToken();
+        client.disableSymbolStreaming(symbol);
+      } catch {
+        // if no client, persisted disabled state still takes effect
+      }
     }
 
     const dbKey = `streaming_disabled_${symbol}`;
@@ -100,7 +113,7 @@ router.post("/diagnostics/symbols/:symbol/streaming", async (req, res) => {
     res.json({
       symbol,
       streamingEnabled: !disabled,
-      streamingState: disabled ? "disabled" : "available",
+      streamingState: disabled ? "disabled" : "streaming",
       message: `Streaming ${enabled ? "enabled" : "disabled"} for ${symbol}`,
     });
   } catch (err) {

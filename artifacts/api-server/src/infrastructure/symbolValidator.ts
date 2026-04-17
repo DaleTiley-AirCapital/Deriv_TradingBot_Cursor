@@ -10,6 +10,7 @@ import {
 export type SymbolStreamingState = "streaming" | "available" | "idle" | "disabled";
 
 export interface SymbolStatus {
+  symbol: string;
   configured: string;
   instrumentFamily: string;
   isActiveTradingSymbol: boolean;
@@ -339,6 +340,7 @@ export function getAllSymbolStatuses(): SymbolStatus[] {
     const streamingState = resolveStreamingState(symbol, health, !!validated);
 
     return {
+      symbol:                symbol,
       configured:            symbol,
       instrumentFamily:      classifyInstrumentFamily(symbol),
       isActiveTradingSymbol: ACTIVE_TRADING_SYMBOLS.includes(symbol),

@@ -513,7 +513,7 @@ Answer the user's question about this backtest concisely and with specific data 
         { role: "system", content: retrievedSection + systemPrompt },
         { role: "user", content: message },
       ],
-      max_tokens: 800,
+      max_completion_tokens: 800,
       temperature: 0.4,
     });
 

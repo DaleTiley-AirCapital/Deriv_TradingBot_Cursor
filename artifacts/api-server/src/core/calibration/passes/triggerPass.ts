@@ -104,7 +104,7 @@ Respond with ONLY valid JSON:
 
   const response = await chatComplete({
     messages: [{ role: "user", content: prompt }],
-    max_tokens: 400,
+    max_completion_tokens: 400,
     temperature: 0.2,
   });
 

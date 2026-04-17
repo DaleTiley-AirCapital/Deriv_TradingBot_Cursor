@@ -174,7 +174,7 @@ export default function Settings() {
       const r = await fetch(`${BASE}api/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key, value }),
+        body: JSON.stringify({ [key]: value }),
       });
       if (!r.ok) throw new Error(`${r.status}`);
       return r.json();

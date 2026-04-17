@@ -4,7 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
-import { CheckCircle2, Circle, Loader2, AlertCircle, Database, BarChart3, Zap, ArrowRight, ArrowLeft, Key, Eye, EyeOff, Brain, Radio, RefreshCw, RotateCcw, Wifi, WifiOff, AlertTriangle, ChevronDown, ChevronUp, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, AlertCircle, Database, Zap, ArrowRight, ArrowLeft, Key, Eye, EyeOff, Radio, RefreshCw, RotateCcw, Wifi, WifiOff, AlertTriangle, ChevronDown, ChevronUp, XCircle } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL || "/";
 const api = (path: string) => `${BASE}api${path}`;
@@ -84,15 +84,14 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [testResult, setTestResult] = useState<{ derivDemo: { ok: boolean; error?: string }; derivReal: { ok: boolean; error?: string }; openai: { ok: boolean; error?: string } } | null>(null);
 
   const [initProgress, setInitProgress] = useState(0);
-  const [initStage, setInitStage] = useState<"backfill" | "backtest" | "ai_review" | "optimise" | "streaming" | "complete" | "error">("backfill");
+  const [initStage, setInitStage] = useState<"backfill" | "canonical" | "calibration" | "streaming" | "complete" | "error">("backfill");
   const [initStatus, setInitStatus] = useState("");
   const [candleTotal, setCandleTotal] = useState(0);
-  const [btCompleted, setBtCompleted] = useState(0);
-  const [btTotal, setBtTotal] = useState(0);
+  const [canonicalCompleted, setCanonicalCompleted] = useState(0);
+  const [canonicalTotal, setCanonicalTotal] = useState(0);
   const [estRemainingSec, setEstRemainingSec] = useState(0);
   const [symbolProgress, setSymbolProgress] = useState<Record<string, SymbolBackfillInfo>>({});
   const [btSymbolResults, setBtSymbolResults] = useState<Record<string, { strategy: string; winRate: number; profitFactor: number; score: number; tradeCount: number; avgHoldHours: number }>>({});
-  const [aiReviews, setAiReviews] = useState<Record<string, { summary: string | null; suggestions: string[] | null; bestStrategy: string; winRate: number; profitFactor: number }>>({});
   const [failedSymbols, setFailedSymbols] = useState<{ symbol: string; error: string; timeframe: string }[]>([]);
   const [grandTotalExpected, setGrandTotalExpected] = useState(0);
   const [backfillExpanded, setBackfillExpanded] = useState(true);
@@ -168,12 +167,11 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     setInitStage("backfill");
     setInitStatus("Probing Deriv API for available data ranges...");
     setCandleTotal(0);
-    setBtCompleted(0);
-    setBtTotal(0);
+    setCanonicalCompleted(0);
+    setCanonicalTotal(0);
     setEstRemainingSec(0);
     setSymbolProgress({});
     setBtSymbolResults({});
-    setAiReviews({});
     setFailedSymbols([]);
     setGrandTotalExpected(0);
     setBackfillExpanded(true);
@@ -350,72 +348,29 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           if (failed && failed.length > 0) {
             setFailedSymbols(failed);
           }
-        } else if (phase === "backtest_start") {
-          setInitStage("backtest");
-          setBtTotal(evt.btTotal as number || 0);
-          setInitStatus(evt.message as string);
-        } else if (phase === "backtest_progress") {
-          setInitStage("backtest");
+        } else if (phase === "canonical_start") {
+          setInitStage("canonical");
+          setCanonicalTotal(evt.reconcileTotal as number || 0);
+          setCanonicalCompleted(0);
           setInitProgress(Math.max(pct, 40));
-          setBtCompleted(evt.btCompleted as number || 0);
-          setBtTotal(evt.btTotal as number || 0);
-          setCandleTotal(evt.candleTotal as number || 0);
-          setEstRemainingSec(evt.estRemainingSec as number || 0);
           setInitStatus(evt.message as string);
-          const sym = evt.symbol as string;
-          const strat = evt.strategy as string;
-          if (sym && strat) {
-            setBtSymbolResults(prev => {
-              const existing = prev[sym];
-              if (!existing) return { ...prev, [sym]: { strategy: strat, winRate: 0, profitFactor: 0, score: 0, tradeCount: 0, avgHoldHours: 0 } };
-              return prev;
-            });
-          }
-        } else if (phase === "backtest_symbol_summary") {
-          const sym = evt.symbol as string;
-          if (sym) {
-            setBtSymbolResults(prev => ({
-              ...prev,
-              [sym]: {
-                strategy: (evt.bestStrategy as string) || prev[sym]?.strategy || "",
-                winRate: (evt.avgWinRate as number) || 0,
-                profitFactor: (evt.avgProfitFactor as number) || 0,
-                score: (evt.bestScore as number) || 0,
-                tradeCount: (evt.tradeCount as number) || 0,
-                avgHoldHours: (evt.avgHoldHours as number) || 0,
-              },
-            }));
-          }
-        } else if (phase === "ai_review_start") {
-          setInitStage("ai_review");
-          setInitProgress(Math.max(pct, 70));
+        } else if (phase === "canonical_symbol_start" || phase === "canonical_symbol_complete" || phase === "canonical_symbol_error") {
+          setInitStage("canonical");
+          setInitProgress(Math.max(pct, 40));
+          setCanonicalCompleted(evt.reconcileCompleted as number || 0);
+          setCanonicalTotal(evt.reconcileTotal as number || 0);
           setInitStatus(evt.message as string);
           setEstRemainingSec(0);
-        } else if (phase === "ai_review_symbol") {
-          setInitStage("ai_review");
-          setInitProgress(Math.max(pct, 70));
+        } else if (phase === "canonical_complete") {
+          setInitStage("canonical");
+          setInitProgress(Math.max(pct, 75));
+          setCanonicalCompleted(evt.reconcileCompleted as number || 0);
+          setCanonicalTotal(evt.reconcileTotal as number || 0);
           setInitStatus(evt.message as string);
           setEstRemainingSec(0);
-          const sym = evt.symbol as string;
-          if (sym) {
-            setAiReviews(prev => ({
-              ...prev,
-              [sym]: {
-                summary: (evt.aiSummary as string) || null,
-                suggestions: (evt.aiSuggestions as string[]) || null,
-                bestStrategy: (evt.bestStrategy as string) || "none",
-                winRate: (evt.winRate as number) || 0,
-                profitFactor: (evt.profitFactor as number) || 0,
-              },
-            }));
-          }
-        } else if (phase === "ai_review_complete") {
-          setInitStage("ai_review");
-          setInitProgress(80);
-          setInitStatus(evt.message as string);
-        } else if (phase === "optimising" || phase === "optimise_complete") {
-          setInitStage("optimise");
-          setInitProgress(Math.max(pct, 80));
+        } else if (phase === "calibration_start" || phase === "calibration_complete") {
+          setInitStage("calibration");
+          setInitProgress(Math.max(pct, 76));
           setInitStatus(evt.message as string);
           setEstRemainingSec(0);
         } else if (phase === "streaming_start" || phase === "streaming_complete") {
@@ -428,11 +383,11 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           setInitProgress(100);
           setInitStatus(evt.message as string);
           setCandleTotal(evt.candleTotal as number || 0);
-          setBtCompleted(evt.btCompleted as number || 0);
+          setCanonicalCompleted(evt.reconcileCompleted as number || 0);
+          setCanonicalTotal(evt.reconcileTotal as number || 0);
           setEstRemainingSec(0);
           const failed = evt.failedSymbols as Array<{ symbol: string; error: string; timeframe: string }>;
           if (failed && failed.length > 0) setFailedSymbols(failed);
-          queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
           queryClient.invalidateQueries({ queryKey: ["/api/setup/status"] });
           setStep("complete");
         } else if (phase === "error") {
@@ -465,11 +420,10 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
         setInitStage("backfill");
         setInitStatus("");
         setCandleTotal(0);
-        setBtCompleted(0);
-        setBtTotal(0);
+        setCanonicalCompleted(0);
+        setCanonicalTotal(0);
         setSymbolProgress({});
         setBtSymbolResults({});
-        setAiReviews({});
         setFailedSymbols([]);
         setGrandTotalExpected(0);
         completedRef.current = false;
@@ -487,7 +441,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const stepDefs = [
     { label: "Welcome" },
     { label: "API Keys" },
-    { label: "Backfill \u2192 Backtest \u2192 AI" },
+    { label: "Backfill \u2192 Clean \u2192 Calibrate" },
     { label: "Ready" },
   ];
 
@@ -590,8 +544,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                   <h2 className="text-xl font-semibold text-foreground">Welcome</h2>
                   <p className="text-muted-foreground leading-relaxed max-w-md mx-auto">
                     Before trading, the system downloads ALL available 1m & 5m price history,
-                    runs every strategy as backtests across every symbol, and has AI
-                    recommend your optimal starting settings.
+                    reconciles canonical candles, runs move calibration, and starts live streaming.
                   </p>
                 </div>
                 <div className="grid grid-cols-3 gap-2 max-w-lg mx-auto">
@@ -604,16 +557,12 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                     <p className="text-[10px] text-muted-foreground">Backfill</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/20 text-center">
-                    <BarChart3 className="w-5 h-5 text-purple-400 mx-auto mb-1.5" />
-                    <p className="text-[10px] text-muted-foreground">Strategy Replay</p>
-                  </div>
-                  <div className="p-3 rounded-lg bg-muted/20 text-center">
-                    <Brain className="w-5 h-5 text-amber-400 mx-auto mb-1.5" />
-                    <p className="text-[10px] text-muted-foreground">AI Review</p>
+                    <Database className="w-5 h-5 text-purple-400 mx-auto mb-1.5" />
+                    <p className="text-[10px] text-muted-foreground">Canonical Clean</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/20 text-center">
                     <Zap className="w-5 h-5 text-emerald-400 mx-auto mb-1.5" />
-                    <p className="text-[10px] text-muted-foreground">AI Optimise</p>
+                    <p className="text-[10px] text-muted-foreground">Move Calibration</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/20 text-center">
                     <Radio className="w-5 h-5 text-cyan-400 mx-auto mb-1.5" />
@@ -780,21 +729,19 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                   <div className="space-y-5">
                     <div className="text-center space-y-1">
                       <h2 className="text-lg font-semibold">
-                        {initStage === "backfill" && "Step 1 of 6: Downloading Historical Data"}
-                        {initStage === "backtest" && "Step 2 of 6: Running Strategy Replay"}
-                        {initStage === "ai_review" && "Step 3 of 6: AI Review Per Symbol"}
-                        {initStage === "optimise" && "Step 4 of 6: AI-Optimised Settings"}
-                        {initStage === "streaming" && "Step 5 of 6: Starting Live Stream"}
-                        {initStage === "complete" && "Step 6 of 6: Complete"}
+                        {initStage === "backfill" && "Step 1 of 5: Downloading Historical Data"}
+                        {initStage === "canonical" && "Step 2 of 5: Running Clean Canonical Data"}
+                        {initStage === "calibration" && "Step 3 of 5: Running Move Calibration"}
+                        {initStage === "streaming" && "Step 4 of 5: Starting Live Stream"}
+                        {initStage === "complete" && "Step 5 of 5: Ready"}
                         {initStage === "error" && "Setup Failed"}
                       </h2>
                       <p className="text-xs text-muted-foreground">
                         {initStage === "backfill" && (grandTotalExpected > 0
                           ? `Fetching ~${formatNumber(grandTotalExpected)} total records (1m & 5m candles) from Deriv`
                           : "Fetching all available 1m & 5m candle data from Deriv")}
-                        {initStage === "backtest" && "Testing all strategies across every symbol"}
-                        {initStage === "ai_review" && "Analysing each symbol's best strategy and performance"}
-                        {initStage === "optimise" && "Computing optimal parameters from backtest results"}
+                        {initStage === "canonical" && "Repairing gaps and rebuilding enriched canonical candles"}
+                        {initStage === "calibration" && "Calibrating move-first V3 engines on downloaded data"}
                         {initStage === "streaming" && "Connecting to live market data feeds"}
                         {initStage === "complete" && "Your platform is ready"}
                         {initStage === "error" && "An error occurred during setup"}
@@ -832,16 +779,15 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       </div>
                     )}
 
-                    <div className="grid grid-cols-6 gap-1.5">
+                    <div className="grid grid-cols-5 gap-1.5">
                       {([
                         { key: "backfill", icon: Database, label: "Backfill", activeBg: "bg-blue-500/10 border-blue-500/30", activeIcon: "text-blue-400", value: candleTotal > 0 ? formatNumber(candleTotal) : "\u2014" },
-                        { key: "backtest", icon: BarChart3, label: "Replay", activeBg: "bg-purple-500/10 border-purple-500/30", activeIcon: "text-purple-400", value: btTotal > 0 ? `${btCompleted}/${btTotal}` : "\u2014" },
-                        { key: "ai_review", icon: Brain, label: "Review", activeBg: "bg-amber-500/10 border-amber-500/30", activeIcon: "text-amber-400 animate-pulse", value: null },
-                        { key: "optimise", icon: Zap, label: "Optimise", activeBg: "bg-emerald-500/10 border-emerald-500/30", activeIcon: "text-emerald-400 animate-pulse", value: null },
+                        { key: "canonical", icon: Database, label: "Canonical", activeBg: "bg-purple-500/10 border-purple-500/30", activeIcon: "text-purple-400", value: null },
+                        { key: "calibration", icon: Zap, label: "Calibrate", activeBg: "bg-amber-500/10 border-amber-500/30", activeIcon: "text-amber-400 animate-pulse", value: null },
                         { key: "streaming", icon: Radio, label: "Stream", activeBg: "bg-cyan-500/10 border-cyan-500/30", activeIcon: "text-cyan-400", value: null },
                         { key: "complete", icon: CheckCircle2, label: "Ready", activeBg: "bg-green-500/10 border-green-500/30", activeIcon: "text-green-400", value: null },
                       ] as const).map((s) => {
-                        const stageOrder = ["backfill", "backtest", "ai_review", "optimise", "streaming", "complete"];
+                        const stageOrder = ["backfill", "canonical", "calibration", "streaming", "complete"];
                         const currentIdx = stageOrder.indexOf(initStage);
                         const thisIdx = stageOrder.indexOf(s.key);
                         const isDone = thisIdx < currentIdx || initStage === "complete";
@@ -978,9 +924,9 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       </div>
                     )}
 
-                    {initStage === "backtest" && Object.keys(btSymbolResults).length > 0 && (
+                    {initStage === "canonical" && Object.keys(btSymbolResults).length > 0 && (
                       <div className="space-y-1.5 max-h-56 overflow-y-auto rounded-lg border border-border/30 p-3">
-                        <p className="text-xs font-medium text-muted-foreground mb-2">Per-Symbol Backtest Results</p>
+                        <p className="text-xs font-medium text-muted-foreground mb-2">Per-Symbol Canonical Reconcile</p>
                         {Object.entries(btSymbolResults).map(([sym, info]) => (
                           <div key={sym} className="flex items-center gap-2 text-xs py-1 border-b border-border/10 last:border-0">
                             <span className="w-20 font-medium truncate">{sym}</span>
@@ -993,31 +939,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                                 <span className="text-[10px] tabular-nums text-muted-foreground">{info.avgHoldHours.toFixed(0)}h avg</span>
                               </>
                             )}
-                            {info.tradeCount === 0 && <BarChart3 className="w-3 h-3 text-purple-400 animate-pulse" />}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {(initStage === "ai_review" || initStage === "optimise" || initStage === "streaming" || initStage === "complete") && Object.keys(aiReviews).length > 0 && (
-                      <div className="space-y-2 max-h-64 overflow-y-auto rounded-lg border border-border/30 p-3">
-                        <p className="text-xs font-medium text-muted-foreground mb-2">AI Review Per Symbol</p>
-                        {Object.entries(aiReviews).map(([sym, review]) => (
-                          <div key={sym} className="p-2 rounded-md bg-muted/10 border border-border/20 space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-medium">{sym}</span>
-                              <span className="text-[10px] text-muted-foreground">
-                                {review.bestStrategy} — WR {(review.winRate * 100).toFixed(0)}% / PF {review.profitFactor.toFixed(2)}
-                              </span>
-                            </div>
-                            {review.summary && (
-                              <p className="text-[11px] text-muted-foreground leading-snug">{review.summary}</p>
-                            )}
-                            {review.suggestions && review.suggestions.length > 0 && (
-                              <ul className="text-[10px] text-muted-foreground/80 list-disc list-inside">
-                                {review.suggestions.map((s, i) => <li key={i}>{s}</li>)}
-                              </ul>
-                            )}
+                            {info.tradeCount === 0 && <Loader2 className="w-3 h-3 text-purple-400 animate-spin" />}
                           </div>
                         ))}
                       </div>
@@ -1046,8 +968,8 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                     <Database className="w-10 h-10 text-blue-400 mx-auto" />
                     <h2 className="text-lg font-semibold">System Initialisation</h2>
                     <p className="text-muted-foreground text-sm max-w-md mx-auto">
-                      Download all available 1m & 5m price history, run all 4 strategies per symbol
-                      as backtests, and AI-optimise your settings. This may take a while.
+                      Download all available 1m & 5m price history, clean canonical data,
+                      run move calibration, and then start streaming. This may take a while.
                     </p>
                     <div className="flex justify-center gap-3">
                       <Button variant="outline" onClick={goBack} className="px-6">
@@ -1070,8 +992,8 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 <div className="space-y-3">
                   <h2 className="text-xl font-semibold text-foreground">You're All Set!</h2>
                   <p className="text-muted-foreground text-sm max-w-md mx-auto">
-                    Your platform has been configured with AI-optimised parameters based on
-                    full historical backtested data.
+                    Your platform has downloaded history, cleaned canonical data, completed move
+                    calibration, and started streaming.
                   </p>
                   <div className="grid grid-cols-2 gap-3 max-w-sm mx-auto text-sm">
                     <div className="p-3 rounded-lg bg-muted/20 border border-border/40">
@@ -1079,8 +1001,8 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                       <p className="font-bold tabular-nums">{candleTotal > 0 ? candleTotal.toLocaleString() : "\u2014"}</p>
                     </div>
                     <div className="p-3 rounded-lg bg-muted/20 border border-border/40">
-                      <p className="text-xs text-muted-foreground">Backtests Run</p>
-                      <p className="font-bold tabular-nums">{btCompleted > 0 ? btCompleted : "\u2014"}</p>
+                      <p className="text-xs text-muted-foreground">Calibration</p>
+                      <p className="font-bold tabular-nums">Completed</p>
                     </div>
                   </div>
                   {failedSymbols.length > 0 && (
