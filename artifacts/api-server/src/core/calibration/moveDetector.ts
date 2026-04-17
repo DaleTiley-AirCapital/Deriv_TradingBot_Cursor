@@ -608,7 +608,7 @@ export async function getDetectedMoves(
 
   type WhereCondition = ReturnType<typeof eq>;
   const conditions: WhereCondition[] = [eq(detectedMovesTable.symbol, symbol)];
-  if (moveType) conditions.push(eq(detectedMovesTable.moveType, moveType));
+  if (moveType && moveType !== "all") conditions.push(eq(detectedMovesTable.moveType, moveType));
   if (validTiers.length < 4) {
     conditions.push(inArray(detectedMovesTable.qualityTier, [...validTiers]));
   }

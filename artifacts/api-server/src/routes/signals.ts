@@ -52,7 +52,35 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
     .where(whereClause);
   const totalCount = countResult[0]?.count ?? 0;
 
-  const rows = await db.select().from(signalLogTable)
+  const rows = await db.select({
+    id: signalLogTable.id,
+    ts: signalLogTable.ts,
+    symbol: signalLogTable.symbol,
+    strategyName: signalLogTable.strategyName,
+    score: signalLogTable.score,
+    expectedValue: signalLogTable.expectedValue,
+    allowedFlag: signalLogTable.allowedFlag,
+    rejectionReason: signalLogTable.rejectionReason,
+    direction: signalLogTable.direction,
+    suggestedSl: signalLogTable.suggestedSl,
+    suggestedTp: signalLogTable.suggestedTp,
+    aiVerdict: signalLogTable.aiVerdict,
+    aiReasoning: signalLogTable.aiReasoning,
+    aiConfidenceAdj: signalLogTable.aiConfidenceAdj,
+    compositeScore: signalLogTable.compositeScore,
+    scoringDimensions: signalLogTable.scoringDimensions,
+    mode: signalLogTable.mode,
+    regime: signalLogTable.regime,
+    regimeConfidence: signalLogTable.regimeConfidence,
+    strategyFamily: signalLogTable.strategyFamily,
+    subStrategy: signalLogTable.subStrategy,
+    allocationPct: signalLogTable.allocationPct,
+    executionStatus: signalLogTable.executionStatus,
+    expectedMovePct: signalLogTable.expectedMovePct,
+    expectedHoldDays: signalLogTable.expectedHoldDays,
+    captureRate: signalLogTable.captureRate,
+    empiricalWinRate: signalLogTable.empiricalWinRate,
+  }).from(signalLogTable)
     .where(whereClause)
     .orderBy(desc(signalLogTable.ts))
     .limit(limit)
@@ -149,7 +177,30 @@ router.get("/signals/export", async (req, res): Promise<void> => {
       conditions.push(lte(signalLogTable.ts, new Date(endTsParam * 1000)));
     }
 
-    const rows = await db.select().from(signalLogTable)
+    const rows = await db.select({
+      id: signalLogTable.id,
+      ts: signalLogTable.ts,
+      symbol: signalLogTable.symbol,
+      strategyName: signalLogTable.strategyName,
+      direction: signalLogTable.direction,
+      score: signalLogTable.score,
+      allowedFlag: signalLogTable.allowedFlag,
+      rejectionReason: signalLogTable.rejectionReason,
+      executionStatus: signalLogTable.executionStatus,
+      mode: signalLogTable.mode,
+      aiVerdict: signalLogTable.aiVerdict,
+      aiReasoning: signalLogTable.aiReasoning,
+      regime: signalLogTable.regime,
+      regimeConfidence: signalLogTable.regimeConfidence,
+      compositeScore: signalLogTable.compositeScore,
+      expectedMovePct: signalLogTable.expectedMovePct,
+      suggestedTp: signalLogTable.suggestedTp,
+      suggestedSl: signalLogTable.suggestedSl,
+      allocationPct: signalLogTable.allocationPct,
+      expectedHoldDays: signalLogTable.expectedHoldDays,
+      captureRate: signalLogTable.captureRate,
+      empiricalWinRate: signalLogTable.empiricalWinRate,
+    }).from(signalLogTable)
       .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(asc(signalLogTable.ts))
       .limit(limitParam);

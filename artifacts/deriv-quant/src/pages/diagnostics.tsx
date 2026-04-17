@@ -51,7 +51,7 @@ export default function Diagnostics() {
       await fetch(`${BASE}api/settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: "kill_switch", value: current ? "false" : "true" }),
+        body: JSON.stringify({ kill_switch: current ? "false" : "true" }),
       });
       refetch();
     } catch {}

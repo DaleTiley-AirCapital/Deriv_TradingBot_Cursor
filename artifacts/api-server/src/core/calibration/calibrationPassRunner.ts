@@ -167,7 +167,7 @@ export async function runCalibrationPasses(
   } = opts;
 
   const conditions: ReturnType<typeof eq>[] = [eq(detectedMovesTable.symbol, symbol)];
-  if (moveType) conditions.push(eq(detectedMovesTable.moveType, moveType));
+  if (moveType && moveType !== "all") conditions.push(eq(detectedMovesTable.moveType, moveType));
 
   const allMoves = await db
     .select()

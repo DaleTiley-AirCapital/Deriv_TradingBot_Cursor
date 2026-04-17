@@ -1,0 +1,10 @@
+**/node_modules
+**/.pnpm-store
+.pnpm-store
+.git
+.cursor
+attached_assets
+artifacts/mockup-sandbox
+dist
+coverage
+*.log

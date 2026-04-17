@@ -104,9 +104,10 @@ router.get("/calibration/moves/:symbol", async (req, res): Promise<void> => {
   }
 
   try {
+    const resolvedMoveType = moveType && String(moveType) === "all" ? undefined : (moveType ? String(moveType) : undefined);
     const moves = await getDetectedMoves(
       symbol,
-      moveType ? String(moveType) : undefined,
+      resolvedMoveType,
       minTier ? (String(minTier) as "A" | "B" | "C" | "D") : undefined,
     );
     res.json({ symbol, moveCount: moves.length, moves });
@@ -140,7 +141,9 @@ router.post("/calibration/run-passes/:symbol", async (req, res): Promise<void> =
   })();
   const resolvedMoveType: string | undefined = (() => {
     const raw = body.strategyFamily ?? body.moveType;
-    return raw ? String(raw) : undefined;
+    if (!raw) return undefined;
+    const normalized = String(raw);
+    return normalized === "all" ? undefined : normalized;
   })();
   const minTier:  string | undefined = body.minTier ? String(body.minTier) : undefined;
   const maxMoves: number | undefined = body.maxMoves ? Number(body.maxMoves) : undefined;
@@ -266,12 +269,9 @@ async function handleProfileRequest(
 }
 
 router.get("/calibration/profile/:symbol/:strategy", async (req, res): Promise<void> => {
+  // :strategy and legacy :moveType callers share the same URL shape and value space.
+  // Keep a single canonical route to avoid ambiguous duplicate route registration.
   await handleProfileRequest(req.params.symbol, req.params.strategy, res);
-});
-
-// Legacy alias (kept for backward compat — :moveType and :strategy are the same value space)
-router.get("/calibration/profile/:symbol/:moveType", async (req, res): Promise<void> => {
-  await handleProfileRequest(req.params.symbol, req.params.moveType, res);
 });
 
 // ── GET /api/calibration/profiles/:symbol ─────────────────────────────────────

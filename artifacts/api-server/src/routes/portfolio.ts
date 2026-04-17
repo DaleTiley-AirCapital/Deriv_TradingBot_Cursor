@@ -12,10 +12,16 @@ router.get("/portfolio/status", async (_req, res): Promise<void> => {
     const states = await db.select().from(platformStateTable);
     const stateMap: Record<string, string> = {};
     for (const s of states) stateMap[s.key] = s.value;
-
     const totalCapital = parseFloat(stateMap["total_capital"] || "10000");
-    const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
-    const closedTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "closed"));
+    // Select only required fields to remain compatible with partially-migrated DBs.
+    const openTrades = await db.select({
+      size: tradesTable.size,
+      pnl: tradesTable.pnl,
+    }).from(tradesTable).where(eq(tradesTable.status, "open"));
+    const closedTrades = await db.select({
+      pnl: tradesTable.pnl,
+      exitTs: tradesTable.exitTs,
+    }).from(tradesTable).where(eq(tradesTable.status, "closed"));
 
     const openRisk = openTrades.reduce((sum, t) => sum + t.size * 0.015, 0);
     const realisedPnl = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
@@ -70,19 +76,18 @@ router.get("/overview", async (_req, res): Promise<void> => {
     const states = await db.select().from(platformStateTable);
     const stateMap: Record<string, string> = {};
     for (const s of states) stateMap[s.key] = s.value;
-
-    const openTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "open"));
-    const closedTrades = await db.select().from(tradesTable).where(eq(tradesTable.status, "closed"));
-    const totalCapital = parseFloat(stateMap["total_capital"] || "10000");
-    const openRisk = openTrades.reduce((sum, t) => sum + t.size * 0.015, 0);
-    const realisedPnl = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-    const wins = closedTrades.filter(t => (t.pnl || 0) > 0).length;
-    const winRate = closedTrades.length > 0 ? wins / closedTrades.length : 0;
-
     const activeModes = getActiveModes(stateMap);
     const legacyMode = stateMap["mode"] || "idle";
 
-    const perMode: Record<string, {
+    const totalCapital = parseFloat(stateMap["total_capital"] || "10000");
+
+    // Never let trade stats failure force an "all idle/offline" fallback.
+    let openRisk = 0;
+    let realisedPnl = 0;
+    let winRate = 0;
+    let openPositions = 0;
+    let totalTrades = 0;
+    let perMode: Record<string, {
       capital: number;
       openPositions: number;
       realisedPnl: number;
@@ -91,21 +96,53 @@ router.get("/overview", async (_req, res): Promise<void> => {
       active: boolean;
     }> = {};
 
-    for (const mode of ["paper", "demo", "real"] as TradingMode[]) {
-      const modeOpen = openTrades.filter(t => t.mode === mode);
-      const modeClosed = closedTrades.filter(t => t.mode === mode);
-      const modeWins = modeClosed.filter(t => (t.pnl || 0) > 0).length;
-      const capitalKey = getModeCapitalKey(mode);
-      const capitalDefault = getModeCapitalDefault(mode);
+    try {
+      const openTrades = await db.select({
+        size: tradesTable.size,
+        mode: tradesTable.mode,
+      }).from(tradesTable).where(eq(tradesTable.status, "open"));
+      const closedTrades = await db.select({
+        pnl: tradesTable.pnl,
+        mode: tradesTable.mode,
+      }).from(tradesTable).where(eq(tradesTable.status, "closed"));
 
-      perMode[mode] = {
-        capital: parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault),
-        openPositions: modeOpen.length,
-        realisedPnl: modeClosed.reduce((sum, t) => sum + (t.pnl || 0), 0),
-        winRate: modeClosed.length > 0 ? modeWins / modeClosed.length : 0,
-        totalTrades: modeClosed.length,
-        active: activeModes.includes(mode),
-      };
+      openPositions = openTrades.length;
+      totalTrades = closedTrades.length;
+      openRisk = openTrades.reduce((sum, t) => sum + t.size * 0.015, 0);
+      realisedPnl = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+      const wins = closedTrades.filter(t => (t.pnl || 0) > 0).length;
+      winRate = closedTrades.length > 0 ? wins / closedTrades.length : 0;
+
+      for (const mode of ["paper", "demo", "real"] as TradingMode[]) {
+        const modeOpen = openTrades.filter(t => t.mode === mode);
+        const modeClosed = closedTrades.filter(t => t.mode === mode);
+        const modeWins = modeClosed.filter(t => (t.pnl || 0) > 0).length;
+        const capitalKey = getModeCapitalKey(mode);
+        const capitalDefault = getModeCapitalDefault(mode);
+
+        perMode[mode] = {
+          capital: parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault),
+          openPositions: modeOpen.length,
+          realisedPnl: modeClosed.reduce((sum, t) => sum + (t.pnl || 0), 0),
+          winRate: modeClosed.length > 0 ? modeWins / modeClosed.length : 0,
+          totalTrades: modeClosed.length,
+          active: activeModes.includes(mode),
+        };
+      }
+    } catch (tradeErr) {
+      console.warn("[API] /overview trade stats degraded mode:", tradeErr instanceof Error ? tradeErr.message : tradeErr);
+      for (const mode of ["paper", "demo", "real"] as TradingMode[]) {
+        const capitalKey = getModeCapitalKey(mode);
+        const capitalDefault = getModeCapitalDefault(mode);
+        perMode[mode] = {
+          capital: parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault),
+          openPositions: 0,
+          realisedPnl: 0,
+          winRate: 0,
+          totalTrades: 0,
+          active: activeModes.includes(mode),
+        };
+      }
     }
 
     let effectiveMode = legacyMode;
@@ -126,12 +163,12 @@ router.get("/overview", async (_req, res): Promise<void> => {
     res.json({
       mode: effectiveMode,
       activeModes,
-      openPositions: openTrades.length,
+      openPositions,
       availableCapital: totalCapital - openRisk,
       openRisk,
       aiVerificationEnabled: stateMap["ai_verification_enabled"] === "true",
       lastDataSyncAt: stateMap["last_sync_at"] || null,
-      totalTrades: closedTrades.length,
+      totalTrades,
       winRate,
       realisedPnl,
       activeStrategies: parseInt(stateMap["active_strategies"] || "4"),

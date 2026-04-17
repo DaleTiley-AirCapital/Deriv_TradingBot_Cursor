@@ -206,6 +206,120 @@ async function initDb(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_behavior_events_symbol ON behavior_events (symbol);
     CREATE INDEX IF NOT EXISTS idx_behavior_events_source ON behavior_events (source);
+
+    CREATE TABLE IF NOT EXISTS detected_moves (
+      id SERIAL PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      move_type TEXT NOT NULL DEFAULT 'unknown',
+      start_ts DOUBLE PRECISION NOT NULL,
+      end_ts DOUBLE PRECISION NOT NULL,
+      start_price DOUBLE PRECISION NOT NULL,
+      end_price DOUBLE PRECISION NOT NULL,
+      move_pct DOUBLE PRECISION NOT NULL,
+      holding_minutes DOUBLE PRECISION NOT NULL,
+      lead_in_shape TEXT NOT NULL DEFAULT 'unknown',
+      lead_in_bars INTEGER NOT NULL DEFAULT 0,
+      directional_persistence DOUBLE PRECISION NOT NULL DEFAULT 0,
+      range_expansion DOUBLE PRECISION NOT NULL DEFAULT 1,
+      spike_count_4h INTEGER NOT NULL DEFAULT 0,
+      quality_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+      quality_tier TEXT NOT NULL DEFAULT 'D',
+      window_days INTEGER NOT NULL DEFAULT 90,
+      is_interpolated_excluded BOOLEAN NOT NULL DEFAULT TRUE,
+      strategy_family_candidate TEXT NOT NULL DEFAULT 'unknown',
+      context_json JSONB,
+      trigger_zone_json JSONB,
+      detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_detected_moves_symbol_ts ON detected_moves (symbol, start_ts);
+    CREATE INDEX IF NOT EXISTS idx_detected_moves_symbol_type ON detected_moves (symbol, move_type);
+    CREATE INDEX IF NOT EXISTS idx_detected_moves_quality ON detected_moves (symbol, quality_tier);
+
+    CREATE TABLE IF NOT EXISTS calibration_pass_runs (
+      id SERIAL PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      window_days INTEGER NOT NULL DEFAULT 90,
+      status TEXT NOT NULL DEFAULT 'running',
+      pass_name TEXT NOT NULL DEFAULT 'all',
+      total_moves INTEGER NOT NULL DEFAULT 0,
+      processed_moves INTEGER NOT NULL DEFAULT 0,
+      failed_moves INTEGER NOT NULL DEFAULT 0,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ,
+      error_summary JSONB,
+      meta_json JSONB
+    );
+    CREATE INDEX IF NOT EXISTS idx_pass_runs_symbol_status ON calibration_pass_runs (symbol, status);
+    CREATE INDEX IF NOT EXISTS idx_pass_runs_started_at ON calibration_pass_runs (started_at);
+
+    CREATE TABLE IF NOT EXISTS move_precursor_passes (
+      id SERIAL PRIMARY KEY,
+      move_id INTEGER NOT NULL,
+      symbol TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      move_type TEXT NOT NULL,
+      engine_matched TEXT,
+      engine_would_fire BOOLEAN NOT NULL DEFAULT FALSE,
+      precursor_conditions JSONB,
+      missed_reason TEXT,
+      lead_in_summary TEXT,
+      confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+      raw_ai_response JSONB,
+      pass_run_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_precursor_passes_move_id ON move_precursor_passes (move_id);
+    CREATE INDEX IF NOT EXISTS idx_precursor_passes_symbol ON move_precursor_passes (symbol);
+
+    CREATE TABLE IF NOT EXISTS move_behavior_passes (
+      id SERIAL PRIMARY KEY,
+      move_id INTEGER NOT NULL,
+      symbol TEXT NOT NULL,
+      direction TEXT NOT NULL,
+      pass_name TEXT NOT NULL,
+      earliest_entry_ts DOUBLE PRECISION,
+      earliest_entry_price DOUBLE PRECISION,
+      entry_slippage DOUBLE PRECISION NOT NULL DEFAULT 0,
+      captureable_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      max_favorable_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      max_adverse_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      bars_to_mfe_peak INTEGER NOT NULL DEFAULT 0,
+      exit_narrative TEXT,
+      trigger_conditions JSONB,
+      behavior_pattern TEXT NOT NULL DEFAULT 'unknown',
+      holdability_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+      raw_ai_response JSONB,
+      pass_run_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_behavior_passes_move_id ON move_behavior_passes (move_id);
+    CREATE INDEX IF NOT EXISTS idx_behavior_passes_symbol_pass ON move_behavior_passes (symbol, pass_name);
+
+    CREATE TABLE IF NOT EXISTS strategy_calibration_profiles (
+      id SERIAL PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      move_type TEXT NOT NULL,
+      window_days INTEGER NOT NULL DEFAULT 90,
+      target_moves INTEGER NOT NULL DEFAULT 0,
+      captured_moves INTEGER NOT NULL DEFAULT 0,
+      missed_moves INTEGER NOT NULL DEFAULT 0,
+      fit_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+      miss_reasons JSONB,
+      avg_move_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      median_move_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      avg_holding_hours DOUBLE PRECISION NOT NULL DEFAULT 0,
+      avg_captureable_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      avg_holdability_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+      engine_coverage JSONB,
+      precursor_summary JSONB,
+      trigger_summary JSONB,
+      feeddown_schema JSONB,
+      profitability_summary JSONB,
+      last_run_id INTEGER,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_profiles_symbol_type ON strategy_calibration_profiles (symbol, move_type);
   `);
 
   const migrations = [
@@ -220,6 +334,23 @@ async function initDb(): Promise<void> {
     "ALTER TABLE trades ADD COLUMN IF NOT EXISTS trade_stage INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE trades ADD COLUMN IF NOT EXISTS mfe_pct DOUBLE PRECISION NOT NULL DEFAULT 0",
     "ALTER TABLE trades ADD COLUMN IF NOT EXISTS mae_pct DOUBLE PRECISION NOT NULL DEFAULT 0",
+    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS calibration_move_id INTEGER",
+    "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS calibration_move_id INTEGER",
+    "CREATE TABLE IF NOT EXISTS detected_moves (id SERIAL PRIMARY KEY, symbol TEXT NOT NULL, direction TEXT NOT NULL, move_type TEXT NOT NULL DEFAULT 'unknown', start_ts DOUBLE PRECISION NOT NULL, end_ts DOUBLE PRECISION NOT NULL, start_price DOUBLE PRECISION NOT NULL, end_price DOUBLE PRECISION NOT NULL, move_pct DOUBLE PRECISION NOT NULL, holding_minutes DOUBLE PRECISION NOT NULL, lead_in_shape TEXT NOT NULL DEFAULT 'unknown', lead_in_bars INTEGER NOT NULL DEFAULT 0, directional_persistence DOUBLE PRECISION NOT NULL DEFAULT 0, range_expansion DOUBLE PRECISION NOT NULL DEFAULT 1, spike_count_4h INTEGER NOT NULL DEFAULT 0, quality_score DOUBLE PRECISION NOT NULL DEFAULT 0, quality_tier TEXT NOT NULL DEFAULT 'D', window_days INTEGER NOT NULL DEFAULT 90, is_interpolated_excluded BOOLEAN NOT NULL DEFAULT TRUE, strategy_family_candidate TEXT NOT NULL DEFAULT 'unknown', context_json JSONB, trigger_zone_json JSONB, detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+    "CREATE TABLE IF NOT EXISTS calibration_pass_runs (id SERIAL PRIMARY KEY, symbol TEXT NOT NULL, window_days INTEGER NOT NULL DEFAULT 90, status TEXT NOT NULL DEFAULT 'running', pass_name TEXT NOT NULL DEFAULT 'all', total_moves INTEGER NOT NULL DEFAULT 0, processed_moves INTEGER NOT NULL DEFAULT 0, failed_moves INTEGER NOT NULL DEFAULT 0, started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), completed_at TIMESTAMPTZ, error_summary JSONB, meta_json JSONB)",
+    "CREATE TABLE IF NOT EXISTS move_precursor_passes (id SERIAL PRIMARY KEY, move_id INTEGER NOT NULL, symbol TEXT NOT NULL, direction TEXT NOT NULL, move_type TEXT NOT NULL, engine_matched TEXT, engine_would_fire BOOLEAN NOT NULL DEFAULT FALSE, precursor_conditions JSONB, missed_reason TEXT, lead_in_summary TEXT, confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0, raw_ai_response JSONB, pass_run_id INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+    "CREATE TABLE IF NOT EXISTS move_behavior_passes (id SERIAL PRIMARY KEY, move_id INTEGER NOT NULL, symbol TEXT NOT NULL, direction TEXT NOT NULL, pass_name TEXT NOT NULL, earliest_entry_ts DOUBLE PRECISION, earliest_entry_price DOUBLE PRECISION, entry_slippage DOUBLE PRECISION NOT NULL DEFAULT 0, captureable_pct DOUBLE PRECISION NOT NULL DEFAULT 0, max_favorable_pct DOUBLE PRECISION NOT NULL DEFAULT 0, max_adverse_pct DOUBLE PRECISION NOT NULL DEFAULT 0, bars_to_mfe_peak INTEGER NOT NULL DEFAULT 0, exit_narrative TEXT, trigger_conditions JSONB, behavior_pattern TEXT NOT NULL DEFAULT 'unknown', holdability_score DOUBLE PRECISION NOT NULL DEFAULT 0, raw_ai_response JSONB, pass_run_id INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+    "CREATE TABLE IF NOT EXISTS strategy_calibration_profiles (id SERIAL PRIMARY KEY, symbol TEXT NOT NULL, move_type TEXT NOT NULL, window_days INTEGER NOT NULL DEFAULT 90, target_moves INTEGER NOT NULL DEFAULT 0, captured_moves INTEGER NOT NULL DEFAULT 0, missed_moves INTEGER NOT NULL DEFAULT 0, fit_score DOUBLE PRECISION NOT NULL DEFAULT 0, miss_reasons JSONB, avg_move_pct DOUBLE PRECISION NOT NULL DEFAULT 0, median_move_pct DOUBLE PRECISION NOT NULL DEFAULT 0, avg_holding_hours DOUBLE PRECISION NOT NULL DEFAULT 0, avg_captureable_pct DOUBLE PRECISION NOT NULL DEFAULT 0, avg_holdability_score DOUBLE PRECISION NOT NULL DEFAULT 0, engine_coverage JSONB, precursor_summary JSONB, trigger_summary JSONB, feeddown_schema JSONB, profitability_summary JSONB, last_run_id INTEGER, generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+    "CREATE INDEX IF NOT EXISTS idx_detected_moves_symbol_ts ON detected_moves (symbol, start_ts)",
+    "CREATE INDEX IF NOT EXISTS idx_detected_moves_symbol_type ON detected_moves (symbol, move_type)",
+    "CREATE INDEX IF NOT EXISTS idx_detected_moves_quality ON detected_moves (symbol, quality_tier)",
+    "CREATE INDEX IF NOT EXISTS idx_pass_runs_symbol_status ON calibration_pass_runs (symbol, status)",
+    "CREATE INDEX IF NOT EXISTS idx_pass_runs_started_at ON calibration_pass_runs (started_at)",
+    "CREATE INDEX IF NOT EXISTS idx_precursor_passes_move_id ON move_precursor_passes (move_id)",
+    "CREATE INDEX IF NOT EXISTS idx_precursor_passes_symbol ON move_precursor_passes (symbol)",
+    "CREATE INDEX IF NOT EXISTS idx_behavior_passes_move_id ON move_behavior_passes (move_id)",
+    "CREATE INDEX IF NOT EXISTS idx_behavior_passes_symbol_pass ON move_behavior_passes (symbol, pass_name)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_profiles_symbol_type ON strategy_calibration_profiles (symbol, move_type)",
     "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS composite_score DOUBLE PRECISION",
     "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS scoring_dimensions JSONB",
     "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS mode TEXT",
