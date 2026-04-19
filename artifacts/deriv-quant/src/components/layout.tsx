@@ -29,8 +29,23 @@ import {
   getGetDataStatusQueryKey,
 } from "@workspace/api-client-react";
 import type { ToggleTradingModeRequestMode } from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AiChat } from "./AiChat";
+
+const BASE = import.meta.env.BASE_URL || "/";
+
+interface DeployStatusResponse {
+  provider: string;
+  appVersion: string;
+  status: string;
+  lastRebuildAt: string;
+  processStartedAt: string;
+  uptimeSeconds: number;
+  commitSha: string | null;
+  deploymentId: string | null;
+  environmentName: string | null;
+  serviceName: string | null;
+}
 
 const NAV_ITEMS = [
   { name: "Overview",         href: "/",          icon: Activity  },
@@ -520,6 +535,35 @@ function TradingBanner({ isLive, isPaper }: { isLive: boolean; isPaper: boolean 
 }
 
 /* ─── Root layout — picks the right layout per screen size ──────────────── */
+function DeployStatusBadge() {
+  const { data, isError } = useQuery<DeployStatusResponse>({
+    queryKey: ["/api/deploy-status"],
+    queryFn: async () => {
+      const response = await fetch(`${BASE}api/deploy-status`);
+      if (!response.ok) throw new Error(`Deploy status failed (${response.status})`);
+      return response.json();
+    },
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  });
+
+  const lastRebuild = data?.lastRebuildAt
+    ? new Date(data.lastRebuildAt).toLocaleString()
+    : "unknown";
+  const shortCommit = data?.commitSha ? data.commitSha.slice(0, 7) : null;
+
+  return (
+    <div className="fixed bottom-3 right-3 z-40 rounded-lg border border-border/60 bg-background/95 backdrop-blur-sm px-3 py-2 shadow-lg">
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Deploy</p>
+      <p className="text-xs font-semibold text-foreground">{isError ? "Status unavailable" : "Running"}</p>
+      <p className="text-[11px] text-muted-foreground mt-0.5">Last rebuild: {lastRebuild}</p>
+      {shortCommit && (
+        <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">commit {shortCommit}</p>
+      )}
+    </div>
+  );
+}
+
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const bp = useBreakpoint();
@@ -534,6 +578,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       {layout}
+      <DeployStatusBadge />
       <AiChat />
     </>
   );
