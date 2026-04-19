@@ -18,6 +18,7 @@ import { getCachedRegime, classifyRegimeFromHTF, cacheRegime, accumulateHourlyFe
 import { runEnginesAndCoordinate } from "./signalPipeline.js";
 import type { CoordinatorOutput, EngineResult } from "./engineTypes.js";
 import type { FeatureVector } from "./features.js";
+import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
 
 export interface V3ScanResult {
   symbol: string;
@@ -27,11 +28,15 @@ export interface V3ScanResult {
   engineResults: EngineResult[];
   coordinatorOutput: CoordinatorOutput | null;
   features: FeatureVector | null;
+  runtimeCalibrationApplied: boolean;
   skipped: boolean;
   skipReason?: string;
 }
 
-export async function scanSymbolV3(symbol: string): Promise<V3ScanResult> {
+export async function scanSymbolV3(
+  symbol: string,
+  runtimeCalibration: LiveCalibrationProfile | null = null,
+): Promise<V3ScanResult> {
   const scannedAt = new Date();
 
   // ── 1. Feature extraction ──────────────────────────────────────────────────
@@ -42,6 +47,7 @@ export async function scanSymbolV3(symbol: string): Promise<V3ScanResult> {
       operationalRegime: "unknown", regimeConfidence: 0,
       engineResults: [], coordinatorOutput: null,
       features: null,
+      runtimeCalibrationApplied: false,
       skipped: true, skipReason: "insufficient_data",
     };
   }
@@ -69,6 +75,7 @@ export async function scanSymbolV3(symbol: string): Promise<V3ScanResult> {
       features,
       operationalRegime,
       regimeConfidence,
+      runtimeCalibration,
     });
     engineResults = pipelineResult.engineResults;
     coordinatorOutput = pipelineResult.coordinatorOutput;
@@ -103,6 +110,7 @@ export async function scanSymbolV3(symbol: string): Promise<V3ScanResult> {
     engineResults,
     coordinatorOutput,
     features,
+    runtimeCalibrationApplied: Boolean(runtimeCalibration),
     skipped: false,
   };
 }

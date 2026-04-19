@@ -22,6 +22,7 @@ import {
   movePrecursorPassesTable,
   moveBehaviorPassesTable,
   strategyCalibrationProfilesTable,
+  calibrationPassRunsTable,
   type InsertDetectedMoveRow,
 } from "@workspace/db";
 import { eq, and, gte, lte, asc, inArray } from "drizzle-orm";
@@ -52,6 +53,35 @@ async function safeDeleteForSymbol(op: () => Promise<unknown>, label: string): P
     }
     throw err;
   }
+}
+
+/**
+ * Deletes all move-calibration artifacts for a symbol: profiles, AI pass rows,
+ * async run history (`calibration_pass_runs`), then `detected_moves`.
+ * Call this before re-detecting moves so stale run rows and pass data cannot
+ * reference old move IDs or block new runs (409).
+ */
+export async function clearCalibrationArtifactsForSymbol(symbol: string): Promise<void> {
+  await safeDeleteForSymbol(
+    () => db.delete(strategyCalibrationProfilesTable).where(eq(strategyCalibrationProfilesTable.symbol, symbol)),
+    "strategy_calibration_profiles",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(movePrecursorPassesTable).where(eq(movePrecursorPassesTable.symbol, symbol)),
+    "move_precursor_passes",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol)),
+    "move_behavior_passes",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(calibrationPassRunsTable).where(eq(calibrationPassRunsTable.symbol, symbol)),
+    "calibration_pass_runs",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(detectedMovesTable).where(eq(detectedMovesTable.symbol, symbol)),
+    "detected_moves",
+  );
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -540,25 +570,7 @@ export async function detectAndStoreMoves(
   const moves = extractStructuralMoves(candles, symbol, minMovePct);
 
   if (clearExisting) {
-    // Cascade-delete all dependent calibration rows first so stale pass data
-    // from old move IDs never contaminates subsequent honest-fit calculations.
-    // Order: profiles → precursor/behavior passes → detected moves
-    await safeDeleteForSymbol(
-      () => db.delete(strategyCalibrationProfilesTable).where(eq(strategyCalibrationProfilesTable.symbol, symbol)),
-      "strategy_calibration_profiles",
-    );
-    await safeDeleteForSymbol(
-      () => db.delete(movePrecursorPassesTable).where(eq(movePrecursorPassesTable.symbol, symbol)),
-      "move_precursor_passes",
-    );
-    await safeDeleteForSymbol(
-      () => db.delete(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol)),
-      "move_behavior_passes",
-    );
-    await safeDeleteForSymbol(
-      () => db.delete(detectedMovesTable).where(eq(detectedMovesTable.symbol, symbol)),
-      "detected_moves",
-    );
+    await clearCalibrationArtifactsForSymbol(symbol);
   }
 
   let savedToDb = 0;

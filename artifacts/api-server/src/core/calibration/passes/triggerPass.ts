@@ -15,7 +15,7 @@ import {
   type DetectedMoveRow,
 } from "@workspace/db";
 import { eq, and, gte, lte, asc } from "drizzle-orm";
-import { chatComplete } from "../../../infrastructure/openai.js";
+import { chatCompleteJsonPrefer } from "../../../infrastructure/openai.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
 import { parseAiJsonObject } from "../parseAiJson.js";
 
@@ -103,7 +103,9 @@ Respond with ONLY valid JSON:
   "confidenceScore": <0.0-1.0>
 }`;
 
-  const response = await chatComplete({
+  const response = await chatCompleteJsonPrefer({
+    logLabel: `triggerPass moveId=${move.id}`,
+    telemetry: { runId, passName: "trigger" },
     messages: [{ role: "user", content: prompt }],
     max_completion_tokens: 1_200,
     temperature: 0.2,
@@ -118,6 +120,8 @@ Respond with ONLY valid JSON:
   const slippage    = (entryPrice - move.startPrice) / move.startPrice;
   const captureable = Math.max(0, Math.min(1, Number(parsed.captureablePct) || 0));
 
+  const triggerConditions = Array.isArray(parsed.triggerConditions) ? parsed.triggerConditions : [];
+  const exitNarrative = typeof parsed.exitNarrative === "string" ? parsed.exitNarrative : "";
   const dir = move.direction as "up" | "down";
   const mfePct = direction_mfe(candles, entryBarIdx, dir);
   const maePct = direction_mae(candles, entryBarIdx, dir);
@@ -135,8 +139,8 @@ Respond with ONLY valid JSON:
     maxFavorablePct:    mfePct,
     maxAdversePct:      maePct,
     barsToMfePeak,
-    triggerConditions:  parsed.triggerConditions ?? [],
-    exitNarrative:      parsed.exitNarrative ?? "",
+    triggerConditions,
+    exitNarrative,
     holdabilityScore:   Math.max(0, Math.min(1, Number(parsed.confidenceScore) || 0)),
     rawAiResponse:      parsed,
     passRunId:          runId,

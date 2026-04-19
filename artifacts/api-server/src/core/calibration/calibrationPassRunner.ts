@@ -7,8 +7,11 @@
  *   Pass 3 (behavior)   — how did the move progress bar-by-bar?
  *   Pass 4 (extraction) — what are the structural rules distilled across all moves?
  *
- * Each move is processed independently. Failures on individual moves are
- * recorded in calibration_pass_runs.error_summary and do not abort the run.
+ * Each move runs precursor → trigger → behavior (when passName is "all").
+ * By default, the **first** pass error aborts the run (status `failed`) so the
+ * job cannot sit in `running` while hundreds of moves keep failing. Set
+ * `continueOnMoveErrors: true` to record all per-move errors and finish with
+ * `completed` / `partial` / `failed` using the legacy rules.
  *
  * Honest fit reporting: targetMoves vs capturedMoves vs missedMoves is always
  * truthful. Fit score is capturedMoves/targetMoves — never inflated.
@@ -18,6 +21,7 @@ import { db } from "@workspace/db";
 import {
   calibrationPassRunsTable,
   detectedMovesTable,
+  strategyCalibrationProfilesTable,
   type DetectedMoveRow,
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
@@ -27,6 +31,10 @@ import { runTriggerPass } from "./passes/triggerPass.js";
 import { runBehaviorPass } from "./passes/behaviorPass.js";
 import { runExtractionPass } from "./passes/extractionPass.js";
 import { PRIMARY_MODEL } from "../ai/aiConfig.js";
+import {
+  clearCalibrationAiTelemetry,
+  getCalibrationAiTelemetry,
+} from "./aiTelemetry.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -40,6 +48,8 @@ export interface RunPassesOptions {
   moveType?: string;
   maxMoves?: number;
   force?: boolean;
+  /** If true, collect errors for every move and only finish at the end. If false/omitted, abort on first pass error. */
+  continueOnMoveErrors?: boolean;
 }
 
 export interface RunPassesResult {
@@ -72,6 +82,19 @@ async function hasBehaviorPass(moveId: number, pass: "trigger" | "behavior"): Pr
     .where(and(
       eq(moveBehaviorPassesTable.moveId, moveId),
       eq(moveBehaviorPassesTable.passName, pass),
+    ))
+    .limit(1);
+  return rows.length > 0;
+}
+
+async function hasResearchProfileForRun(symbol: string, runId: number): Promise<boolean> {
+  const rows = await db
+    .select({ id: strategyCalibrationProfilesTable.id })
+    .from(strategyCalibrationProfilesTable)
+    .where(and(
+      eq(strategyCalibrationProfilesTable.symbol, symbol),
+      eq(strategyCalibrationProfilesTable.moveType, "all"),
+      eq(strategyCalibrationProfilesTable.lastRunId, runId),
     ))
     .limit(1);
   return rows.length > 0;
@@ -123,7 +146,11 @@ async function createRunRecord(
       totalMoves,
       processedMoves: 0,
       failedMoves: 0,
-      metaJson: { model: PRIMARY_MODEL, startedAt: new Date().toISOString() },
+      metaJson: {
+        model: PRIMARY_MODEL,
+        startedAt: new Date().toISOString(),
+        stage: passName === "extraction" ? "Extraction Model" : "AI Passes",
+      },
     })
     .returning({ id: calibrationPassRunsTable.id });
   return row.id;
@@ -198,11 +225,16 @@ async function executeCalibrationRun(
     symbol,
     passName = "all",
     force = false,
+    continueOnMoveErrors = false,
   } = opts;
+
+  clearCalibrationAiTelemetry(runId);
 
   const errors: Array<{ moveId: number; pass: string; error: string }> = [];
   let processedMoves = 0;
   let skippedMoves   = 0;
+  const phaseDurationsMs: Record<string, number> = {};
+  const perPassStartMs = new Map<string, number>();
 
   const perMovePasses: Exclude<PassName, "all">[] =
     passName === "all"
@@ -229,6 +261,7 @@ async function executeCalibrationRun(
 
       const label = `${moveOrdinal}/${totalMoves} · ${pass}`;
       await mergeRunMeta(runId, {
+        stage: "AI Passes",
         progress: {
           phase: "per_move",
           currentPass: pass,
@@ -238,16 +271,65 @@ async function executeCalibrationRun(
           label,
         },
       });
+      if (!perPassStartMs.has(pass)) perPassStartMs.set(pass, Date.now());
 
       try {
         await runPassForMove(move, pass, runId);
+        const started = perPassStartMs.get(pass);
+        if (started && (moveOrdinal === totalMoves || moveOrdinal % 5 === 0)) {
+          phaseDurationsMs[pass] = Date.now() - started;
+        }
       } catch (err) {
         moveFailed = true;
+        const message = err instanceof Error ? err.message : "Unknown error";
         errors.push({
           moveId: move.id,
           pass,
-          error: err instanceof Error ? err.message : "Unknown error",
+          error: message,
         });
+
+        if (!continueOnMoveErrors) {
+          const aiTelemetry = getCalibrationAiTelemetry(runId);
+          phaseDurationsMs.total = Date.now() - startMs;
+          await mergeRunMeta(runId, {
+            stage: "AI Passes",
+            phaseDurationsMs,
+            usage: aiTelemetry,
+            progress: {
+              phase: "aborted",
+              currentPass: pass,
+              moveIndex: moveOrdinal,
+              totalMoves,
+              moveId: move.id,
+              label: `Aborted on first error: ${pass} @ move ${moveOrdinal}/${totalMoves} (move id ${move.id})`,
+            },
+            failure: {
+              kind: "abort_on_first_pass_error",
+              symbol,
+              moveOrdinal,
+              totalMoves,
+              moveId: move.id,
+              pass,
+              error: message,
+              hint:
+                "Fix the underlying issue (often malformed model JSON for this move), then re-run passes. " +
+                "Use POST /api/calibration/run-passes with passName targeting a single pass if needed.",
+            },
+          });
+          await updateRunRecord(runId, processedMoves, errors.length, "failed", errors);
+          clearCalibrationAiTelemetry(runId);
+          return {
+            runId,
+            symbol,
+            passName,
+            status: "failed",
+            totalMoves,
+            processedMoves,
+            failedMoves: errors.length,
+            errors,
+            durationMs: Date.now() - startMs,
+          };
+        }
       }
     }
 
@@ -260,14 +342,20 @@ async function executeCalibrationRun(
     }
 
     if (moveOrdinal % 5 === 0 || moveOrdinal === totalMoves) {
-      const effectiveMoves = filteredMoves.length - skippedMoves;
-      const failedMovesRunning = effectiveMoves > 0 ? effectiveMoves - processedMoves : 0;
-      await updateRunRecord(runId, processedMoves, failedMovesRunning, "running", errors);
+      await mergeRunMeta(runId, {
+        progress: {
+          phase: "per_move",
+          remainingMoves: Math.max(0, totalMoves - moveOrdinal),
+        },
+      });
+      await updateRunRecord(runId, processedMoves, errors.length, "running", errors);
     }
   }
 
   if (passName === "all" || passName === "extraction") {
+    const extractionStartedAt = Date.now();
     await mergeRunMeta(runId, {
+      stage: "Extraction Model",
       progress: {
         phase: "extraction",
         currentPass: "extraction",
@@ -277,29 +365,74 @@ async function executeCalibrationRun(
       },
     });
     try {
-      await runExtractionPass(symbol, filteredMoves, runId);
+      await runExtractionPass(symbol, filteredMoves, runId, opts.windowDays ?? 90);
+      phaseDurationsMs.extraction = Date.now() - extractionStartedAt;
+      const profileExists = await hasResearchProfileForRun(symbol, runId);
+      if (!profileExists) {
+        throw new Error("Extraction completed but canonical research profile was not persisted");
+      }
     } catch (err) {
+      const exMsg = err instanceof Error ? err.message : "Extraction pass failed";
       errors.push({
         moveId: -1,
         pass: "extraction",
-        error: err instanceof Error ? err.message : "Extraction pass failed",
+        error: exMsg,
       });
+      if (!continueOnMoveErrors) {
+        const aiTelemetry = getCalibrationAiTelemetry(runId);
+        phaseDurationsMs.total = Date.now() - startMs;
+        await mergeRunMeta(runId, {
+          stage: "Extraction Model",
+          phaseDurationsMs,
+          usage: aiTelemetry,
+          progress: {
+            phase: "aborted",
+            currentPass: "extraction",
+            label: "Aborted: extraction pass failed",
+          },
+          failure: {
+            kind: "extraction_failed",
+            symbol,
+            pass: "extraction",
+            error: exMsg,
+            hint: "Ensure extraction pass writes strategy calibration profile rows before marking run complete.",
+          },
+        });
+        await updateRunRecord(runId, processedMoves, errors.length, "failed", errors);
+        clearCalibrationAiTelemetry(runId);
+        return {
+          runId,
+          symbol,
+          passName,
+          status: "failed",
+          totalMoves,
+          processedMoves,
+          failedMoves: errors.length,
+          errors,
+          durationMs: Date.now() - startMs,
+        };
+      }
     }
   }
 
-  const effectiveMoves = filteredMoves.length - skippedMoves;
-  const failedMoves    = effectiveMoves > 0 ? effectiveMoves - processedMoves : 0;
   const status: "completed" | "partial" | "failed" =
     errors.length === 0 ? "completed" :
     processedMoves > 0  ? "partial"   : "failed";
 
+  const aiTelemetry = getCalibrationAiTelemetry(runId);
+  phaseDurationsMs.total = Date.now() - startMs;
+
   await mergeRunMeta(runId, {
+    stage: status === "completed" ? "Research Profile Complete" : "AI Passes",
+    phaseDurationsMs,
+    usage: aiTelemetry,
     progress: {
       phase: "done",
       label: status === "completed" ? "Completed" : `Finished (${status})`,
     },
   });
-  await updateRunRecord(runId, processedMoves, failedMoves, status, errors);
+  await updateRunRecord(runId, processedMoves, errors.length, status, errors);
+  clearCalibrationAiTelemetry(runId);
 
   return {
     runId,
@@ -308,7 +441,7 @@ async function executeCalibrationRun(
     status,
     totalMoves,
     processedMoves,
-    failedMoves,
+    failedMoves: errors.length,
     errors,
     durationMs: Date.now() - startMs,
   };
@@ -332,6 +465,7 @@ export async function startCalibrationPassesBackground(opts: RunPassesOptions): 
     })
     .catch(err => {
       console.error(`[calibration] run ${runId} crashed:`, err);
+      clearCalibrationAiTelemetry(runId);
       void updateRunRecord(
         runId,
         0,

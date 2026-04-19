@@ -1,5 +1,5 @@
 import type { SymbolEngine } from "./engineTypes.js";
-import { boom300Engine } from "./engines/boom300Engine.js";
+import { boom300Engine, boom300LongExpansionEngine } from "./engines/boom300Engine.js";
 import { crash300Engine } from "./engines/crash300Engine.js";
 import {
   r75ContinuationEngine,
@@ -14,16 +14,17 @@ import {
 
 // ─── V3 Engine Registry ───────────────────────────────────────────────────────
 // Single source of truth for which engines run on which symbols.
-// BOOM300 and CRASH300: 1 engine each.
+// BOOM300: 2 engines (sell expansion + long expansion).
+// CRASH300: 1 engine.
 // R_75 and R_100: 3 engines each.
-// Total live engines = 8.
+// Total live engines = 9.
 //
 // To disable an engine: remove it from this map.
 // To re-enable: add it back here.
 // There is no fallback — if a symbol has no engines, V3 scanner logs an error.
 
 export const ENGINE_REGISTRY: Record<string, SymbolEngine[]> = {
-  BOOM300:  [boom300Engine],
+  BOOM300:  [boom300Engine, boom300LongExpansionEngine],
   CRASH300: [crash300Engine],
   R_75:     [r75ContinuationEngine, r75ReversalEngine, r75BreakoutEngine],
   R_100:    [r100ContinuationEngine, r100ReversalEngine, r100BreakoutEngine],

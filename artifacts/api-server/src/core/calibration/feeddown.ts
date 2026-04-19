@@ -21,6 +21,7 @@ import {
 } from "@workspace/db";
 import { eq, and, desc } from "drizzle-orm";
 import { buildCalibrationAggregate, type CalibrationAggregateSummary } from "./calibrationAggregator.js";
+import { getLatestSymbolResearchProfile, type SymbolResearchProfile } from "./symbolResearchProfile.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,17 @@ export interface FullCalibrationExport {
   aggregate: CalibrationAggregateSummary;
   profiles: typeof strategyCalibrationProfilesTable.$inferSelect[];
   latestRunStatus: typeof calibrationPassRunsTable.$inferSelect | null;
+  researchProfile: SymbolResearchProfile | null;
+  costTelemetry: {
+    requestCount: number;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    estimatedUsd: number;
+    byPass: Record<string, unknown>;
+    phaseDurationsMs: Record<string, number>;
+    totalDurationMs: number;
+  } | null;
   readOnly: true;
 }
 
@@ -265,17 +277,35 @@ export async function getFullCalibrationExport(
 ): Promise<FullCalibrationExport> {
   const aggregate = await buildCalibrationAggregate(symbol);
 
-  const profiles = await db
-    .select()
-    .from(strategyCalibrationProfilesTable)
-    .where(eq(strategyCalibrationProfilesTable.symbol, symbol));
-
-  const latestRun = await db
-    .select()
-    .from(calibrationPassRunsTable)
-    .where(eq(calibrationPassRunsTable.symbol, symbol))
-    .orderBy(desc(calibrationPassRunsTable.startedAt))
-    .limit(1);
+  const [profiles, latestRun, researchProfile] = await Promise.all([
+    db
+      .select()
+      .from(strategyCalibrationProfilesTable)
+      .where(eq(strategyCalibrationProfilesTable.symbol, symbol)),
+    db
+      .select()
+      .from(calibrationPassRunsTable)
+      .where(eq(calibrationPassRunsTable.symbol, symbol))
+      .orderBy(desc(calibrationPassRunsTable.startedAt))
+      .limit(1),
+    getLatestSymbolResearchProfile(symbol),
+  ]);
+  const latest = latestRun[0] ?? null;
+  const meta = latest?.metaJson && typeof latest.metaJson === "object"
+    ? (latest.metaJson as Record<string, unknown>)
+    : {};
+  const usage = meta.usage && typeof meta.usage === "object"
+    ? (meta.usage as Record<string, unknown>)
+    : null;
+  const phaseDurations = meta.phaseDurationsMs && typeof meta.phaseDurationsMs === "object"
+    ? (meta.phaseDurationsMs as Record<string, number>)
+    : {};
+  const totalDurationMs =
+    typeof phaseDurations.total === "number"
+      ? phaseDurations.total
+      : latest?.startedAt && latest?.completedAt
+        ? latest.completedAt.getTime() - latest.startedAt.getTime()
+        : 0;
 
   return {
     symbol,
@@ -290,7 +320,20 @@ export async function getFullCalibrationExport(
     },
     aggregate,
     profiles,
-    latestRunStatus: latestRun[0] ?? null,
+    latestRunStatus: latest,
+    researchProfile,
+    costTelemetry: usage
+      ? {
+        requestCount: Number(usage.requestCount ?? 0),
+        promptTokens: Number(usage.promptTokens ?? 0),
+        completionTokens: Number(usage.completionTokens ?? 0),
+        totalTokens: Number(usage.totalTokens ?? 0),
+        estimatedUsd: Number(usage.estimatedUsd ?? 0),
+        byPass: (usage.byPass as Record<string, unknown>) ?? {},
+        phaseDurationsMs: phaseDurations,
+        totalDurationMs,
+      }
+      : null,
     readOnly: true as const,
   };
 }

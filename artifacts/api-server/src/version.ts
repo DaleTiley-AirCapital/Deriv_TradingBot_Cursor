@@ -15,7 +15,7 @@ export const RELEASES: ReleaseEntry[] = [
     date: "2026-04-14",
     title: "V3 Symbol-Native Engine System — Live Path Rewrite",
     changes: [
-      "8 symbol-native engines replace all V2 shared-scoring: boom_expansion, crash_expansion, r75×3 (continuation/reversal/breakout), r100×3",
+      "9 symbol-native engines replace all V2 shared-scoring: boom_expansion, boom_expansion_long, crash_expansion, r75x3 (continuation/reversal/breakout), r100x3",
       "Per-engine 6-component native scores (0–100) — no shared generic composite scoring path in live system",
       "Symbol Coordinator resolves multi-engine conflicts (R_75, R_100): priority breakout>continuation>reversal",
       "3-stage hybrid trade manager: entry SL, breakeven promotion at 20% TP, ATR trailing from 30% TP",
@@ -60,3 +60,4 @@ export const RELEASES: ReleaseEntry[] = [
     ],
   },
 ];
+

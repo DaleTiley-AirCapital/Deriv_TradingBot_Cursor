@@ -13,5 +13,6 @@ export * from "./detectedMoves";
 export * from "./movePrecursorPasses";
 export * from "./moveBehaviorPasses";
 export * from "./strategyCalibrationProfiles";
+export * from "./symbolResearchProfiles";
 export * from "./calibrationPassRuns";
 export * from "./aiContextEmbeddings";

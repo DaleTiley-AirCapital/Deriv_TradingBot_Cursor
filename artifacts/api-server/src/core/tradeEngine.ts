@@ -6,6 +6,7 @@ import type { AllocationDecision } from "./signalRouter.js";
 import { checkAndAutoExtract } from "./extractionEngine.js";
 import { recordBehaviorEvent } from "./backtest/behaviorCapture.js";
 import { evaluateBarExits, MAX_HOLD_MINS, applyBarStateTransitions } from "./tradeManagement.js";
+import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
 
 const MAX_OPEN_TRADES = 6;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
@@ -611,8 +612,9 @@ export async function openPositionV3(params: {
   capitalAmount: number;
   features: import("./features.js").FeatureVector;
   mode: TradingMode;
+  runtimeCalibration?: LiveCalibrationProfile | null;
 }): Promise<number | null> {
-  const { symbol, engineName, direction, confidence, capitalAmount, features, mode } = params;
+  const { symbol, engineName, direction, confidence, capitalAmount, features, mode, runtimeCalibration } = params;
 
   const client = await getDerivClientForMode(mode);
   const states = await db.select().from(platformStateTable);
@@ -644,7 +646,7 @@ export async function openPositionV3(params: {
 
   const atrPct = features.atr14 > 0 ? features.atr14 / spotPrice : getDefaultAtr14Pct(symbol);
 
-  const tp = calculateSRFibTP({
+  let tp = calculateSRFibTP({
     entryPrice: spotPrice,
     direction,
     swingHigh: features.swingHigh,
@@ -664,9 +666,34 @@ export async function openPositionV3(params: {
     prevSessionLow: features.prevSessionLow,
   });
 
-  const sl = calculateSRFibSL({ entryPrice: spotPrice, direction, tp, positionSize: capitalAmount, equity });
+  let sl = calculateSRFibSL({ entryPrice: spotPrice, direction, tp, positionSize: capitalAmount, equity });
 
-  const notes = `V3 HybridStaged | engine=${engineName} | conf=${confidence.toFixed(3)}`;
+  if (runtimeCalibration && mode === "paper") {
+    const targetPctRaw = Number(runtimeCalibration.tpModel?.["targetPct"] ?? 0);
+    const targetPct = Number.isFinite(targetPctRaw) ? Math.max(0, targetPctRaw / 100) : 0;
+    if (targetPct > 0) {
+      const currentTpPct = Math.abs(tp - spotPrice) / spotPrice;
+      const blendedTpPct = currentTpPct * 0.7 + targetPct * 0.3;
+      tp = direction === "buy"
+        ? spotPrice * (1 + blendedTpPct)
+        : spotPrice * (1 - blendedTpPct);
+    }
+    const maxInitialRiskPctRaw = Number(runtimeCalibration.slModel?.["maxInitialRiskPct"] ?? 0);
+    const maxInitialRiskPct = Number.isFinite(maxInitialRiskPctRaw) ? Math.max(0, maxInitialRiskPctRaw / 100) : 0;
+    if (maxInitialRiskPct > 0) {
+      const calibratedSl = direction === "buy"
+        ? spotPrice * (1 - maxInitialRiskPct)
+        : spotPrice * (1 + maxInitialRiskPct);
+      const currentSlDist = Math.abs(sl - spotPrice);
+      const calibratedDist = Math.abs(calibratedSl - spotPrice);
+      if (calibratedDist < currentSlDist) {
+        sl = calibratedSl;
+      }
+    }
+  }
+
+  const notes = `V3 HybridStaged | engine=${engineName} | conf=${confidence.toFixed(3)}` +
+    (runtimeCalibration ? ` | calib_run=${runtimeCalibration.sourceRunId}` : "");
 
   if ((mode === "demo" || mode === "real") && client) {
     try {

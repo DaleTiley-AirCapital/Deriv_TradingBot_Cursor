@@ -320,6 +320,35 @@ async function initDb(): Promise<void> {
       generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_profiles_symbol_type ON strategy_calibration_profiles (symbol, move_type);
+
+    CREATE TABLE IF NOT EXISTS symbol_research_profiles (
+      id SERIAL PRIMARY KEY,
+      symbol TEXT NOT NULL,
+      symbol_domain TEXT NOT NULL,
+      window_days INTEGER NOT NULL DEFAULT 90,
+      data_health_summary JSONB,
+      move_count INTEGER NOT NULL DEFAULT 0,
+      move_family_distribution JSONB,
+      engine_type_recommendation TEXT,
+      build_priority TEXT,
+      estimated_trades_per_month DOUBLE PRECISION NOT NULL DEFAULT 0,
+      estimated_capital_utilization_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      estimated_fit_adjusted_monthly_return_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+      recommended_scan_interval_seconds INTEGER,
+      recommended_confirmation_window TEXT,
+      recommended_entry_model TEXT,
+      recommended_hold_profile JSONB,
+      recommended_tp_model JSONB,
+      recommended_sl_model JSONB,
+      recommended_trailing_model JSONB,
+      recommended_score_gates JSONB,
+      research_status TEXT NOT NULL DEFAULT 'research_complete',
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_run_id INTEGER NOT NULL,
+      raw_json JSONB
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_symbol_research_profiles_symbol_window
+      ON symbol_research_profiles (symbol, window_days);
   `);
 
   const migrations = [
@@ -341,6 +370,7 @@ async function initDb(): Promise<void> {
     "CREATE TABLE IF NOT EXISTS move_precursor_passes (id SERIAL PRIMARY KEY, move_id INTEGER NOT NULL, symbol TEXT NOT NULL, direction TEXT NOT NULL, move_type TEXT NOT NULL, engine_matched TEXT, engine_would_fire BOOLEAN NOT NULL DEFAULT FALSE, precursor_conditions JSONB, missed_reason TEXT, lead_in_summary TEXT, confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0, raw_ai_response JSONB, pass_run_id INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
     "CREATE TABLE IF NOT EXISTS move_behavior_passes (id SERIAL PRIMARY KEY, move_id INTEGER NOT NULL, symbol TEXT NOT NULL, direction TEXT NOT NULL, pass_name TEXT NOT NULL, earliest_entry_ts DOUBLE PRECISION, earliest_entry_price DOUBLE PRECISION, entry_slippage DOUBLE PRECISION NOT NULL DEFAULT 0, captureable_pct DOUBLE PRECISION NOT NULL DEFAULT 0, max_favorable_pct DOUBLE PRECISION NOT NULL DEFAULT 0, max_adverse_pct DOUBLE PRECISION NOT NULL DEFAULT 0, bars_to_mfe_peak INTEGER NOT NULL DEFAULT 0, exit_narrative TEXT, trigger_conditions JSONB, behavior_pattern TEXT NOT NULL DEFAULT 'unknown', holdability_score DOUBLE PRECISION NOT NULL DEFAULT 0, raw_ai_response JSONB, pass_run_id INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
     "CREATE TABLE IF NOT EXISTS strategy_calibration_profiles (id SERIAL PRIMARY KEY, symbol TEXT NOT NULL, move_type TEXT NOT NULL, window_days INTEGER NOT NULL DEFAULT 90, target_moves INTEGER NOT NULL DEFAULT 0, captured_moves INTEGER NOT NULL DEFAULT 0, missed_moves INTEGER NOT NULL DEFAULT 0, fit_score DOUBLE PRECISION NOT NULL DEFAULT 0, miss_reasons JSONB, avg_move_pct DOUBLE PRECISION NOT NULL DEFAULT 0, median_move_pct DOUBLE PRECISION NOT NULL DEFAULT 0, avg_holding_hours DOUBLE PRECISION NOT NULL DEFAULT 0, avg_captureable_pct DOUBLE PRECISION NOT NULL DEFAULT 0, avg_holdability_score DOUBLE PRECISION NOT NULL DEFAULT 0, engine_coverage JSONB, precursor_summary JSONB, trigger_summary JSONB, feeddown_schema JSONB, profitability_summary JSONB, last_run_id INTEGER, generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+    "CREATE TABLE IF NOT EXISTS symbol_research_profiles (id SERIAL PRIMARY KEY, symbol TEXT NOT NULL, symbol_domain TEXT NOT NULL, window_days INTEGER NOT NULL DEFAULT 90, data_health_summary JSONB, move_count INTEGER NOT NULL DEFAULT 0, move_family_distribution JSONB, engine_type_recommendation TEXT, build_priority TEXT, estimated_trades_per_month DOUBLE PRECISION NOT NULL DEFAULT 0, estimated_capital_utilization_pct DOUBLE PRECISION NOT NULL DEFAULT 0, estimated_fit_adjusted_monthly_return_pct DOUBLE PRECISION NOT NULL DEFAULT 0, recommended_scan_interval_seconds INTEGER, recommended_confirmation_window TEXT, recommended_entry_model TEXT, recommended_hold_profile JSONB, recommended_tp_model JSONB, recommended_sl_model JSONB, recommended_trailing_model JSONB, recommended_score_gates JSONB, research_status TEXT NOT NULL DEFAULT 'research_complete', generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_run_id INTEGER NOT NULL, raw_json JSONB)",
     "CREATE INDEX IF NOT EXISTS idx_detected_moves_symbol_ts ON detected_moves (symbol, start_ts)",
     "CREATE INDEX IF NOT EXISTS idx_detected_moves_symbol_type ON detected_moves (symbol, move_type)",
     "CREATE INDEX IF NOT EXISTS idx_detected_moves_quality ON detected_moves (symbol, quality_tier)",
@@ -351,6 +381,7 @@ async function initDb(): Promise<void> {
     "CREATE INDEX IF NOT EXISTS idx_behavior_passes_move_id ON move_behavior_passes (move_id)",
     "CREATE INDEX IF NOT EXISTS idx_behavior_passes_symbol_pass ON move_behavior_passes (symbol, pass_name)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_profiles_symbol_type ON strategy_calibration_profiles (symbol, move_type)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_symbol_research_profiles_symbol_window ON symbol_research_profiles (symbol, window_days)",
     "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS composite_score DOUBLE PRECISION",
     "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS scoring_dimensions JSONB",
     "ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS mode TEXT",
@@ -417,6 +448,7 @@ async function initDb(): Promise<void> {
       ('paper_min_composite_score', '60'),
       ('demo_min_composite_score',  '65'),
       ('real_min_composite_score',  '70'),
+      ('use_calibrated_runtime_profiles', 'false'),
       ('min_ev_threshold',    '0.001'),
       ('min_rr_ratio',        '1.5'),
 
@@ -459,6 +491,7 @@ async function initDb(): Promise<void> {
     INSERT INTO platform_state (key, value) VALUES ('paper_min_composite_score', '60') ON CONFLICT (key) DO UPDATE SET value = '60';
     INSERT INTO platform_state (key, value) VALUES ('demo_min_composite_score',  '65') ON CONFLICT (key) DO UPDATE SET value = '65';
     INSERT INTO platform_state (key, value) VALUES ('real_min_composite_score',  '70') ON CONFLICT (key) DO UPDATE SET value = '70';
+    INSERT INTO platform_state (key, value) VALUES ('use_calibrated_runtime_profiles', 'false') ON CONFLICT (key) DO NOTHING;
     INSERT INTO platform_state (key, value) VALUES ('signal_visibility_threshold', '50') ON CONFLICT (key) DO UPDATE SET value = LEAST(platform_state.value::numeric, 50)::text;
     UPDATE platform_state SET value = '600' WHERE key = 'paper_capital' AND value = '10000';
     UPDATE platform_state SET value = '60' WHERE key = 'ai_suggest_paper_min_composite_score' AND CAST(value AS INTEGER) < 60;

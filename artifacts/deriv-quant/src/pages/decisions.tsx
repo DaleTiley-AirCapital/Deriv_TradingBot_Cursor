@@ -14,6 +14,7 @@ import {
 
 const ENGINES = [
   "boom_expansion_engine",
+  "boom_expansion_long_engine",
   "crash_expansion_engine",
   "r75_continuation_engine",
   "r75_reversal_engine",
@@ -26,6 +27,7 @@ const ENGINES = [
 
 const ENGINE_LABELS: Record<string, string> = {
   boom_expansion_engine:    "Boom Expansion",
+  boom_expansion_long_engine: "Boom Expansion Long",
   crash_expansion_engine:   "Crash Expansion",
   r75_continuation_engine:  "R75 Continuation",
   r75_reversal_engine:      "R75 Reversal",
@@ -38,6 +40,7 @@ const ENGINE_LABELS: Record<string, string> = {
 
 const ENGINE_COLORS: Record<string, string> = {
   boom_expansion_engine:    "bg-emerald-500/12 text-emerald-400 border-emerald-500/25",
+  boom_expansion_long_engine: "bg-lime-500/12 text-lime-400 border-lime-500/25",
   crash_expansion_engine:   "bg-red-500/12 text-red-400 border-red-500/25",
   r75_continuation_engine:  "bg-blue-500/12 text-blue-400 border-blue-500/25",
   r75_reversal_engine:      "bg-purple-500/12 text-purple-400 border-purple-500/25",

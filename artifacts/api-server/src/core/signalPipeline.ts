@@ -21,12 +21,14 @@ import { getEnginesForSymbol } from "./engineRegistry.js";
 import { runSymbolCoordinator } from "./symbolCoordinator.js";
 import type { EngineContext, EngineResult, CoordinatorOutput } from "./engineTypes.js";
 import type { FeatureVector } from "./features.js";
+import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
 
 export interface EngineCoordinatorInput {
   symbol: string;
   features: FeatureVector;
   operationalRegime: string;
   regimeConfidence: number;
+  runtimeCalibration?: LiveCalibrationProfile | null;
 }
 
 export interface EngineCoordinatorOutput {
@@ -45,7 +47,7 @@ export interface EngineCoordinatorOutput {
 export function runEnginesAndCoordinate(
   input: EngineCoordinatorInput,
 ): EngineCoordinatorOutput {
-  const { symbol, features, operationalRegime, regimeConfidence } = input;
+  const { symbol, features, operationalRegime, regimeConfidence, runtimeCalibration } = input;
 
   const engines = getEnginesForSymbol(symbol);
 
@@ -53,6 +55,7 @@ export function runEnginesAndCoordinate(
     features,
     operationalRegime,
     regimeConfidence,
+    runtimeCalibration: runtimeCalibration ?? null,
   };
 
   const engineResults: EngineResult[] = [];
@@ -62,6 +65,18 @@ export function runEnginesAndCoordinate(
       if (result) engineResults.push(result);
     } catch (err) {
       console.error(`[SignalPipeline] Engine error for ${symbol}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  if (runtimeCalibration) {
+    for (const result of engineResults) {
+      result.confidence = Math.max(0, Math.min(0.99, result.confidence * runtimeCalibration.confidenceMultiplier));
+      result.projectedMovePct = Math.max(0, result.projectedMovePct * runtimeCalibration.projectedMoveMultiplier);
+      result.metadata = {
+        ...result.metadata,
+        runtimeCalibrationApplied: true,
+        runtimeCalibrationRunId: runtimeCalibration.sourceRunId,
+      };
     }
   }
 

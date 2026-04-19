@@ -7,6 +7,7 @@ import type { TradingMode } from "./deriv.js";
 import { ACTIVE_TRADING_SYMBOLS } from "./deriv.js";
 import { scanSymbolV3 } from "../core/engineRouterV3.js";
 import { allocateV3Signal } from "../core/portfolioAllocatorV3.js";
+import { getLiveCalibrationProfile } from "../core/calibration/liveCalibrationProfile.js";
 import {
   updateCandidate,
   markCandidateExecuted,
@@ -88,7 +89,15 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   lastScanSymbol = symbol;
   totalScansRun++;
 
-  const result = await scanSymbolV3(symbol);
+  const aiEnabled = stateMap["ai_verification_enabled"] === "true";
+  const activeModes = getActiveModes(stateMap);
+  const modesToProcess: TradingMode[] = activeModes.length > 0 ? activeModes : ["paper" as TradingMode];
+  const isIntelOnly = activeModes.length === 0;
+  const paperModeInUse = isIntelOnly || modesToProcess.includes("paper");
+  const runtimeCalibration = paperModeInUse
+    ? await getLiveCalibrationProfile(symbol, "paper", stateMap).catch(() => null)
+    : null;
+  const result = await scanSymbolV3(symbol, runtimeCalibration);
 
   if (result.skipped) {
     console.log(`[V3Scan] ${symbol} | SKIP | reason=${result.skipReason ?? "unknown"}`);
@@ -121,11 +130,6 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: spikeVal, updatedAt: new Date() } }),
   ]).catch(() => {/* non-fatal */});
 
-  const aiEnabled = stateMap["ai_verification_enabled"] === "true";
-  const activeModes = getActiveModes(stateMap);
-  const modesToProcess: TradingMode[] = activeModes.length > 0 ? activeModes : ["paper" as TradingMode];
-  const isIntelOnly = activeModes.length === 0;
-
   for (const mode of modesToProcess) {
     const modePrefix = mode === "paper" ? "paper" : mode === "demo" ? "demo" : "real";
 
@@ -138,7 +142,14 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     const effectiveMode: TradingMode = isIntelOnly ? "paper" : mode;
 
     // ── Allocator decision ───────────────────────────────────────────────────
-    const v3Decision = await allocateV3Signal(coordinatorOutput, effectiveMode, stateMap);
+    const modeCalibration = effectiveMode === "paper" ? runtimeCalibration : null;
+
+    const v3Decision = await allocateV3Signal(
+      coordinatorOutput,
+      effectiveMode,
+      stateMap,
+      modeCalibration,
+    );
 
     // ── Extract engine-native score and component breakdown ─────────────────
     const candidateScoringDims = winner.metadata?.["componentScores"] as Record<string, number> | null ?? null;
@@ -328,6 +339,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       capitalAmount: v3Decision.capitalAmount,
       features,
       mode: effectiveMode,
+      runtimeCalibration: modeCalibration,
     });
 
     if (tradeId) {

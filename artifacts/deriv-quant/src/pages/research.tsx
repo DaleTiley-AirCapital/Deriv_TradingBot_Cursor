@@ -3,7 +3,7 @@ import {
   FlaskConical, Brain, Play, RefreshCw,
   Loader2, CheckCircle, XCircle,
   FileText, Clock, BarChart2, ChevronRight, Download, Activity,
-  Target, Zap, TrendingUp, TrendingDown, Search, ChevronDown, ChevronUp,
+  Target, Zap, TrendingUp, TrendingDown, Search, ChevronDown, ChevronUp, Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -42,9 +42,13 @@ type CalibrationRunContextValue = {
   runId: number | null;
   symbol: string | null;
   status: PassStatusResult | null;
+  /** Last finished run (failed/completed/partial) so the UI can still show errors after polling stops. */
+  lastTerminalRun: { symbol: string; status: PassStatusResult } | null;
   /** Polling active for an in-flight server run */
   isPassRunActive: boolean;
   beginPassRun: (runId: number, symbol: string) => void;
+  /** Stop polling and session if the active run was for this symbol (e.g. DB reset). */
+  clearPassRunForSymbol: (symbol: string) => void;
 };
 
 const CalibrationRunContext = createContext<CalibrationRunContextValue | null>(null);
@@ -60,6 +64,7 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
   const [runId, setRunId] = useState<number | null>(null);
   const [symbol, setSymbol] = useState<string | null>(null);
   const [status, setStatus] = useState<PassStatusResult | null>(null);
+  const [lastTerminalRun, setLastTerminalRun] = useState<{ symbol: string; status: PassStatusResult } | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopInterval = () => {
@@ -74,10 +79,21 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
     try {
       sessionStorage.setItem(CALIB_PASS_SESSION_KEY, JSON.stringify({ runId: rid, symbol: sym }));
     } catch { /* ignore */ }
+    setLastTerminalRun(null);
     setRunId(rid);
     setSymbol(sym);
     setStatus(null);
   }, []);
+
+  const clearPassRunForSymbol = useCallback((sym: string) => {
+    if (symbol !== sym) return;
+    stopInterval();
+    try { sessionStorage.removeItem(CALIB_PASS_SESSION_KEY); } catch { /* ignore */ }
+    setRunId(null);
+    setSymbol(null);
+    setStatus(null);
+    setLastTerminalRun(prev => (prev?.symbol === sym ? null : prev));
+  }, [symbol]);
 
   // Restore session and drop stale "running" entries
   useEffect(() => {
@@ -93,6 +109,7 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
           setSymbol(p.symbol);
         } else {
           sessionStorage.removeItem(CALIB_PASS_SESSION_KEY);
+          setLastTerminalRun({ symbol: p.symbol, status: s });
         }
       } catch {
         try { sessionStorage.removeItem(CALIB_PASS_SESSION_KEY); } catch { /* ignore */ }
@@ -112,8 +129,11 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
         if (done) {
           stopInterval();
           try { sessionStorage.removeItem(CALIB_PASS_SESSION_KEY); } catch { /* ignore */ }
+          const symForRun = symbol;
+          if (symForRun) setLastTerminalRun({ symbol: symForRun, status: s });
           setRunId(null);
           setSymbol(null);
+          setStatus(null);
         }
       } catch {
         /* transient network errors — keep polling */
@@ -129,8 +149,10 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
     runId,
     symbol,
     status,
+    lastTerminalRun,
     isPassRunActive: runId !== null,
     beginPassRun,
+    clearPassRunForSymbol,
   };
 
   return (
@@ -147,8 +169,11 @@ const ALL_SYMBOLS = [
   "JD10","JD25","JD50","JD75","JD100",
   "stpRNG","stpRNG2","stpRNG3","stpRNG5","RB100","RB200",
 ];
-const ACTIVE = ["CRASH300", "BOOM300", "R_75", "R_100"];
-const BACKTEST_SYMBOLS = ["all", "CRASH300", "BOOM300", "R_75", "R_100"];
+const ACTIVE_SYMBOLS = ["CRASH300", "BOOM300", "R_75", "R_100"];
+const RESEARCH_ONLY_SYMBOLS = ALL_SYMBOLS.filter((s) => !ACTIVE_SYMBOLS.includes(s));
+const BACKTEST_ACTIVE_SYMBOLS = ["all", ...ACTIVE_SYMBOLS];
+const BACKTEST_RESEARCH_SYMBOLS = ["all", ...RESEARCH_ONLY_SYMBOLS];
+type DomainId = "active" | "research";
 
 function StatusPill({ ok, yes, no }: { ok: boolean; yes: string; no: string }) {
   return ok
@@ -174,7 +199,17 @@ function SuccessBox({ msg }: { msg: string }) {
   );
 }
 
-function SymbolSelect({ value, onChange, label }: { value: string; onChange: (s: string) => void; label?: string }) {
+function SymbolSelect({
+  value,
+  onChange,
+  label,
+  symbols = ALL_SYMBOLS,
+}: {
+  value: string;
+  onChange: (s: string) => void;
+  label?: string;
+  symbols?: string[];
+}) {
   return (
     <div className="flex items-center gap-2">
       {label && <span className="text-xs text-muted-foreground">{label}</span>}
@@ -183,8 +218,8 @@ function SymbolSelect({ value, onChange, label }: { value: string; onChange: (s:
         onChange={e => onChange(e.target.value)}
         className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
       >
-        {ALL_SYMBOLS.map(s => (
-          <option key={s} value={s}>{s}{ACTIVE.includes(s) ? " ●" : ""}</option>
+        {symbols.map(s => (
+          <option key={s} value={s}>{s}{ACTIVE_SYMBOLS.includes(s) ? " ●" : ""}</option>
         ))}
       </select>
     </div>
@@ -193,8 +228,9 @@ function SymbolSelect({ value, onChange, label }: { value: string; onChange: (s:
 
 // ─── AI Analysis Tab ─────────────────────────────────────────────────────────
 
-function AiAnalysisTab() {
-  const [symbol, setSymbol] = useState("CRASH300");
+function AiAnalysisTab({ domain }: { domain: DomainId }) {
+  const domainSymbols = domain === "active" ? ACTIVE_SYMBOLS : RESEARCH_ONLY_SYMBOLS;
+  const [symbol, setSymbol] = useState(domainSymbols[0] ?? "CRASH300");
   const [windowDays, setWindowDays] = useState(90);
   const [running, setRunning] = useState(false);
   const [bgStarted, setBgStarted] = useState(false);
@@ -215,6 +251,13 @@ function AiAnalysisTab() {
     intervalRef.current = setInterval(loadStatus, 5000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
+
+  useEffect(() => {
+    if (!domainSymbols.includes(symbol)) {
+      setSymbol(domainSymbols[0] ?? "CRASH300");
+      setResult(null);
+    }
+  }, [domain, domainSymbols, symbol]);
 
   const runSync = async () => {
     setRunning(true); setErr(null); setResult(null);
@@ -255,7 +298,12 @@ function AiAnalysisTab() {
           </p>
         </div>
         <div className="flex items-center gap-4 flex-wrap">
-          <SymbolSelect value={symbol} onChange={s => { setSymbol(s); setResult(null); }} label="Symbol:" />
+          <SymbolSelect
+            value={symbol}
+            symbols={domainSymbols}
+            onChange={s => { setSymbol(s); setResult(null); }}
+            label="Symbol:"
+          />
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">Window:</span>
             {([30, 90, 180, 270, 365] as const).map((d, i) => {
@@ -554,13 +602,14 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
   );
 }
 
-function BacktestTab() {
+function BacktestTab({ domain }: { domain: DomainId }) {
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   const toDateStr = (d: Date) => d.toISOString().slice(0, 10);
+  const backtestSymbols = domain === "active" ? BACKTEST_ACTIVE_SYMBOLS : BACKTEST_RESEARCH_SYMBOLS;
 
-  const [symbol, setSymbol] = useState("R_75");
+  const [symbol, setSymbol] = useState(backtestSymbols[0] ?? "all");
   const [startDate, setStartDate] = useState(toDateStr(thirtyDaysAgo));
   const [endDate, setEndDate] = useState(toDateStr(now));
   const [minScore, setMinScore] = useState("");
@@ -573,6 +622,12 @@ function BacktestTab() {
   useEffect(() => {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
+
+  useEffect(() => {
+    if (!backtestSymbols.includes(symbol)) {
+      setSymbol(backtestSymbols[0] ?? "all");
+    }
+  }, [domain, backtestSymbols, symbol]);
 
   const run = async () => {
     setRunning(true);
@@ -711,8 +766,12 @@ function BacktestTab() {
               onChange={e => setSymbol(e.target.value)}
               className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
-              {BACKTEST_SYMBOLS.map(s => (
-                <option key={s} value={s}>{s === "all" ? "All (4 symbols)" : s}</option>
+              {backtestSymbols.map(s => (
+                <option key={s} value={s}>
+                  {s === "all"
+                    ? `All (${domain === "active" ? "active symbols" : "new symbols"})`
+                    : s}
+                </option>
               ))}
             </select>
           </div>
@@ -919,15 +978,55 @@ interface PassRun {
   metaJson?: Record<string, unknown> | null;
 }
 
+interface SymbolResearchProfileUi {
+  moveCount?: number;
+  moveFamilyDistribution?: Record<string, number>;
+  estimatedTradesPerMonth?: number;
+  recommendedHoldProfile?: Record<string, unknown>;
+  recommendedScanIntervalSeconds?: number;
+  recommendedEntryModel?: string;
+  recommendedTpModel?: Record<string, unknown>;
+  recommendedSlModel?: Record<string, unknown>;
+  recommendedTrailingModel?: Record<string, unknown>;
+  estimatedFitAdjustedMonthlyReturnPct?: number;
+  engineTypeRecommendation?: string;
+  researchStatus?: string;
+}
+
 // ─── Move Calibration Tab ─────────────────────────────────────────────────────
 
-const CALIB_SYMBOLS = ["BOOM300", "CRASH300", "R_75", "R_100"];
+const CALIB_ACTIVE_SYMBOLS = [...ACTIVE_SYMBOLS];
+const CALIB_RESEARCH_SYMBOLS = [...RESEARCH_ONLY_SYMBOLS];
 const PASS_NAMES = ["all", "precursor", "trigger", "behavior", "extraction"];
-const MOVE_TYPES_FILTER_GENERIC = ["all", "breakout", "continuation", "reversal", "unknown"];
+const MOVE_TYPES_FILTER_GENERIC = [
+  "all",
+  "breakout",
+  "continuation",
+  "reversal",
+  "spike_cluster_recovery",
+  "exhaustion",
+  "drift_recovery",
+  "uncategorized_emerging_pattern",
+  "unknown",
+];
 function moveTypesFilterForSymbol(sym: string): string[] {
   if (sym === "BOOM300") return ["all", "boom_expansion"];
   if (sym === "CRASH300") return ["all", "crash_expansion"];
   return MOVE_TYPES_FILTER_GENERIC;
+}
+function strategyFamiliesForSymbol(sym: string): string[] {
+  if (sym === "BOOM300") return ["all", "boom_expansion"];
+  if (sym === "CRASH300") return ["all", "crash_expansion"];
+  return [
+    "all",
+    "reversal",
+    "continuation",
+    "breakout",
+    "spike_cluster_recovery",
+    "exhaustion",
+    "drift_recovery",
+    "uncategorized_emerging_pattern",
+  ];
 }
 const TIERS = ["A", "B", "C", "D"];
 const TIER_COLORS: Record<string, string> = {
@@ -943,11 +1042,18 @@ const TYPE_COLORS: Record<string, string> = {
   unknown:      "text-muted-foreground bg-muted/20 border-border/30",
   boom_expansion: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
   crash_expansion: "text-rose-400 bg-rose-500/10 border-rose-500/25",
+  spike_cluster_recovery: "text-indigo-300 bg-indigo-500/10 border-indigo-500/25",
+  exhaustion: "text-orange-300 bg-orange-500/10 border-orange-500/25",
+  drift_recovery: "text-cyan-300 bg-cyan-500/10 border-cyan-500/25",
+  uncategorized_emerging_pattern: "text-slate-300 bg-slate-500/10 border-slate-500/25",
 };
 
 function formatMoveTypeLabel(type: string): string {
   if (type === "boom_expansion") return "Boom Expansion";
   if (type === "crash_expansion") return "Crash Expansion";
+  if (type === "spike_cluster_recovery") return "Spike Cluster Recovery";
+  if (type === "drift_recovery") return "Drift Recovery";
+  if (type === "uncategorized_emerging_pattern") return "Uncategorized Emerging Pattern";
   return type;
 }
 
@@ -1068,9 +1174,10 @@ interface DetectedMove {
   startTs: number;
 }
 
-function MoveCalibrationTab() {
+function MoveCalibrationTab({ domain }: { domain: DomainId }) {
   const calibRun = useCalibrationRun();
-  const [symbol, setSymbol] = useState("BOOM300");
+  const calibrationSymbols = domain === "active" ? CALIB_ACTIVE_SYMBOLS : CALIB_RESEARCH_SYMBOLS;
+  const [symbol, setSymbol] = useState(calibrationSymbols[0] ?? "BOOM300");
   const [windowDays, setWindowDays] = useState(90);
   const [minMovePct, setMinMovePct] = useState(0.05);
   const [clearExisting, setClearExisting] = useState(true);
@@ -1094,6 +1201,7 @@ function MoveCalibrationTab() {
   const [behaviorProfile, setBehaviorProfile] = useState<BehaviorOverview | null>(null);
   const [buildingProfile, setBuildingProfile] = useState(false);
   const [calibProfile, setCalibProfile] = useState<CalibrationProfile | null>(null);
+  const [researchProfile, setResearchProfile] = useState<SymbolResearchProfileUi | null>(null);
   const [domainLoading, setDomainLoading] = useState(false);
 
   const [engines, setEngines] = useState<EngineRow[]>([]);
@@ -1105,9 +1213,21 @@ function MoveCalibrationTab() {
   const [tierFilter, setTierFilter] = useState<string>("");
   const [movesExpanded, setMovesExpanded] = useState(false);
 
-  const [scope, setScope] = useState<"detect" | "passes" | "full">("detect");
+  const [scope, setScope] = useState<"detect" | "passes" | "full">("full");
   const [runElapsed, setRunElapsed] = useState(0);
   const prevCalibStatusRef = useRef<string | undefined>(undefined);
+  const [showDebugTools, setShowDebugTools] = useState(false);
+  const [preflight, setPreflight] = useState<{
+    latestCandleTs?: number;
+    base1mCount: number;
+    base1mGapCount: number;
+    base1mInterpolatedCount: number;
+    base1mCoveragePct: number;
+    readyForCalibration: boolean;
+    integrityStatus: "healthy" | "reconcile_required";
+    recommendedAction: string;
+  } | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
 
   const [passName, setPassName] = useState("all");
   const [passMinTier, setPassMinTier] = useState("");
@@ -1116,7 +1236,16 @@ function MoveCalibrationTab() {
   const [passErr, setPassErr] = useState<string | null>(null);
 
   const passForThisSymbol = calibRun.isPassRunActive && calibRun.symbol === symbol;
-  const passStatus = calibRun.symbol === symbol ? calibRun.status : null;
+  const passStatus = (() => {
+    if (calibRun.runId !== null && calibRun.symbol === symbol && calibRun.status) {
+      return calibRun.status;
+    }
+    const term = calibRun.lastTerminalRun;
+    if (term && term.symbol === symbol) {
+      return term.status;
+    }
+    return null;
+  })();
 
   const [historyDetailId, setHistoryDetailId] = useState<number | null>(null);
   const [historyDetail, setHistoryDetail] = useState<PassStatusResult | null>(null);
@@ -1127,6 +1256,7 @@ function MoveCalibrationTab() {
   const [runsExpanded, setRunsExpanded] = useState(false);
 
   const [exportBusy, setExportBusy] = useState<Record<string, boolean>>({});
+  const [resetBusy, setResetBusy] = useState(false);
 
   const loadDomains = useCallback(async (sym: string, family?: string) => {
     setAggLoading(true);
@@ -1134,17 +1264,19 @@ function MoveCalibrationTab() {
     setEngineLoading(true);
     const profilePath = (family && family !== "all") ? family : "all";
     try {
-      const [agg, eng, beh, calib, rawMovesResp] = await Promise.all([
+      const [agg, eng, beh, calib, rawMovesResp, rp] = await Promise.all([
         apiFetch(`calibration/aggregate/${sym}`).catch(() => null),
         apiFetch(`calibration/engine/${sym}`).catch(() => null),
         apiFetch(`behavior/profile/${sym}`).catch(() => null),
         apiFetch(`calibration/profile/${sym}/${profilePath}`).catch(() => null),
         apiFetch(`calibration/moves/${sym}`).catch(() => null),
+        apiFetch(`calibration/research-profile/${sym}`).catch(() => null),
       ]);
       setAggregate(agg);
       setEngines(eng?.engines ?? []);
       setBehaviorProfile(beh ?? null);
       setCalibProfile(calib ?? null);
+      setResearchProfile(rp ?? null);
 
       // Compute Target Moves stats directly from the moves endpoint (constraint #9 — source: /api/calibration/moves/:symbol)
       const rawMoves: Array<{ movePct?: number | string | null; moveType?: string | null; qualityTier?: string | null; qualityScore?: number | string | null }> =
@@ -1214,10 +1346,33 @@ function MoveCalibrationTab() {
     }
   }, []);
 
+  const loadPreflight = useCallback(async (sym: string) => {
+    setPreflightLoading(true);
+    try {
+      const d = await apiFetch(`calibration/preflight/${sym}`);
+      setPreflight(d);
+    } catch {
+      setPreflight(null);
+    } finally {
+      setPreflightLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!calibrationSymbols.includes(symbol)) {
+      setSymbol(calibrationSymbols[0] ?? "BOOM300");
+      setDetectResult(null);
+      setDetectErr(null);
+      setStrategyFamily("all");
+      setMoveTypeFilter("all");
+    }
+  }, [domain, calibrationSymbols, symbol]);
+
   useEffect(() => {
     loadDomains(symbol, strategyFamily);
     loadMoves(symbol, moveTypeFilter, tierFilter);
     loadRuns(symbol);
+    loadPreflight(symbol);
   }, [symbol]);
 
   useEffect(() => {
@@ -1256,10 +1411,39 @@ function MoveCalibrationTab() {
         loadDomains(symbol, strategyFamily),
         loadMoves(symbol, moveTypeFilter, tierFilter),
         loadRuns(symbol),
+        loadPreflight(symbol),
       ]);
     }
     prevCalibStatusRef.current = st;
-  }, [calibRun.status?.status, calibRun.symbol, symbol, strategyFamily, moveTypeFilter, tierFilter, loadDomains, loadMoves, loadRuns]);
+  }, [calibRun.status?.status, calibRun.symbol, symbol, strategyFamily, moveTypeFilter, tierFilter, loadDomains, loadMoves, loadRuns, loadPreflight]);
+
+  const resetCalibration = async (): Promise<void> => {
+    if (
+      !window.confirm(
+        `Clear all move calibration for ${symbol}? This deletes detected moves, AI pass rows, profiles, and run history for this symbol.`,
+      )
+    ) {
+      return;
+    }
+    setResetBusy(true);
+    setDetectErr(null);
+    setPassErr(null);
+    try {
+      await apiFetch(`calibration/reset/${symbol}`, { method: "POST" });
+      calibRun.clearPassRunForSymbol(symbol);
+      setDetectResult(null);
+      await Promise.all([
+        loadDomains(symbol, strategyFamily),
+        loadMoves(symbol, moveTypeFilter, tierFilter),
+        loadRuns(symbol),
+        loadPreflight(symbol),
+      ]);
+    } catch (e: unknown) {
+      setDetectErr(e instanceof Error ? e.message : "Reset failed");
+    } finally {
+      setResetBusy(false);
+    }
+  };
 
   const detectMoves = async (): Promise<boolean> => {
     setDetecting(true);
@@ -1275,6 +1459,7 @@ function MoveCalibrationTab() {
       await Promise.all([
         loadDomains(symbol, strategyFamily),
         loadMoves(symbol, moveTypeFilter, tierFilter),
+        loadPreflight(symbol),
       ]);
       return true;
     } catch (e: unknown) {
@@ -1302,7 +1487,11 @@ function MoveCalibrationTab() {
     setPassErr(null);
     try {
       const pn = overridePassName ?? passName;
-      const body: Record<string, unknown> = { windowDays, passName: pn };
+      const body: Record<string, unknown> = {
+        windowDays,
+        passName: pn,
+        continueOnMoveErrors: false,
+      };
       if (passMinTier) body.minTier = passMinTier;
       const effectiveMoveType = passMoveType !== "all" ? passMoveType : (strategyFamily !== "all" ? strategyFamily : undefined);
       if (effectiveMoveType) body.moveType = effectiveMoveType;
@@ -1334,6 +1523,39 @@ function MoveCalibrationTab() {
     }
   };
 
+  const runFullCalibration = async (): Promise<boolean> => {
+    setPassErr(null);
+    setDetectErr(null);
+    try {
+      const body: Record<string, unknown> = {
+        windowDays,
+        minMovePct,
+        force: true,
+      };
+      if (passMinTier) body.minTier = passMinTier;
+      const effectiveMoveType = passMoveType !== "all" ? passMoveType : (strategyFamily !== "all" ? strategyFamily : undefined);
+      if (effectiveMoveType) body.moveType = effectiveMoveType;
+      if (maxMoves && !isNaN(Number(maxMoves))) body.maxMoves = Number(maxMoves);
+
+      const d = await apiFetch(`calibration/full/${symbol}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (typeof d.runId === "number") {
+        calibRun.beginPassRun(d.runId, symbol);
+        setDetectResult(d.detectSummary ?? null);
+        await loadPreflight(symbol);
+        return true;
+      }
+      setPassErr("Full calibration did not return a run id");
+      return false;
+    } catch (e: unknown) {
+      setPassErr(e instanceof Error ? e.message : "Full calibration failed");
+      return false;
+    }
+  };
+
   const runScope = async () => {
     if (scope === "detect") {
       await detectMoves();
@@ -1342,9 +1564,7 @@ function MoveCalibrationTab() {
       // so the selector only affects explicit single-pass reruns from run history.
       await runPasses("all");
     } else {
-      // Full Calibration: detect first, then run all passes
-      const ok = await detectMoves();
-      if (ok) await runPasses("all");
+      await runFullCalibration();
     }
   };
 
@@ -1385,22 +1605,19 @@ function MoveCalibrationTab() {
         {/* Scope row */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Calibration Controls</h3>
-          <div className="flex items-center gap-1 bg-background border border-border/50 rounded-lg p-0.5">
-            {(["detect", "passes", "full"] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setScope(s)}
-                className={cn(
-                  "text-[11px] px-2.5 py-1 rounded-md transition-colors font-medium",
-                  scope === s
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {s === "detect" ? "Detect Moves Only" : s === "passes" ? "Run All Passes" : "Full Calibration"}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setShowDebugTools(prev => {
+                const next = !prev;
+                if (!next) setScope("full");
+                return next;
+              });
+            }}
+            className="text-[11px] px-2.5 py-1 rounded-md border border-border/50 text-muted-foreground hover:text-foreground hover:border-border transition-colors"
+          >
+            {showDebugTools ? "Hide Debug Tools" : "Show Debug Tools"}
+          </button>
         </div>
 
         {/* Shared controls */}
@@ -1419,7 +1636,7 @@ function MoveCalibrationTab() {
               }}
               className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
-              {CALIB_SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
+              {calibrationSymbols.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
 
@@ -1445,46 +1662,37 @@ function MoveCalibrationTab() {
               onChange={e => setStrategyFamily(e.target.value)}
               className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
-              <option value="all">All families</option>
-              {symbol === "BOOM300" && <option value="boom_expansion">Boom Expansion</option>}
-              {symbol === "CRASH300" && <option value="crash_expansion">Crash Expansion</option>}
-              {(symbol === "R_75" || symbol === "R_100") && (
-                <>
-                  <option value="reversal">Reversal</option>
-                  <option value="continuation">Continuation</option>
-                  <option value="breakout">Breakout</option>
-                </>
-              )}
+              {strategyFamiliesForSymbol(symbol).map((family) => (
+                <option key={family} value={family}>{formatMoveTypeLabel(family)}</option>
+              ))}
             </select>
           </div>
 
-          {/* Detect-specific controls */}
-          {(scope === "detect" || scope === "full") && (
-            <>
-              <div className="flex flex-col gap-1">
-                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Min Move %</span>
-                <select
-                  value={minMovePct}
-                  onChange={e => setMinMovePct(Number(e.target.value))}
-                  className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-                >
-                  {[0.02, 0.03, 0.05, 0.08, 0.10].map(p => <option key={p} value={p}>{(p * 100).toFixed(0)}%</option>)}
-                </select>
-              </div>
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer self-end pb-1.5">
-                <input
-                  type="checkbox"
-                  checked={clearExisting}
-                  onChange={e => setClearExisting(e.target.checked)}
-                  className="accent-primary"
-                />
-                Clear existing
-              </label>
-            </>
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Min Move %</span>
+            <select
+              value={minMovePct}
+              onChange={e => setMinMovePct(Number(e.target.value))}
+              className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+            >
+              {[0.02, 0.03, 0.05, 0.08, 0.10].map(p => <option key={p} value={p}>{(p * 100).toFixed(0)}%</option>)}
+            </select>
+          </div>
+
+          {showDebugTools && scope === "detect" && (
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer self-end pb-1.5">
+              <input
+                type="checkbox"
+                checked={clearExisting}
+                onChange={e => setClearExisting(e.target.checked)}
+                className="accent-primary"
+              />
+              Clear existing
+            </label>
           )}
 
-          {/* Pass-specific controls */}
-          {(scope === "passes" || scope === "full") && (
+          {/* Debug-only pass controls */}
+          {showDebugTools && (scope === "passes" || scope === "full") && (
             <>
               <div className="flex flex-col gap-1">
                 <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Pass</span>
@@ -1520,6 +1728,25 @@ function MoveCalibrationTab() {
             </>
           )}
 
+          {showDebugTools && (
+            <div className="flex items-center gap-1 bg-background border border-border/50 rounded-lg p-0.5 self-end">
+              {(["full", "detect", "passes"] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setScope(s)}
+                  className={cn(
+                    "text-[11px] px-2.5 py-1 rounded-md transition-colors font-medium",
+                    scope === s
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {s === "detect" ? "Detect Moves Only" : s === "passes" ? "Run All Passes" : "Run Full Calibration"}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Unified Run button */}
           <button
             onClick={runScope}
@@ -1529,8 +1756,8 @@ function MoveCalibrationTab() {
               scope === "full"
                 ? "bg-emerald-600 text-white"
                 : scope === "passes"
-                ? "bg-amber-500/80 text-black"
-                : "bg-primary text-primary-foreground"
+                  ? "bg-amber-500/80 text-black"
+                  : "bg-primary text-primary-foreground"
             )}
           >
             {(detecting || passForThisSymbol) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
@@ -1539,12 +1766,23 @@ function MoveCalibrationTab() {
           </button>
 
           <button
-            onClick={() => { loadDomains(symbol, strategyFamily); loadMoves(symbol, moveTypeFilter, tierFilter); loadRuns(symbol); }}
+            onClick={() => { loadDomains(symbol, strategyFamily); loadMoves(symbol, moveTypeFilter, tierFilter); loadRuns(symbol); loadPreflight(symbol); }}
             disabled={aggLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border self-end"
           >
             <RefreshCw className={cn("w-3.5 h-3.5", aggLoading && "animate-spin")} />
             Refresh
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void resetCalibration()}
+            disabled={resetBusy || detecting || passForThisSymbol}
+            title="Delete moves, pass results, profiles, and run history for this symbol"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-destructive/40 text-xs text-destructive hover:bg-destructive/10 self-end disabled:opacity-50"
+          >
+            {resetBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+            Clear calibration
           </button>
         </div>
 
@@ -1562,6 +1800,73 @@ function MoveCalibrationTab() {
             )}
           </div>
         )}
+
+        <div className="rounded-lg border border-border/40 bg-muted/10 p-3 space-y-2">
+          {(() => {
+            const currentStage = (passStatus?.metaJson as { stage?: string } | null)?.stage;
+            const reconcileRunning = passStatus?.status === "running" && currentStage === "Data Integrity";
+            const readinessLabel = reconcileRunning
+              ? "running reconcile"
+              : preflight?.readyForCalibration
+                ? "healthy"
+                : "reconcile required";
+            const readinessClass = reconcileRunning
+              ? "text-sky-300 border-sky-500/30 bg-sky-500/10"
+              : preflight?.readyForCalibration
+                ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
+                : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+            return (
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-foreground">Calibration Readiness</span>
+            {preflightLoading ? (
+              <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" /> checking
+              </span>
+            ) : (
+              <span
+                className={cn(
+                  "text-[11px] px-2 py-0.5 rounded border",
+                  readinessClass
+                )}
+              >
+                {readinessLabel}
+              </span>
+            )}
+          </div>
+            );
+          })()}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
+            <div className="rounded border border-border/30 bg-background/40 p-2">
+              <div className="text-muted-foreground">Last candle</div>
+              <div className="font-mono text-foreground">
+                {preflight?.latestCandleTs
+                  ? new Date(preflight.latestCandleTs * 1000).toLocaleString()
+                  : "—"}
+              </div>
+            </div>
+            <div className="rounded border border-border/30 bg-background/40 p-2">
+              <div className="text-muted-foreground">1m candles</div>
+              <div className="font-mono text-foreground">{preflight?.base1mCount?.toLocaleString?.() ?? "—"}</div>
+            </div>
+            <div className="rounded border border-border/30 bg-background/40 p-2">
+              <div className="text-muted-foreground">Missing gaps</div>
+              <div className="font-mono text-foreground">{preflight?.base1mGapCount ?? "—"}</div>
+            </div>
+            <div className="rounded border border-border/30 bg-background/40 p-2">
+              <div className="text-muted-foreground">Interpolated</div>
+              <div className="font-mono text-foreground">{preflight?.base1mInterpolatedCount ?? "—"}</div>
+            </div>
+            <div className="rounded border border-border/30 bg-background/40 p-2">
+              <div className="text-muted-foreground">Coverage</div>
+              <div className="font-mono text-foreground">{preflight?.base1mCoveragePct != null ? `${preflight.base1mCoveragePct}%` : "—"}</div>
+            </div>
+          </div>
+          {preflight?.recommendedAction && (
+            <p className="text-[11px] text-muted-foreground">
+              Recommended action: <span className="text-foreground font-mono">{preflight.recommendedAction}</span>
+            </p>
+          )}
+        </div>
 
         {detectErr && <ErrorBox msg={detectErr} />}
         {detectResult && (
@@ -1612,11 +1917,43 @@ function MoveCalibrationTab() {
                  `Status: ${passStatus.status}`}
               </span>
             </div>
+            <div className="flex flex-wrap gap-1">
+              {["Data Integrity", "Move Detection", "AI Passes", "Extraction Model", "Research Profile Complete"].map((stage) => {
+                const currentStage = (passStatus.metaJson as { stage?: string } | null)?.stage ?? "";
+                const isActive = currentStage === stage;
+                const isDone = ["Research Profile Complete"].includes(stage)
+                  ? passStatus.status === "completed"
+                  : false;
+                return (
+                  <span
+                    key={stage}
+                    className={cn(
+                      "text-[10px] px-1.5 py-0.5 rounded border",
+                      isDone
+                        ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                        : isActive
+                          ? "text-primary border-primary/40 bg-primary/10"
+                          : "text-muted-foreground border-border/30 bg-background/40"
+                    )}
+                  >
+                    {stage}
+                  </span>
+                );
+              })}
+            </div>
             <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
               {passStatus.totalMoves    != null && <span>Total: <strong className="text-foreground">{passStatus.totalMoves}</strong></span>}
               {passStatus.processedMoves != null && <span>Processed: <strong className="text-foreground">{passStatus.processedMoves}</strong></span>}
-              {passStatus.failedMoves   != null && <span>Failed: <strong className="text-foreground">{passStatus.failedMoves}</strong></span>}
+              {passStatus.failedMoves   != null && (
+                <span title="Number of pass-level errors recorded (same move can count more than once only if multiple passes error)">
+                  Pass errors: <strong className="text-foreground">{passStatus.failedMoves}</strong>
+                </span>
+              )}
               {passStatus.passName                  && <span>Pass: <strong className="text-foreground">{passStatus.passName}</strong></span>}
+              {(passStatus.metaJson as { progress?: { remainingMoves?: number } } | null)?.progress?.remainingMoves != null &&
+                passStatus.status === "running" && (
+                <span>Queue left: <strong className="text-foreground">{(passStatus.metaJson as { progress?: { remainingMoves?: number } }).progress?.remainingMoves}</strong></span>
+              )}
             </div>
             {passStatus.status === "running" &&
               (passStatus.metaJson as { progress?: { label?: string } } | null)?.progress?.label && (
@@ -1624,11 +1961,24 @@ function MoveCalibrationTab() {
                 {(passStatus.metaJson as { progress?: { label?: string } }).progress?.label}
               </p>
             )}
+            {(() => {
+              const mj = passStatus.metaJson as { failure?: { kind?: string; moveId?: number; pass?: string; error?: string; hint?: string } } | null;
+              const f = mj?.failure;
+              if (!f || passStatus.status === "running") return null;
+              return (
+                <div className="rounded border border-amber-500/25 bg-amber-500/5 p-2 text-[11px] text-amber-100/90 space-y-1">
+                  <p className="font-semibold text-amber-200">Run stopped — {f.kind ?? "failure"}</p>
+                  {typeof f.moveId === "number" && <p className="font-mono">move id {f.moveId}{typeof f.pass === "string" ? ` · ${f.pass}` : ""}</p>}
+                  {typeof f.error === "string" && <p className="font-mono text-red-300/95 whitespace-pre-wrap">{f.error}</p>}
+                  {typeof f.hint === "string" && <p className="text-muted-foreground">{f.hint}</p>}
+                </div>
+              );
+            })()}
             {passStatus.errorSummary != null && (
-              <p className="text-[11px] text-red-400">
+              <p className="text-[11px] text-red-400 font-mono whitespace-pre-wrap break-all">
                 {typeof passStatus.errorSummary === "string"
                   ? passStatus.errorSummary
-                  : JSON.stringify(passStatus.errorSummary)}
+                  : JSON.stringify(passStatus.errorSummary, null, 2)}
               </p>
             )}
           </div>
@@ -2146,6 +2496,74 @@ function MoveCalibrationTab() {
         </div>
       )}
 
+      {researchProfile && (
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
+              <Activity className="w-3.5 h-3.5 text-primary" />
+              Research Profile Output
+            </h3>
+            <span
+              className={cn(
+                "text-[11px] px-2 py-0.5 rounded border font-medium",
+                domain === "active"
+                  ? "text-sky-300 border-sky-500/30 bg-sky-500/10"
+                  : researchProfile.researchStatus === "engine_candidate"
+                    ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                    : researchProfile.researchStatus === "not_worth_building"
+                      ? "text-red-300 border-red-500/30 bg-red-500/10"
+                      : "text-amber-300 border-amber-500/30 bg-amber-500/10"
+              )}
+            >
+              {domain === "active"
+                ? "Engine Refinement Ready"
+                : researchProfile.researchStatus === "engine_candidate"
+                  ? "Engine Candidate"
+                  : researchProfile.researchStatus === "not_worth_building"
+                    ? "Not Worth Building"
+                    : "Research Complete"}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-0.5">
+              <StatRow label="Move count" value={researchProfile.moveCount ?? "—"} />
+              <StatRow label="Estimated trades / month" value={researchProfile.estimatedTradesPerMonth?.toFixed?.(1) ?? "—"} />
+              <StatRow label="Scan cadence" value={researchProfile.recommendedScanIntervalSeconds ? `${researchProfile.recommendedScanIntervalSeconds}s` : "—"} />
+              <StatRow label="Entry model" value={researchProfile.recommendedEntryModel ?? "—"} />
+              <StatRow
+                label="Hold duration bands"
+                value={(() => {
+                  const h = researchProfile.recommendedHoldProfile ?? {};
+                  const p25 = Number(h.p25Hours ?? 0);
+                  const p50 = Number(h.p50Hours ?? 0);
+                  const p75 = Number(h.p75Hours ?? 0);
+                  return `${p25.toFixed(1)}h / ${p50.toFixed(1)}h / ${p75.toFixed(1)}h`;
+                })()}
+              />
+            </div>
+            <div className="space-y-0.5">
+              <StatRow label="TP model" value={JSON.stringify(researchProfile.recommendedTpModel ?? {})} />
+              <StatRow label="SL model" value={JSON.stringify(researchProfile.recommendedSlModel ?? {})} />
+              <StatRow label="Trailing model" value={JSON.stringify(researchProfile.recommendedTrailingModel ?? {})} />
+              <StatRow label="Profitability summary" value={researchProfile.estimatedFitAdjustedMonthlyReturnPct != null ? `${researchProfile.estimatedFitAdjustedMonthlyReturnPct.toFixed(2)}%/mo` : "—"} />
+              <StatRow label="Engine recommendation" value={researchProfile.engineTypeRecommendation ?? "—"} />
+            </div>
+          </div>
+          {(researchProfile.moveFamilyDistribution && Object.keys(researchProfile.moveFamilyDistribution).length > 0) && (
+            <div className="pt-2 border-t border-border/20">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Move family distribution</p>
+              <div className="flex flex-wrap gap-1.5">
+                {Object.entries(researchProfile.moveFamilyDistribution).map(([family, count]) => (
+                  <span key={family} className="px-1.5 py-0.5 rounded border border-border/40 text-[10px] text-foreground bg-muted/20">
+                    {family}: {count}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Detected Moves List ── */}
       <div className="rounded-xl border border-border/50 bg-card">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/30">
@@ -2408,6 +2826,7 @@ function MoveCalibrationTab() {
                             onClick={(e) => {
                               e.stopPropagation();
                               setPassName(run.passName);
+                              setShowDebugTools(true);
                               setScope("passes");
                               void runPasses(run.passName);
                             }}
@@ -2488,16 +2907,22 @@ function MoveCalibrationTab() {
 // ─── Tab Navigation ───────────────────────────────────────────────────────────
 
 type TabId = "ai" | "backtest" | "calibration";
+type DomainTabId = "active" | "research";
 
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: "ai",          label: "AI Analysis",       icon: <Brain     className="w-3.5 h-3.5" /> },
   { id: "backtest",    label: "Backtest",           icon: <BarChart2 className="w-3.5 h-3.5" /> },
   { id: "calibration", label: "Move Calibration",   icon: <Target    className="w-3.5 h-3.5" /> },
 ];
+const DOMAIN_TABS: { id: DomainTabId; label: string }[] = [
+  { id: "active", label: "Active Symbols" },
+  { id: "research", label: "New Symbols" },
+];
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function Research() {
+  const [activeDomain, setActiveDomain] = useState<DomainTabId>("active");
   const [activeTab, setActiveTab] = useState<TabId>("ai");
 
   return (
@@ -2509,11 +2934,28 @@ export default function Research() {
           Research
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          AI market analysis · V3 isolated backtest engine — Export moved to Data console
+          Active and new-symbol research domains with full-calibration workflow
         </p>
       </div>
 
-      {/* Tab bar */}
+      <div className="flex items-center gap-2 border-b border-border/30 pb-2">
+        {DOMAIN_TABS.map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveDomain(tab.id)}
+            className={cn(
+              "px-3 py-1.5 text-xs rounded-md border transition-colors",
+              activeDomain === tab.id
+                ? "border-primary/50 bg-primary/10 text-primary"
+                : "border-border/40 text-muted-foreground hover:text-foreground hover:border-border/60"
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Nested task tabs */}
       <div className="flex items-center gap-0.5 border-b border-border/30">
         {TABS.map(tab => (
           <button
@@ -2532,9 +2974,9 @@ export default function Research() {
         ))}
       </div>
 
-      {activeTab === "ai"          && <AiAnalysisTab />}
-      {activeTab === "backtest"    && <BacktestTab />}
-      {activeTab === "calibration" && <MoveCalibrationTab />}
+      {activeTab === "ai"          && <AiAnalysisTab domain={activeDomain} />}
+      {activeTab === "backtest"    && <BacktestTab domain={activeDomain} />}
+      {activeTab === "calibration" && <MoveCalibrationTab domain={activeDomain} />}
     </div>
     </CalibrationRunProvider>
   );

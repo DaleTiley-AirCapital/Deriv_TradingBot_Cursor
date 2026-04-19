@@ -23,6 +23,7 @@ const allowlist = [
   "express",
   "express-rate-limit",
   "express-session",
+  "jsonrepair",
   "jsonwebtoken",
   "memorystore",
   "multer",

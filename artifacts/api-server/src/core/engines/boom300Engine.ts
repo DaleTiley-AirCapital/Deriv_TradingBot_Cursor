@@ -34,6 +34,7 @@
 import type { EngineContext, EngineResult } from "../engineTypes.js";
 
 const ENGINE_NAME = "boom_expansion_engine";
+const ENGINE_NAME_LONG = "boom_expansion_long_engine";
 const SYMBOL = "BOOM300";
 
 // ── Projected move calibration (6-month empirical, BOOM300 only) ─────────────
@@ -46,6 +47,7 @@ const BOOM300_BUY_PROJECTED_PCT  = 0.302;   // median upside capture after BUY s
 // Recalibrate by adjusting these constants based on live performance data.
 const BOOM300_SELL_MIN_GATE = 55;  // native score 0-100; below this → no signal forwarded
 const BOOM300_BUY_MIN_GATE  = 50;  // buy setups allowed at slightly lower threshold
+const BOOM300_LONG_BUY_MIN_GATE = 52;
 
 // ── Component weights ─────────────────────────────────────────────────────────
 // Must sum to 1.0. Adjust here for recalibration.
@@ -70,6 +72,32 @@ const BOOM300_BUY_TRAIL     = "Trailing stop activates at 18% unrealised gain. I
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+function resolveBoom300RuntimeGates(
+  ctx: EngineContext,
+  baseSellGate: number,
+  baseBuyGate: number,
+): { sellGate: number; buyGate: number; calibrated: boolean; sourceRunId: number | null } {
+  const paperGate = Number(ctx.runtimeCalibration?.recommendedScoreGates?.paper ?? NaN);
+  if (!Number.isFinite(paperGate)) {
+    return {
+      sellGate: baseSellGate,
+      buyGate: baseBuyGate,
+      calibrated: false,
+      sourceRunId: null,
+    };
+  }
+
+  // Blend profile gate into engine-native gates conservatively.
+  const sellGate = clamp(Math.round(baseSellGate * 0.7 + paperGate * 0.3), 45, 90);
+  const buyGate = clamp(Math.round(baseBuyGate * 0.6 + paperGate * 0.4), 45, 90);
+  return {
+    sellGate,
+    buyGate,
+    calibrated: true,
+    sourceRunId: ctx.runtimeCalibration?.sourceRunId ?? null,
+  };
 }
 
 // ── Component 1: Spike Cluster Pressure (0–100) ───────────────────────────────
@@ -338,6 +366,39 @@ function scoreLowSpikeHazard(f: {
   return { score: clamp(Math.round(score), 0, 100), flags };
 }
 
+function scoreLongMomentumConfirmation(f: {
+  emaSlope: number;
+  bbWidthRoc: number;
+  atrAccel: number;
+  latestClose: number;
+  latestOpen: number;
+}): { score: number; flags: string[] } {
+  const flags: string[] = [];
+  let score = 0;
+
+  if (f.emaSlope >= 0.0004)      { score += 35; flags.push("ema_slope_strongly_pos"); }
+  else if (f.emaSlope >= 0.0002) { score += 28; flags.push("ema_slope_pos"); }
+  else if (f.emaSlope > 0)       { score += 18; flags.push("ema_slope_weakly_pos"); }
+  else                           { score += 2;  flags.push("ema_slope_not_supportive"); }
+
+  if (f.bbWidthRoc > 0.04)       { score += 25; flags.push("bb_expanding"); }
+  else if (f.bbWidthRoc > 0)     { score += 15; flags.push("bb_slightly_expanding"); }
+  else                           { score += 5;  flags.push("bb_not_expanding"); }
+
+  if (f.atrAccel > 0.03)         { score += 20; flags.push("atr_accelerating"); }
+  else if (f.atrAccel > 0)       { score += 10; flags.push("atr_slightly_accelerating"); }
+  else                           { score += 4;  flags.push("atr_flat_or_decelerating"); }
+
+  if (f.latestClose > f.latestOpen) {
+    score += 20;
+    flags.push("bullish_confirmation_candle");
+  } else {
+    flags.push("no_bullish_confirmation");
+  }
+
+  return { score: clamp(Math.round(score), 0, 100), flags };
+}
+
 // ── Main engine function ──────────────────────────────────────────────────────
 
 export interface Boom300NativeScoreBreakdown {
@@ -375,9 +436,12 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
   const symbol = f.symbol;
 
   // ── Regime pre-filter ─────────────────────────────────────────────────────
-  // no_trade and trend_down are incompatible with SELL; boom_expansion incompatible with BUY
+  // no_trade and trend_down are incompatible with SELL.
+  // BUY is allowed in boom_expansion regimes because long-expansion opportunities
+  // are now covered explicitly and should not be structurally blocked here.
   const regimeBlocksSell = operationalRegime === "trend_down" || operationalRegime === "no_trade";
-  const regimeBlocksBuy  = operationalRegime === "boom_expansion" || operationalRegime === "spike_zone";
+  const regimeBlocksBuy  = operationalRegime === "no_trade";
+  const gateCfg = resolveBoom300RuntimeGates(ctx, BOOM300_SELL_MIN_GATE, BOOM300_BUY_MIN_GATE);
 
   // ── Compute SELL components ────────────────────────────────────────────────
   const c1_spike  = scoreSpikeClusterPressure({ spikeHazardScore: f.spikeHazardScore, runLengthSinceSpike: f.runLengthSinceSpike });
@@ -426,13 +490,13 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
   let trailLogic: string;
   let setupLabel: string;
 
-  const sellViable = sellNativeScore >= BOOM300_SELL_MIN_GATE && !regimeBlocksSell;
-  const buyViable  = buyNativeScore  >= BOOM300_BUY_MIN_GATE  && !regimeBlocksBuy;
+  const sellViable = sellNativeScore >= gateCfg.sellGate && !regimeBlocksSell;
+  const buyViable  = buyNativeScore  >= gateCfg.buyGate  && !regimeBlocksBuy;
 
   if (sellViable && (!buyViable || sellNativeScore >= buyNativeScore)) {
     direction      = "sell";
     nativeScore    = sellNativeScore;
-    minGate        = BOOM300_SELL_MIN_GATE;
+    minGate        = gateCfg.sellGate;
     components     = { c1: c1_spike, c2: c2_disp, c3: c3_exhaust, c4: c4_drift, c5: c5_entry, c6: c6_move };
     projectedMovePct = BOOM300_SELL_PROJECTED_PCT;
     invalidation   = f.swingHigh * 1.005;
@@ -444,7 +508,7 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
   } else if (buyViable) {
     direction      = "buy";
     nativeScore    = buyNativeScore;
-    minGate        = BOOM300_BUY_MIN_GATE;
+    minGate        = gateCfg.buyGate;
     components     = { c1: b1_lowHazard, c2: b2_dispDown, c3: b3_exhaust, c4: b4_drift, c5: b5_entry, c6: b6_move };
     projectedMovePct = BOOM300_BUY_PROJECTED_PCT;
     invalidation   = f.swingLow * 0.995;
@@ -557,6 +621,8 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
       boom300GatePassed: true,
       boom300GateThreshold: minGate,
       boom300BlockReasons: blockReasons,
+      boom300RuntimeCalibrationApplied: gateCfg.calibrated,
+      boom300RuntimeCalibrationRunId: gateCfg.sourceRunId,
       setupDetected: nativeBreakdown.setupDetected,
       setupFamily: nativeBreakdown.setupFamily,
       componentScores: nativeBreakdown.componentScores,
@@ -564,6 +630,111 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
       tpLogicSummary: tpLogic,
       slLogicSummary: slLogic,
       structuralContextSummary: structuralContext,
+    },
+  };
+}
+
+export function boom300LongExpansionEngine(ctx: EngineContext): EngineResult | null {
+  const { features, operationalRegime, regimeConfidence } = ctx;
+  const f = features;
+  if (f.symbol !== SYMBOL && !f.symbol.startsWith("BOOM")) return null;
+
+  const regimeBlocked = operationalRegime === "no_trade" || operationalRegime === "trend_down";
+  const gateCfg = resolveBoom300RuntimeGates(ctx, BOOM300_SELL_MIN_GATE, BOOM300_LONG_BUY_MIN_GATE);
+
+  const c1_lowHazard = scoreLowSpikeHazard({
+    spikeHazardScore: f.spikeHazardScore,
+    runLengthSinceSpike: f.runLengthSinceSpike,
+  });
+  const c2_displacement = scoreBuyDisplacementDown({
+    distFromRange30dLowPct: f.distFromRange30dLowPct,
+    bbPctB: f.bbPctB,
+    rsi14: f.rsi14,
+  });
+  const c3_momentum = scoreLongMomentumConfirmation({
+    emaSlope: f.emaSlope,
+    bbWidthRoc: f.bbWidthRoc,
+    atrAccel: f.atrAccel,
+    latestClose: f.latestClose,
+    latestOpen: f.latestOpen,
+  });
+  const c4_structure = scoreDriftResuption({
+    emaDist: -f.emaDist,
+    bbWidthRoc: f.bbWidthRoc,
+    atrAccel: f.atrAccel,
+    atrRank: f.atrRank,
+  });
+  const c5_entry = scoreEntryEfficiency({
+    distFromRange30dHighPct: f.distFromRange30dLowPct,
+    emaDist: -f.emaDist,
+  });
+  const c6_move = scoreExpectedMoveSufficiency({
+    distFromRange30dLowPct: f.distFromRange30dHighPct,
+    atrRank: f.atrRank,
+  });
+
+  const nativeScore = Math.round(
+    c1_lowHazard.score * W_SPIKE_CLUSTER +
+    c2_displacement.score * W_UPSIDE_DISP +
+    c3_momentum.score * W_EXHAUSTION +
+    c4_structure.score * W_DRIFT_RESUMPTION +
+    c5_entry.score * W_ENTRY_EFFICIENCY +
+    c6_move.score * W_MOVE_SUFFICIENCY
+  );
+
+  const minGate = gateCfg.buyGate;
+  if (regimeBlocked || nativeScore < minGate) return null;
+
+  let regimeFit = 0.6;
+  if (operationalRegime === "boom_expansion" || operationalRegime === "breakout_expansion") regimeFit = 0.9;
+  else if (operationalRegime === "spike_zone") regimeFit = 0.82;
+  else if (operationalRegime === "trend_up") regimeFit = 0.74;
+  else if (operationalRegime === "ranging" || operationalRegime === "compression") regimeFit = 0.66;
+
+  const confidence = clamp(nativeScore / 100, 0, 0.98);
+  const invalidation = f.swingLow * 0.995;
+  const blockReasons: string[] = [];
+  if (c1_lowHazard.score < 40) blockReasons.push(`spike_hazard_still_elevated(${c1_lowHazard.score}/100)`);
+  if (c2_displacement.score < 40) blockReasons.push(`price_not_near_range_low(${c2_displacement.score}/100)`);
+  if (c3_momentum.score < 35) blockReasons.push(`momentum_confirmation_weak(${c3_momentum.score}/100)`);
+  if (c4_structure.score < 30) blockReasons.push(`structure_not_supportive(${c4_structure.score}/100)`);
+
+  return {
+    valid: true,
+    symbol: f.symbol,
+    engineName: ENGINE_NAME_LONG,
+    direction: "buy",
+    confidence,
+    regimeFit,
+    entryType: "expansion",
+    projectedMovePct: BOOM300_BUY_PROJECTED_PCT,
+    invalidation,
+    reason:
+      `BOOM300 buy_long_expansion | native=${nativeScore}/100 | gate=${minGate} | ` +
+      `hazard=${c1_lowHazard.score} disp=${c2_displacement.score} momentum=${c3_momentum.score} ` +
+      `structure=${c4_structure.score} entry=${c5_entry.score} move=${c6_move.score} | ` +
+      `regime=${operationalRegime}(fit=${regimeFit.toFixed(2)})`,
+    metadata: {
+      boom300Long: true,
+      boom300NativeScore: nativeScore,
+      boom300GatePassed: true,
+      boom300GateThreshold: minGate,
+      boom300BlockReasons: blockReasons,
+      boom300RuntimeCalibrationApplied: gateCfg.calibrated,
+      boom300RuntimeCalibrationRunId: gateCfg.sourceRunId,
+      setupDetected: "buy_long_expansion",
+      setupFamily: "boom300_long_expansion",
+      componentScores: {
+        spikeClusterPressure: c1_lowHazard.score,
+        upsideDisplacement: c2_displacement.score,
+        exhaustionEvidence: c3_momentum.score,
+        driftResumption: c4_structure.score,
+        entryEfficiency: c5_entry.score,
+        expectedMoveSufficiency: c6_move.score,
+      },
+      expectedHoldProfile: BOOM300_BUY_HOLD_PROFILE,
+      tpLogicSummary: BOOM300_BUY_TP_LOGIC,
+      slLogicSummary: BOOM300_BUY_SL_LOGIC,
     },
   };
 }

@@ -26,7 +26,8 @@ const ENGINES: {
   name: string; symbol: string; direction: "up" | "down" | "both";
   desc: string;
 }[] = [
-  { name: "Boom Expansion",    symbol: "BOOM300",  direction: "up",   desc: "Enters on spike-surge events with multi-window score confirmation. Targets the expansion leg following a Boom spike cluster. Requires direction=up; uses spike count, candle range, and MA deviation." },
+  { name: "Boom Expansion", symbol: "BOOM300", direction: "down", desc: "Primary BOOM300 sell engine. Enters after spike-cluster exhaustion near structural highs and rides the natural drift-down leg." },
+  { name: "Boom Expansion Long", symbol: "BOOM300", direction: "up", desc: "Secondary BOOM300 buy engine. Enters low-hazard drift-down exhaustion reversals and captures rebound expansions." },
   { name: "Crash Expansion",   symbol: "CRASH300", direction: "down", desc: "Mirrors Boom Expansion for Crash indices. Enters on spike-drop events and targets the continuation sell-off after a Crash spike cluster. Requires direction=down." },
   { name: "R75 Continuation",  symbol: "R_75",     direction: "both", desc: "Follows high-momentum trends on Volatility 75. Enters in the direction of the dominant trend after mean-to-range confirmation. Avoids counter-trend entries." },
   { name: "R75 Reversal",      symbol: "R_75",     direction: "both", desc: "Fades exhausted moves on Volatility 75. Enters counter-trend at extreme range positions where MA deviation is at maximum. High score required." },
@@ -60,7 +61,7 @@ const FAQ_ITEMS: { q: string; a: string; icon: React.ReactNode }[] = [
   },
   {
     q: "How does native engine scoring work?",
-    a: "Each of the 8 engines computes its own 6-component native score (0–100) using dimensions specific to that symbol and entry type. For example, BOOM300/CRASH300 engines score cluster pressure, displacement, exhaustion, recovery quality, entry efficiency, and expected move magnitude. R_75/R_100 engines score trend quality, pullback quality, slope, structure, entry efficiency, and expected move. All six components combine into a single native score. There is no shared generic scoring path — each engine's dimensions are calibrated to that specific market behaviour.",
+    a: "Each of the 9 engines computes its own 6-component native score (0–100) using dimensions specific to that symbol and entry type. For example, BOOM300/CRASH300 engines score cluster pressure, displacement, exhaustion, recovery quality, entry efficiency, and expected move magnitude. R_75/R_100 engines score trend quality, pullback quality, slope, structure, entry efficiency, and expected move. All six components combine into a single native score. There is no shared generic scoring path — each engine's dimensions are calibrated to that specific market behaviour.",
     icon: <BarChart3 className="w-4 h-4 text-primary" />,
   },
   {
@@ -381,3 +382,4 @@ export default function Help() {
     </div>
   );
 }
+

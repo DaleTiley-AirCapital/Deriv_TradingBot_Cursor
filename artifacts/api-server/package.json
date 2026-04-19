@@ -8,7 +8,8 @@
     "build": "tsx ./build.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify:structure": "bash ./scripts/verify-structure.sh",
-    "verify:guardrails": "bash ./scripts/verify-guardrails.sh"
+    "verify:guardrails": "bash ./scripts/verify-guardrails.sh",
+    "debug:precursor-move": "tsx ./scripts/debug-precursor-move.ts"
   },
   "dependencies": {
     "@types/archiver": "^7.0.0",
@@ -20,6 +21,7 @@
     "cors": "^2",
     "drizzle-orm": "catalog:",
     "express": "^5",
+    "jsonrepair": "^3.14.0",
     "openai": "^6.29.0",
     "ws": "^8.19.0",
     "xlsx": "^0.18.5"

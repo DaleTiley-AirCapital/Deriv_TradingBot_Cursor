@@ -2,7 +2,7 @@ import type { EngineResult, CoordinatorOutput } from "./engineTypes.js";
 
 // ─── Symbol Coordinator ───────────────────────────────────────────────────────
 // Resolves conflicts when multiple engines fire on the same symbol.
-// BOOM300/CRASH300: only 1 engine per symbol, so coordination is trivial.
+// BOOM300/CRASH300: symbol-native expansion engines.
 // R_75/R_100: resolves across continuation, reversal, breakout engines.
 //
 // Priority rules (explicit, deterministic):

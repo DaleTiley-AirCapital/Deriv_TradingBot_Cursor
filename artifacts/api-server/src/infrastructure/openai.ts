@@ -3,6 +3,35 @@ import { db, platformStateTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { createDecipheriv, scryptSync } from "crypto";
 import { PRIMARY_MODEL, FALLBACK_MODEL } from "../core/ai/aiConfig.js";
+import { recordCalibrationAiUsage } from "../core/calibration/aiTelemetry.js";
+
+/** Calibration / AI calls: bound wall-clock wait and SDK-level retries. */
+export const OPENAI_TIMEOUT_MS = 90_000;
+export const OPENAI_MAX_RETRIES = 1;
+
+type ChatTelemetry = {
+  runId?: number;
+  passName?: string;
+};
+
+function recordUsageTelemetry(
+  completion: OpenAI.Chat.Completions.ChatCompletion,
+  telemetry: ChatTelemetry | undefined,
+  durationMs: number,
+): void {
+  if (!telemetry?.runId) return;
+  const usage = completion.usage;
+  if (!usage) return;
+  recordCalibrationAiUsage({
+    runId: telemetry.runId,
+    passName: telemetry.passName ?? "unknown",
+    model: completion.model ?? "unknown",
+    promptTokens: usage.prompt_tokens ?? 0,
+    completionTokens: usage.completion_tokens ?? 0,
+    totalTokens: usage.total_tokens ?? 0,
+    durationMs,
+  });
+}
 
 const ENC_KEY_SOURCE = process.env["DATABASE_URL"] || process.env["ENCRYPTION_SECRET"];
 if (!ENC_KEY_SOURCE) {
@@ -35,7 +64,11 @@ async function getOpenAIKey(): Promise<string | null> {
 export async function getOpenAIClient(): Promise<OpenAI> {
   const key = await getOpenAIKey();
   if (!key) throw new Error("OpenAI API key not configured — set it in Settings");
-  return new OpenAI({ apiKey: key });
+  return new OpenAI({
+    apiKey: key,
+    timeout: OPENAI_TIMEOUT_MS,
+    maxRetries: OPENAI_MAX_RETRIES,
+  });
 }
 
 /**
@@ -44,15 +77,22 @@ export async function getOpenAIClient(): Promise<OpenAI> {
  * Use this instead of calling client.chat.completions.create directly with PRIMARY_MODEL.
  */
 export async function chatComplete(
-  params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model"> & { model?: string },
+  params: Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model"> & {
+    model?: string;
+    telemetry?: ChatTelemetry;
+  },
 ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
   const client = await getOpenAIClient();
-  const primaryParams = { ...params, model: params.model ?? PRIMARY_MODEL };
+  const { telemetry, ...rest } = params;
+  const primaryParams = { ...rest, model: rest.model ?? PRIMARY_MODEL };
   const maxTokens = typeof params.max_completion_tokens === "number"
     ? params.max_completion_tokens
     : undefined;
   try {
-    return await client.chat.completions.create(primaryParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+    const startedAt = Date.now();
+    const completion = await client.chat.completions.create(primaryParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+    recordUsageTelemetry(completion, telemetry, Date.now() - startedAt);
+    return completion;
   } catch (err) {
     const status = (err as { status?: number })?.status;
     const code   = (err as { error?: { code?: string } })?.error?.code;
@@ -68,10 +108,13 @@ export async function chatComplete(
         console.warn(
           `[AI] Output limit reached at ${maxTokens} tokens for model ${(primaryParams as { model?: string }).model ?? "unknown"}; retrying with ${bumped}.`,
         );
-        return await client.chat.completions.create({
+        const startedAt = Date.now();
+        const completion = await client.chat.completions.create({
           ...primaryParams,
           max_completion_tokens: bumped,
         } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+        recordUsageTelemetry(completion, telemetry, Date.now() - startedAt);
+        return completion;
       }
     }
 
@@ -80,7 +123,125 @@ export async function chatComplete(
       code === "model_not_found" || code === "insufficient_quota" || code === "model_not_available";
     if (isFallbackCandidate && (params.model === PRIMARY_MODEL || params.model == null)) {
       console.warn(`[AI] PRIMARY_MODEL (${PRIMARY_MODEL}) error (${status}/${code ?? ""}), falling back to ${FALLBACK_MODEL}`);
-      return await client.chat.completions.create({ ...params, model: FALLBACK_MODEL } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+      const startedAt = Date.now();
+      const completion = await client.chat.completions.create({
+        ...rest,
+        model: FALLBACK_MODEL,
+      } as OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming);
+      recordUsageTelemetry(completion, telemetry, Date.now() - startedAt);
+      return completion;
+    }
+    throw err;
+  }
+}
+
+export function isLikelyJsonModeRejection(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const status = (err as { status?: number })?.status;
+  return (
+    status === 400 &&
+    /response_format|json_object|json mode|unsupported/i.test(msg)
+  );
+}
+
+/** True when the API rejects `response_format: json_schema` (model or deployment). */
+export function isLikelyStructuredOutputRejection(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const status = (err as { status?: number })?.status;
+  return (
+    status === 400 &&
+    /response_format|json_schema|structured|unsupported/i.test(msg)
+  );
+}
+
+/**
+ * JSON Schema for OpenAI structured outputs (precursor pass).
+ * `missedReason` is always a string; use "" when engines cover the move.
+ */
+export const PRECURSOR_PASS_STRICT_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    precursorConditions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          condition: { type: "string" },
+          strength: { type: "string", enum: ["strong", "moderate", "weak"] },
+          detail: { type: "string" },
+        },
+        required: ["condition", "strength", "detail"],
+      },
+    },
+    missedReason: {
+      type: "string",
+      description: "Why engines missed; empty string if covered",
+    },
+    leadInSummary: { type: "string" },
+    confidenceScore: { type: "number" },
+  },
+  required: ["precursorConditions", "missedReason", "leadInSummary", "confidenceScore"],
+};
+
+/**
+ * Prefer OpenAI structured outputs (`json_schema` + strict) for calibration precursor;
+ * falls back to `chatCompleteJsonPrefer` when the deployment rejects the format.
+ */
+export async function chatCompletePrecursorPassPrefer(
+  params: ChatCompleteParams & { logLabel?: string },
+): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  const { logLabel, ...rest } = params;
+  const structured: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
+    ...rest,
+    model: rest.model ?? PRIMARY_MODEL,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "precursor_calibration_output",
+        strict: true,
+        schema: PRECURSOR_PASS_STRICT_JSON_SCHEMA,
+      },
+    },
+  };
+  try {
+    return await chatComplete(structured);
+  } catch (err) {
+    if (isLikelyStructuredOutputRejection(err)) {
+      console.warn(
+        `[AI] ${logLabel ?? "precursorPass"} json_schema rejected; falling back to json_object`,
+      );
+      return await chatCompleteJsonPrefer(params);
+    }
+    throw err;
+  }
+}
+
+export type ChatCompleteParams = Omit<OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, "model"> & {
+  model?: string;
+  telemetry?: ChatTelemetry;
+};
+
+/**
+ * Request `response_format: json_object` so the model emits valid JSON.
+ * Retries without it when the API returns 400 (some deployments/models reject the flag).
+ */
+export async function chatCompleteJsonPrefer(
+  params: ChatCompleteParams & { logLabel?: string },
+): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  const { logLabel, ...rest } = params;
+  try {
+    return await chatComplete({
+      ...rest,
+      response_format: { type: "json_object" },
+    });
+  } catch (err) {
+    if (isLikelyJsonModeRejection(err)) {
+      console.warn(
+        `[AI] ${logLabel ?? "chatCompleteJsonPrefer"} json_object rejected; retrying without`,
+      );
+      return await chatComplete(rest);
     }
     throw err;
   }

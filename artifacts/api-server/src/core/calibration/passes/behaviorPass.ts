@@ -15,11 +15,12 @@ import {
   type DetectedMoveRow,
 } from "@workspace/db";
 import { eq, and, gte, lte, asc } from "drizzle-orm";
-import { chatComplete } from "../../../infrastructure/openai.js";
+import { chatCompleteJsonPrefer } from "../../../infrastructure/openai.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
 import { parseAiJsonObject } from "../parseAiJson.js";
 
 const MAX_BEHAVIOR_BARS = 200;
+const VALID_BEHAVIOR_PATTERNS = new Set(["smooth", "choppy", "gapped", "spiked", "compressing"]);
 
 export async function runBehaviorPass(
   move: DetectedMoveRow,
@@ -116,7 +117,9 @@ Respond with ONLY valid JSON:
   ]
 }`;
 
-  const response = await chatComplete({
+  const response = await chatCompleteJsonPrefer({
+    logLabel: `behaviorPass moveId=${move.id}`,
+    telemetry: { runId, passName: "behavior" },
     messages: [{ role: "user", content: prompt }],
     max_completion_tokens: 1_200,
     temperature: 0.2,
@@ -128,6 +131,12 @@ Respond with ONLY valid JSON:
   const holdabilityScore = Math.max(0, Math.min(1, Number(parsed.holdabilityScore) || 0));
   const maxIntradrawdown = Math.max(0, Number(parsed.maxIntradrawdownPct) || 0);
   const mfePct = Math.abs(move.movePct);
+  const behaviorPatternRaw = typeof parsed.behaviorPattern === "string" ? parsed.behaviorPattern : "unknown";
+  const behaviorPattern = VALID_BEHAVIOR_PATTERNS.has(behaviorPatternRaw) ? behaviorPatternRaw : "unknown";
+  const exitNarrative = typeof parsed.exitNarrative === "string" ? parsed.exitNarrative : "";
+  const keyBehaviorInsights = Array.isArray(parsed.keyBehaviorInsights)
+    ? parsed.keyBehaviorInsights.filter((v): v is string => typeof v === "string")
+    : [];
 
   await db.insert(moveBehaviorPassesTable).values({
     moveId:             move.id,
@@ -138,11 +147,11 @@ Respond with ONLY valid JSON:
     maxFavorablePct:    mfePct,
     maxAdversePct:      maxIntradrawdown / 100,
     barsToMfePeak:      candles.length,
-    behaviorPattern:    parsed.behaviorPattern ?? "unknown",
-    exitNarrative:      parsed.exitNarrative ?? "",
+    behaviorPattern,
+    exitNarrative,
     holdabilityScore,
-    triggerConditions:  parsed.keyBehaviorInsights
-      ? parsed.keyBehaviorInsights.map((s: string, i: number) => ({ condition: `insight_${i + 1}`, detail: s }))
+    triggerConditions:  keyBehaviorInsights.length > 0
+      ? keyBehaviorInsights.map((s, i) => ({ condition: `insight_${i + 1}`, detail: s }))
       : [],
     rawAiResponse:      parsed,
     passRunId:          runId,

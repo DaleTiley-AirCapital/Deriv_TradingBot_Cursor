@@ -1,4 +1,5 @@
 import type { FeatureVector } from "./features.js";
+import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
 
 export type EngineEntryType =
   | "expansion"
@@ -24,6 +25,7 @@ export interface EngineContext {
   features: FeatureVector;
   operationalRegime: string;
   regimeConfidence: number;
+  runtimeCalibration?: LiveCalibrationProfile | null;
 }
 
 export type SymbolEngine = (ctx: EngineContext) => EngineResult | null;

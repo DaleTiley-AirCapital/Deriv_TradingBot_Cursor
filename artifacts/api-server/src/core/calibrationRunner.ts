@@ -4,8 +4,8 @@
  * Replays ALL historical 1m candles through every V3 engine's component scoring
  * functions to compute realistic native-score distributions from real market data.
  *
- * Coverage: 8 engine families × 2 directions
- *   BOOM300: sell (primary), buy (secondary)
+ * Coverage: 9 live engines (reported as engine+direction entries)
+ *   BOOM300: sell (boom_expansion_engine), buy (boom_expansion_long_engine)
  *   CRASH300: buy (primary), sell (secondary)
  *   R_75: reversal, continuation, breakout — each buy + sell
  *   R_100: reversal, breakout, continuation — each buy + sell
@@ -829,7 +829,7 @@ const WARMUP = 55;
 const CURRENT_GATES = { paper:60, demo:65, real:70 };
 
 const ENGINE_GATES: Record<string, Record<string, number>> = {
-  BOOM300:  { sell:55, buy:50 },
+  BOOM300:  { sell:55, buy:52 },
   CRASH300: { buy:55, sell:50 },
   R_75:  { reversal_buy:55, reversal_sell:55, continuation_buy:58, continuation_sell:58, breakout_buy:60, breakout_sell:60 },
   R_100: { reversal_buy:58, reversal_sell:58, breakout_buy:60, breakout_sell:60, continuation_buy:62, continuation_sell:62 },
@@ -838,7 +838,7 @@ const ENGINE_GATES: Record<string, Record<string, number>> = {
 export async function runNativeScoreCalibration(
   updatePlatformState = false,
 ): Promise<CalibrationReport> {
-  console.log("[Calibration] Starting full native score calibration across all 8 engine families...");
+  console.log("[Calibration] Starting full native score calibration across all 9 live engines...");
 
   const allEngines: EngineCalibrationSummary[] = [];
   let totalHTFBars = 0;
@@ -964,7 +964,7 @@ export async function runNativeScoreCalibration(
 
     if (symbol==="BOOM300") {
       allEngines.push(buildEngineSummary("BOOM300","boom_expansion_engine","sell",boomSellS,ENGINE_GATES.BOOM300.sell,htfMins));
-      allEngines.push(buildEngineSummary("BOOM300","boom_expansion_engine","buy", boomBuyS, ENGINE_GATES.BOOM300.buy, htfMins));
+      allEngines.push(buildEngineSummary("BOOM300","boom_expansion_long_engine","buy", boomBuyS, ENGINE_GATES.BOOM300.buy, htfMins));
     } else if (symbol==="CRASH300") {
       allEngines.push(buildEngineSummary("CRASH300","crash_expansion_engine","buy",  crashBuyS, ENGINE_GATES.CRASH300.buy, htfMins));
       allEngines.push(buildEngineSummary("CRASH300","crash_expansion_engine","sell", crashSellS,ENGINE_GATES.CRASH300.sell,htfMins));
@@ -1032,7 +1032,7 @@ export async function runNativeScoreCalibration(
 
   const report: CalibrationReport = {
     reportGeneratedAt: new Date().toISOString(),
-    enginesAnalyzed: 8,
+    enginesAnalyzed: 9,
     totalHTFBarsAnalyzed: totalHTFBars,
     currentGates: CURRENT_GATES,
     newThresholds: { paper:recPaper, demo:recDemo, real:recReal },

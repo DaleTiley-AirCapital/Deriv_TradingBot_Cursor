@@ -14,6 +14,7 @@ import type { CoordinatorOutput } from "./engineTypes.js";
 import type { TradingMode } from "../infrastructure/deriv.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "../infrastructure/deriv.js";
 import { evaluateSignalAdmission, MODE_SCORE_GATES, extractNativeScore } from "./allocatorCore.js";
+import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
 
 export interface V3AllocationDecision {
   coordinatorOutput: CoordinatorOutput;
@@ -36,6 +37,7 @@ export async function allocateV3Signal(
   coordinatorOutput: CoordinatorOutput,
   mode: TradingMode,
   stateMap: Record<string, string>,
+  runtimeCalibration: LiveCalibrationProfile | null = null,
 ): Promise<V3AllocationDecision> {
   const { winner, symbol } = coordinatorOutput;
   const prefix = getModePrefix(mode);
@@ -91,7 +93,10 @@ export async function allocateV3Signal(
 
   // Use mode-specific gate from allocatorCore (single source of truth) or platformState override
   const modeDefaultGate = MODE_SCORE_GATES[mode as string] ?? 60;
-  const minScore = parseFloat(stateMap[`${prefix}_min_composite_score`] || stateMap["min_composite_score"] || String(modeDefaultGate));
+  const calibratedGate = runtimeCalibration?.recommendedScoreGates?.[mode as "paper" | "demo" | "real"];
+  const minScore = calibratedGate != null
+    ? calibratedGate
+    : parseFloat(stateMap[`${prefix}_min_composite_score`] || stateMap["min_composite_score"] || String(modeDefaultGate));
   // extractNativeScore is the shared extractor used by both live and backtest so
   // gate-4 score comparisons are identical in both paths.
   const nativeScore = extractNativeScore(winner, coordinatorOutput.coordinatorConfidence);
@@ -126,7 +131,9 @@ export async function allocateV3Signal(
       const minConfidence = minScore / 100;
       if (winner.confidence < minConfidence) {
         // Build engine-specific rejection reason for BOOM300
-        const isBoom300 = winner.engineName === "boom_expansion_engine";
+        const isBoom300 =
+          winner.engineName === "boom_expansion_engine" ||
+          winner.engineName === "boom_expansion_long_engine";
         if (isBoom300 && winner.metadata) {
           const nativeScore = winner.metadata["boom300NativeScore"] as number | undefined;
           const blockReasons = winner.metadata["boom300BlockReasons"] as string[] | undefined;
@@ -360,7 +367,10 @@ export async function allocateV3Signal(
   if (remaining <= 0) return deny("80pct_equity_cap_reached");
 
   const confidenceScale = Math.max(0.60, Math.min(1.0, winner.confidence));
-  let size = totalCapital * (equityPctPerTrade / 100) * confidenceScale;
+  const utilizationScale = runtimeCalibration
+    ? Math.max(0.75, Math.min(1.25, (runtimeCalibration.expectedCapitalUtilizationPct || 50) / 50))
+    : 1;
+  let size = totalCapital * (equityPctPerTrade / 100) * confidenceScale * utilizationScale;
   size = Math.min(size, remaining);
   size = Math.max(size, totalCapital * 0.05);
 

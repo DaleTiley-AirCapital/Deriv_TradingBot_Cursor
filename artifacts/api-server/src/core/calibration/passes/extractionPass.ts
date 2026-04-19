@@ -22,9 +22,10 @@ import {
   type DetectedMoveRow,
 } from "@workspace/db";
 import { eq, and, inArray } from "drizzle-orm";
-import { chatComplete } from "../../../infrastructure/openai.js";
+import { chatCompleteJsonPrefer } from "../../../infrastructure/openai.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
 import { parseAiJsonObject } from "../parseAiJson.js";
+import { upsertSymbolResearchProfile } from "../symbolResearchProfile.js";
 
 function median(arr: number[]): number {
   if (arr.length === 0) return 0;
@@ -37,6 +38,7 @@ export async function runExtractionPass(
   symbol: string,
   moves: DetectedMoveRow[],
   runId: number,
+  windowDays = 90,
 ): Promise<void> {
   if (moves.length === 0) return;
 
@@ -195,7 +197,9 @@ Respond with ONLY valid JSON:
   "topImprovementOpportunity": "<1 sentence: single most impactful calibration change — must be research output, not a live code change>"
 }`;
 
-  const response = await chatComplete({
+  const response = await chatCompleteJsonPrefer({
+    logLabel: `extractionPass symbol=${symbol}`,
+    telemetry: { runId, passName: "extraction" },
     messages: [{ role: "user", content: prompt }],
     max_completion_tokens: 2_048,
     temperature: 0.3,
@@ -230,7 +234,7 @@ Respond with ONLY valid JSON:
     .values({
       symbol,
       moveType:           "all",
-      windowDays:         90,
+      windowDays,
       targetMoves:        moves.length,
       capturedMoves:      captured,
       missedMoves:        moves.length - captured,
@@ -295,7 +299,7 @@ Respond with ONLY valid JSON:
       .values({
         symbol,
         moveType:        mt,
-        windowDays:      90,
+        windowDays,
         targetMoves:     typeMoves.length,
         capturedMoves:   typeCaptured,
         missedMoves:     typeMoves.length - typeCaptured,
@@ -320,6 +324,8 @@ Respond with ONLY valid JSON:
         },
       });
   }
+
+  await upsertSymbolResearchProfile(symbol, runId);
 }
 
 // ── Profitability summary builder ─────────────────────────────────────────────
