@@ -490,6 +490,16 @@ export async function manageOpenPositions(): Promise<void> {
       // ${symbol}_scan_spike_count_4h. Neutral defaults if not yet stored.
       const emaSlope = parseFloat(scanContextMap[`${trade.symbol}_scan_ema_slope`] || "0");
       const spikeCount4h = parseInt(scanContextMap[`${trade.symbol}_scan_spike_count_4h`] || "0", 10);
+      const trailActivationPct = parseFloat(scanContextMap[`${trade.symbol}_scan_trail_activation_pct`] || "0");
+      const trailDistancePct = parseFloat(scanContextMap[`${trade.symbol}_scan_trail_distance_pct`] || "0");
+      const trailingActivationThresholdPct =
+        Number.isFinite(trailActivationPct) && trailActivationPct > 0
+          ? trailActivationPct / 100
+          : undefined;
+      const calibratedTrailingDistancePct =
+        Number.isFinite(trailDistancePct) && trailDistancePct > 0
+          ? trailDistancePct / 100
+          : undefined;
 
       const instrumentFamily = classifyInstrumentFamily(trade.symbol);
       const atr14Pct = getDefaultAtr14Pct(trade.symbol);
@@ -520,6 +530,8 @@ export async function manageOpenPositions(): Promise<void> {
         instrumentFamily,
         emaSlope,
         spikeCount4h,
+        trailingActivationThresholdPct,
+        trailingDistancePct: calibratedTrailingDistancePct,
       });
 
       const slChanged = barState.sl !== trade.sl;
@@ -667,6 +679,7 @@ export async function openPositionV3(params: {
   });
 
   let sl = calculateSRFibSL({ entryPrice: spotPrice, direction, tp, positionSize: capitalAmount, equity });
+  let trailingStopPct = PROFIT_TRAILING_DRAWDOWN_PCT;
 
   if (runtimeCalibration && mode === "paper") {
     const targetPctRaw = Number(runtimeCalibration.tpModel?.["targetPct"] ?? 0);
@@ -689,6 +702,11 @@ export async function openPositionV3(params: {
       if (calibratedDist < currentSlDist) {
         sl = calibratedSl;
       }
+    }
+
+    const trailingDistancePctRaw = Number(runtimeCalibration.trailingModel?.["trailingDistancePct"] ?? 0);
+    if (Number.isFinite(trailingDistancePctRaw) && trailingDistancePctRaw > 0) {
+      trailingStopPct = Math.max(0.02, Math.min(0.8, trailingDistancePctRaw / 100));
     }
   }
 
@@ -719,7 +737,7 @@ export async function openPositionV3(params: {
         status: "open",
         mode,
         confidence,
-        trailingStopPct: PROFIT_TRAILING_DRAWDOWN_PCT,
+        trailingStopPct,
         peakPrice: result.entrySpot,
         currentPrice: result.entrySpot,
         notes,
@@ -743,7 +761,7 @@ export async function openPositionV3(params: {
     status: "open",
     mode: "paper",
     confidence,
-    trailingStopPct: PROFIT_TRAILING_DRAWDOWN_PCT,
+    trailingStopPct,
     peakPrice: spotPrice,
     currentPrice: spotPrice,
     notes,

@@ -20,11 +20,28 @@ export interface LiveCalibrationProfile {
   tpModel: Record<string, unknown>;
   slModel: Record<string, unknown>;
   trailingModel: Record<string, unknown>;
+  formulaOverride: Record<string, unknown> | null;
 }
 
 function asNumber(v: unknown, fallback: number): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+function parseJsonRecord(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return asRecord(parsed);
+  } catch {
+    return {};
+  }
 }
 
 function enabledForMode(mode: TradingMode): boolean {
@@ -56,6 +73,20 @@ export async function getLiveCalibrationProfile(
     Math.min(1.25, asNumber(profile.estimatedFitAdjustedMonthlyReturnPct, 0) / 12 || 1),
   );
 
+  const profileRaw = asRecord(profile);
+  const profileOverride = asRecord(
+    profileRaw.recommendedFormulaOverride ?? profileRaw.formulaOverride,
+  );
+  const stateOverride = parseJsonRecord(
+    stateMap[`calibration_formula_override_${symbol}`] ?? stateMap[`${symbol}_formula_override`],
+  );
+  const formulaOverride =
+    Object.keys(stateOverride).length > 0
+      ? stateOverride
+      : Object.keys(profileOverride).length > 0
+        ? profileOverride
+        : null;
+
   return {
     symbol,
     source: "symbol_research_profile",
@@ -74,5 +105,6 @@ export async function getLiveCalibrationProfile(
     tpModel: profile.recommendedTpModel ?? {},
     slModel: profile.recommendedSlModel ?? {},
     trailingModel: profile.recommendedTrailingModel ?? {},
+    formulaOverride,
   };
 }

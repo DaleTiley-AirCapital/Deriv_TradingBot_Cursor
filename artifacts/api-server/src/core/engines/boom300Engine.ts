@@ -74,24 +74,91 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+type BoomWeightSet = {
+  spikeCluster: number;
+  displacement: number;
+  exhaustion: number;
+  drift: number;
+  entry: number;
+  move: number;
+};
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+function asFinite(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getBoomEngineOverride(ctx: EngineContext, engineName: string): Record<string, unknown> {
+  const root = asRecord(ctx.runtimeCalibration?.formulaOverride);
+  const engines = asRecord(root.engines);
+  return asRecord(engines[engineName] ?? root[engineName]);
+}
+
+function resolveBoomWeights(
+  ctx: EngineContext,
+  engineName: string,
+): BoomWeightSet {
+  const fallback: BoomWeightSet = {
+    spikeCluster: W_SPIKE_CLUSTER,
+    displacement: W_UPSIDE_DISP,
+    exhaustion: W_EXHAUSTION,
+    drift: W_DRIFT_RESUMPTION,
+    entry: W_ENTRY_EFFICIENCY,
+    move: W_MOVE_SUFFICIENCY,
+  };
+  const engineOverride = getBoomEngineOverride(ctx, engineName);
+  const w = asRecord(engineOverride.weights);
+  if (Object.keys(w).length === 0) return fallback;
+
+  const spike = asFinite(w.spikeClusterPressure ?? w.spikeCluster) ?? fallback.spikeCluster;
+  const disp = asFinite(w.upsideDisplacement ?? w.displacement) ?? fallback.displacement;
+  const ex = asFinite(w.exhaustionEvidence ?? w.exhaustion) ?? fallback.exhaustion;
+  const drift = asFinite(w.driftResumption ?? w.drift) ?? fallback.drift;
+  const entry = asFinite(w.entryEfficiency ?? w.entry) ?? fallback.entry;
+  const move = asFinite(w.expectedMoveSufficiency ?? w.move) ?? fallback.move;
+  const sum = spike + disp + ex + drift + entry + move;
+  if (!Number.isFinite(sum) || sum <= 0) return fallback;
+
+  return {
+    spikeCluster: spike / sum,
+    displacement: disp / sum,
+    exhaustion: ex / sum,
+    drift: drift / sum,
+    entry: entry / sum,
+    move: move / sum,
+  };
+}
+
 function resolveBoom300RuntimeGates(
   ctx: EngineContext,
   baseSellGate: number,
   baseBuyGate: number,
+  engineName: string,
 ): { sellGate: number; buyGate: number; calibrated: boolean; sourceRunId: number | null } {
   const paperGate = Number(ctx.runtimeCalibration?.recommendedScoreGates?.paper ?? NaN);
+  const engineOverride = getBoomEngineOverride(ctx, engineName);
+  const sellGateOverride = asFinite(engineOverride.sellGate ?? engineOverride.minSellGate);
+  const buyGateOverride = asFinite(engineOverride.buyGate ?? engineOverride.minBuyGate ?? engineOverride.minGate);
   if (!Number.isFinite(paperGate)) {
     return {
-      sellGate: baseSellGate,
-      buyGate: baseBuyGate,
+      sellGate: clamp(Math.round(sellGateOverride ?? baseSellGate), 40, 95),
+      buyGate: clamp(Math.round(buyGateOverride ?? baseBuyGate), 40, 95),
       calibrated: false,
       sourceRunId: null,
     };
   }
 
   // Blend profile gate into engine-native gates conservatively.
-  const sellGate = clamp(Math.round(baseSellGate * 0.7 + paperGate * 0.3), 45, 90);
-  const buyGate = clamp(Math.round(baseBuyGate * 0.6 + paperGate * 0.4), 45, 90);
+  const blendedSell = clamp(Math.round(baseSellGate * 0.7 + paperGate * 0.3), 45, 90);
+  const blendedBuy = clamp(Math.round(baseBuyGate * 0.6 + paperGate * 0.4), 45, 90);
+  const sellGate = clamp(Math.round(sellGateOverride ?? blendedSell), 40, 95);
+  const buyGate = clamp(Math.round(buyGateOverride ?? blendedBuy), 40, 95);
   return {
     sellGate,
     buyGate,
@@ -440,8 +507,8 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
   // BUY is allowed in boom_expansion regimes because long-expansion opportunities
   // are now covered explicitly and should not be structurally blocked here.
   const regimeBlocksSell = operationalRegime === "trend_down" || operationalRegime === "no_trade";
-  const regimeBlocksBuy  = operationalRegime === "no_trade";
-  const gateCfg = resolveBoom300RuntimeGates(ctx, BOOM300_SELL_MIN_GATE, BOOM300_BUY_MIN_GATE);
+  const gateCfg = resolveBoom300RuntimeGates(ctx, BOOM300_SELL_MIN_GATE, BOOM300_BUY_MIN_GATE, ENGINE_NAME);
+  const weights = resolveBoomWeights(ctx, ENGINE_NAME);
 
   // ── Compute SELL components ────────────────────────────────────────────────
   const c1_spike  = scoreSpikeClusterPressure({ spikeHazardScore: f.spikeHazardScore, runLengthSinceSpike: f.runLengthSinceSpike });
@@ -452,12 +519,12 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
   const c6_move   = scoreExpectedMoveSufficiency({ distFromRange30dLowPct: f.distFromRange30dLowPct, atrRank: f.atrRank });
 
   const sellNativeScore = Math.round(
-    c1_spike.score  * W_SPIKE_CLUSTER    +
-    c2_disp.score   * W_UPSIDE_DISP      +
-    c3_exhaust.score * W_EXHAUSTION      +
-    c4_drift.score  * W_DRIFT_RESUMPTION +
-    c5_entry.score  * W_ENTRY_EFFICIENCY +
-    c6_move.score   * W_MOVE_SUFFICIENCY
+    c1_spike.score  * weights.spikeCluster +
+    c2_disp.score   * weights.displacement +
+    c3_exhaust.score * weights.exhaustion +
+    c4_drift.score  * weights.drift +
+    c5_entry.score  * weights.entry +
+    c6_move.score   * weights.move
   );
 
   // ── Compute BUY components ────────────────────────────────────────────────
@@ -469,12 +536,12 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
   const b6_move      = scoreExpectedMoveSufficiency({ distFromRange30dLowPct: f.distFromRange30dHighPct, atrRank: f.atrRank });
 
   const buyNativeScore = Math.round(
-    b1_lowHazard.score * W_SPIKE_CLUSTER    +
-    b2_dispDown.score  * W_UPSIDE_DISP      +
-    b3_exhaust.score   * W_EXHAUSTION       +
-    b4_drift.score     * W_DRIFT_RESUMPTION +
-    b5_entry.score     * W_ENTRY_EFFICIENCY +
-    b6_move.score      * W_MOVE_SUFFICIENCY
+    b1_lowHazard.score * weights.spikeCluster +
+    b2_dispDown.score  * weights.displacement +
+    b3_exhaust.score   * weights.exhaustion +
+    b4_drift.score     * weights.drift +
+    b5_entry.score     * weights.entry +
+    b6_move.score      * weights.move
   );
 
   // ── Direction selection ───────────────────────────────────────────────────
@@ -491,9 +558,8 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
   let setupLabel: string;
 
   const sellViable = sellNativeScore >= gateCfg.sellGate && !regimeBlocksSell;
-  const buyViable  = buyNativeScore  >= gateCfg.buyGate  && !regimeBlocksBuy;
 
-  if (sellViable && (!buyViable || sellNativeScore >= buyNativeScore)) {
+  if (sellViable) {
     direction      = "sell";
     nativeScore    = sellNativeScore;
     minGate        = gateCfg.sellGate;
@@ -505,18 +571,6 @@ export function boom300Engine(ctx: EngineContext): EngineResult | null {
     slLogic        = BOOM300_SELL_SL_LOGIC;
     trailLogic     = BOOM300_SELL_TRAIL;
     setupLabel     = "sell_after_spike_cluster_exhaustion";
-  } else if (buyViable) {
-    direction      = "buy";
-    nativeScore    = buyNativeScore;
-    minGate        = gateCfg.buyGate;
-    components     = { c1: b1_lowHazard, c2: b2_dispDown, c3: b3_exhaust, c4: b4_drift, c5: b5_entry, c6: b6_move };
-    projectedMovePct = BOOM300_BUY_PROJECTED_PCT;
-    invalidation   = f.swingLow * 0.995;
-    holdProfile    = BOOM300_BUY_HOLD_PROFILE;
-    tpLogic        = BOOM300_BUY_TP_LOGIC;
-    slLogic        = BOOM300_BUY_SL_LOGIC;
-    trailLogic     = BOOM300_BUY_TRAIL;
-    setupLabel     = "buy_after_drift_exhaustion_low_hazard";
   } else {
     // Neither setup meets the BOOM300-native gate — no signal
     return null;
@@ -640,7 +694,8 @@ export function boom300LongExpansionEngine(ctx: EngineContext): EngineResult | n
   if (f.symbol !== SYMBOL && !f.symbol.startsWith("BOOM")) return null;
 
   const regimeBlocked = operationalRegime === "no_trade" || operationalRegime === "trend_down";
-  const gateCfg = resolveBoom300RuntimeGates(ctx, BOOM300_SELL_MIN_GATE, BOOM300_LONG_BUY_MIN_GATE);
+  const gateCfg = resolveBoom300RuntimeGates(ctx, BOOM300_SELL_MIN_GATE, BOOM300_LONG_BUY_MIN_GATE, ENGINE_NAME_LONG);
+  const weights = resolveBoomWeights(ctx, ENGINE_NAME_LONG);
 
   const c1_lowHazard = scoreLowSpikeHazard({
     spikeHazardScore: f.spikeHazardScore,
@@ -674,12 +729,12 @@ export function boom300LongExpansionEngine(ctx: EngineContext): EngineResult | n
   });
 
   const nativeScore = Math.round(
-    c1_lowHazard.score * W_SPIKE_CLUSTER +
-    c2_displacement.score * W_UPSIDE_DISP +
-    c3_momentum.score * W_EXHAUSTION +
-    c4_structure.score * W_DRIFT_RESUMPTION +
-    c5_entry.score * W_ENTRY_EFFICIENCY +
-    c6_move.score * W_MOVE_SUFFICIENCY
+    c1_lowHazard.score * weights.spikeCluster +
+    c2_displacement.score * weights.displacement +
+    c3_momentum.score * weights.exhaustion +
+    c4_structure.score * weights.drift +
+    c5_entry.score * weights.entry +
+    c6_move.score * weights.move
   );
 
   const minGate = gateCfg.buyGate;

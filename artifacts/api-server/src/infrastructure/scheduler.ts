@@ -66,6 +66,7 @@ let lastScanTime: Date | null = null;
 let lastScanSymbol: string | null = null;
 let totalScansRun = 0;
 let totalDecisionsLogged = 0;
+const calibratedLastScanMs: Record<string, number> = {};
 
 export function getSchedulerStatus() {
   return {
@@ -97,6 +98,21 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   const runtimeCalibration = paperModeInUse
     ? await getLiveCalibrationProfile(symbol, "paper", stateMap).catch(() => null)
     : null;
+
+  if (runtimeCalibration && paperModeInUse) {
+    const watchSymbols = new Set(getSymbolsNeedingWatchScan());
+    const cadenceMs = Math.max(30_000, Math.min(15 * 60_000, runtimeCalibration.recommendedScanIntervalSeconds * 1000));
+    const nowMs = Date.now();
+    const lastMs = calibratedLastScanMs[symbol] ?? 0;
+    if (!watchSymbols.has(symbol) && (nowMs - lastMs) < cadenceMs) {
+      console.log(
+        `[V3Scan] ${symbol} | SKIP | reason=calibrated_scan_cadence_guard(${Math.round((cadenceMs - (nowMs - lastMs)) / 1000)}s_remaining)`,
+      );
+      return;
+    }
+    calibratedLastScanMs[symbol] = nowMs;
+  }
+
   const result = await scanSymbolV3(symbol, runtimeCalibration);
 
   if (result.skipped) {
@@ -121,13 +137,31 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   // rather than placeholder 0-values.
   const emaKey      = `${symbol}_scan_ema_slope`;
   const spikeKey    = `${symbol}_scan_spike_count_4h`;
+  const trailActivationKey = `${symbol}_scan_trail_activation_pct`;
+  const trailDistanceKey   = `${symbol}_scan_trail_distance_pct`;
+  const calibCadenceKey    = `${symbol}_scan_calibrated_interval_seconds`;
   const emaVal      = String(features.emaSlope ?? 0);
   const spikeVal    = String(features.spikeCount4h ?? 0);
+  const trailActivationVal = String(
+    Number(runtimeCalibration?.trailingModel?.["activationProfitPct"] ?? 0) || 0,
+  );
+  const trailDistanceVal = String(
+    Number(runtimeCalibration?.trailingModel?.["trailingDistancePct"] ?? 0) || 0,
+  );
+  const calibCadenceVal = String(
+    Number(runtimeCalibration?.recommendedScanIntervalSeconds ?? 0) || 0,
+  );
   Promise.all([
     db.insert(platformStateTable).values({ key: emaKey, value: emaVal })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: emaVal, updatedAt: new Date() } }),
     db.insert(platformStateTable).values({ key: spikeKey, value: spikeVal })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: spikeVal, updatedAt: new Date() } }),
+    db.insert(platformStateTable).values({ key: trailActivationKey, value: trailActivationVal })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: trailActivationVal, updatedAt: new Date() } }),
+    db.insert(platformStateTable).values({ key: trailDistanceKey, value: trailDistanceVal })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: trailDistanceVal, updatedAt: new Date() } }),
+    db.insert(platformStateTable).values({ key: calibCadenceKey, value: calibCadenceVal })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: calibCadenceVal, updatedAt: new Date() } }),
   ]).catch(() => {/* non-fatal */});
 
   for (const mode of modesToProcess) {

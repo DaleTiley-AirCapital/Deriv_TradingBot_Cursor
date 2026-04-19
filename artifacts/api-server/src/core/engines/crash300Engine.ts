@@ -75,6 +75,64 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+type CrashWeightSet = {
+  cluster: number;
+  displacement: number;
+  exhaustion: number;
+  recovery: number;
+  entry: number;
+  move: number;
+};
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+function asFinite(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getCrashEngineOverride(ctx: EngineContext, engineName: string): Record<string, unknown> {
+  const root = asRecord(ctx.runtimeCalibration?.formulaOverride);
+  const engines = asRecord(root.engines);
+  return asRecord(engines[engineName] ?? root[engineName]);
+}
+
+function resolveCrashWeights(ctx: EngineContext, engineName: string): CrashWeightSet {
+  const fallback: CrashWeightSet = {
+    cluster: W_CRASH_SPIKE_CLUSTER,
+    displacement: W_DOWNSIDE_DISP,
+    exhaustion: W_EXHAUSTION_REVERSAL,
+    recovery: W_RECOVERY_QUALITY,
+    entry: W_ENTRY_EFFICIENCY,
+    move: W_MOVE_SUFFICIENCY,
+  };
+  const engineOverride = getCrashEngineOverride(ctx, engineName);
+  const w = asRecord(engineOverride.weights);
+  if (Object.keys(w).length === 0) return fallback;
+
+  const cluster = asFinite(w.crashSpikeClusterPressure ?? w.cluster) ?? fallback.cluster;
+  const displacement = asFinite(w.downsideDisplacement ?? w.displacement) ?? fallback.displacement;
+  const exhaustion = asFinite(w.exhaustionReversalEvidence ?? w.exhaustion) ?? fallback.exhaustion;
+  const recovery = asFinite(w.recoveryQuality ?? w.recovery) ?? fallback.recovery;
+  const entry = asFinite(w.entryEfficiency ?? w.entry) ?? fallback.entry;
+  const move = asFinite(w.expectedMoveSufficiency ?? w.move) ?? fallback.move;
+  const sum = cluster + displacement + exhaustion + recovery + entry + move;
+  if (!Number.isFinite(sum) || sum <= 0) return fallback;
+
+  return {
+    cluster: cluster / sum,
+    displacement: displacement / sum,
+    exhaustion: exhaustion / sum,
+    recovery: recovery / sum,
+    entry: entry / sum,
+    move: move / sum,
+  };
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // BUY-SIDE COMPONENTS
 // ══════════════════════════════════════════════════════════════════════════════
@@ -557,6 +615,10 @@ function evaluateCrash300Direction(
   if (f.symbol !== SYMBOL && !f.symbol.startsWith("CRASH")) return null;
 
   const symbol = f.symbol;
+  const engineNameForOverride =
+    forcedDirection === "sell" ? SELL_ENGINE_NAME : BUY_ENGINE_NAME;
+  const engineOverride = getCrashEngineOverride(ctx, engineNameForOverride);
+  const weights = resolveCrashWeights(ctx, engineNameForOverride);
 
   // ── Regime pre-filter ──────────────────────────────────────────────────────
   // trend_up blocks BUY (no BUY in a sustained uptrend for CRASH300)
@@ -573,12 +635,12 @@ function evaluateCrash300Direction(
   const b6_move     = scoreBuyExpectedMoveSufficiency({ distFromRange30dHighPct: f.distFromRange30dHighPct, atrRank: f.atrRank });
 
   const buyNativeScore = Math.round(
-    b1_cluster.score  * W_CRASH_SPIKE_CLUSTER +
-    b2_disp.score     * W_DOWNSIDE_DISP       +
-    b3_exhaust.score  * W_EXHAUSTION_REVERSAL +
-    b4_recovery.score * W_RECOVERY_QUALITY    +
-    b5_entry.score    * W_ENTRY_EFFICIENCY    +
-    b6_move.score     * W_MOVE_SUFFICIENCY
+    b1_cluster.score  * weights.cluster +
+    b2_disp.score     * weights.displacement +
+    b3_exhaust.score  * weights.exhaustion +
+    b4_recovery.score * weights.recovery +
+    b5_entry.score    * weights.entry +
+    b6_move.score     * weights.move
   );
 
   // ── Compute SELL components (secondary setup) ──────────────────────────────
@@ -590,17 +652,29 @@ function evaluateCrash300Direction(
   const s6_move     = scoreSellExpectedMoveSufficiency({ distFromRange30dLowPct: f.distFromRange30dLowPct, atrRank: f.atrRank });
 
   const sellNativeScore = Math.round(
-    s1_rally.score   * W_CRASH_SPIKE_CLUSTER +
-    s2_stretch.score * W_DOWNSIDE_DISP       +
-    s3_exhaust.score * W_EXHAUSTION_REVERSAL +
-    s4_cascade.score * W_RECOVERY_QUALITY    +
-    s5_entry.score   * W_ENTRY_EFFICIENCY    +
-    s6_move.score    * W_MOVE_SUFFICIENCY
+    s1_rally.score   * weights.cluster +
+    s2_stretch.score * weights.displacement +
+    s3_exhaust.score * weights.exhaustion +
+    s4_cascade.score * weights.recovery +
+    s5_entry.score   * weights.entry +
+    s6_move.score    * weights.move
   );
 
   // ── Direction selection (BUY is primary) ──────────────────────────────────
-  const buyViable  = buyNativeScore  >= CRASH300_BUY_MIN_GATE  && !regimeBlocksBuy;
-  const sellViable = sellNativeScore >= CRASH300_SELL_MIN_GATE && !regimeBlocksSell;
+  const paperGate = asFinite(ctx.runtimeCalibration?.recommendedScoreGates?.paper);
+  const blendedBuyGate = paperGate != null
+    ? clamp(Math.round(CRASH300_BUY_MIN_GATE * 0.7 + paperGate * 0.3), 45, 90)
+    : CRASH300_BUY_MIN_GATE;
+  const blendedSellGate = paperGate != null
+    ? clamp(Math.round(CRASH300_SELL_MIN_GATE * 0.65 + paperGate * 0.35), 45, 90)
+    : CRASH300_SELL_MIN_GATE;
+  const buyGateOverride = asFinite(engineOverride.buyGate ?? engineOverride.minBuyGate ?? engineOverride.minGate);
+  const sellGateOverride = asFinite(engineOverride.sellGate ?? engineOverride.minSellGate ?? engineOverride.minGate);
+  const resolvedBuyGate = clamp(Math.round(buyGateOverride ?? blendedBuyGate), 40, 95);
+  const resolvedSellGate = clamp(Math.round(sellGateOverride ?? blendedSellGate), 40, 95);
+
+  const buyViable  = buyNativeScore  >= resolvedBuyGate  && !regimeBlocksBuy;
+  const sellViable = sellNativeScore >= resolvedSellGate && !regimeBlocksSell;
 
   type ComponentSet = {
     c1: { score: number; flags: string[] };
@@ -627,7 +701,7 @@ function evaluateCrash300Direction(
     if (!buyViable) return null;
     direction       = "buy";
     nativeScore     = buyNativeScore;
-    minGate         = CRASH300_BUY_MIN_GATE;
+    minGate         = resolvedBuyGate;
     components      = { c1: b1_cluster, c2: b2_disp, c3: b3_exhaust, c4: b4_recovery, c5: b5_entry, c6: b6_move };
     projectedMovePct = CRASH300_BUY_PROJECTED_PCT;
     invalidation    = f.swingLow * 0.995;
@@ -640,7 +714,7 @@ function evaluateCrash300Direction(
     if (!sellViable) return null;
     direction       = "sell";
     nativeScore     = sellNativeScore;
-    minGate         = CRASH300_SELL_MIN_GATE;
+    minGate         = resolvedSellGate;
     components      = { c1: s1_rally, c2: s2_stretch, c3: s3_exhaust, c4: s4_cascade, c5: s5_entry, c6: s6_move };
     projectedMovePct = CRASH300_SELL_PROJECTED_PCT;
     invalidation    = f.swingHigh * 1.005;
@@ -653,7 +727,7 @@ function evaluateCrash300Direction(
     // Auto mode: BUY preferred when both viable (BUY = primary setup)
     direction       = "buy";
     nativeScore     = buyNativeScore;
-    minGate         = CRASH300_BUY_MIN_GATE;
+    minGate         = resolvedBuyGate;
     components      = { c1: b1_cluster, c2: b2_disp, c3: b3_exhaust, c4: b4_recovery, c5: b5_entry, c6: b6_move };
     projectedMovePct = CRASH300_BUY_PROJECTED_PCT;
     invalidation    = f.swingLow * 0.995;
@@ -665,7 +739,7 @@ function evaluateCrash300Direction(
   } else if (sellViable) {
     direction       = "sell";
     nativeScore     = sellNativeScore;
-    minGate         = CRASH300_SELL_MIN_GATE;
+    minGate         = resolvedSellGate;
     components      = { c1: s1_rally, c2: s2_stretch, c3: s3_exhaust, c4: s4_cascade, c5: s5_entry, c6: s6_move };
     projectedMovePct = CRASH300_SELL_PROJECTED_PCT;
     invalidation    = f.swingHigh * 1.005;
@@ -779,6 +853,8 @@ function evaluateCrash300Direction(
       crash300GatePassed: true,
       crash300GateThreshold: minGate,
       crash300BlockReasons: blockReasons,
+      crash300RuntimeCalibrationApplied: Boolean(ctx.runtimeCalibration),
+      crash300RuntimeCalibrationRunId: ctx.runtimeCalibration?.sourceRunId ?? null,
       setupDetected: nativeBreakdown.setupDetected,
       setupFamily: nativeBreakdown.setupFamily,
       componentScores: nativeBreakdown.componentScores,
