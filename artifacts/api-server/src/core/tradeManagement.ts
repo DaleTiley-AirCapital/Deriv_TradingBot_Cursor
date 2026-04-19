@@ -82,11 +82,13 @@ export function calculateAdaptiveTrailingStop(params: {
   adverseCandleCount: number;
   emaSlope: number;
   spikeCountAdverse4h?: number;
+  trailingActivationThresholdPct?: number;
   trailingDistancePct?: number;
 }): { newSl: number; updated: boolean; reason?: string } {
   const {
     entryPrice, currentPrice, peakPrice, direction, currentSl, tpPrice,
-    atr14Pct, instrumentFamily, adverseCandleCount, emaSlope, spikeCountAdverse4h, trailingDistancePct,
+    atr14Pct, instrumentFamily, adverseCandleCount, emaSlope, spikeCountAdverse4h,
+    trailingActivationThresholdPct, trailingDistancePct,
   } = params;
 
   const currentPnlPct = direction === "buy"
@@ -100,7 +102,11 @@ export function calculateAdaptiveTrailingStop(params: {
   if (tpPct <= 0) return { newSl: currentSl, updated: false };
 
   const progress = currentPnlPct / tpPct;
-  if (progress < 0.30) return { newSl: currentSl, updated: false };
+  const effectiveTrailingActivationThreshold =
+    Number.isFinite(trailingActivationThresholdPct) && (trailingActivationThresholdPct ?? 0) > 0
+      ? Math.max(0.05, Math.min(0.90, trailingActivationThresholdPct as number))
+      : TRAILING_ACTIVATION_THRESHOLD_PCT;
+  if (progress < effectiveTrailingActivationThreshold) return { newSl: currentSl, updated: false };
 
   const isCrashBoom = instrumentFamily === "crash" || instrumentFamily === "boom";
 
@@ -169,6 +175,7 @@ export interface OpenTradeBarInput {
   direction: "buy" | "sell";
   entryPrice: number;
   tp: number;
+  holdBars: number;
   barHigh: number;
   barLow: number;
   barClose: number;
@@ -186,6 +193,7 @@ export interface OpenTradeBarInput {
   emaSlope: number;
   spikeCount4h: number;
   trailingActivationThresholdPct?: number;
+  trailingMinHoldBars?: number;
   trailingDistancePct?: number;
 }
 
@@ -206,9 +214,9 @@ export interface OpenTradeBarOutput {
 export function applyBarStateTransitions(input: OpenTradeBarInput): OpenTradeBarOutput {
   const {
     direction, entryPrice, tp,
-    barHigh, barLow, barClose, barOpen,
+    holdBars, barHigh, barLow, barClose, barOpen,
     atr14AtEntry, instrumentFamily, emaSlope, spikeCount4h,
-    trailingActivationThresholdPct, trailingDistancePct,
+    trailingActivationThresholdPct, trailingMinHoldBars, trailingDistancePct,
   } = input;
 
   let { stage, sl, peakPrice, mfePct, maePct, adverseCandleCount } = input;
@@ -259,7 +267,11 @@ export function applyBarStateTransitions(input: OpenTradeBarInput): OpenTradeBar
       Number.isFinite(trailingActivationThresholdPct) && (trailingActivationThresholdPct ?? 0) > 0
         ? Math.max(0.05, Math.min(0.90, trailingActivationThresholdPct as number))
         : TRAILING_ACTIVATION_THRESHOLD_PCT;
-    if (progress >= effectiveTrailingActivationThreshold) {
+    const effectiveTrailingMinHoldBars =
+      Number.isFinite(trailingMinHoldBars) && (trailingMinHoldBars ?? 0) > 0
+        ? Math.max(1, Math.min(MAX_HOLD_MINS, Math.round(trailingMinHoldBars as number)))
+        : 1;
+    if (progress >= effectiveTrailingActivationThreshold && holdBars >= effectiveTrailingMinHoldBars) {
       if (stage === 2) {
         stage = 3;
         trailingActivated = true;
@@ -277,6 +289,7 @@ export function applyBarStateTransitions(input: OpenTradeBarInput): OpenTradeBar
         adverseCandleCount,
         emaSlope,
         spikeCountAdverse4h: spikeCount4h,
+        trailingActivationThresholdPct: effectiveTrailingActivationThreshold,
         trailingDistancePct,
       });
       if (updated) sl = newSl;

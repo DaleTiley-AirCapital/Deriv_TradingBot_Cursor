@@ -1375,6 +1375,15 @@ function MoveCalibrationTab({ domain }: { domain: DomainId }) {
     loadPreflight(symbol);
   }, [symbol]);
 
+  // Recovery path: if a run is already "running" on the backend (e.g. page refresh,
+  // new browser tab, or stale session storage), re-attach local polling automatically.
+  useEffect(() => {
+    if (calibRun.isPassRunActive) return;
+    const running = runs.find(r => r.status === "running");
+    if (!running) return;
+    calibRun.beginPassRun(running.id, symbol);
+  }, [runs, symbol, calibRun]);
+
   useEffect(() => {
     setHistoryDetailId(null);
     setHistoryDetail(null);
@@ -1537,14 +1546,24 @@ function MoveCalibrationTab({ domain }: { domain: DomainId }) {
       if (effectiveMoveType) body.moveType = effectiveMoveType;
       if (maxMoves && !isNaN(Number(maxMoves))) body.maxMoves = Number(maxMoves);
 
-      const d = await apiFetch(`calibration/full/${symbol}`, {
+      const url = `${BASE}api/calibration/full/${symbol}`;
+      const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      const d = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+      if (r.status === 409 && typeof d.runId === "number") {
+        calibRun.beginPassRun(d.runId as number, symbol);
+        return true;
+      }
+      if (!r.ok) {
+        setPassErr(String(d.error ?? `HTTP ${r.status}`));
+        return false;
+      }
       if (typeof d.runId === "number") {
         calibRun.beginPassRun(d.runId, symbol);
-        setDetectResult(d.detectSummary ?? null);
+        setDetectResult((d.detectSummary as DetectResult | null | undefined) ?? null);
         await loadPreflight(symbol);
         return true;
       }
@@ -1556,10 +1575,12 @@ function MoveCalibrationTab({ domain }: { domain: DomainId }) {
     }
   };
 
+  const effectiveScope: "detect" | "passes" | "full" = showDebugTools ? scope : "full";
+
   const runScope = async () => {
-    if (scope === "detect") {
+    if (effectiveScope === "detect") {
       await detectMoves();
-    } else if (scope === "passes") {
+    } else if (effectiveScope === "passes") {
       // Scope "Run All Passes" always forces passName="all" regardless of the pass selector,
       // so the selector only affects explicit single-pass reruns from run history.
       await runPasses("all");
@@ -1753,16 +1774,16 @@ function MoveCalibrationTab({ domain }: { domain: DomainId }) {
             disabled={detecting || passForThisSymbol}
             className={cn(
               "flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold hover:opacity-90 disabled:opacity-50 self-end",
-              scope === "full"
+              effectiveScope === "full"
                 ? "bg-emerald-600 text-white"
-                : scope === "passes"
+                : effectiveScope === "passes"
                   ? "bg-amber-500/80 text-black"
                   : "bg-primary text-primary-foreground"
             )}
           >
             {(detecting || passForThisSymbol) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
             {detecting ? "Detecting…" : passForThisSymbol ? "Running passes…" :
-              scope === "detect" ? "Detect Moves" : scope === "passes" ? "Run AI Passes" : "Run Full Calibration"}
+              effectiveScope === "detect" ? "Detect Moves" : effectiveScope === "passes" ? "Run AI Passes" : "Run Full Calibration"}
           </button>
 
           <button
@@ -2936,6 +2957,18 @@ export default function Research() {
         <p className="text-sm text-muted-foreground mt-0.5">
           Active and new-symbol research domains with full-calibration workflow
         </p>
+        <div className="mt-2">
+          <a
+            href={`${BASE}reports/deep-research-report.md`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-border/50 hover:border-primary/50 hover:text-primary transition-colors"
+            title="Open Deep Research Report"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Open Deep Research Report
+          </a>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 border-b border-border/30 pb-2">

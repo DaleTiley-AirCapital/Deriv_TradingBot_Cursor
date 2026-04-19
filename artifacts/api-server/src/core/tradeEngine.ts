@@ -492,6 +492,7 @@ export async function manageOpenPositions(): Promise<void> {
       const spikeCount4h = parseInt(scanContextMap[`${trade.symbol}_scan_spike_count_4h`] || "0", 10);
       const trailActivationPct = parseFloat(scanContextMap[`${trade.symbol}_scan_trail_activation_pct`] || "0");
       const trailDistancePct = parseFloat(scanContextMap[`${trade.symbol}_scan_trail_distance_pct`] || "0");
+      const trailMinHoldBarsRaw = parseFloat(scanContextMap[`${trade.symbol}_scan_trail_min_hold_bars`] || "0");
       const trailingActivationThresholdPct =
         Number.isFinite(trailActivationPct) && trailActivationPct > 0
           ? trailActivationPct / 100
@@ -500,6 +501,13 @@ export async function manageOpenPositions(): Promise<void> {
         Number.isFinite(trailDistancePct) && trailDistancePct > 0
           ? trailDistancePct / 100
           : undefined;
+      const trailingMinHoldBars =
+        Number.isFinite(trailMinHoldBarsRaw) && trailMinHoldBarsRaw > 0
+          ? Math.max(1, Math.round(trailMinHoldBarsRaw))
+          : undefined;
+      const holdMins = trade.createdAt
+        ? Math.floor((Date.now() - trade.createdAt.getTime()) / 60_000)
+        : 0;
 
       const instrumentFamily = classifyInstrumentFamily(trade.symbol);
       const atr14Pct = getDefaultAtr14Pct(trade.symbol);
@@ -516,6 +524,7 @@ export async function manageOpenPositions(): Promise<void> {
         direction,
         entryPrice: trade.entryPrice,
         tp: trade.tp,
+        holdBars: holdMins,
         barHigh: currentPrice,
         barLow: currentPrice,
         barClose: currentPrice,
@@ -531,6 +540,7 @@ export async function manageOpenPositions(): Promise<void> {
         emaSlope,
         spikeCount4h,
         trailingActivationThresholdPct,
+        trailingMinHoldBars,
         trailingDistancePct: calibratedTrailingDistancePct,
       });
 
@@ -587,9 +597,6 @@ export async function manageOpenPositions(): Promise<void> {
       // ── Max-duration expiry (shared constant from tradeManagement.ts) ─────
       // Mirrors the MAX_HOLD_BARS check in backtestRunner so both paths
       // have the same hard expiry ceiling.
-      const holdMins = trade.createdAt
-        ? Math.floor((Date.now() - trade.createdAt.getTime()) / 60_000)
-        : 0;
       if (holdMins >= MAX_HOLD_MINS) {
         console.log(`[TradeEngine] Trade #${trade.id} ${trade.symbol} expired after ${holdMins}m (MAX_HOLD_MINS=${MAX_HOLD_MINS})`);
         await closePosition(trade.id, currentPrice, "max_duration");

@@ -1,6 +1,7 @@
 import { db } from "@workspace/db";
 import {
   detectedMovesTable,
+  moveBehaviorPassesTable,
   strategyCalibrationProfilesTable,
   symbolResearchProfilesTable,
 } from "@workspace/db";
@@ -74,6 +75,13 @@ function deriveScanCadenceSeconds(estimatedTradesPerMonth: number): number {
   return 600;
 }
 
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p)));
+  return sorted[idx] ?? 0;
+}
+
 function isMissingRelationError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { code?: string; message?: string };
@@ -88,7 +96,7 @@ export async function buildSymbolResearchProfile(
   const domain = getSymbolDomain(symbol);
   if (!domain) return null;
 
-  const [profileRows, moves] = await Promise.all([
+  const [profileRows, moves, behaviorRows] = await Promise.all([
     db
       .select()
       .from(strategyCalibrationProfilesTable)
@@ -101,9 +109,23 @@ export async function buildSymbolResearchProfile(
     db
       .select({
         moveType: detectedMovesTable.moveType,
+        qualityScore: detectedMovesTable.qualityScore,
       })
       .from(detectedMovesTable)
       .where(eq(detectedMovesTable.symbol, symbol)),
+    db
+      .select({
+        captureablePct: moveBehaviorPassesTable.captureablePct,
+        maxFavorablePct: moveBehaviorPassesTable.maxFavorablePct,
+        maxAdversePct: moveBehaviorPassesTable.maxAdversePct,
+        barsToMfePeak: moveBehaviorPassesTable.barsToMfePeak,
+        passName: moveBehaviorPassesTable.passName,
+      })
+      .from(moveBehaviorPassesTable)
+      .where(and(
+        eq(moveBehaviorPassesTable.symbol, symbol),
+        eq(moveBehaviorPassesTable.passName, "behavior"),
+      )),
   ]);
 
   const profile = profileRows[0];
@@ -132,6 +154,54 @@ export async function buildSymbolResearchProfile(
   const recommendedScanIntervalSeconds = deriveScanCadenceSeconds(estimatedTradesPerMonth);
   const researchStatus = computeResearchStatus(domain, fitAdjusted, profile.targetMoves);
 
+  const holdP25Hours = Number(hold.p25Hours ?? 0);
+  const qualityScores = moves
+    .map((m) => Number(m.qualityScore ?? NaN))
+    .filter((v) => Number.isFinite(v));
+  const qualityP50 = percentile(qualityScores, 0.50);
+  const qualityP75 = percentile(qualityScores, 0.75);
+  const qualityP90 = percentile(qualityScores, 0.90);
+
+  const behaviorCaptureable = behaviorRows
+    .map((r) => Number(r.captureablePct ?? NaN) * 100)
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const behaviorMfe = behaviorRows
+    .map((r) => Number(r.maxFavorablePct ?? NaN) * 100)
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const behaviorMae = behaviorRows
+    .map((r) => Math.abs(Number(r.maxAdversePct ?? NaN) * 100))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const barsToMfe = behaviorRows
+    .map((r) => Number(r.barsToMfePeak ?? NaN))
+    .filter((v) => Number.isFinite(v) && v > 0);
+
+  const tpTargetPct = percentile(behaviorMfe, 0.50) || Number(Math.max(0, profile.avgMovePct ?? 0).toFixed(2));
+  const slRiskPct = percentile(behaviorMae, 0.75) || Number(Math.max(0.5, (profile.avgMovePct ?? 0) * 0.35).toFixed(2));
+  const captureableP50 = percentile(behaviorCaptureable, 0.50);
+  const minHoldMinutesBeforeTrail = Number(
+    Math.max(
+      60,
+      Math.min(
+        12 * 60,
+        barsToMfe.length > 0
+          ? Math.round(percentile(barsToMfe, 0.25))
+          : (holdP25Hours > 0 ? Math.round(holdP25Hours * 60 * 0.30) : 180),
+      ),
+    ).toFixed(0),
+  );
+  const trailActivationPct = Number(
+    Math.max(
+      1.5,
+      Math.min(90, tpTargetPct * 0.35, captureableP50 > 0 ? captureableP50 * 0.5 : 90),
+    ).toFixed(2),
+  );
+  const trailDistancePct = Number(
+    Math.max(0.8, Math.min(40, slRiskPct * 0.5)).toFixed(2),
+  );
+  const paperGate = Math.max(40, Math.min(95, Math.round(qualityP50 || Number(scoring.mediumQualityMoveMinScore ?? 60))));
+  const demoGate = Math.max(45, Math.min(97, Math.round(Math.max(qualityP75 || Number(scoring.mediumQualityMoveMinScore ?? 65), paperGate + 5))));
+  const realGate = Math.max(50, Math.min(99, Math.round(Math.max(qualityP90 || Number(scoring.highQualityMoveMinScore ?? 70), demoGate + 5))));
+
   return {
     symbol,
     symbolDomain: domain,
@@ -156,22 +226,24 @@ export async function buildSymbolResearchProfile(
       systemCompatibility: String(hold.systemCompatibility ?? "unknown"),
     },
     recommendedTpModel: {
-      targetPct: Number(Math.max(0, profile.avgMovePct ?? 0).toFixed(2)),
-      rationale: "Derived from average captured move profile",
+      targetPct: Number(tpTargetPct.toFixed(2)),
+      rationale: "Derived from behavior-pass MFE median (symbol-specific)",
     },
     recommendedSlModel: {
       structural: true,
-      maxInitialRiskPct: Number(Math.max(0.5, (profile.avgMovePct ?? 0) * 0.35).toFixed(2)),
+      maxInitialRiskPct: Number(slRiskPct.toFixed(2)),
     },
     recommendedTrailingModel: {
-      activationProfitPct: Number(Math.max(1.5, (profile.avgMovePct ?? 0) * 0.5).toFixed(2)),
-      trailingDistancePct: Number(Math.max(0.8, (profile.avgMovePct ?? 0) * 0.25).toFixed(2)),
+      activationProfitPct: trailActivationPct,
+      trailingDistancePct: trailDistancePct,
+      minHoldMinutesBeforeTrail,
       policy: "tp_primary_trailing_safety_net",
     },
     recommendedScoreGates: {
-      paper: Number(scoring.mediumQualityMoveMinScore ?? 60),
-      demo: Math.max(65, Number(scoring.mediumQualityMoveMinScore ?? 65)),
-      real: Math.max(70, Number(scoring.highQualityMoveMinScore ?? 70)),
+      paper: paperGate,
+      demo: demoGate,
+      real: realGate,
+      source: "symbol_quality_percentiles",
     },
     researchStatus,
     generatedAt: new Date().toISOString(),

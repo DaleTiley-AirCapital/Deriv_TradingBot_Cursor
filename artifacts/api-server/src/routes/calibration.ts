@@ -19,7 +19,13 @@
 
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { movePrecursorPassesTable, moveBehaviorPassesTable, calibrationPassRunsTable } from "@workspace/db";
+import {
+  movePrecursorPassesTable,
+  moveBehaviorPassesTable,
+  calibrationPassRunsTable,
+  detectedMovesTable,
+  strategyCalibrationProfilesTable,
+} from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { detectAndStoreMoves, getDetectedMoves, clearCalibrationArtifactsForSymbol } from "../core/calibration/moveDetector.js";
 import {
@@ -48,7 +54,10 @@ import {
   assertCalibrationSymbol,
   type SymbolDomain,
 } from "../core/calibration/symbolDomain.js";
-import { getLatestSymbolResearchProfile } from "../core/calibration/symbolResearchProfile.js";
+import {
+  getLatestSymbolResearchProfile,
+  upsertSymbolResearchProfile,
+} from "../core/calibration/symbolResearchProfile.js";
 
 const router: IRouter = Router();
 
@@ -798,6 +807,287 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
     res.json(response);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Calibration export failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+// ── POST /api/calibration/import/:symbol ──────────────────────────────────────
+// Import previously exported calibration artifacts so we can reuse completed
+// AI calibration runs without re-consuming API budget.
+// Query:
+//   type = moves | passes | profile | comparison
+//   replace = true|false (default true)
+router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  const { symbolDomain } = checked;
+
+  const importType = String(req.query.type ?? "").toLowerCase();
+  const replace = req.query.replace !== "false";
+  const VALID_IMPORT_TYPES = ["moves", "passes", "profile", "comparison"];
+  if (!VALID_IMPORT_TYPES.includes(importType)) {
+    res.status(400).json({ error: `Invalid import type. Valid: ${VALID_IMPORT_TYPES.join(", ")}` });
+    return;
+  }
+
+  const payload = req.body ?? {};
+  const asArray = (v: unknown): Record<string, unknown>[] =>
+    Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => !!x && typeof x === "object") : [];
+  const num = (v: unknown, fallback = 0): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const txt = (v: unknown, fallback = ""): string =>
+    typeof v === "string" && v.trim().length > 0 ? v.trim() : fallback;
+  const json = (v: unknown): Record<string, unknown> | null =>
+    v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
+  try {
+    let imported = {
+      moves: 0,
+      passRuns: 0,
+      precursorPasses: 0,
+      behaviorPasses: 0,
+      profiles: 0,
+    };
+
+    if (importType === "moves") {
+      const moves = asArray((payload as Record<string, unknown>).moves ?? (payload as Record<string, unknown>).detected_moves);
+      if (replace) {
+        await db.delete(detectedMovesTable).where(eq(detectedMovesTable.symbol, symbol));
+      }
+      if (moves.length > 0) {
+        await db.insert(detectedMovesTable).values(moves.map((m) => ({
+          symbol,
+          direction: txt(m.direction, "up"),
+          moveType: txt(m.moveType, "unknown"),
+          startTs: num(m.startTs),
+          endTs: num(m.endTs),
+          startPrice: num(m.startPrice),
+          endPrice: num(m.endPrice),
+          movePct: num(m.movePct),
+          holdingMinutes: num(m.holdingMinutes),
+          leadInShape: txt(m.leadInShape, "unknown"),
+          leadInBars: Math.round(num(m.leadInBars, 0)),
+          directionalPersistence: num(m.directionalPersistence, 0),
+          rangeExpansion: num(m.rangeExpansion, 1),
+          spikeCount4h: Math.round(num(m.spikeCount4h, 0)),
+          qualityScore: num(m.qualityScore, 0),
+          qualityTier: txt(m.qualityTier, "D"),
+          windowDays: Math.round(num(m.windowDays, 90)),
+          isInterpolatedExcluded: m.isInterpolatedExcluded === false ? false : true,
+          strategyFamilyCandidate: txt(m.strategyFamilyCandidate, "unknown"),
+          contextJson: json(m.contextJson),
+          triggerZoneJson: json(m.triggerZoneJson),
+        })));
+      }
+      imported.moves = moves.length;
+    }
+
+    if (importType === "passes") {
+      const runs = asArray((payload as Record<string, unknown>).runs);
+      const raw = json((payload as Record<string, unknown>).rawPassRecords) ?? {};
+      const precursor = asArray(raw.precursorPasses ?? (payload as Record<string, unknown>).precursorPasses);
+      const behavior = asArray(raw.behaviorPasses ?? (payload as Record<string, unknown>).behaviorPasses);
+      const profiles = asArray((payload as Record<string, unknown>).profiles ?? json((payload as Record<string, unknown>).profileSummaries)?.profiles);
+
+      if (replace) {
+        await db.delete(movePrecursorPassesTable).where(eq(movePrecursorPassesTable.symbol, symbol));
+        await db.delete(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol));
+        await db.delete(calibrationPassRunsTable).where(eq(calibrationPassRunsTable.symbol, symbol));
+      }
+
+      if (runs.length > 0) {
+        await db.insert(calibrationPassRunsTable).values(runs.map((r) => ({
+          symbol,
+          windowDays: Math.round(num(r.windowDays, 90)),
+          status: txt(r.status, "completed"),
+          passName: txt(r.passName, "all"),
+          totalMoves: Math.round(num(r.totalMoves, 0)),
+          processedMoves: Math.round(num(r.processedMoves, 0)),
+          failedMoves: Math.round(num(r.failedMoves, 0)),
+          startedAt: r.startedAt ? new Date(String(r.startedAt)) : new Date(),
+          completedAt: r.completedAt ? new Date(String(r.completedAt)) : null,
+          errorSummary: json(r.errorSummary),
+          metaJson: json(r.metaJson),
+        })));
+      }
+      if (precursor.length > 0) {
+        await db.insert(movePrecursorPassesTable).values(precursor.map((p) => ({
+          moveId: Math.round(num(p.moveId, 0)),
+          symbol,
+          direction: txt(p.direction, "up"),
+          moveType: txt(p.moveType, "unknown"),
+          engineMatched: txt(p.engineMatched, "none"),
+          engineWouldFire: Boolean(p.engineWouldFire),
+          precursorConditions: json(p.precursorConditions),
+          missedReason: txt(p.missedReason, ""),
+          leadInSummary: txt(p.leadInSummary, ""),
+          confidenceScore: num(p.confidenceScore, 0),
+          rawAiResponse: json(p.rawAiResponse),
+          passRunId: Number.isFinite(num(p.passRunId, NaN)) ? Math.round(num(p.passRunId, 0)) : null,
+        })));
+      }
+      if (behavior.length > 0) {
+        await db.insert(moveBehaviorPassesTable).values(behavior.map((b) => ({
+          moveId: Math.round(num(b.moveId, 0)),
+          symbol,
+          direction: txt(b.direction, "up"),
+          passName: txt(b.passName, "behavior"),
+          earliestEntryTs: Number.isFinite(num(b.earliestEntryTs, NaN)) ? num(b.earliestEntryTs, 0) : null,
+          earliestEntryPrice: Number.isFinite(num(b.earliestEntryPrice, NaN)) ? num(b.earliestEntryPrice, 0) : null,
+          entrySlippage: num(b.entrySlippage, 0),
+          captureablePct: num(b.captureablePct, 0),
+          maxFavorablePct: num(b.maxFavorablePct, 0),
+          maxAdversePct: num(b.maxAdversePct, 0),
+          barsToMfePeak: Math.round(num(b.barsToMfePeak, 0)),
+          exitNarrative: txt(b.exitNarrative, ""),
+          triggerConditions: json(b.triggerConditions),
+          behaviorPattern: txt(b.behaviorPattern, "unknown"),
+          holdabilityScore: num(b.holdabilityScore, 0),
+          rawAiResponse: json(b.rawAiResponse),
+          passRunId: Number.isFinite(num(b.passRunId, NaN)) ? Math.round(num(b.passRunId, 0)) : null,
+        })));
+      }
+
+      if (profiles.length > 0) {
+        for (const p of profiles) {
+          await db
+            .insert(strategyCalibrationProfilesTable)
+            .values({
+              symbol,
+              moveType: txt(p.moveType, "all"),
+              windowDays: Math.round(num(p.windowDays, 90)),
+              targetMoves: Math.round(num(p.targetMoves, 0)),
+              capturedMoves: Math.round(num(p.capturedMoves, 0)),
+              missedMoves: Math.round(num(p.missedMoves, 0)),
+              fitScore: num(p.fitScore, 0),
+              missReasons: p.missReasons as never,
+              avgMovePct: num(p.avgMovePct, 0),
+              medianMovePct: num(p.medianMovePct, 0),
+              avgHoldingHours: num(p.avgHoldingHours, 0),
+              avgCaptureablePct: num(p.avgCaptureablePct, 0),
+              avgHoldabilityScore: num(p.avgHoldabilityScore, 0),
+              engineCoverage: p.engineCoverage as never,
+              precursorSummary: p.precursorSummary as never,
+              triggerSummary: p.triggerSummary as never,
+              feeddownSchema: p.feeddownSchema as never,
+              profitabilitySummary: p.profitabilitySummary as never,
+              lastRunId: Number.isFinite(num(p.lastRunId, NaN)) ? Math.round(num(p.lastRunId, 0)) : null,
+              generatedAt: p.generatedAt ? new Date(String(p.generatedAt)) : new Date(),
+            })
+            .onConflictDoUpdate({
+              target: [strategyCalibrationProfilesTable.symbol, strategyCalibrationProfilesTable.moveType],
+              set: {
+                windowDays: Math.round(num(p.windowDays, 90)),
+                targetMoves: Math.round(num(p.targetMoves, 0)),
+                capturedMoves: Math.round(num(p.capturedMoves, 0)),
+                missedMoves: Math.round(num(p.missedMoves, 0)),
+                fitScore: num(p.fitScore, 0),
+                missReasons: p.missReasons as never,
+                avgMovePct: num(p.avgMovePct, 0),
+                medianMovePct: num(p.medianMovePct, 0),
+                avgHoldingHours: num(p.avgHoldingHours, 0),
+                avgCaptureablePct: num(p.avgCaptureablePct, 0),
+                avgHoldabilityScore: num(p.avgHoldabilityScore, 0),
+                engineCoverage: p.engineCoverage as never,
+                precursorSummary: p.precursorSummary as never,
+                triggerSummary: p.triggerSummary as never,
+                feeddownSchema: p.feeddownSchema as never,
+                profitabilitySummary: p.profitabilitySummary as never,
+                lastRunId: Number.isFinite(num(p.lastRunId, NaN)) ? Math.round(num(p.lastRunId, 0)) : null,
+                generatedAt: p.generatedAt ? new Date(String(p.generatedAt)) : new Date(),
+              },
+            });
+        }
+      }
+
+      imported.passRuns = runs.length;
+      imported.precursorPasses = precursor.length;
+      imported.behaviorPasses = behavior.length;
+      imported.profiles = profiles.length;
+    }
+
+    if (importType === "profile") {
+      const profiles = asArray((payload as Record<string, unknown>).profiles);
+      if (replace) {
+        await db.delete(strategyCalibrationProfilesTable).where(eq(strategyCalibrationProfilesTable.symbol, symbol));
+      }
+      for (const p of profiles) {
+        await db
+          .insert(strategyCalibrationProfilesTable)
+          .values({
+            symbol,
+            moveType: txt(p.moveType, "all"),
+            windowDays: Math.round(num(p.windowDays, 90)),
+            targetMoves: Math.round(num(p.targetMoves, 0)),
+            capturedMoves: Math.round(num(p.capturedMoves, 0)),
+            missedMoves: Math.round(num(p.missedMoves, 0)),
+            fitScore: num(p.fitScore, 0),
+            missReasons: p.missReasons as never,
+            avgMovePct: num(p.avgMovePct, 0),
+            medianMovePct: num(p.medianMovePct, 0),
+            avgHoldingHours: num(p.avgHoldingHours, 0),
+            avgCaptureablePct: num(p.avgCaptureablePct, 0),
+            avgHoldabilityScore: num(p.avgHoldabilityScore, 0),
+            engineCoverage: p.engineCoverage as never,
+            precursorSummary: p.precursorSummary as never,
+            triggerSummary: p.triggerSummary as never,
+            feeddownSchema: p.feeddownSchema as never,
+            profitabilitySummary: p.profitabilitySummary as never,
+            lastRunId: Number.isFinite(num(p.lastRunId, NaN)) ? Math.round(num(p.lastRunId, 0)) : null,
+            generatedAt: p.generatedAt ? new Date(String(p.generatedAt)) : new Date(),
+          })
+          .onConflictDoUpdate({
+            target: [strategyCalibrationProfilesTable.symbol, strategyCalibrationProfilesTable.moveType],
+            set: {
+              windowDays: Math.round(num(p.windowDays, 90)),
+              targetMoves: Math.round(num(p.targetMoves, 0)),
+              capturedMoves: Math.round(num(p.capturedMoves, 0)),
+              missedMoves: Math.round(num(p.missedMoves, 0)),
+              fitScore: num(p.fitScore, 0),
+              missReasons: p.missReasons as never,
+              avgMovePct: num(p.avgMovePct, 0),
+              medianMovePct: num(p.medianMovePct, 0),
+              avgHoldingHours: num(p.avgHoldingHours, 0),
+              avgCaptureablePct: num(p.avgCaptureablePct, 0),
+              avgHoldabilityScore: num(p.avgHoldabilityScore, 0),
+              engineCoverage: p.engineCoverage as never,
+              precursorSummary: p.precursorSummary as never,
+              triggerSummary: p.triggerSummary as never,
+              feeddownSchema: p.feeddownSchema as never,
+              profitabilitySummary: p.profitabilitySummary as never,
+              lastRunId: Number.isFinite(num(p.lastRunId, NaN)) ? Math.round(num(p.lastRunId, 0)) : null,
+              generatedAt: p.generatedAt ? new Date(String(p.generatedAt)) : new Date(),
+            },
+          });
+      }
+      imported.profiles = profiles.length;
+    }
+
+    if (importType === "comparison") {
+      // Comparison is derived/read-only and does not map 1:1 to base tables.
+      // Accept as no-op so users can still upload it for bookkeeping.
+    }
+
+    const latestAllProfile = await getCalibrationProfile(symbol, "all");
+    if (latestAllProfile?.lastRunId) {
+      await upsertSymbolResearchProfile(symbol, latestAllProfile.lastRunId);
+    }
+
+    res.json(withSymbolDomain(symbol, symbolDomain, {
+      ok: true,
+      importType,
+      replace,
+      imported,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Calibration import failed";
+    console.error(`[calibration/import/${symbol}] error:`, message);
     res.status(500).json({ error: message });
   }
 });

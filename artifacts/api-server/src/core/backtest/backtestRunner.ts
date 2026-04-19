@@ -1,37 +1,37 @@
-/**
- * backtestRunner.ts — V3 Unified Runtime Backtest Engine
+﻿/**
+ * backtestRunner.ts â€” V3 Unified Runtime Backtest Engine
  *
  * Replays historical candles bar-by-bar using the EXACT same decision path
  * as the live scanner, including mode score gates mirroring portfolioAllocatorV3:
  *
- *   features → HTF regime (averaged) → engines → symbolCoordinator
- *     → backtestAllocator (mode gate: paper≥60, demo≥65, real≥70)
- *     → staged exit model (SR/Fib TP, 1:5 SL, breakeven at 20%, ATR trail at 30%)
+ *   features â†’ HTF regime (averaged) â†’ engines â†’ symbolCoordinator
+ *     â†’ backtestAllocator (mode gate: paperâ‰¥60, demoâ‰¥65, realâ‰¥70)
+ *     â†’ staged exit model (SR/Fib TP, 1:5 SL, breakeven at 20%, ATR trail at 30%)
  *
- * ── Divergences from V2 runner (now eliminated) ──────────────────────────────
- *   OLD: bare classifyRegime per bar → NEW: HTF feature-averaged regime
- *   OLD: highest-score loop → NEW: runSymbolCoordinator (conflict resolution)
- *   OLD: no mode score gate → NEW: paper/demo/real gates matching live allocator
- *   OLD: Leg1/Hard-SL/MFE exits → NEW: SR/Fib TP + 1:5 SL + BE@20% + ATR trail
- *   OLD: blocked signals silently dropped → NEW: blocked events captured for profiling
+ * â”€â”€ Divergences from V2 runner (now eliminated) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+ *   OLD: bare classifyRegime per bar â†’ NEW: HTF feature-averaged regime
+ *   OLD: highest-score loop â†’ NEW: runSymbolCoordinator (conflict resolution)
+ *   OLD: no mode score gate â†’ NEW: paper/demo/real gates matching live allocator
+ *   OLD: Leg1/Hard-SL/MFE exits â†’ NEW: SR/Fib TP + 1:5 SL + BE@20% + ATR trail
+ *   OLD: blocked signals silently dropped â†’ NEW: blocked events captured for profiling
  *
- * ── Behavior event capture ────────────────────────────────────────────────────
+ * â”€â”€ Behavior event capture â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *   Every lifecycle stage is recorded:
- *     signal_fired → blocked_by_gate | entered → breakeven_promoted
- *     → trailing_activated → closed
+ *     signal_fired â†’ blocked_by_gate | entered â†’ breakeven_promoted
+ *     â†’ trailing_activated â†’ closed
  *   The behavior profiler reads these to derive: win rate, hold time,
  *   MFE/MAE distributions, blocked rate, recommended scan cadence, memory window.
  *
- * ── Design constraints ────────────────────────────────────────────────────────
+ * â”€â”€ Design constraints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  *   - No DB calls inside the hot loop (candles pre-loaded at startup)
  *   - HTF regime averaged over last 60 1m feature samples (~1 hour)
  *   - One open trade per symbol at a time (matches live one-per-symbol enforcement)
  *   - Mode score gates: paper=60, demo=65, real=70 (matches portfolioAllocatorV3)
- *   - Backtest allocator is pure/stateless (no portfolio PnL risk limits — those
+ *   - Backtest allocator is pure/stateless (no portfolio PnL risk limits â€” those
  *     are portfolio-state-dependent and inapplicable in isolated bar-by-bar replay)
  */
 
-import { db, candlesTable, platformStateTable } from "@workspace/db";
+import { db, candlesTable, platformStateTable, detectedMovesTable } from "@workspace/db";
 import { eq, and, gte, lte, asc } from "drizzle-orm";
 import { computeFeaturesFromSlice, type CandleRow } from "./featureSlice.js";
 import { classifyRegimeFromSamples } from "../regimeEngine.js";
@@ -58,8 +58,9 @@ import {
   applyBarStateTransitions,
 } from "../tradeManagement.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "../../infrastructure/deriv.js";
+import { getLiveCalibrationProfile, type LiveCalibrationProfile } from "../calibration/liveCalibrationProfile.js";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const STRUCTURAL_LOOKBACK = 1500;
 // MAX_HOLD_MINS is shared from tradeManagement.ts (also used by live tradeEngine)
@@ -67,9 +68,9 @@ const STRUCTURAL_LOOKBACK = 1500;
 const SYNTHETIC_EQUITY = 10_000;
 const DEFAULT_ALLOCATION_PCT = 0.15;     // matches live portfolioAllocatorV3 default
 const SYNTHETIC_SIZE = SYNTHETIC_EQUITY * DEFAULT_ALLOCATION_PCT; // = 1500
-const HTF_AVERAGING_WINDOW = 60;         // 60 feature samples ≈ 1 hour (matches live)
+const HTF_AVERAGING_WINDOW = 60;         // 60 feature samples â‰ˆ 1 hour (matches live)
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface V3BacktestTrade {
   entryTs: number;
@@ -116,6 +117,16 @@ export interface V3BacktestResult {
    * Callers should surface these to the user as simulation caveats.
    */
   simulationGaps: string[];
+  moveOverlap: {
+    movesInWindow: number;
+    capturedMoves: number;
+    missedMoves: number;
+    captureRate: number;
+    tradesMatchedToMoves: number;
+    ghostTrades: number;
+    ghostRate: number;
+    moveDirectionSplit: { up: number; down: number };
+  };
   summary: {
     tradeCount: number;
     winCount: number;
@@ -155,7 +166,7 @@ export interface V3BacktestRequest {
   mode?: "paper" | "demo" | "real";
 }
 
-// ── HTF regime averaging (local, isolated from live module cache) ──────────────
+// â”€â”€ HTF regime averaging (local, isolated from live module cache) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface FeatureSample {
   emaSlope: number;
@@ -170,13 +181,13 @@ interface FeatureSample {
   bbPctB: number;
 }
 
-// ── Per-symbol context for synchronized multi-symbol replay ──────────────────
+// â”€â”€ Per-symbol context for synchronized multi-symbol replay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface SymCtx {
   sym: string;
   instrumentFamily: "crash" | "boom" | "volatility";
   candles: CandleRow[];
-  idxByTs: Map<number, number>;   // closeTs (epoch seconds) → array index
+  idxByTs: Map<number, number>;   // closeTs (epoch seconds) â†’ array index
   simStart: number;               // first index inside sim range
 
   // Shared platform state (derived once for all symbols)
@@ -203,9 +214,65 @@ interface SymCtx {
   signalsFired: number;
   signalsBlocked: number;
   blockedByEngine: Record<string, number>;
+  runtimeCalibration: LiveCalibrationProfile | null;
+  trailingActivationThresholdPct?: number;
+  trailingDistancePct?: number;
+  trailingMinHoldBars?: number;
 }
 
-// ── Percentile helper ─────────────────────────────────────────────────────────
+function calcMoveOverlapDiagnostics(params: {
+  moves: Array<{ startTs: number; endTs: number; direction: string }>;
+  trades: V3BacktestTrade[];
+}): V3BacktestResult["moveOverlap"] {
+  const { moves, trades } = params;
+  const directionMatches = (moveDir: string, tradeDir: "buy" | "sell") =>
+    (moveDir === "up" && tradeDir === "buy") || (moveDir === "down" && tradeDir === "sell");
+  const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number) =>
+    aStart <= bEnd && aEnd >= bStart;
+
+  const moveDirectionSplit = moves.reduce<{ up: number; down: number }>((acc, m) => {
+    if (m.direction === "up") acc.up += 1;
+    else if (m.direction === "down") acc.down += 1;
+    return acc;
+  }, { up: 0, down: 0 });
+
+  const capturedMoveIds = new Set<number>();
+  moves.forEach((move, idx) => {
+    const matched = trades.some((t) =>
+      directionMatches(move.direction, t.direction) &&
+      overlaps(move.startTs, move.endTs, t.entryTs, t.exitTs),
+    );
+    if (matched) capturedMoveIds.add(idx);
+  });
+
+  const matchedTradeIds = new Set<number>();
+  trades.forEach((trade, idx) => {
+    const matched = moves.some((move) =>
+      directionMatches(move.direction, trade.direction) &&
+      overlaps(move.startTs, move.endTs, trade.entryTs, trade.exitTs),
+    );
+    if (matched) matchedTradeIds.add(idx);
+  });
+
+  const movesInWindow = moves.length;
+  const capturedMoves = capturedMoveIds.size;
+  const missedMoves = Math.max(0, movesInWindow - capturedMoves);
+  const tradesMatchedToMoves = matchedTradeIds.size;
+  const ghostTrades = Math.max(0, trades.length - tradesMatchedToMoves);
+
+  return {
+    movesInWindow,
+    capturedMoves,
+    missedMoves,
+    captureRate: movesInWindow > 0 ? capturedMoves / movesInWindow : 0,
+    tradesMatchedToMoves,
+    ghostTrades,
+    ghostRate: trades.length > 0 ? ghostTrades / trades.length : 0,
+    moveDirectionSplit,
+  };
+}
+
+// â”€â”€ Percentile helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -213,7 +280,7 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
-// ── Summary builder ───────────────────────────────────────────────────────────
+// â”€â”€ Summary builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function computeSummary(
   trades: V3BacktestTrade[],
@@ -321,7 +388,7 @@ function computeSummary(
   };
 }
 
-// ── Instrument family helper ───────────────────────────────────────────────────
+// â”€â”€ Instrument family helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function getInstrumentFamily(symbol: string): "crash" | "boom" | "volatility" {
   if (symbol.startsWith("CRASH")) return "crash";
@@ -329,7 +396,7 @@ function getInstrumentFamily(symbol: string): "crash" | "boom" | "volatility" {
   return "volatility";
 }
 
-// ── Open trade state ──────────────────────────────────────────────────────────
+// â”€â”€ Open trade state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface OpenTradeState {
   winner: EngineResult;
@@ -358,9 +425,51 @@ interface OpenTradeState {
   tpPct: number;
   slOriginalPct: number;
   tpProgressAtBe: number;
+  trailingActivationThresholdPct?: number;
+  trailingDistancePct?: number;
+  trailingMinHoldBars?: number;
 }
 
-// ── Simulation gap documentation ──────────────────────────────────────────────
+interface BacktestTrailingConfig {
+  trailingActivationThresholdPct?: number;
+  trailingDistancePct?: number;
+  trailingMinHoldBars?: number;
+}
+
+function resolveTrailingConfigFromProfile(
+  trailingModel: Record<string, unknown>,
+): BacktestTrailingConfig {
+  const activationPctRaw = Number(trailingModel.activationProfitPct ?? 0);
+  const distancePctRaw = Number(trailingModel.trailingDistancePct ?? 0);
+  const minHoldBarsRaw = Number(trailingModel.minHoldMinutesBeforeTrail ?? 0);
+
+  return {
+    trailingActivationThresholdPct:
+      Number.isFinite(activationPctRaw) && activationPctRaw > 0
+        ? Math.max(0.05, Math.min(0.9, activationPctRaw / 100))
+        : undefined,
+    trailingDistancePct:
+      Number.isFinite(distancePctRaw) && distancePctRaw > 0
+        ? Math.max(0.001, Math.min(0.8, distancePctRaw / 100))
+        : undefined,
+    trailingMinHoldBars:
+      Number.isFinite(minHoldBarsRaw) && minHoldBarsRaw > 0
+        ? Math.max(1, Math.min(MAX_HOLD_MINS, Math.round(minHoldBarsRaw)))
+        : undefined,
+  };
+}
+
+async function resolveBacktestTrailingConfig(
+  symbol: string,
+  mode: "paper" | "demo" | "real",
+  stateMap: Record<string, string>,
+): Promise<BacktestTrailingConfig> {
+  const profile = await getLiveCalibrationProfile(symbol, mode, stateMap).catch(() => null);
+  if (!profile) return {};
+  return resolveTrailingConfigFromProfile(profile.trailingModel ?? {});
+}
+
+// â”€â”€ Simulation gap documentation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Flags fetched from DB at run start (same source as live allocator):
 //   - killSwitchActive: read from platformState["kill_switch"]
 //   - modeEnabled:      read from platformState prefix (same logic as allocateV3Signal)
@@ -374,11 +483,11 @@ interface OpenTradeState {
 //   - maxOpenTrades: set to 1 (single-symbol backtest; no cross-symbol tracking)
 // Score gate (gate 4) and one-per-symbol (gate 5) are fully simulated.
 
-// ── Shared portfolio ledger for synchronized multi-symbol replay ─────────────
+// â”€â”€ Shared portfolio ledger for synchronized multi-symbol replay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // Tracks ALL open positions across symbols in time order. Used by
 // runV3BacktestMulti so gates 6 (maxOpenTrades) and 10 (correlatedFamilyCap)
-// are evaluated with real cross-symbol portfolio state — the same semantics
+// are evaluated with real cross-symbol portfolio state â€” the same semantics
 // as the live portfolioAllocatorV3 path.
 //
 // Positions are recorded by the timestamp of the bar that opened/closed them,
@@ -392,7 +501,7 @@ export class SharedPortfolioLedger {
     openTs: number;    // bar closeTs (ms) when position was opened
     closeTs: number;   // bar closeTs (ms) when position was closed; Infinity = still open
   }> = [];
-  private openBySymbol = new Map<string, string>(); // symbol → family, for open positions
+  private openBySymbol = new Map<string, string>(); // symbol â†’ family, for open positions
 
   /** Record a new position opening. openTs is the bar closeTs in ms. */
   open(symbol: string, family: string, openTs: number): void {
@@ -423,7 +532,7 @@ export class SharedPortfolioLedger {
   }
 }
 
-// ── Core simulation loop ──────────────────────────────────────────────────────
+// â”€â”€ Core simulation loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function runV3Backtest(
   req: V3BacktestRequest,
@@ -460,7 +569,19 @@ export async function runV3Backtest(
       symbol, mode, startTs, endTs, totalBars: 0,
       modeScoreGate: req.minScore ?? MODE_SCORE_GATES[mode] ?? 60,
       signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
-      trades: [], simulationGaps: [], summary: computeSummary([], {}),
+      trades: [],
+      simulationGaps: [],
+      moveOverlap: {
+        movesInWindow: 0,
+        capturedMoves: 0,
+        missedMoves: 0,
+        captureRate: 0,
+        tradesMatchedToMoves: 0,
+        ghostTrades: 0,
+        ghostRate: 0,
+        moveDirectionSplit: { up: 0, down: 0 },
+      },
+      summary: computeSummary([], {}),
     };
   }
 
@@ -470,20 +591,20 @@ export async function runV3Backtest(
   if (simStart < 0) simStart = candles.length - 1;
   if (simStart < STRUCTURAL_LOOKBACK) simStart = STRUCTURAL_LOOKBACK;
 
-  // ── Fetch platformState flags (same source as live allocator) ─────────────
+  // â”€â”€ Fetch platformState flags (same source as live allocator) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Reads the exact same keys that portfolioAllocatorV3.allocateV3Signal reads.
   // Kill switch, mode-enabled, and symbol-enabled flags are NOT hardcoded.
   const platformRows = await db.select().from(platformStateTable);
   const stateMap: Record<string, string> = {};
   for (const r of platformRows) stateMap[r.key] = r.value;
 
-  // ── Backtest isolation behavior ──────────────────────────────────────────────
+  // â”€â”€ Backtest isolation behavior â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Backtest should replay entry/exit quality logic without being blocked by
   // live runtime toggles (kill switch/mode active/symbol enabled), otherwise
   // it can return 0 trades simply because runtime mode is OFF.
   const modePrefix = { paper: "paper", demo: "demo", real: "real" }[mode] ?? "paper";
 
-  // ── Min score gate — identical precedence to allocateV3Signal ────────────────
+  // â”€â”€ Min score gate â€” identical precedence to allocateV3Signal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Live allocator reads: stateMap[`${prefix}_min_composite_score`] ??
   //                       stateMap["min_composite_score"] ?? MODE_SCORE_GATES[mode]
   // req.minScore acts as a caller override (used by tests/UI when specified).
@@ -506,7 +627,7 @@ export async function runV3Backtest(
   let signalsBlocked = 0;
   const blockedByEngine: Record<string, number> = {};
 
-  // ── Simulation PnL state — used to evaluate daily/weekly risk gates ─────────
+  // â”€â”€ Simulation PnL state â€” used to evaluate daily/weekly risk gates â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Tracks closed simulation trades with their close timestamp and $ PnL so
   // that dailyLossLimitBreached and weeklyLossLimitBreached are computed from
   // replay state rather than assumed false.
@@ -516,13 +637,13 @@ export async function runV3Backtest(
 
   // totalCapital: read from platformState using same key/default as live allocator
   // (portfolioAllocatorV3.ts getModeCapitalKey/getModeCapitalDefault).
-  // Loss limits are expressed as a % of total capital — using SYNTHETIC_SIZE (~1500)
+  // Loss limits are expressed as a % of total capital â€” using SYNTHETIC_SIZE (~1500)
   // instead would cause gates to trigger at a completely different threshold.
   const capitalKey = getModeCapitalKey(mode as "paper" | "demo" | "real");
   const capitalDefault = getModeCapitalDefault(mode as "paper" | "demo" | "real");
   const totalCapital = Math.max(1, parseFloat(stateMap[capitalKey] || stateMap["total_capital"] || capitalDefault));
 
-  // ── Running equity curve — used to compute maxDrawdownBreached per bar ───────
+  // â”€â”€ Running equity curve â€” used to compute maxDrawdownBreached per bar â”€â”€â”€â”€â”€â”€â”€
   // Normalized to 1.0 start. Updated whenever a trade closes so each new entry
   // evaluation sees the current drawdown level (not assumed false).
   let simEquity     = 1.0;
@@ -534,24 +655,29 @@ export async function runV3Backtest(
   if (mode === "real") {
     console.error(
       `[BacktestRunner] REAL-MODE PARITY WARNING: ${symbol} backtest cannot achieve full ` +
-      `allocator parity — cross-symbol portfolio state (correlatedFamilyCapBreached, ` +
+      `allocator parity â€” cross-symbol portfolio state (correlatedFamilyCapBreached, ` +
       `multi-symbol equity curve) is unavailable in single-symbol replay. ` +
       `Results are directionally valid but NOT safe for real-mode deployment decisions.`
     );
   }
 
   // maxOpenTrades: read from platformState (same key/default as live portfolioAllocatorV3).
-  // In a single-symbol replay, currentOpenCount is 0 or 1 — this gate only fires if the
+  // In a single-symbol replay, currentOpenCount is 0 or 1 â€” this gate only fires if the
   // platform is configured for maxOpenTrades=1, which is a deliberate operator choice.
   const maxOpenTrades = parseInt(
     stateMap[`${modePrefix}_max_open_trades`] || stateMap["max_open_trades"] || "3"
   );
+  const runtimeCalibration =
+    await getLiveCalibrationProfile(symbol, mode as "paper" | "demo" | "real", stateMap).catch(() => null);
+  const trailingCfg = runtimeCalibration
+    ? resolveTrailingConfigFromProfile(runtimeCalibration.trailingModel ?? {})
+    : {};
 
-  // ── Simulation parity gaps carried in the response ────────────────────────
+  // â”€â”€ Simulation parity gaps carried in the response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // - maxDrawdownBreached: computed from running single-symbol equity (not assumed false)
   // - dailyLossLimitBreached/weeklyLossLimitBreached: computed from sim PnLs w/ real totalCapital
   // - maxOpenTrades: read from platformState (same formula as live allocator)
-  // - correlatedFamilyCapBreached: always false — IDENTICAL to live allocator (portfolioAllocatorV3.ts:119)
+  // - correlatedFamilyCapBreached: always false â€” IDENTICAL to live allocator (portfolioAllocatorV3.ts:119)
   //   The live path also hardcodes this to false; no gap exists between live and backtest here.
   // REMAINING TRUE GAP: single-symbol replay cannot model cross-symbol portfolio state.
   // (multi-symbol concurrent positions, correlated family exposure from other symbols)
@@ -564,20 +690,21 @@ export async function runV3Backtest(
     const slice = candles.slice(sliceStart, i + 1);
     const bar = candles[i];
 
-    // ── Manage open trade ─────────────────────────────────────────────────
+    // â”€â”€ Manage open trade â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (openTrade !== null) {
       const dir = openTrade.winner.direction;
       const ep = openTrade.entryPrice;
       const holdBars = i - openTrade.entryBar;
 
-      // ── Shared bar-state transitions (peak tracking, MFE/MAE, BE, trailing) ──
-      // Uses applyBarStateTransitions from tradeManagement.ts — identical logic
+      // â”€â”€ Shared bar-state transitions (peak tracking, MFE/MAE, BE, trailing) â”€â”€
+      // Uses applyBarStateTransitions from tradeManagement.ts â€” identical logic
       // consumed by both live manageOpenPositions and historical replay.
       const prevPeakPrice = openTrade.peakPrice;
       const barState = applyBarStateTransitions({
         direction: dir,
         entryPrice: ep,
         tp: openTrade.tp,
+        holdBars,
         barHigh: bar.high,
         barLow: bar.low,
         barClose: bar.close,
@@ -592,6 +719,9 @@ export async function runV3Backtest(
         instrumentFamily: openTrade.instrumentFamily,
         emaSlope: openTrade.emaSlope,
         spikeCount4h: openTrade.spikeCount4h,
+        trailingActivationThresholdPct: openTrade.trailingActivationThresholdPct,
+        trailingMinHoldBars: openTrade.trailingMinHoldBars,
+        trailingDistancePct: openTrade.trailingDistancePct,
       });
 
       openTrade.sl               = barState.sl;
@@ -631,7 +761,7 @@ export async function runV3Backtest(
         });
       }
 
-      // ── Exit checks — uses shared evaluateBarExits (SL checked BEFORE TP) ──
+      // â”€â”€ Exit checks â€” uses shared evaluateBarExits (SL checked BEFORE TP) â”€â”€
       // SL-first priority matches live manageOpenPositions (eliminates same-bar
       // divergence where backtest used TP-first, live uses SL-first).
       const barExit = evaluateBarExits({
@@ -646,7 +776,7 @@ export async function runV3Backtest(
       let exitReason: V3BacktestTrade["exitReason"] | null = barExit.exitReason;
       let exitPrice = barExit.exitPrice;
 
-      // Max duration — shared MAX_HOLD_MINS from tradeManagement.ts
+      // Max duration â€” shared MAX_HOLD_MINS from tradeManagement.ts
       // For 1m bars holdBars === holdMins; MAX_HOLD_MINS applies directly
       if (!exitReason && holdBars >= MAX_HOLD_MINS) {
         exitReason = "max_duration";
@@ -695,7 +825,7 @@ export async function runV3Backtest(
         trades.push(trade);
 
         // Track closed trade PnL for daily/weekly loss limit gates
-        // bar.closeTs is unix epoch SECONDS — multiply by 1000 to store as ms
+        // bar.closeTs is unix epoch SECONDS â€” multiply by 1000 to store as ms
         simClosedPnls.push({
           closeTs: bar.closeTs * 1000,
           pnlUsd: finalPnl * SYNTHETIC_SIZE,
@@ -740,7 +870,7 @@ export async function runV3Backtest(
       if (openTrade !== null) continue;
     }
 
-    // ── Signal scan (only when no open trade) ─────────────────────────────
+    // â”€â”€ Signal scan (only when no open trade) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (slice.length < Math.max(60, Math.ceil(indicatorLookback / 60))) continue;
 
     const features = computeFeaturesFromSlice(symbol, slice);
@@ -761,12 +891,12 @@ export async function runV3Backtest(
     });
     if (featureHistory.length > HTF_AVERAGING_WINDOW) featureHistory.shift();
 
-    // HTF-averaged regime — uses shared classifyRegimeFromSamples from regimeEngine.ts
+    // HTF-averaged regime â€” uses shared classifyRegimeFromSamples from regimeEngine.ts
     // This is the SAME function classifyRegimeFromHTF uses internally (live path).
     // Both paths now share identical averaging logic over their respective sample buffers.
     const regimeResult = classifyRegimeFromSamples(features, featureHistory);
 
-    // ── Engine evaluation + coordinator — shared pipeline ────────────────────
+    // â”€â”€ Engine evaluation + coordinator â€” shared pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // runEnginesAndCoordinate is the exact same function used by engineRouterV3
     // (live scanner). Both paths share identical engine logic and coordinator
     // conflict resolution from this point forward.
@@ -778,6 +908,7 @@ export async function runV3Backtest(
         features,
         operationalRegime: regimeResult.regime,
         regimeConfidence: regimeResult.confidence,
+        runtimeCalibration,
       });
       engineResults = pipelineResult.engineResults;
       coordinatorOutput = pipelineResult.coordinatorOutput;
@@ -806,12 +937,12 @@ export async function runV3Backtest(
       conflictResolution,
     });
 
-    // ── Shared admission evaluator (same logic as portfolioAllocatorV3) ─────
+    // â”€â”€ Shared admission evaluator (same logic as portfolioAllocatorV3) â”€â”€â”€â”€â”€
     // killSwitchActive, modeEnabled, symbolEnabled come from real platformState.
     // dailyLossLimitBreached and weeklyLossLimitBreached are computed from the
     // simulation's own accumulated closed-trade PnL so that risk gates fire
     // correctly during replay (no longer assumed false).
-    // bar.closeTs is unix epoch SECONDS — convert to ms for window comparisons
+    // bar.closeTs is unix epoch SECONDS â€” convert to ms for window comparisons
     const nowTs        = bar.closeTs * 1000;
     const dayStartTs   = nowTs - 86_400_000;
     const weekStartTs  = nowTs - 7 * 86_400_000;
@@ -822,7 +953,7 @@ export async function runV3Backtest(
     const weeklyLossLimitBreached = weeklyLossUsd < 0 && Math.abs(weeklyLossUsd) / totalCapital >= maxWeeklyLossPct;
 
     // Drawdown gate: derived from the running single-symbol normalized equity curve.
-    // Computed fresh each bar from closed trades — same approach as dailyLossLimitBreached.
+    // Computed fresh each bar from closed trades â€” same approach as dailyLossLimitBreached.
     const currentDrawdownPct = simEquityPeak > 0 ? (simEquityPeak - simEquity) / simEquityPeak : 0;
     const maxDrawdownBreached = currentDrawdownPct >= maxDrawdownThresholdPct;
 
@@ -838,7 +969,7 @@ export async function runV3Backtest(
       modeEnabled,        // real: from platformState prefix keys
       symbolEnabled,      // real: from platformState prefix_enabled_symbols
       // When a shared ledger is provided (multi-symbol run), use it for cross-symbol
-      // portfolio state — this gives gates 6 and 10 the same semantics as live.
+      // portfolio state â€” this gives gates 6 and 10 the same semantics as live.
       // Without a ledger (single-symbol run), fall back to local-only state.
       openTradeForSymbol: sharedLedger
         ? sharedLedger.isSymbolOpen(symbol, bar.closeTs * 1000)
@@ -846,11 +977,11 @@ export async function runV3Backtest(
       currentOpenCount: sharedLedger
         ? sharedLedger.getOpenCount(bar.closeTs * 1000)
         : (openTrade !== null ? 1 : 0),
-      maxOpenTrades,                     // from platformState — same formula as live allocator
+      maxOpenTrades,                     // from platformState â€” same formula as live allocator
       dailyLossLimitBreached,            // computed from simulation trades + real totalCapital
       weeklyLossLimitBreached,           // computed from simulation trades + real totalCapital
       maxDrawdownBreached,               // computed from running single-symbol equity curve
-      // correlatedFamilyCapBreached: false — identical to live portfolioAllocatorV3 (line 119).
+      // correlatedFamilyCapBreached: false â€” identical to live portfolioAllocatorV3 (line 119).
       // Live also hardcodes this to false, so backtest=false IS correct parity.
       // With a shared ledger, cross-symbol open count (gate 6) already enforces the
       // multi-symbol limit, so family-cap is an additive concern, not a parity gap.
@@ -890,7 +1021,7 @@ export async function runV3Backtest(
       continue;
     }
 
-    // ── SR/Fib TP (exact live calculateSRFibTP) ──────────────────────────
+    // â”€â”€ SR/Fib TP (exact live calculateSRFibTP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const tp = calculateSRFibTP({
       entryPrice: bar.close,
       direction: winner.direction,
@@ -917,7 +1048,7 @@ export async function runV3Backtest(
     if (winner.direction === "buy" && tp <= bar.close) continue;
     if (winner.direction === "sell" && tp >= bar.close) continue;
 
-    // ── SR/Fib SL at 1:5 RR (exact live calculateSRFibSL) ───────────────
+    // â”€â”€ SR/Fib SL at 1:5 RR (exact live calculateSRFibSL) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const sl = calculateSRFibSL({
       entryPrice: bar.close,
       direction: winner.direction,
@@ -974,6 +1105,9 @@ export async function runV3Backtest(
       tpPct,
       slOriginalPct,
       tpProgressAtBe: 0,
+      trailingActivationThresholdPct: trailingCfg.trailingActivationThresholdPct,
+      trailingDistancePct: trailingCfg.trailingDistancePct,
+      trailingMinHoldBars: trailingCfg.trailingMinHoldBars,
     };
 
     // Register opening in shared ledger so concurrent symbols see this position
@@ -982,6 +1116,19 @@ export async function runV3Backtest(
 
   const barsInRange = Math.max(0, candles.length - simStart);
   const blockedRate = signalsFired > 0 ? signalsBlocked / signalsFired : 0;
+  const detectedMovesInWindow = await db
+    .select({
+      startTs: detectedMovesTable.startTs,
+      endTs: detectedMovesTable.endTs,
+      direction: detectedMovesTable.direction,
+    })
+    .from(detectedMovesTable)
+    .where(and(
+      eq(detectedMovesTable.symbol, symbol),
+      gte(detectedMovesTable.endTs, startTs),
+      lte(detectedMovesTable.startTs, endTs),
+    ));
+  const moveOverlap = calcMoveOverlapDiagnostics({ moves: detectedMovesInWindow, trades });
 
   return {
     symbol,
@@ -995,6 +1142,7 @@ export async function runV3Backtest(
     blockedRate,
     trades,
     simulationGaps: runSimulationGaps,
+    moveOverlap,
     summary: computeSummary(trades, blockedByEngine),
   };
 }
@@ -1002,15 +1150,15 @@ export async function runV3Backtest(
 /**
  * Run V3 backtest across multiple symbols using a time-synchronized event loop.
  *
- * ── Synchronization guarantee ────────────────────────────────────────────────
+ * â”€â”€ Synchronization guarantee â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * All symbols share a single global bar clock (sorted union of all closeTs values).
  * At each timestamp T the loop processes two phases in strict order:
  *
- *   1. EXIT PHASE  — apply state transitions and check SL/TP/timeout for every
+ *   1. EXIT PHASE  â€” apply state transitions and check SL/TP/timeout for every
  *      symbol that has an open position at T.  Positions that close at T are
  *      removed from the shared ledger before the entry phase begins.
  *
- *   2. ENTRY PHASE — evaluate new entries for every symbol that has no open
+ *   2. ENTRY PHASE â€” evaluate new entries for every symbol that has no open
  *      position at T.  Admission gates (maxOpenTrades, one-per-symbol) query
  *      the shared ledger which already reflects all exits at T, so the cross-
  *      symbol portfolio state is always correct at the moment of evaluation.
@@ -1031,7 +1179,7 @@ export async function runV3BacktestMulti(
     return symbols[0] ? { [symbols[0]]: result } : {};
   }
 
-  // ── Shared platform state (loaded once for all symbols) ──────────────────
+  // â”€â”€ Shared platform state (loaded once for all symbols) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const now = Math.floor(Date.now() / 1000);
   const _startTs = startTs ?? (now - 90 * 86400);
   const _endTs   = endTs   ?? now;
@@ -1058,7 +1206,7 @@ export async function runV3BacktestMulti(
   const sharedMaxWeeklyLoss  = parseFloat(stateMap[`${modePrefix}_max_weekly_loss_pct`]  || stateMap["max_weekly_loss_pct"]  || "10") / 100;
   const sharedMaxDrawdownPct = parseFloat(stateMap[`${modePrefix}_max_drawdown_pct`]     || stateMap["max_drawdown_pct"]     || "20") / 100;
 
-  // ── Load candles for all symbols in parallel ─────────────────────────────
+  // â”€â”€ Load candles for all symbols in parallel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const bufferStartTs = _startTs - STRUCTURAL_LOOKBACK * 60;
   const allCandleArrays = await Promise.all(
     symbols.map(sym =>
@@ -1078,7 +1226,7 @@ export async function runV3BacktestMulti(
     ),
   );
 
-  // ── Build per-symbol contexts and global timestamp union ─────────────────
+  // â”€â”€ Build per-symbol contexts and global timestamp union â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const symCtxMap = new Map<string, SymCtx>();
   const allTs     = new Set<number>();
 
@@ -1122,6 +1270,9 @@ export async function runV3BacktestMulti(
       signalsFired:           0,
       signalsBlocked:         0,
       blockedByEngine:        {},
+      trailingActivationThresholdPct: undefined,
+      trailingDistancePct: undefined,
+      trailingMinHoldBars: undefined,
     });
   }
 
@@ -1132,27 +1283,45 @@ export async function runV3BacktestMulti(
         symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
         totalBars: 0, modeScoreGate: sharedModeGate,
         signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
-        trades: [], simulationGaps: [], summary: computeSummary([], {}),
+        trades: [],
+        simulationGaps: [],
+        moveOverlap: {
+          movesInWindow: 0,
+          capturedMoves: 0,
+          missedMoves: 0,
+          captureRate: 0,
+          tradesMatchedToMoves: 0,
+          ghostTrades: 0,
+          ghostRate: 0,
+          moveDirectionSplit: { up: 0, down: 0 },
+        },
+        summary: computeSummary([], {}),
       };
     }
     return out;
   }
 
-  // ── Shared portfolio ledger ───────────────────────────────────────────────
+  // â”€â”€ Shared portfolio ledger â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const ledger = new SharedPortfolioLedger();
+  for (const ctx of symCtxMap.values()) {
+    const trailingCfg = await resolveBacktestTrailingConfig(ctx.sym, _mode, stateMap);
+    ctx.trailingActivationThresholdPct = trailingCfg.trailingActivationThresholdPct;
+    ctx.trailingDistancePct = trailingCfg.trailingDistancePct;
+    ctx.trailingMinHoldBars = trailingCfg.trailingMinHoldBars;
+  }
 
-  // ── Global sorted timestamp list ─────────────────────────────────────────
+  // â”€â”€ Global sorted timestamp list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const globalTs = Array.from(allTs).sort((a, b) => a - b);
 
-  // ── Time-synchronized event loop ─────────────────────────────────────────
+  // â”€â”€ Time-synchronized event loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   for (const ts of globalTs) {
     const tsMs = ts * 1000;
 
-    // ════════════════════════════════════════════════════════════════════════
-    // EXIT PHASE — apply state transitions + check SL/TP/timeout for all
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // EXIT PHASE â€” apply state transitions + check SL/TP/timeout for all
     // open positions first.  Ledger updates (close) happen here so the entry
     // phase sees accurate open-count / symbol-open state.
-    // ════════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     for (const ctx of symCtxMap.values()) {
       if (!ctx.openTrade) continue;
       const i = ctx.idxByTs.get(ts);
@@ -1166,11 +1335,15 @@ export async function runV3BacktestMulti(
 
       const barState = applyBarStateTransitions({
         direction: dir, entryPrice: ep, tp: ot.tp,
+        holdBars,
         barHigh: bar.high, barLow: bar.low, barClose: bar.close, barOpen: bar.open,
         stage: ot.stage, sl: ot.sl, peakPrice: ot.peakPrice,
         mfePct: ot.mfePct, maePct: ot.maePct, adverseCandleCount: ot.adverseCandleCount,
         atr14AtEntry: ot.atr14AtEntry, instrumentFamily: ot.instrumentFamily,
         emaSlope: ot.emaSlope, spikeCount4h: ot.spikeCount4h,
+        trailingActivationThresholdPct: ot.trailingActivationThresholdPct,
+        trailingMinHoldBars: ot.trailingMinHoldBars,
+        trailingDistancePct: ot.trailingDistancePct,
       });
 
       ot.sl                 = barState.sl;
@@ -1249,10 +1422,10 @@ export async function runV3BacktestMulti(
       }
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    // ENTRY PHASE — evaluate new entries now that all exits at T are settled.
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    // ENTRY PHASE â€” evaluate new entries now that all exits at T are settled.
     // The shared ledger reflects the true concurrent portfolio state at T.
-    // ════════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     for (const ctx of symCtxMap.values()) {
       if (ctx.openTrade) continue;
       const i = ctx.idxByTs.get(ts);
@@ -1302,7 +1475,7 @@ export async function runV3BacktestMulti(
         ts: bar.closeTs, conflictResolution,
       });
 
-      // Admission — ledger provides true cross-symbol open count / symbol-open state
+      // Admission â€” ledger provides true cross-symbol open count / symbol-open state
       const nowMs        = tsMs;
       const dayStartTs   = nowMs - 86_400_000;
       const weekStartTs  = nowMs - 7 * 86_400_000;
@@ -1320,13 +1493,13 @@ export async function runV3BacktestMulti(
         killSwitchActive: ctx.killSwitchActive,
         modeEnabled:      ctx.modeEnabled,
         symbolEnabled:    ctx.symbolEnabled,
-        // Cross-symbol portfolio state from shared ledger — true concurrent state at T
+        // Cross-symbol portfolio state from shared ledger â€” true concurrent state at T
         openTradeForSymbol: ledger.isSymbolOpen(ctx.sym, tsMs),
         currentOpenCount:   ledger.getOpenCount(tsMs),
         maxOpenTrades:      ctx.maxOpenTrades,
         dailyLossLimitBreached, weeklyLossLimitBreached, maxDrawdownBreached,
         correlatedFamilyCapBreached: false,
-        simulationDefaults: [],   // no parity gaps — ledger covers all cross-symbol gates
+        simulationDefaults: [],   // no parity gaps â€” ledger covers all cross-symbol gates
       });
 
       if (!allocResult.allowed) {
@@ -1346,7 +1519,7 @@ export async function runV3BacktestMulti(
         continue;
       }
 
-      // SR/Fib TP — same as single-symbol path
+      // SR/Fib TP â€” same as single-symbol path
       const tp = calculateSRFibTP({
         entryPrice: bar.close, direction: winner.direction,
         swingHigh: features.swingHigh, swingLow: features.swingLow,
@@ -1391,22 +1564,49 @@ export async function runV3BacktestMulti(
         instrumentFamily: ctx.instrumentFamily,
         emaSlope: features.emaSlope, spikeCount4h: features.spikeCount4h ?? 0,
         adverseCandleCount: 0, tpPct, slOriginalPct, tpProgressAtBe: 0,
+        trailingActivationThresholdPct: ctx.trailingActivationThresholdPct,
+        trailingDistancePct: ctx.trailingDistancePct,
+        trailingMinHoldBars: ctx.trailingMinHoldBars,
       };
       ledger.open(ctx.sym, ctx.instrumentFamily, tsMs);
     }
   }
 
-  // ── Collect results ───────────────────────────────────────────────────────
+  // â”€â”€ Collect results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const out: Record<string, V3BacktestResult> = {};
+  const detectedMovesBySymbol = new Map<string, Array<{ startTs: number; endTs: number; direction: string }>>();
+  const movesRows = await db
+    .select({
+      symbol: detectedMovesTable.symbol,
+      startTs: detectedMovesTable.startTs,
+      endTs: detectedMovesTable.endTs,
+      direction: detectedMovesTable.direction,
+    })
+    .from(detectedMovesTable)
+    .where(and(
+      inArray(detectedMovesTable.symbol, symbols),
+      gte(detectedMovesTable.endTs, _startTs),
+      lte(detectedMovesTable.startTs, _endTs),
+    ));
+  for (const row of movesRows) {
+    const list = detectedMovesBySymbol.get(row.symbol) ?? [];
+    list.push({ startTs: row.startTs, endTs: row.endTs, direction: row.direction });
+    detectedMovesBySymbol.set(row.symbol, list);
+  }
   for (const [sym, ctx] of symCtxMap.entries()) {
     const barsInRange = Math.max(0, ctx.candles.length - ctx.simStart);
     const blockedRate = ctx.signalsFired > 0 ? ctx.signalsBlocked / ctx.signalsFired : 0;
+    const moveOverlap = calcMoveOverlapDiagnostics({
+      moves: detectedMovesBySymbol.get(sym) ?? [],
+      trades: ctx.trades,
+    });
     out[sym] = {
       symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
       totalBars: barsInRange, modeScoreGate: ctx.modeGate,
       signalsFired: ctx.signalsFired, signalsBlocked: ctx.signalsBlocked, blockedRate,
       trades: ctx.trades,
-      simulationGaps: [],   // no gaps — synchronized loop uses shared ledger for all gates
+      simulationGaps: [],
+      moveOverlap,
       summary: computeSummary(ctx.trades, ctx.blockedByEngine),
     };
   }
@@ -1418,10 +1618,23 @@ export async function runV3BacktestMulti(
         symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
         totalBars: 0, modeScoreGate: sharedModeGate,
         signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
-        trades: [], simulationGaps: [], summary: computeSummary([], {}),
+        trades: [],
+        simulationGaps: [],
+        moveOverlap: {
+          movesInWindow: 0,
+          capturedMoves: 0,
+          missedMoves: 0,
+          captureRate: 0,
+          tradesMatchedToMoves: 0,
+          ghostTrades: 0,
+          ghostRate: 0,
+          moveDirectionSplit: { up: 0, down: 0 },
+        },
+        summary: computeSummary([], {}),
       };
     }
   }
 
   return out;
 }
+

@@ -139,6 +139,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   const spikeKey    = `${symbol}_scan_spike_count_4h`;
   const trailActivationKey = `${symbol}_scan_trail_activation_pct`;
   const trailDistanceKey   = `${symbol}_scan_trail_distance_pct`;
+  const trailMinHoldBarsKey = `${symbol}_scan_trail_min_hold_bars`;
   const calibCadenceKey    = `${symbol}_scan_calibrated_interval_seconds`;
   const emaVal      = String(features.emaSlope ?? 0);
   const spikeVal    = String(features.spikeCount4h ?? 0);
@@ -147,6 +148,9 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   );
   const trailDistanceVal = String(
     Number(runtimeCalibration?.trailingModel?.["trailingDistancePct"] ?? 0) || 0,
+  );
+  const trailMinHoldBarsVal = String(
+    Number(runtimeCalibration?.trailingModel?.["minHoldMinutesBeforeTrail"] ?? 0) || 0,
   );
   const calibCadenceVal = String(
     Number(runtimeCalibration?.recommendedScanIntervalSeconds ?? 0) || 0,
@@ -160,6 +164,8 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: trailActivationVal, updatedAt: new Date() } }),
     db.insert(platformStateTable).values({ key: trailDistanceKey, value: trailDistanceVal })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: trailDistanceVal, updatedAt: new Date() } }),
+    db.insert(platformStateTable).values({ key: trailMinHoldBarsKey, value: trailMinHoldBarsVal })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: trailMinHoldBarsVal, updatedAt: new Date() } }),
     db.insert(platformStateTable).values({ key: calibCadenceKey, value: calibCadenceVal })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: calibCadenceVal, updatedAt: new Date() } }),
   ]).catch(() => {/* non-fatal */});
