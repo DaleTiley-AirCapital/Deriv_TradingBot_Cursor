@@ -279,11 +279,9 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
           })}
         </nav>
 
-        <div className="px-4 py-3 border-t border-border/40">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] text-muted-foreground/50 font-mono">v{APP_VERSION}</p>
-            <DeployStatusBadge inline />
-          </div>
+        <div className="px-4 py-3 border-t border-border/40 space-y-2">
+          <DeployStatusBadge inline />
+          <p className="text-[10px] text-muted-foreground/50 font-mono">v{APP_VERSION}</p>
         </div>
       </aside>
 
@@ -557,12 +555,11 @@ function DeployStatusBadge({ inline = false }: { inline?: boolean }) {
 
   if (inline) {
     return (
-      <div className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-background/40 px-2 py-1">
-        <span className="text-[9px] uppercase tracking-wider text-muted-foreground">Deploy</span>
-        <span className="text-[10px] font-semibold text-foreground">{isError ? "Unavailable" : "Running"}</span>
-        <span className="text-[10px] text-muted-foreground">•</span>
-        <span className="text-[10px] text-muted-foreground">{lastRebuild}</span>
-        {shortCommit && <span className="text-[10px] text-muted-foreground font-mono">• {shortCommit}</span>}
+      <div className="w-full rounded-md border border-border/50 bg-background/40 px-2.5 py-1.5">
+        <p className="text-[9px] uppercase tracking-wider text-muted-foreground">Deploy</p>
+        <p className="text-[11px] font-semibold text-foreground">{isError ? "Unavailable" : "Running"}</p>
+        <p className="text-[10px] text-muted-foreground leading-tight">{lastRebuild}</p>
+        {shortCommit && <p className="text-[10px] text-muted-foreground font-mono leading-tight">{shortCommit}</p>}
       </div>
     );
   }
