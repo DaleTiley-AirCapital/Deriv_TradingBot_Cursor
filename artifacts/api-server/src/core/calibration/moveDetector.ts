@@ -25,7 +25,7 @@ import {
   type InsertDetectedMoveRow,
 } from "@workspace/db";
 import { eq, and, gte, lte, asc, inArray } from "drizzle-orm";
-import { labelMove } from "./moveLabeler.js";
+import { labelMove, type MoveType as StructuralMoveType } from "./moveLabeler.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -66,13 +66,16 @@ export interface TriggerZoneSnapshot {
   momentumAtStart: number;  // |close - open| / ATR at trigger candle (impulse ratio)
 }
 
+/** Stored in DB `move_type` / strategy_family_candidate — V3 BOOM/CRASH use symbol-native expansion labels only. */
+export type StoredMoveFamily = StructuralMoveType | "boom_expansion" | "crash_expansion";
+
 export interface DetectedMove {
   symbol: string;
   direction: "up" | "down";
-  moveType: "breakout" | "continuation" | "reversal" | "unknown";
+  moveType: StoredMoveFamily;
   // Deterministic label from moveLabeler.ts stored separately so future AI
   // refinement can replace moveType without losing the original detector output.
-  strategyFamilyCandidate: "breakout" | "continuation" | "reversal" | "unknown";
+  strategyFamilyCandidate: StoredMoveFamily;
   startTs: number;
   endTs: number;
   startPrice: number;
@@ -428,8 +431,22 @@ function recordMove(
   const atrEnd               = calcAtr(candles, endIdx);
   const rangeExpansion        = atrStart > 0 ? atrEnd / atrStart : 1;
   const spikeCount4h          = countSpikes(candles, startIdx, symbol);
-  const moveType              = labelMove({ direction, leadInShape: shape, directionalPersistence, rangeExpansion, movePct });
+  const structuralLabel       = labelMove({ direction, leadInShape: shape, directionalPersistence, rangeExpansion, movePct });
   const holdingMinutes        = (candles[endIdx].openTs - candles[startIdx].openTs) / 60;
+
+  // V3: BOOM300 / CRASH300 are calibrated only against their native expansion engines — not generic breakout/continuation/reversal buckets.
+  let moveType: StoredMoveFamily;
+  let strategyFamilyCandidate: StoredMoveFamily;
+  if (symbol === "BOOM300") {
+    moveType = "boom_expansion";
+    strategyFamilyCandidate = "boom_expansion";
+  } else if (symbol === "CRASH300") {
+    moveType = "crash_expansion";
+    strategyFamilyCandidate = "crash_expansion";
+  } else {
+    moveType = structuralLabel;
+    strategyFamilyCandidate = structuralLabel;
+  }
 
   const { qualityScore, qualityTier } = scoreAndTier({
     movePct,
@@ -466,6 +483,7 @@ function recordMove(
       atrAtEnd:   atrEnd,
       swingBars,
       approxMonthFromTs: new Date(candles[startIdx].openTs * 1000).toISOString().slice(0, 7),
+      structuralClassifierLabel: structuralLabel,
     },
     triggerZoneJson,
   });

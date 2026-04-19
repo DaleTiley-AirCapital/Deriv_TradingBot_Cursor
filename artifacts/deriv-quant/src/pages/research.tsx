@@ -802,7 +802,12 @@ interface PassRun {
 
 const CALIB_SYMBOLS = ["BOOM300", "CRASH300", "R_75", "R_100"];
 const PASS_NAMES = ["all", "precursor", "trigger", "behavior", "extraction"];
-const MOVE_TYPES_FILTER = ["all", "breakout", "continuation", "reversal", "unknown"];
+const MOVE_TYPES_FILTER_GENERIC = ["all", "breakout", "continuation", "reversal", "unknown"];
+function moveTypesFilterForSymbol(sym: string): string[] {
+  if (sym === "BOOM300") return ["all", "boom_expansion"];
+  if (sym === "CRASH300") return ["all", "crash_expansion"];
+  return MOVE_TYPES_FILTER_GENERIC;
+}
 const TIERS = ["A", "B", "C", "D"];
 const TIER_COLORS: Record<string, string> = {
   A: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
@@ -815,7 +820,15 @@ const TYPE_COLORS: Record<string, string> = {
   continuation: "text-sky-400 bg-sky-500/10 border-sky-500/25",
   reversal:     "text-amber-400 bg-amber-500/10 border-amber-500/25",
   unknown:      "text-muted-foreground bg-muted/20 border-border/30",
+  boom_expansion: "text-emerald-400 bg-emerald-500/10 border-emerald-500/25",
+  crash_expansion: "text-rose-400 bg-rose-500/10 border-rose-500/25",
 };
+
+function formatMoveTypeLabel(type: string): string {
+  if (type === "boom_expansion") return "Boom Expansion";
+  if (type === "crash_expansion") return "Crash Expansion";
+  return type;
+}
 
 function TierPill({ tier }: { tier: string }) {
   return (
@@ -826,9 +839,10 @@ function TierPill({ tier }: { tier: string }) {
 }
 
 function TypePill({ type }: { type: string }) {
+  const label = formatMoveTypeLabel(type);
   return (
     <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border", TYPE_COLORS[type] ?? TYPE_COLORS.unknown)}>
-      {type}
+      {label}
     </span>
   );
 }
@@ -946,11 +960,6 @@ interface PassStatusResult {
   completedAt?: string | null;
   errors?: string[];
   errorSummary?: string | null;
-}
-
-function toBackendMoveType(family: string): string {
-  if (family === "boom_expansion" || family === "crash_expansion") return "all";
-  return family;
 }
 
 function MoveCalibrationTab() {
@@ -1096,7 +1105,7 @@ function MoveCalibrationTab() {
   }, []);
 
   useEffect(() => {
-    loadDomains(symbol, toBackendMoveType(strategyFamily));
+    loadDomains(symbol, strategyFamily);
     loadMoves(symbol, moveTypeFilter, tierFilter);
     loadRuns(symbol);
   }, [symbol]);
@@ -1106,8 +1115,8 @@ function MoveCalibrationTab() {
   }, [moveTypeFilter, tierFilter]);
 
   useEffect(() => {
-    setMoveTypeFilter(toBackendMoveType(strategyFamily));
-    loadDomains(symbol, toBackendMoveType(strategyFamily));
+    setMoveTypeFilter(strategyFamily);
+    loadDomains(symbol, strategyFamily);
   }, [strategyFamily]);
 
   useEffect(() => {
@@ -1139,7 +1148,7 @@ function MoveCalibrationTab() {
       });
       setDetectResult(d);
       await Promise.all([
-        loadDomains(symbol, toBackendMoveType(strategyFamily)),
+        loadDomains(symbol, strategyFamily),
         loadMoves(symbol, moveTypeFilter, tierFilter),
       ]);
       return true;
@@ -1162,7 +1171,7 @@ function MoveCalibrationTab() {
           clearInterval(passIntervalRef.current!);
           stopElapsed();
           setPassBusy(false);
-          await Promise.all([loadDomains(symbol, toBackendMoveType(strategyFamily)), loadMoves(symbol, moveTypeFilter, tierFilter), loadRuns(symbol)]);
+          await Promise.all([loadDomains(symbol, strategyFamily), loadMoves(symbol, moveTypeFilter, tierFilter), loadRuns(symbol)]);
         }
       } catch {}
     }, 4000);
@@ -1177,7 +1186,7 @@ function MoveCalibrationTab() {
       const pn = overridePassName ?? passName;
       const body: Record<string, unknown> = { windowDays, passName: pn };
       if (passMinTier) body.minTier = passMinTier;
-      const effectiveMoveType = passMoveType !== "all" ? passMoveType : (strategyFamily !== "all" ? toBackendMoveType(strategyFamily) : undefined);
+      const effectiveMoveType = passMoveType !== "all" ? passMoveType : (strategyFamily !== "all" ? strategyFamily : undefined);
       if (effectiveMoveType) body.moveType = effectiveMoveType;
       if (maxMoves && !isNaN(Number(maxMoves))) body.maxMoves = Number(maxMoves);
       const d = await apiFetch(`calibration/run-passes/${symbol}`, {
@@ -1192,7 +1201,7 @@ function MoveCalibrationTab() {
         setPassStatus(d);
         setPassBusy(false);
         stopElapsed();
-        await Promise.all([loadDomains(symbol, toBackendMoveType(strategyFamily)), loadMoves(symbol, moveTypeFilter, tierFilter)]);
+        await Promise.all([loadDomains(symbol, strategyFamily), loadMoves(symbol, moveTypeFilter, tierFilter)]);
       }
       return true;
     } catch (e: unknown) {
@@ -1284,6 +1293,7 @@ function MoveCalibrationTab() {
                 setDetectResult(null);
                 setDetectErr(null);
                 setStrategyFamily("all");
+                setMoveTypeFilter("all");
               }}
               className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
             >
@@ -1407,7 +1417,7 @@ function MoveCalibrationTab() {
           </button>
 
           <button
-            onClick={() => { loadDomains(symbol, toBackendMoveType(strategyFamily)); loadMoves(symbol, moveTypeFilter, tierFilter); loadRuns(symbol); }}
+            onClick={() => { loadDomains(symbol, strategyFamily); loadMoves(symbol, moveTypeFilter, tierFilter); loadRuns(symbol); }}
             disabled={aggLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border self-end"
           >
@@ -1599,7 +1609,7 @@ function MoveCalibrationTab() {
                   {/* Avg hold from aggregate (computed from same moves table) */}
                   {aggregate?.overall && (
                     <>
-                      <StatRow label="Avg move %" value={`${(aggregate.overall.avgMovePct * 100).toFixed(1)}%`} />
+                      <StatRow label="Avg move %" value={`${aggregate.overall.avgMovePct.toFixed(1)}%`} />
                       <StatRow label="Avg hold (hrs)" value={aggregate.overall.avgHoldHours?.toFixed(1) ?? "—"} />
                       <StatRow label="Direction up/down" value={`${aggregate.overall.directionSplit?.up ?? 0} / ${aggregate.overall.directionSplit?.down ?? 0}`} />
                     </>
@@ -1646,7 +1656,7 @@ function MoveCalibrationTab() {
                 <>
                   <StatRow label="Fit score" value={`${(calibProfile.fitScore * 100).toFixed(1)}%`} />
                   <StatRow label="Target / captured" value={`${calibProfile.capturedMoves} / ${calibProfile.targetMoves}`} />
-                  <StatRow label="Avg move %" value={`${(calibProfile.avgMovePct * 100).toFixed(1)}%`} />
+                  <StatRow label="Avg move %" value={`${calibProfile.avgMovePct.toFixed(1)}%`} />
                   <StatRow label="Avg hold (hrs)" value={calibProfile.avgHoldingHours.toFixed(1)} />
                   <StatRow label="Avg capturable %" value={`${(calibProfile.avgCaptureablePct * 100).toFixed(1)}%`} />
                   <StatRow label="Holdability score" value={calibProfile.avgHoldabilityScore.toFixed(2)} />
@@ -1929,11 +1939,11 @@ function MoveCalibrationTab() {
                   <StatRow label="Captured moves" value={aggregate.overall.capturedMoves} />
                   <StatRow label="Missed moves" value={aggregate.overall.missedMoves} />
                   <StatRow label="Fit score" value={`${(aggregate.overall.fitScore * 100).toFixed(1)}%`} />
-                  <StatRow label="Avg move %" value={`${(aggregate.overall.avgMovePct * 100).toFixed(2)}%`} />
+                  <StatRow label="Avg move %" value={`${aggregate.overall.avgMovePct.toFixed(2)}%`} />
                   <StatRow label="Avg capturable %" value={`${(aggregate.overall.avgCaptureablePct * 100).toFixed(1)}%`} />
                   <StatRow
                     label="Avg extracted (est.)"
-                    value={`${(aggregate.overall.avgMovePct * aggregate.overall.avgCaptureablePct * 100).toFixed(2)}%`}
+                    value={`${(aggregate.overall.avgMovePct * aggregate.overall.avgCaptureablePct).toFixed(2)}%`}
                   />
                   <StatRow label="Holdability score" value={aggregate.overall.avgHoldabilityScore.toFixed(2)} />
                   {behaviorProfile && (
@@ -2018,7 +2028,9 @@ function MoveCalibrationTab() {
               onChange={e => setMoveTypeFilter(e.target.value)}
               className="text-[11px] bg-background border border-border/50 rounded px-1.5 py-1 text-foreground focus:outline-none"
             >
-              {MOVE_TYPES_FILTER.map(t => <option key={t} value={t}>{t === "all" ? "All types" : t}</option>)}
+              {moveTypesFilterForSymbol(symbol).map(t => (
+                <option key={t} value={t}>{t === "all" ? "All types" : formatMoveTypeLabel(t)}</option>
+              ))}
             </select>
             <select
               value={tierFilter}

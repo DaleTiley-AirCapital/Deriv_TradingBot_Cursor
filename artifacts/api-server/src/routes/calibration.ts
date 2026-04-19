@@ -47,7 +47,7 @@ const router: IRouter = Router();
 const VALID_SYMBOLS = [...ACTIVE_SYMBOLS];
 const VALID_PASS_NAMES: PassName[] = ["precursor", "trigger", "behavior", "extraction", "all"];
 const VALID_TIERS = ["A", "B", "C", "D"];
-const VALID_MOVE_TYPES = ["breakout", "continuation", "reversal", "unknown", "all"];
+const VALID_MOVE_TYPES = ["breakout", "continuation", "reversal", "unknown", "boom_expansion", "crash_expansion", "all"];
 
 // ── POST /api/calibration/detect-moves/:symbol ────────────────────────────────
 

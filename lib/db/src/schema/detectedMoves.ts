@@ -9,7 +9,7 @@ import { pgTable, serial, text, doublePrecision, integer, boolean, timestamp, js
  * Columns:
  *   symbol          — CRASH300 | BOOM300 | R_75 | R_100
  *   direction       — "up" | "down"
- *   moveType        — "breakout" | "continuation" | "reversal" | "unknown"
+ *   moveType        — R_*: "breakout" | "continuation" | "reversal" | "unknown" · BOOM300: "boom_expansion" · CRASH300: "crash_expansion"
  *   startTs         — epoch seconds, candle open_ts of move start
  *   endTs           — epoch seconds, candle open_ts of move peak/trough
  *   startPrice      — close price at move start
