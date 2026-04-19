@@ -967,7 +967,7 @@ export async function runNativeScoreCalibration(
       allEngines.push(buildEngineSummary("BOOM300","boom_expansion_long_engine","buy", boomBuyS, ENGINE_GATES.BOOM300.buy, htfMins));
     } else if (symbol==="CRASH300") {
       allEngines.push(buildEngineSummary("CRASH300","crash_expansion_engine","buy",  crashBuyS, ENGINE_GATES.CRASH300.buy, htfMins));
-      allEngines.push(buildEngineSummary("CRASH300","crash_expansion_engine","sell", crashSellS,ENGINE_GATES.CRASH300.sell,htfMins));
+      allEngines.push(buildEngineSummary("CRASH300","crash_expansion_short_engine","sell", crashSellS,ENGINE_GATES.CRASH300.sell,htfMins));
     } else if (symbol==="R_75") {
       allEngines.push(buildEngineSummary("R_75","r75_reversal_engine","buy", r75RevBS, ENGINE_GATES.R_75.reversal_buy, htfMins));
       allEngines.push(buildEngineSummary("R_75","r75_reversal_engine","sell",r75RevSS, ENGINE_GATES.R_75.reversal_sell,htfMins));

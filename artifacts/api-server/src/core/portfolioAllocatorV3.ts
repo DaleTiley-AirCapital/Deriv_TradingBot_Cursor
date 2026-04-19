@@ -152,7 +152,9 @@ export async function allocateV3Signal(
         }
 
         // Build engine-specific rejection reason for CRASH300
-        const isCrash300 = winner.engineName === "crash_expansion_engine";
+        const isCrash300 =
+          winner.engineName === "crash_expansion_engine" ||
+          winner.engineName === "crash_expansion_short_engine";
         if (isCrash300 && winner.metadata) {
           const nativeScore = winner.metadata["crash300NativeScore"] as number | undefined;
           const blockReasons = winner.metadata["crash300BlockReasons"] as string[] | undefined;

@@ -36,6 +36,7 @@ const ENGINE_MAP: Record<string, { symbols: string[]; direction: string; leadInS
   "boom_expansion_engine":        { symbols: ["BOOM300"], direction: "down", leadInShapes: ["trending", "expanding"] },
   "boom_expansion_long_engine":   { symbols: ["BOOM300"], direction: "up", leadInShapes: ["compressing", "expanding", "trending"] },
   "crash_expansion_engine":       { symbols: ["CRASH300"], direction: "up", leadInShapes: ["trending", "expanding"] },
+  "crash_expansion_short_engine": { symbols: ["CRASH300"], direction: "down", leadInShapes: ["trending", "expanding"] },
   "r75_reversal_engine":          { symbols: ["R_75"], direction: "both", leadInShapes: ["ranging", "trending"] },
   "r75_continuation_engine":      { symbols: ["R_75"], direction: "both", leadInShapes: ["trending"] },
   "r75_breakout_engine":          { symbols: ["R_75"], direction: "both", leadInShapes: ["compressing"] },
@@ -203,7 +204,7 @@ Pre-move price drift: ${preMovePct}% (positive = up before the main move)
 ENGINE COVERAGE CHECK:
 Matched engine: ${engineMatched ?? "none"}
 Engine would fire: ${engineWouldFire}
-System engines: boom_expansion_engine (BOOM300 down), boom_expansion_long_engine (BOOM300 up), crash_expansion_engine (CRASH300 up),
+System engines: boom_expansion_engine (BOOM300 down), boom_expansion_long_engine (BOOM300 up), crash_expansion_engine (CRASH300 up), crash_expansion_short_engine (CRASH300 down),
   r75_reversal_engine, r75_continuation_engine, r75_breakout_engine (R_75),
   r100_reversal_engine, r100_continuation_engine, r100_breakout_engine (R_100)
 

@@ -35,7 +35,8 @@
 
 import type { EngineContext, EngineResult } from "../engineTypes.js";
 
-const ENGINE_NAME = "crash_expansion_engine";
+const BUY_ENGINE_NAME = "crash_expansion_engine";
+const SELL_ENGINE_NAME = "crash_expansion_short_engine";
 const SYMBOL = "CRASH300";
 
 // ── Projected move calibration (6-month empirical, CRASH300 only) ─────────────
@@ -546,7 +547,10 @@ export interface Crash300NativeScoreBreakdown {
   structuralContextSummary: string;
 }
 
-export function crash300Engine(ctx: EngineContext): EngineResult | null {
+function evaluateCrash300Direction(
+  ctx: EngineContext,
+  forcedDirection: "buy" | "sell" | "auto",
+): EngineResult | null {
   const { features, operationalRegime, regimeConfidence } = ctx;
   const f = features;
 
@@ -619,8 +623,34 @@ export function crash300Engine(ctx: EngineContext): EngineResult | null {
   let trailLogic: string;
   let setupLabel: string;
 
-  // BUY preferred when both viable (BUY = primary setup)
-  if (buyViable && (!sellViable || buyNativeScore >= sellNativeScore)) {
+  if (forcedDirection === "buy") {
+    if (!buyViable) return null;
+    direction       = "buy";
+    nativeScore     = buyNativeScore;
+    minGate         = CRASH300_BUY_MIN_GATE;
+    components      = { c1: b1_cluster, c2: b2_disp, c3: b3_exhaust, c4: b4_recovery, c5: b5_entry, c6: b6_move };
+    projectedMovePct = CRASH300_BUY_PROJECTED_PCT;
+    invalidation    = f.swingLow * 0.995;
+    holdProfile     = CRASH300_BUY_HOLD_PROFILE;
+    tpLogic         = CRASH300_BUY_TP_LOGIC;
+    slLogic         = CRASH300_BUY_SL_LOGIC;
+    trailLogic      = CRASH300_BUY_TRAIL;
+    setupLabel      = "buy_after_crash_spike_cluster_swing_low_reversal";
+  } else if (forcedDirection === "sell") {
+    if (!sellViable) return null;
+    direction       = "sell";
+    nativeScore     = sellNativeScore;
+    minGate         = CRASH300_SELL_MIN_GATE;
+    components      = { c1: s1_rally, c2: s2_stretch, c3: s3_exhaust, c4: s4_cascade, c5: s5_entry, c6: s6_move };
+    projectedMovePct = CRASH300_SELL_PROJECTED_PCT;
+    invalidation    = f.swingHigh * 1.005;
+    holdProfile     = CRASH300_SELL_HOLD_PROFILE;
+    tpLogic         = CRASH300_SELL_TP_LOGIC;
+    slLogic         = CRASH300_SELL_SL_LOGIC;
+    trailLogic      = CRASH300_SELL_TRAIL;
+    setupLabel      = "sell_after_extended_rally_exhaustion_cascade";
+  } else if (buyViable && (!sellViable || buyNativeScore >= sellNativeScore)) {
+    // Auto mode: BUY preferred when both viable (BUY = primary setup)
     direction       = "buy";
     nativeScore     = buyNativeScore;
     minGate         = CRASH300_BUY_MIN_GATE;
@@ -730,7 +760,7 @@ export function crash300Engine(ctx: EngineContext): EngineResult | null {
   return {
     valid: true,
     symbol,
-    engineName: ENGINE_NAME,
+    engineName: direction === "buy" ? BUY_ENGINE_NAME : SELL_ENGINE_NAME,
     direction,
     confidence,
     regimeFit,
@@ -758,4 +788,12 @@ export function crash300Engine(ctx: EngineContext): EngineResult | null {
       structuralContextSummary: structuralContext,
     },
   };
+}
+
+export function crash300Engine(ctx: EngineContext): EngineResult | null {
+  return evaluateCrash300Direction(ctx, "buy");
+}
+
+export function crash300ShortExpansionEngine(ctx: EngineContext): EngineResult | null {
+  return evaluateCrash300Direction(ctx, "sell");
 }
