@@ -17,6 +17,7 @@ import {
 import { eq, and, gte, lte, asc } from "drizzle-orm";
 import { chatComplete } from "../../../infrastructure/openai.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
+import { parseAiJsonObject } from "../parseAiJson.js";
 
 const MAX_BEHAVIOR_BARS = 200;
 
@@ -117,14 +118,12 @@ Respond with ONLY valid JSON:
 
   const response = await chatComplete({
     messages: [{ role: "user", content: prompt }],
-    max_completion_tokens: 400,
+    max_completion_tokens: 1_200,
     temperature: 0.2,
   });
 
   const raw = response.choices[0]?.message?.content?.trim() ?? "";
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("No JSON in behavior pass response");
-  const parsed = JSON.parse(match[0]);
+  const parsed = parseAiJsonObject<Record<string, unknown>>(raw);
 
   const holdabilityScore = Math.max(0, Math.min(1, Number(parsed.holdabilityScore) || 0));
   const maxIntradrawdown = Math.max(0, Number(parsed.maxIntradrawdownPct) || 0);

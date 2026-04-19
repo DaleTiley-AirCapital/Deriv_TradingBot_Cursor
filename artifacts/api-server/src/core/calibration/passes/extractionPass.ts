@@ -24,6 +24,7 @@ import {
 import { eq, and, inArray } from "drizzle-orm";
 import { chatComplete } from "../../../infrastructure/openai.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
+import { parseAiJsonObject } from "../parseAiJson.js";
 
 function median(arr: number[]): number {
   if (arr.length === 0) return 0;
@@ -196,14 +197,12 @@ Respond with ONLY valid JSON:
 
   const response = await chatComplete({
     messages: [{ role: "user", content: prompt }],
-    max_completion_tokens: 900,
+    max_completion_tokens: 2_048,
     temperature: 0.3,
   });
 
   const raw = response.choices[0]?.message?.content?.trim() ?? "";
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("No JSON in extraction pass response");
-  const parsed = JSON.parse(match[0]);
+  const parsed = parseAiJsonObject<Record<string, unknown>>(raw);
 
   const feeddownSchema = {
     structuralRules:        parsed.structuralRules ?? [],

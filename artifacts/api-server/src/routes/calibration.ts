@@ -23,10 +23,11 @@ import { eq } from "drizzle-orm";
 import { ACTIVE_SYMBOLS } from "../core/engineTypes.js";
 import { detectAndStoreMoves, getDetectedMoves } from "../core/calibration/moveDetector.js";
 import {
-  runCalibrationPasses,
+  startCalibrationPassesBackground,
   getPassRunStatus,
   getLatestPassRun,
   getAllPassRuns,
+  getRunningPassRunForSymbol,
   type PassName,
 } from "../core/calibration/calibrationPassRunner.js";
 import {
@@ -118,8 +119,7 @@ router.get("/calibration/moves/:symbol", async (req, res): Promise<void> => {
 });
 
 // ── POST /api/calibration/run-passes/:symbol ──────────────────────────────────
-// Starts the async AI pass pipeline. Runs synchronously (awaits completion).
-// For large windows, consider polling /run-status/:runId.
+// Starts the AI pass pipeline in the background; poll GET /run-status/:runId for progress.
 
 router.post("/calibration/run-passes/:symbol", async (req, res): Promise<void> => {
   const { symbol } = req.params;
@@ -159,16 +159,28 @@ router.post("/calibration/run-passes/:symbol", async (req, res): Promise<void> =
   }
 
   try {
-    const result = await runCalibrationPasses({
+    const existing = await getRunningPassRunForSymbol(symbol);
+    if (existing) {
+      res.status(409).json({
+        error: "A calibration pass run is already in progress for this symbol.",
+        ok: false,
+        runId: existing.id,
+        status: "running",
+        totalMoves: existing.totalMoves ?? 0,
+      });
+      return;
+    }
+
+    const { runId, totalMoves } = await startCalibrationPassesBackground({
       symbol,
       windowDays,
-      passName:   resolvedPassName,
-      minTier:    minTier as "A" | "B" | "C" | "D" | undefined,
-      moveType:   resolvedMoveType,
+      passName: resolvedPassName,
+      minTier: minTier as "A" | "B" | "C" | "D" | undefined,
+      moveType: resolvedMoveType,
       maxMoves,
       force,
     });
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, runId, status: "running", totalMoves });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Pass run failed";
     console.error(`[calibration/run-passes/${symbol}] error:`, message);

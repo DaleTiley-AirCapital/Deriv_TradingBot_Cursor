@@ -17,6 +17,7 @@ import {
 import { eq, and, gte, lte, asc } from "drizzle-orm";
 import { chatComplete } from "../../../infrastructure/openai.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
+import { parseAiJsonObject } from "../parseAiJson.js";
 
 const TRIGGER_SCAN_BARS = 48;
 
@@ -104,14 +105,12 @@ Respond with ONLY valid JSON:
 
   const response = await chatComplete({
     messages: [{ role: "user", content: prompt }],
-    max_completion_tokens: 400,
+    max_completion_tokens: 1_200,
     temperature: 0.2,
   });
 
   const raw = response.choices[0]?.message?.content?.trim() ?? "";
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("No JSON in trigger pass response");
-  const parsed = JSON.parse(match[0]);
+  const parsed = parseAiJsonObject<Record<string, unknown>>(raw);
 
   const entryBarIdx = Math.max(1, Math.min(Number(parsed.earliestEntryBar) || 1, candles.length - 1));
   const entryCandle = candles[entryBarIdx];

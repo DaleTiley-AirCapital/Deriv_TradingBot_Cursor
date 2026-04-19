@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, createContext, useContext, type ReactNode } from "react";
 import {
   FlaskConical, Brain, Play, RefreshCw,
   Loader2, CheckCircle, XCircle,
@@ -18,6 +18,126 @@ function apiFetch(path: string, opts?: RequestInit) {
     }
     return r.json();
   });
+}
+
+const CALIB_PASS_SESSION_KEY = "deriv_calib_pass_run";
+
+interface PassStatusResult {
+  id: number;
+  symbol?: string;
+  status: string;
+  passName?: string | null;
+  totalMoves?: number | null;
+  processedMoves?: number | null;
+  failedMoves?: number | null;
+  windowDays?: number;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  errors?: string[];
+  errorSummary?: unknown;
+  metaJson?: Record<string, unknown> | null;
+}
+
+type CalibrationRunContextValue = {
+  runId: number | null;
+  symbol: string | null;
+  status: PassStatusResult | null;
+  /** Polling active for an in-flight server run */
+  isPassRunActive: boolean;
+  beginPassRun: (runId: number, symbol: string) => void;
+};
+
+const CalibrationRunContext = createContext<CalibrationRunContextValue | null>(null);
+
+function useCalibrationRun(): CalibrationRunContextValue {
+  const v = useContext(CalibrationRunContext);
+  if (!v) throw new Error("useCalibrationRun: missing provider");
+  return v;
+}
+
+/** Keeps pass-run polling alive while viewing any Research tab (AI / Backtest / Move Calibration). */
+function CalibrationRunProvider({ children }: { children: ReactNode }) {
+  const [runId, setRunId] = useState<number | null>(null);
+  const [symbol, setSymbol] = useState<string | null>(null);
+  const [status, setStatus] = useState<PassStatusResult | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopInterval = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  };
+
+  const beginPassRun = useCallback((rid: number, sym: string) => {
+    stopInterval();
+    try {
+      sessionStorage.setItem(CALIB_PASS_SESSION_KEY, JSON.stringify({ runId: rid, symbol: sym }));
+    } catch { /* ignore */ }
+    setRunId(rid);
+    setSymbol(sym);
+    setStatus(null);
+  }, []);
+
+  // Restore session and drop stale "running" entries
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = sessionStorage.getItem(CALIB_PASS_SESSION_KEY);
+        if (!raw) return;
+        const p = JSON.parse(raw) as { runId: number; symbol: string };
+        const s = (await apiFetch(`calibration/run-status/${p.runId}`)) as PassStatusResult;
+        setStatus(s);
+        if (s.status === "running") {
+          setRunId(p.runId);
+          setSymbol(p.symbol);
+        } else {
+          sessionStorage.removeItem(CALIB_PASS_SESSION_KEY);
+        }
+      } catch {
+        try { sessionStorage.removeItem(CALIB_PASS_SESSION_KEY); } catch { /* ignore */ }
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!runId) return;
+
+    const tick = async () => {
+      try {
+        const s = (await apiFetch(`calibration/run-status/${runId}`)) as PassStatusResult;
+        setStatus(s);
+        const done =
+          s.status === "completed" || s.status === "failed" || s.status === "partial";
+        if (done) {
+          stopInterval();
+          try { sessionStorage.removeItem(CALIB_PASS_SESSION_KEY); } catch { /* ignore */ }
+          setRunId(null);
+          setSymbol(null);
+        }
+      } catch {
+        /* transient network errors — keep polling */
+      }
+    };
+
+    void tick();
+    intervalRef.current = setInterval(tick, 1800);
+    return () => stopInterval();
+  }, [runId]);
+
+  const value: CalibrationRunContextValue = {
+    runId,
+    symbol,
+    status,
+    isPassRunActive: runId !== null,
+    beginPassRun,
+  };
+
+  return (
+    <CalibrationRunContext.Provider value={value}>
+      {children}
+    </CalibrationRunContext.Provider>
+  );
 }
 
 const ALL_SYMBOLS = [
@@ -796,6 +916,7 @@ interface PassRun {
   windowDays: number;
   startedAt: string;
   completedAt?: string | null;
+  metaJson?: Record<string, unknown> | null;
 }
 
 // ─── Move Calibration Tab ─────────────────────────────────────────────────────
@@ -947,22 +1068,8 @@ interface DetectedMove {
   startTs: number;
 }
 
-interface PassStatusResult {
-  id: number;
-  symbol?: string;
-  status: string;
-  passName?: string | null;
-  totalMoves?: number | null;
-  processedMoves?: number | null;
-  failedMoves?: number | null;
-  windowDays?: number;
-  startedAt?: string | null;
-  completedAt?: string | null;
-  errors?: string[];
-  errorSummary?: string | null;
-}
-
 function MoveCalibrationTab() {
+  const calibRun = useCalibrationRun();
   const [symbol, setSymbol] = useState("BOOM300");
   const [windowDays, setWindowDays] = useState(90);
   const [minMovePct, setMinMovePct] = useState(0.05);
@@ -1000,17 +1107,20 @@ function MoveCalibrationTab() {
 
   const [scope, setScope] = useState<"detect" | "passes" | "full">("detect");
   const [runElapsed, setRunElapsed] = useState(0);
-  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevCalibStatusRef = useRef<string | undefined>(undefined);
 
   const [passName, setPassName] = useState("all");
   const [passMinTier, setPassMinTier] = useState("");
   const [passMoveType, setPassMoveType] = useState("all");
   const [maxMoves, setMaxMoves] = useState("");
-  const [passBusy, setPassBusy] = useState(false);
-  const [passRunId, setPassRunId] = useState<number | null>(null);
-  const [passStatus, setPassStatus] = useState<PassStatusResult | null>(null);
   const [passErr, setPassErr] = useState<string | null>(null);
-  const passIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const passForThisSymbol = calibRun.isPassRunActive && calibRun.symbol === symbol;
+  const passStatus = calibRun.symbol === symbol ? calibRun.status : null;
+
+  const [historyDetailId, setHistoryDetailId] = useState<number | null>(null);
+  const [historyDetail, setHistoryDetail] = useState<PassStatusResult | null>(null);
+  const [historyDetailLoading, setHistoryDetailLoading] = useState(false);
 
   const [runs, setRuns] = useState<PassRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
@@ -1111,6 +1221,11 @@ function MoveCalibrationTab() {
   }, [symbol]);
 
   useEffect(() => {
+    setHistoryDetailId(null);
+    setHistoryDetail(null);
+  }, [symbol]);
+
+  useEffect(() => {
     loadMoves(symbol, moveTypeFilter, tierFilter);
   }, [moveTypeFilter, tierFilter]);
 
@@ -1120,26 +1235,36 @@ function MoveCalibrationTab() {
   }, [strategyFamily]);
 
   useEffect(() => {
-    return () => {
-      if (passIntervalRef.current) clearInterval(passIntervalRef.current);
-      if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
-    };
-  }, []);
-
-  const startElapsed = () => {
+    if (!detecting && !passForThisSymbol) {
+      setRunElapsed(0);
+      return;
+    }
     setRunElapsed(0);
-    if (elapsedIntervalRef.current) clearInterval(elapsedIntervalRef.current);
-    elapsedIntervalRef.current = setInterval(() => setRunElapsed(s => s + 1), 1000);
-  };
-  const stopElapsed = () => {
-    if (elapsedIntervalRef.current) { clearInterval(elapsedIntervalRef.current); elapsedIntervalRef.current = null; }
-  };
+    const id = setInterval(() => setRunElapsed(s => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [detecting, passForThisSymbol]);
+
+  useEffect(() => {
+    const st = calibRun.status?.status;
+    if (
+      prevCalibStatusRef.current === "running" &&
+      st &&
+      st !== "running" &&
+      calibRun.symbol === symbol
+    ) {
+      void Promise.all([
+        loadDomains(symbol, strategyFamily),
+        loadMoves(symbol, moveTypeFilter, tierFilter),
+        loadRuns(symbol),
+      ]);
+    }
+    prevCalibStatusRef.current = st;
+  }, [calibRun.status?.status, calibRun.symbol, symbol, strategyFamily, moveTypeFilter, tierFilter, loadDomains, loadMoves, loadRuns]);
 
   const detectMoves = async (): Promise<boolean> => {
     setDetecting(true);
     setDetectErr(null);
     setDetectResult(null);
-    startElapsed();
     try {
       const d = await apiFetch(`calibration/detect-moves/${symbol}`, {
         method: "POST",
@@ -1157,31 +1282,24 @@ function MoveCalibrationTab() {
       return false;
     } finally {
       setDetecting(false);
-      stopElapsed();
     }
   };
 
-  const pollPassStatus = (runId: number) => {
-    if (passIntervalRef.current) clearInterval(passIntervalRef.current);
-    passIntervalRef.current = setInterval(async () => {
-      try {
-        const s = await apiFetch(`calibration/run-status/${runId}`);
-        setPassStatus(s);
-        if (s.status === "completed" || s.status === "failed" || s.status === "partial") {
-          clearInterval(passIntervalRef.current!);
-          stopElapsed();
-          setPassBusy(false);
-          await Promise.all([loadDomains(symbol, strategyFamily), loadMoves(symbol, moveTypeFilter, tierFilter), loadRuns(symbol)]);
-        }
-      } catch {}
-    }, 4000);
+  const openRunHistoryDetail = async (id: number) => {
+    setHistoryDetailId(id);
+    setHistoryDetailLoading(true);
+    try {
+      const s = (await apiFetch(`calibration/run-status/${id}`)) as PassStatusResult;
+      setHistoryDetail(s);
+    } catch {
+      setHistoryDetail(null);
+    } finally {
+      setHistoryDetailLoading(false);
+    }
   };
 
   const runPasses = async (overridePassName?: string): Promise<boolean> => {
-    setPassBusy(true);
     setPassErr(null);
-    setPassStatus(null);
-    startElapsed();
     try {
       const pn = overridePassName ?? passName;
       const body: Record<string, unknown> = { windowDays, passName: pn };
@@ -1189,25 +1307,29 @@ function MoveCalibrationTab() {
       const effectiveMoveType = passMoveType !== "all" ? passMoveType : (strategyFamily !== "all" ? strategyFamily : undefined);
       if (effectiveMoveType) body.moveType = effectiveMoveType;
       if (maxMoves && !isNaN(Number(maxMoves))) body.maxMoves = Number(maxMoves);
-      const d = await apiFetch(`calibration/run-passes/${symbol}`, {
+      const url = `${BASE}api/calibration/run-passes/${symbol}`;
+      const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (d.runId) {
-        setPassRunId(d.runId);
-        pollPassStatus(d.runId);
-      } else {
-        setPassStatus(d);
-        setPassBusy(false);
-        stopElapsed();
-        await Promise.all([loadDomains(symbol, strategyFamily), loadMoves(symbol, moveTypeFilter, tierFilter)]);
+      const d = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+      if (r.status === 409 && typeof d.runId === "number") {
+        calibRun.beginPassRun(d.runId as number, symbol);
+        return true;
       }
-      return true;
+      if (!r.ok) {
+        setPassErr(String(d.error ?? `HTTP ${r.status}`));
+        return false;
+      }
+      if (typeof d.runId === "number") {
+        calibRun.beginPassRun(d.runId, symbol);
+        return true;
+      }
+      setPassErr("No run id returned from server");
+      return false;
     } catch (e: unknown) {
       setPassErr(e instanceof Error ? e.message : "Pass run failed");
-      setPassBusy(false);
-      stopElapsed();
       return false;
     }
   };
@@ -1401,7 +1523,7 @@ function MoveCalibrationTab() {
           {/* Unified Run button */}
           <button
             onClick={runScope}
-            disabled={detecting || passBusy}
+            disabled={detecting || passForThisSymbol}
             className={cn(
               "flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold hover:opacity-90 disabled:opacity-50 self-end",
               scope === "full"
@@ -1411,8 +1533,8 @@ function MoveCalibrationTab() {
                 : "bg-primary text-primary-foreground"
             )}
           >
-            {(detecting || passBusy) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            {detecting ? "Detecting…" : passBusy ? "Running passes…" :
+            {(detecting || passForThisSymbol) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            {detecting ? "Detecting…" : passForThisSymbol ? "Running passes…" :
               scope === "detect" ? "Detect Moves" : scope === "passes" ? "Run AI Passes" : "Run Full Calibration"}
           </button>
 
@@ -1427,13 +1549,15 @@ function MoveCalibrationTab() {
         </div>
 
         {/* Elapsed timer */}
-        {(detecting || passBusy) && runElapsed > 0 && (
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        {(detecting || passForThisSymbol) && runElapsed > 0 && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground flex-wrap">
             <Loader2 className="w-3 h-3 animate-spin" />
             Elapsed: <strong className="text-foreground font-mono">{runElapsed}s</strong>
-            {passBusy && passStatus && passStatus.totalMoves !== undefined && (
-              <span className="ml-2">
-                · Pass {passStatus.passName ?? "all"} · {passStatus.processedMoves ?? 0}/{passStatus.totalMoves} moves
+            {passForThisSymbol && passStatus && (
+              <span className="ml-2 text-foreground">
+                ·{" "}
+                {(passStatus.metaJson as { progress?: { label?: string } } | null)?.progress?.label
+                  ?? `${passStatus.processedMoves ?? 0}/${passStatus.totalMoves ?? "—"} moves · ${passStatus.passName ?? "all"}`}
               </span>
             )}
           </div>
@@ -1476,7 +1600,9 @@ function MoveCalibrationTab() {
             "bg-primary/5 border-primary/20"
           )}>
             <div className="flex items-center gap-2">
-              {passBusy && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />}
+              {passForThisSymbol && passStatus?.status === "running" && (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+              )}
               {passStatus.status === "completed" && <CheckCircle className="w-3.5 h-3.5 text-green-400" />}
               {passStatus.status === "failed"    && <XCircle    className="w-3.5 h-3.5 text-red-400"   />}
               <span className="text-xs font-semibold text-foreground">
@@ -1492,6 +1618,12 @@ function MoveCalibrationTab() {
               {passStatus.failedMoves   != null && <span>Failed: <strong className="text-foreground">{passStatus.failedMoves}</strong></span>}
               {passStatus.passName                  && <span>Pass: <strong className="text-foreground">{passStatus.passName}</strong></span>}
             </div>
+            {passStatus.status === "running" &&
+              (passStatus.metaJson as { progress?: { label?: string } } | null)?.progress?.label && (
+              <p className="text-[11px] font-mono text-primary">
+                {(passStatus.metaJson as { progress?: { label?: string } }).progress?.label}
+              </p>
+            )}
             {passStatus.errorSummary != null && (
               <p className="text-[11px] text-red-400">
                 {typeof passStatus.errorSummary === "string"
@@ -2231,7 +2363,22 @@ function MoveCalibrationTab() {
                         ? Math.round((new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime()) / 1000)
                         : null;
                       return (
-                      <tr key={run.id} className="border-b border-border/20 hover:bg-muted/20 transition-colors">
+                      <tr
+                        key={run.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => void openRunHistoryDetail(run.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            void openRunHistoryDetail(run.id);
+                          }
+                        }}
+                        className={cn(
+                          "border-b border-border/20 transition-colors cursor-pointer",
+                          historyDetailId === run.id ? "bg-muted/30" : "hover:bg-muted/20",
+                        )}
+                      >
                         <td className="px-4 py-1.5 font-mono text-muted-foreground">#{run.id}</td>
                         <td className="px-3 py-1.5 font-mono text-foreground">{run.passName}</td>
                         <td className="px-3 py-1.5">
@@ -2257,8 +2404,14 @@ function MoveCalibrationTab() {
                         </td>
                         <td className="px-3 py-1.5">
                           <button
-                            onClick={() => { setPassName(run.passName); setScope("passes"); void runPasses(run.passName); }}
-                            disabled={passBusy || detecting}
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPassName(run.passName);
+                              setScope("passes");
+                              void runPasses(run.passName);
+                            }}
+                            disabled={passForThisSymbol || detecting}
                             className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-border/50 text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-40 transition-colors"
                             title={`Rerun pass "${run.passName}"`}
                           >
@@ -2271,6 +2424,57 @@ function MoveCalibrationTab() {
                     })}
                   </tbody>
                 </table>
+                {historyDetailId != null && (
+                  <div className="border-t border-border/30 px-4 py-3 space-y-2 bg-muted/5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-foreground">Selected run #{historyDetailId}</span>
+                      <button
+                        type="button"
+                        className="text-[10px] text-muted-foreground hover:text-foreground"
+                        onClick={() => { setHistoryDetailId(null); setHistoryDetail(null); }}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    {historyDetailLoading && (
+                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading run details…
+                      </div>
+                    )}
+                    {!historyDetailLoading && historyDetail && (
+                      <div className="space-y-2 text-[11px]">
+                        <div className="flex flex-wrap gap-3 text-muted-foreground">
+                          <span>Status: <strong className="text-foreground">{historyDetail.status}</strong></span>
+                          {historyDetail.passName != null && (
+                            <span>Pass: <strong className="text-foreground">{String(historyDetail.passName)}</strong></span>
+                          )}
+                          {historyDetail.totalMoves != null && (
+                            <span>Moves: <strong className="text-foreground">{historyDetail.totalMoves}</strong></span>
+                          )}
+                          {historyDetail.processedMoves != null && (
+                            <span>Processed: <strong className="text-foreground">{historyDetail.processedMoves}</strong></span>
+                          )}
+                          {historyDetail.failedMoves != null && (
+                            <span>Failed: <strong className="text-foreground">{historyDetail.failedMoves}</strong></span>
+                          )}
+                        </div>
+                        {historyDetail.errorSummary != null && (
+                          <p className="text-red-400 font-mono break-all">
+                            {typeof historyDetail.errorSummary === "string"
+                              ? historyDetail.errorSummary
+                              : JSON.stringify(historyDetail.errorSummary)}
+                          </p>
+                        )}
+                        <div>
+                          <span className="text-muted-foreground block mb-1">meta_json (progress, model, etc.)</span>
+                          <pre className="text-[10px] overflow-x-auto p-2 rounded bg-background/80 border border-border/40 max-h-56 overflow-y-auto whitespace-pre-wrap">
+                            {JSON.stringify(historyDetail.metaJson ?? {}, null, 2)}
+                          </pre>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2297,6 +2501,7 @@ export default function Research() {
   const [activeTab, setActiveTab] = useState<TabId>("ai");
 
   return (
+    <CalibrationRunProvider>
     <div className="p-6 space-y-5 max-w-6xl">
       <div>
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
@@ -2331,5 +2536,6 @@ export default function Research() {
       {activeTab === "backtest"    && <BacktestTab />}
       {activeTab === "calibration" && <MoveCalibrationTab />}
     </div>
+    </CalibrationRunProvider>
   );
 }

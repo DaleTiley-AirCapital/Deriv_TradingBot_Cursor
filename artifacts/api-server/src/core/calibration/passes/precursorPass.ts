@@ -17,6 +17,7 @@ import {
 import { eq, and, gte, lte, asc } from "drizzle-orm";
 import { chatComplete } from "../../../infrastructure/openai.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
+import { parseAiJsonObject } from "../parseAiJson.js";
 
 const PRECURSOR_LOOKBACK_BARS = 96;
 
@@ -139,14 +140,18 @@ Respond with ONLY valid JSON:
 
   const response = await chatComplete({
     messages: [{ role: "user", content: prompt }],
-    max_completion_tokens: 500,
+    // Enough headroom for long lead-in summaries + 3–5 conditions (truncation → invalid JSON).
+    max_completion_tokens: 2_048,
     temperature: 0.25,
   });
 
   const raw = response.choices[0]?.message?.content?.trim() ?? "";
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("No JSON in precursor pass response");
-  const parsed = JSON.parse(match[0]);
+  const parsed = parseAiJsonObject<{
+    precursorConditions?: unknown;
+    missedReason?: string | null;
+    leadInSummary?: string;
+    confidenceScore?: number;
+  }>(raw);
 
   await db.insert(movePrecursorPassesTable).values({
     moveId:              move.id,

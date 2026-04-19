@@ -150,22 +150,29 @@ async function updateRunRecord(
     .where(eq(calibrationPassRunsTable.id, runId));
 }
 
-// ── Core runner ────────────────────────────────────────────────────────────────
+/** Merge into meta_json for live progress while a run is executing (poll GET /run-status). */
+async function mergeRunMeta(
+  runId: number,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const [row] = await db
+    .select({ meta: calibrationPassRunsTable.metaJson })
+    .from(calibrationPassRunsTable)
+    .where(eq(calibrationPassRunsTable.id, runId))
+    .limit(1);
+  const prev = (row?.meta && typeof row.meta === "object" ? row.meta : {}) as Record<string, unknown>;
+  const next: Record<string, unknown> = { ...prev, ...patch };
+  if (prev.progress && patch.progress && typeof patch.progress === "object") {
+    next.progress = { ...(prev.progress as object), ...(patch.progress as object) };
+  }
+  await db
+    .update(calibrationPassRunsTable)
+    .set({ metaJson: next as never })
+    .where(eq(calibrationPassRunsTable.id, runId));
+}
 
-export async function runCalibrationPasses(
-  opts: RunPassesOptions,
-): Promise<RunPassesResult> {
-  const startMs = Date.now();
-  const {
-    symbol,
-    windowDays = 90,
-    passName = "all",
-    minTier,
-    moveType,
-    maxMoves,
-    force = false,
-  } = opts;
-
+async function loadFilteredMoves(opts: RunPassesOptions): Promise<DetectedMoveRow[]> {
+  const { symbol, minTier, moveType, maxMoves } = opts;
   const conditions: ReturnType<typeof eq>[] = [eq(detectedMovesTable.symbol, symbol)];
   if (moveType && moveType !== "all") conditions.push(eq(detectedMovesTable.moveType, moveType));
 
@@ -175,29 +182,42 @@ export async function runCalibrationPasses(
     .where(conditions.length === 1 ? conditions[0] : and(...conditions))
     .orderBy(detectedMovesTable.startTs);
 
-  const filteredMoves = filterByMinTier(allMoves, minTier).slice(0, maxMoves ?? allMoves.length);
-  const totalMoves = filteredMoves.length;
+  return filterByMinTier(allMoves, minTier).slice(0, maxMoves ?? allMoves.length);
+}
 
-  const runId = await createRunRecord(symbol, windowDays, passName, totalMoves);
+/**
+ * Execute calibration passes (long-running). Call from background after HTTP returns runId.
+ */
+async function executeCalibrationRun(
+  runId: number,
+  filteredMoves: DetectedMoveRow[],
+  opts: RunPassesOptions,
+): Promise<RunPassesResult> {
+  const startMs = Date.now();
+  const {
+    symbol,
+    passName = "all",
+    force = false,
+  } = opts;
 
   const errors: Array<{ moveId: number; pass: string; error: string }> = [];
   let processedMoves = 0;
-  let skippedMoves   = 0;  // moves where every requested pass was already complete
+  let skippedMoves   = 0;
 
   const perMovePasses: Exclude<PassName, "all">[] =
     passName === "all"
       ? ["precursor", "trigger", "behavior"]
       : passName !== "extraction" ? [passName] : [];
 
+  const totalMoves = filteredMoves.length;
+  let moveOrdinal = 0;
+
   for (const move of filteredMoves) {
+    moveOrdinal++;
     let moveFailed  = false;
-    // A move is only "skipped" if it has per-move passes to run AND every one was already done.
-    // For extraction-only runs (perMovePasses==[]), there are no per-move passes so skip tracking
-    // doesn't apply — moves are not counted at all (they're aggregated in the extraction step).
     let allPassesDone = perMovePasses.length > 0;
 
     for (const pass of perMovePasses) {
-      // Skip-completed: if force=false and this pass already ran for this move, skip it
       if (!force) {
         const alreadyDone =
           pass === "precursor"
@@ -205,8 +225,20 @@ export async function runCalibrationPasses(
             : await hasBehaviorPass(move.id, pass as "trigger" | "behavior");
         if (alreadyDone) continue;
       }
-      // At least one pass needs to run for this move → not fully skipped
       allPassesDone = false;
+
+      const label = `${moveOrdinal}/${totalMoves} · ${pass}`;
+      await mergeRunMeta(runId, {
+        progress: {
+          phase: "per_move",
+          currentPass: pass,
+          moveIndex: moveOrdinal,
+          totalMoves,
+          moveId: move.id,
+          label,
+        },
+      });
+
       try {
         await runPassForMove(move, pass, runId);
       } catch (err) {
@@ -227,14 +259,23 @@ export async function runCalibrationPasses(
       }
     }
 
-    // Checkpoint progress every 10 active moves
-    if ((processedMoves + errors.length) % 10 === 0 && (processedMoves + errors.length) > 0) {
-      await updateRunRecord(runId, processedMoves, errors.length, "running", errors);
+    if (moveOrdinal % 5 === 0 || moveOrdinal === totalMoves) {
+      const effectiveMoves = filteredMoves.length - skippedMoves;
+      const failedMovesRunning = effectiveMoves > 0 ? effectiveMoves - processedMoves : 0;
+      await updateRunRecord(runId, processedMoves, failedMovesRunning, "running", errors);
     }
   }
 
-  // Pass 4 (extraction) runs once across all moves — after per-move passes complete
   if (passName === "all" || passName === "extraction") {
+    await mergeRunMeta(runId, {
+      progress: {
+        phase: "extraction",
+        currentPass: "extraction",
+        moveIndex: totalMoves,
+        totalMoves,
+        label: "Running extraction pass (aggregating all moves)…",
+      },
+    });
     try {
       await runExtractionPass(symbol, filteredMoves, runId);
     } catch (err) {
@@ -246,13 +287,18 @@ export async function runCalibrationPasses(
     }
   }
 
-  // failedMoves = total − processed − skipped (skipped are not failures, they were already done)
   const effectiveMoves = filteredMoves.length - skippedMoves;
   const failedMoves    = effectiveMoves > 0 ? effectiveMoves - processedMoves : 0;
   const status: "completed" | "partial" | "failed" =
     errors.length === 0 ? "completed" :
     processedMoves > 0  ? "partial"   : "failed";
 
+  await mergeRunMeta(runId, {
+    progress: {
+      phase: "done",
+      label: status === "completed" ? "Completed" : `Finished (${status})`,
+    },
+  });
   await updateRunRecord(runId, processedMoves, failedMoves, status, errors);
 
   return {
@@ -268,6 +314,45 @@ export async function runCalibrationPasses(
   };
 }
 
+/** Start pass run in the background; HTTP handler returns immediately with runId. */
+export async function startCalibrationPassesBackground(opts: RunPassesOptions): Promise<{ runId: number; totalMoves: number }> {
+  const {
+    symbol,
+    windowDays = 90,
+    passName = "all",
+  } = opts;
+
+  const filteredMoves = await loadFilteredMoves(opts);
+  const totalMoves = filteredMoves.length;
+  const runId = await createRunRecord(symbol, windowDays, passName, totalMoves);
+
+  void executeCalibrationRun(runId, filteredMoves, opts)
+    .then(result => {
+      console.log(`[calibration] run ${runId} finished: ${result.status} in ${result.durationMs}ms`);
+    })
+    .catch(err => {
+      console.error(`[calibration] run ${runId} crashed:`, err);
+      void updateRunRecord(
+        runId,
+        0,
+        1,
+        "failed",
+        [{ moveId: -1, pass: "runner", error: err instanceof Error ? err.message : String(err) }],
+      );
+    });
+
+  return { runId, totalMoves };
+}
+
+/** Run to completion in-process (tests / scripts). API uses startCalibrationPassesBackground. */
+export async function runCalibrationPasses(opts: RunPassesOptions): Promise<RunPassesResult> {
+  const { symbol, windowDays = 90, passName = "all" } = opts;
+  const filteredMoves = await loadFilteredMoves(opts);
+  const totalMoves = filteredMoves.length;
+  const runId = await createRunRecord(symbol, windowDays, passName, totalMoves);
+  return executeCalibrationRun(runId, filteredMoves, opts);
+}
+
 // ── Get run status ─────────────────────────────────────────────────────────────
 
 export async function getPassRunStatus(
@@ -278,6 +363,24 @@ export async function getPassRunStatus(
     .from(calibrationPassRunsTable)
     .where(eq(calibrationPassRunsTable.id, runId));
   return row ?? null;
+}
+
+/** If a pass run is still `running` for this symbol, return it (most recent first). */
+export async function getRunningPassRunForSymbol(
+  symbol: string,
+): Promise<typeof calibrationPassRunsTable.$inferSelect | null> {
+  const rows = await db
+    .select()
+    .from(calibrationPassRunsTable)
+    .where(
+      and(
+        eq(calibrationPassRunsTable.symbol, symbol),
+        eq(calibrationPassRunsTable.status, "running"),
+      ),
+    )
+    .orderBy(desc(calibrationPassRunsTable.startedAt))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 export async function getLatestPassRun(
