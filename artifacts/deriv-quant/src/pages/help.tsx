@@ -61,7 +61,7 @@ const FAQ_ITEMS: { q: string; a: string; icon: React.ReactNode }[] = [
   },
   {
     q: "How does native engine scoring work?",
-    a: "Each of the 9 engines computes its own 6-component native score (0–100) using dimensions specific to that symbol and entry type. For example, BOOM300/CRASH300 engines score cluster pressure, displacement, exhaustion, recovery quality, entry efficiency, and expected move magnitude. R_75/R_100 engines score trend quality, pullback quality, slope, structure, entry efficiency, and expected move. All six components combine into a single native score. There is no shared generic scoring path — each engine's dimensions are calibrated to that specific market behaviour.",
+    a: "Each of the 10 engines computes its own 6-component native score (0–100) using dimensions specific to that symbol and entry type. For example, BOOM300/CRASH300 engines score cluster pressure, displacement, exhaustion, recovery quality, entry efficiency, and expected move magnitude. R_75/R_100 engines score trend quality, pullback quality, slope, structure, entry efficiency, and expected move. All six components combine into a single native score. There is no shared generic scoring path — each engine's dimensions are calibrated to that specific market behaviour.",
     icon: <BarChart3 className="w-4 h-4 text-primary" />,
   },
   {
@@ -71,7 +71,7 @@ const FAQ_ITEMS: { q: string; a: string; icon: React.ReactNode }[] = [
   },
   {
     q: "What is the AI Verdict?",
-    a: "After the engine scores a signal above threshold, a GPT-4o model independently evaluates it using regime context, all 6 scoring dimensions, and trade parameters. It returns Agree, Disagree, or Uncertain with reasoning. A Disagree does not automatically block the trade unless 'AI Verification' is enabled in settings — but it is always logged. 'Skipped' means the signal was blocked by a gate before reaching the AI layer.",
+    a: "After the engine scores a signal above threshold, a GPT-5.1 model independently evaluates it using regime context, all 6 scoring dimensions, and trade parameters. It returns Agree, Disagree, or Uncertain with reasoning. A Disagree does not automatically block the trade unless 'AI Verification' is enabled in settings — but it is always logged. 'Skipped' means the signal was blocked by a gate before reaching the AI layer.",
     icon: <Brain className="w-4 h-4 text-primary" />,
   },
   {
@@ -324,7 +324,7 @@ export default function Help() {
             { page: "Overview",         path: "/",            desc: "System status, portfolio snapshot, mode summary, engine config, data health. Start here." },
             { page: "Engine Decisions", path: "/decisions",   desc: "Every signal decision — scored, classified by state (traded/pending/approved/rejected/blocked/suppressed), with coordinator reasoning and AI verdict." },
             { page: "Trades",           path: "/trades",      desc: "Open positions with floating PnL and progress to TP, closed trade history with exit reasons, attribution by symbol and engine." },
-            { page: "Research",         path: "/research",    desc: "Two tabs: AI Analysis (GPT-4o structured research reports per symbol) and Backtest (V3 isolated backtest engine — replay historical candles through live engines, export results as JSON)." },
+            { page: "Research",         path: "/research",    desc: "Two tabs: AI Analysis (GPT-5.1 structured research reports per symbol) and Backtest (V3 isolated backtest engine — replay historical candles through live engines, export results as JSON)." },
             { page: "Data",             path: "/data",        desc: "Streaming state for all 28 symbols · candle coverage · data operations · top-up · ZIP export · runtime engine state." },
             { page: "Settings",         path: "/settings",    desc: "Trading mode activation, kill switch, capital, score thresholds, AI verification, streaming config." },
             { page: "Diagnostics",      path: "/diagnostics", desc: "Advanced debug access — raw feature vectors and kill switch. Operational runtime content lives in Data." },

@@ -330,7 +330,7 @@ export default function Overview() {
             <StatusRow
               label="AI Verification"
               ok={ov?.aiVerificationEnabled === true}
-              detail={ov?.aiVerificationEnabled ? "GPT-4o Enabled" : "Disabled"}
+              detail={ov?.aiVerificationEnabled ? "GPT-5.1 Enabled" : "Disabled"}
               loading={ovLoading} />
           </div>
         </div>

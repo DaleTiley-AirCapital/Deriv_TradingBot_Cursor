@@ -87,7 +87,7 @@ export function AiChat() {
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border/30 bg-[#0e1120]">
             <Bot className="w-4 h-4 text-primary" />
             <span className="text-sm font-semibold text-foreground">AI Assistant</span>
-            <span className="text-[10px] text-muted-foreground ml-auto">GPT-4o</span>
+            <span className="text-[10px] text-muted-foreground ml-auto">GPT-5.1</span>
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[200px] max-h-[360px]">

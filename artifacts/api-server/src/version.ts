@@ -54,7 +54,7 @@ export const RELEASES: ReleaseEntry[] = [
       "30% trailing stop safety net (no time-based exits)",
       "Multi-window signal confirmation (3 windows, 90min gaps)",
       "Pyramiding support up to 3 positions per symbol",
-      "AI verification via GPT-4o",
+      "AI verification via GPT-5.1",
       "Comprehensive backtesting engine with walk-forward testing",
       "12-symbol data collection, 4-symbol active trading",
     ],

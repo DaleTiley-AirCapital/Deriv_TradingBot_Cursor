@@ -280,7 +280,10 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
         </nav>
 
         <div className="px-4 py-3 border-t border-border/40">
-          <p className="text-[10px] text-muted-foreground/40 text-center font-mono">v{APP_VERSION}</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] text-muted-foreground/50 font-mono">v{APP_VERSION}</p>
+            <DeployStatusBadge inline />
+          </div>
         </div>
       </aside>
 
@@ -535,7 +538,7 @@ function TradingBanner({ isLive, isPaper }: { isLive: boolean; isPaper: boolean 
 }
 
 /* ─── Root layout — picks the right layout per screen size ──────────────── */
-function DeployStatusBadge() {
+function DeployStatusBadge({ inline = false }: { inline?: boolean }) {
   const { data, isError } = useQuery<DeployStatusResponse>({
     queryKey: ["/api/deploy-status"],
     queryFn: async () => {
@@ -551,6 +554,18 @@ function DeployStatusBadge() {
     ? new Date(data.lastRebuildAt).toLocaleString()
     : "unknown";
   const shortCommit = data?.commitSha ? data.commitSha.slice(0, 7) : null;
+
+  if (inline) {
+    return (
+      <div className="inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-background/40 px-2 py-1">
+        <span className="text-[9px] uppercase tracking-wider text-muted-foreground">Deploy</span>
+        <span className="text-[10px] font-semibold text-foreground">{isError ? "Unavailable" : "Running"}</span>
+        <span className="text-[10px] text-muted-foreground">•</span>
+        <span className="text-[10px] text-muted-foreground">{lastRebuild}</span>
+        {shortCommit && <span className="text-[10px] text-muted-foreground font-mono">• {shortCommit}</span>}
+      </div>
+    );
+  }
 
   return (
     <div className="fixed bottom-3 right-3 z-40 rounded-lg border border-border/60 bg-background/95 backdrop-blur-sm px-3 py-2 shadow-lg">
@@ -578,7 +593,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       {layout}
-      <DeployStatusBadge />
+      {bp !== "desktop" && <DeployStatusBadge />}
       <AiChat />
     </>
   );
