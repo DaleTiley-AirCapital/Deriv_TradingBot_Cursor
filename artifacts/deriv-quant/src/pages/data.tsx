@@ -217,7 +217,9 @@ function SymbolStreamRow({ sym, diag, coverage, onToggle }: {
 
   const serverState: string = (() => {
     if (diag?.streamingState) return diag.streamingState;
+    if (diag?.apiSymbol) return "available";
     if (coverage && coverage.totalCandles > 0) return "available";
+    if (ALL_28_SYMBOLS.includes(sym)) return "available";
     return "no_data";
   })();
 
@@ -546,11 +548,46 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const [tracking, setTracking] = useState(false);
+  const [baselineCount, setBaselineCount] = useState(0);
+  const [currentCount, setCurrentCount] = useState(0);
+  const [pollsWithoutChange, setPollsWithoutChange] = useState(0);
+  const [lastTrackedAt, setLastTrackedAt] = useState<string | null>(null);
 
   const noDataSymbols = useMemo(() => {
     const map = new Map((statusData?.symbols ?? []).map(s => [s.symbol, s.totalCandles]));
     return ALL_28_SYMBOLS.filter(s => (map.get(s) ?? 0) === 0);
   }, [statusData]);
+
+  useEffect(() => {
+    if (!tracking) return;
+    let cancelled = false;
+    const id = setInterval(async () => {
+      try {
+        const d = await apiFetch<ResearchDataStatus>("research/data-status");
+        if (cancelled) return;
+        const row = d.symbols.find(s => s.symbol === symbol);
+        const nextCount = row?.count1m ?? 0;
+        setCurrentCount(nextCount);
+        setLastTrackedAt(new Date().toLocaleTimeString());
+        if (nextCount > currentCount) {
+          setPollsWithoutChange(0);
+          return;
+        }
+        setPollsWithoutChange(prev => {
+          const next = prev + 1;
+          if (next >= 6) setTracking(false);
+          return next;
+        });
+      } catch {
+        // keep trying until user refreshes / tracker auto-stops
+      }
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [tracking, symbol, currentCount]);
 
   useEffect(() => {
     if (noDataSymbols.length > 0 && !noDataSymbols.includes(symbol)) {
@@ -563,14 +600,21 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
     setErr(null);
     setOk(null);
     try {
+      const baseline = statusData?.symbols.find(s => s.symbol === symbol)?.count1m ?? 0;
+      setBaselineCount(baseline);
+      setCurrentCount(baseline);
+      setPollsWithoutChange(0);
+      setLastTrackedAt(new Date().toLocaleTimeString());
       const d = await apiFetch("research/data-top-up?background=true", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ symbol }),
       });
       setOk(d.message ?? `Historical download started for ${symbol}`);
+      setTracking(true);
     } catch (e) {
       setErr((e as Error).message);
+      setTracking(false);
     } finally {
       setRunning(false);
     }
@@ -606,6 +650,42 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
       </div>
       {err && <ErrorBox msg={err} />}
       {ok && <SuccessBox msg={ok} />}
+      {(tracking || baselineCount !== currentCount) && (
+        <div className="rounded-lg bg-muted/20 border border-border/30 px-4 py-3 space-y-2">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-muted-foreground">Download tracker ({symbol})</span>
+            <span className={cn("font-medium", tracking ? "text-primary" : "text-foreground")}>
+              {tracking ? "in progress" : "idle"}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div className="rounded bg-background/50 border border-border/30 p-2">
+              <div className="text-muted-foreground text-[10px] uppercase tracking-wide">Baseline M1</div>
+              <div className="font-mono text-foreground">{baselineCount.toLocaleString()}</div>
+            </div>
+            <div className="rounded bg-background/50 border border-border/30 p-2">
+              <div className="text-muted-foreground text-[10px] uppercase tracking-wide">Current M1</div>
+              <div className="font-mono text-foreground">{currentCount.toLocaleString()}</div>
+            </div>
+            <div className="rounded bg-background/50 border border-border/30 p-2">
+              <div className="text-muted-foreground text-[10px] uppercase tracking-wide">Downloaded</div>
+              <div className="font-mono text-green-400">+{Math.max(0, currentCount - baselineCount).toLocaleString()}</div>
+            </div>
+            <div className="rounded bg-background/50 border border-border/30 p-2">
+              <div className="text-muted-foreground text-[10px] uppercase tracking-wide">Last update</div>
+              <div className="font-mono text-foreground">{lastTrackedAt ?? "—"}</div>
+            </div>
+          </div>
+          {tracking && (
+            <div className="w-full h-1.5 rounded bg-background/60 overflow-hidden">
+              <div className="h-full w-1/3 bg-primary animate-pulse" />
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            Tracker reads live candle counts from Data Status every 5s and auto-stops after repeated unchanged polls.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -902,6 +982,32 @@ function RuntimePanel({ title, icon: Icon, badge, children }: {
 function RuntimeTab() {
   const [features, setFeatures] = useState<Record<string, any>>({});
   const [featLoading, setFeatLoading] = useState<Record<string, boolean>>({});
+  const FEATURE_LABELS: Record<string, string> = {
+    emaSlope: "EMA trend slope",
+    emaDist: "Price distance vs EMA20",
+    priceVsEma20: "Normalized price/EMA20 distance",
+    rsi14: "RSI (14)",
+    rsiZone: "RSI regime zone",
+    atr14: "ATR(14) normalized volatility",
+    atrRank: "ATR percentile rank",
+    bbWidth: "Bollinger Band width",
+    bbPctB: "Bollinger %B position",
+    candleBody: "Candle body ratio",
+    upperWickRatio: "Upper wick ratio",
+    lowerWickRatio: "Lower wick ratio",
+    consecutive: "Consecutive directional candles",
+    zScore: "Price z-score",
+    rollingSkew: "Short-window return skew",
+    ticksSinceSpike: "Ticks elapsed since spike",
+    runLengthSinceSpike: "Bars since spike run started",
+    spikeHazardScore: "Spike hazard estimate",
+    swingHighDist: "Distance to swing high",
+    swingLowDist: "Distance to swing low",
+    swingBreached: "Swing low/high breach flag",
+    swingReclaimed: "Swing reclaim flag",
+    latestCandleCloseTs: "Latest candle close timestamp",
+    ts: "Feature snapshot timestamp",
+  };
 
   const loadFeatures = async (sym: string) => {
     setFeatLoading(f => ({ ...f, [sym]: true }));
@@ -923,6 +1029,13 @@ function RuntimeTab() {
           <p className="text-xs text-muted-foreground bg-muted/20 rounded p-3">
             Computed feature vectors that the V3 coordinator sees on each scan cycle. Click a symbol to load its latest features.
           </p>
+          <div className="rounded border border-border/30 bg-background/30 p-3 text-[11px] text-muted-foreground">
+            <p className="font-medium text-foreground mb-1">How to read this</p>
+            <p>
+              These are normalized model inputs, not profits or scores. They feed:
+              feature vector → engine formula → native score → coordinator → allocator → trade manager.
+            </p>
+          </div>
           <div className="flex flex-wrap gap-2">
             {ACTIVE_SYMBOLS.map(sym => (
               <button key={sym} onClick={() => loadFeatures(sym)} disabled={featLoading[sym]}
@@ -944,7 +1057,12 @@ function RuntimeTab() {
               {(f as any).error ? <ErrorBox msg={(f as any).error} /> : (
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-0">
                   {Object.entries(f as Record<string,any>).filter(([k]) => !["symbol","error"].includes(k)).slice(0, 24).map(([k, v]) => (
-                    <RuntimeKV key={k} k={k} v={String(v ?? "—")} mono />
+                    <RuntimeKV
+                      key={k}
+                      k={FEATURE_LABELS[k] ? `${k} · ${FEATURE_LABELS[k]}` : k}
+                      v={String(v ?? "—")}
+                      mono
+                    />
                   ))}
                 </div>
               )}
@@ -979,11 +1097,10 @@ function CoverageAllGrid() {
   }, [data]);
 
   const symbolsWithData = useMemo(() => {
-    const syms = Object.keys(matrix);
-    const activeFirst = ACTIVE_SYMBOLS.filter(s => syms.includes(s));
-    const rest = syms.filter(s => !ACTIVE_SYMBOLS.includes(s)).sort();
+    const activeFirst = ACTIVE_SYMBOLS.filter(s => ALL_28_SYMBOLS.includes(s));
+    const rest = ALL_28_SYMBOLS.filter(s => !ACTIVE_SYMBOLS.includes(s));
     return [...activeFirst, ...rest];
-  }, [matrix]);
+  }, []);
 
   const statusCls = (count: number, interpCount: number) => {
     if (!count) return "bg-muted/10 text-muted-foreground/30 border-border/10";
@@ -1122,19 +1239,12 @@ export default function DataManager() {
 
   const allSymbolRows = useMemo(() => {
     const diagMap = new Map(diagSymbols.filter(d => !!d.symbol).map(d => [d.symbol, d]));
-    const activeRows = ACTIVE_SYMBOLS.map(sym => ({
+    const coverageMap = new Map((researchData?.symbols ?? []).map(s => [s.symbol, s]));
+    return ALL_28_SYMBOLS.map(sym => ({
       sym,
       diag: diagMap.get(sym),
-      coverage: researchData?.symbols.find(s => s.symbol === sym),
+      coverage: coverageMap.get(sym),
     }));
-    const seen = new Set<string>(ACTIVE_SYMBOLS);
-    const nonActiveFromCoverage = (researchData?.symbols ?? [])
-      .filter(s => s.symbol && !seen.has(s.symbol) && !!seen.add(s.symbol))
-      .map(s => ({ sym: s.symbol, diag: diagMap.get(s.symbol), coverage: s }));
-    const diagOnlySymbols = diagSymbols
-      .filter(d => d.symbol && !seen.has(d.symbol) && !!seen.add(d.symbol))
-      .map(d => ({ sym: d.symbol, diag: d, coverage: undefined }));
-    return [...activeRows, ...nonActiveFromCoverage, ...diagOnlySymbols];
   }, [diagSymbols, researchData]);
 
   const tabs: { id: ViewTab; label: string; icon: React.ElementType }[] = [
