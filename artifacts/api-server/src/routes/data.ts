@@ -5,6 +5,23 @@ import { getDerivClientWithDbToken, ACTIVE_TRADING_SYMBOLS, getEnabledSymbols } 
 
 const router: IRouter = Router();
 
+function normalizeTimeframe(tf: string): string {
+  const v = String(tf || "1m").trim().toLowerCase();
+  if (v === "m1") return "1m";
+  if (v === "m5") return "5m";
+  if (v === "m10") return "10m";
+  if (v === "m20") return "20m";
+  if (v === "m40") return "40m";
+  if (v === "h1") return "1h";
+  if (v === "h2") return "2h";
+  if (v === "h4") return "4h";
+  if (v === "h8") return "8h";
+  if (v === "d1") return "1d";
+  if (v === "d2") return "2d";
+  if (v === "d4") return "4d";
+  return v;
+}
+
 router.post("/data/stream/start", async (req, res): Promise<void> => {
   const enabledSymbols = await getEnabledSymbols();
   const { symbols = enabledSymbols } = req.body ?? {};
@@ -88,10 +105,10 @@ router.get("/data/ticks", async (req, res): Promise<void> => {
 
 router.get("/data/candles", async (req, res): Promise<void> => {
   const symbol = String(req.query.symbol || "BOOM1000");
-  const timeframe = String(req.query.timeframe || "1m");
+  const timeframe = normalizeTimeframe(String(req.query.timeframe || "1m"));
   const limit = Math.min(Number(req.query.limit || 200), 1000);
   const rows = await db.select().from(candlesTable)
-    .where(eq(candlesTable.symbol, symbol))
+    .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, timeframe)))
     .orderBy(desc(candlesTable.openTs))
     .limit(limit);
   res.json(rows.map(r => ({

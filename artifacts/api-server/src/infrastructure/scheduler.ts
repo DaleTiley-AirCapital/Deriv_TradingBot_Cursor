@@ -16,6 +16,7 @@ import {
   cleanupStale,
 } from "../core/candidateLifecycle.js";
 import type { BehaviorProfileSummary } from "../core/backtest/behaviorProfiler.js";
+import { isSymbolStreamingDisabled } from "./symbolValidator.js";
 
 const DEFAULT_SYMBOLS = ACTIVE_TRADING_SYMBOLS;
 const DEFAULT_SCAN_INTERVAL_MS = 300_000;
@@ -126,6 +127,18 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     const engineCount = engineResults.length;
     console.log(`[V3Scan] ${symbol} | regime=${operationalRegime} | engines=${engineCount} | SKIP=no_coordinator_output`);
     return;
+  }
+
+  const latestCandleCloseTs = Number(features.latestCandleCloseTs || 0);
+  const staleCutoffMs = Number(stateMap["max_candle_stale_ms"] || 180_000);
+  if (Number.isFinite(latestCandleCloseTs) && latestCandleCloseTs > 0) {
+    const ageMs = Date.now() - latestCandleCloseTs;
+    if (ageMs > staleCutoffMs) {
+      console.log(
+        `[V3Scan] ${symbol} | SKIP | reason=stale_candle_data(age=${Math.round(ageMs / 1000)}s,cutoff=${Math.round(staleCutoffMs / 1000)}s)`,
+      );
+      return;
+    }
   }
 
   const { winner } = coordinatorOutput;
@@ -406,6 +419,9 @@ async function scheduleStaggeredScan(symbols: string[], staggerMs: number): Prom
     );
     const freshMap: Record<string, string> = {};
     for (const s of freshStates) freshMap[s.key] = s.value;
+    if (isSymbolStreamingDisabled(symbol)) {
+      return;
+    }
     await scanSingleSymbolV3(symbol, freshMap);
   } catch (err) {
     console.error(`[Scheduler] Stagger scan error for ${symbol}:`, err instanceof Error ? err.message : err);
@@ -449,9 +465,20 @@ async function scanCycle(): Promise<void> {
     }
 
     const enabledSymbolsRaw = stateMap["enabled_symbols"] || "";
-    const symbols = enabledSymbolsRaw
+    const symbolsRaw = enabledSymbolsRaw
       ? enabledSymbolsRaw.split(",").map((s: string) => s.trim()).filter(Boolean)
       : DEFAULT_SYMBOLS;
+    const symbols = symbolsRaw.filter((s) => !isSymbolStreamingDisabled(s));
+    if (symbols.length === 0) {
+      if (staggeredScanActive) {
+        staggeredScanActive = false;
+        if (staggerTimerHandle) {
+          clearTimeout(staggerTimerHandle);
+          staggerTimerHandle = null;
+        }
+      }
+      return;
+    }
 
     const staggerSeconds = parseInt(stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS));
     const staggerMs = Math.max(staggerSeconds * 1000, 1000);
@@ -702,7 +729,10 @@ async function watchScanCycle(): Promise<void> {
   cleanupStale();
 
   const watchSymbols = getSymbolsNeedingWatchScan();
-  if (watchSymbols.length === 0) return;
+  if (watchSymbols.length === 0) {
+    watchCycleRunning = false;
+    return;
+  }
 
   try {
     const states = await dbWithRetry(
@@ -713,13 +743,15 @@ async function watchScanCycle(): Promise<void> {
     for (const s of states) stateMap[s.key] = s.value;
 
     const killSwitch = stateMap["kill_switch"] === "true";
-    if (killSwitch) return;
+    const streamingActive = stateMap["streaming"] === "true";
+    if (killSwitch || !streamingActive) return;
 
     const nowMs = Date.now();
     // Pre-load watched candidates once for the full cycle
     const allWatchedCandidates = getWatchedCandidates();
 
     for (const sym of watchSymbols) {
+      if (isSymbolStreamingDisabled(sym)) continue;
       // ── Gate 1: Behavior-guided cadence throttle ──────────────────────────
       // Only re-scan once the behavior-recommended interval has elapsed.
       const behaviorCadenceMs = stateMap[`behavior_watch_cadence_${sym}`]

@@ -621,10 +621,12 @@ function evaluateCrash300Direction(
   const weights = resolveCrashWeights(ctx, engineNameForOverride);
 
   // ── Regime pre-filter ──────────────────────────────────────────────────────
-  // trend_up blocks BUY (no BUY in a sustained uptrend for CRASH300)
-  // crash_expansion / spike_zone block SELL (no SELL when crash is actively expanding)
-  const regimeBlocksBuy  = operationalRegime === "trend_up";
-  const regimeBlocksSell = operationalRegime === "crash_expansion" || operationalRegime === "spike_zone";
+  // Directional guard:
+  // - BUY should not trigger into sustained upside trend.
+  // - SELL should stay enabled in crash_expansion/spike_zone because CRASH300
+  //   calibration indicates downside expansion is the primary capturable leg.
+  const regimeBlocksBuy = operationalRegime === "trend_up";
+  const regimeBlocksSell = operationalRegime === "trend_up";
 
   // ── Compute BUY components (primary setup) ─────────────────────────────────
   const b1_cluster  = scoreBuyCrashSpikeClusterPressure({ spikeHazardScore: f.spikeHazardScore, runLengthSinceSpike: f.runLengthSinceSpike });
