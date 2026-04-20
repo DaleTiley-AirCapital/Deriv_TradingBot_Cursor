@@ -323,7 +323,7 @@ function AiAnalysisTab({ domain, windowDays }: { domain: DomainId; windowDays: n
           <p className="text-xs text-muted-foreground leading-relaxed">
             Runs a structured analysis on stored candle data for the selected symbol.
             Extracts swing patterns, move size distribution, frequency, and behavioral drift.
-            Produces a research report. <strong className="text-foreground">Sync mode blocks until complete (~1030s).</strong>
+            Produces a research report. <strong className="text-foreground">Sync mode blocks until complete (~10-30s).</strong>
           </p>
         </div>
         <div className="flex items-center gap-4 flex-wrap">
@@ -1084,11 +1084,53 @@ function TypePill({ type }: { type: string }) {
 
 function StatRow({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="flex items-center justify-between py-1 border-b border-border/20 last:border-0">
+    <div className="flex items-start justify-between gap-3 py-1 border-b border-border/20 last:border-0">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-xs font-mono font-medium text-foreground">{value}</span>
+      <span className="text-xs font-mono font-medium text-foreground text-right max-w-[70%] break-words whitespace-normal">
+        {value}
+      </span>
     </div>
   );
+}
+
+function asNum(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatPct(v: unknown, digits = 2): string {
+  const n = asNum(v);
+  return n == null ? "" : `${n.toFixed(digits)}%`;
+}
+
+function formatModelDetails(
+  model: Record<string, unknown> | undefined,
+  kind: "tp" | "sl" | "trailing",
+): string {
+  if (!model || Object.keys(model).length === 0) return "";
+
+  if (kind === "tp") {
+    const target = formatPct(model.targetPct, 2);
+    const rationale = typeof model.rationale === "string" ? model.rationale : "";
+    return [target ? `target ${target}` : "", rationale].filter(Boolean).join(" - ");
+  }
+
+  if (kind === "sl") {
+    const structural = model.structural === true ? "structural" : "";
+    const risk = formatPct(model.maxInitialRiskPct, 2);
+    return [structural, risk ? `max risk ${risk}` : ""].filter(Boolean).join(" - ");
+  }
+
+  const activation = formatPct(model.activationProfitPct, 2);
+  const distance = formatPct(model.trailingDistancePct, 2);
+  const hold = asNum(model.minHoldMinutesBeforeTrail);
+  const policy = typeof model.policy === "string" ? model.policy : "";
+  return [
+    activation ? `arm ${activation}` : "",
+    distance ? `distance ${distance}` : "",
+    hold != null ? `min hold ${Math.round(hold)}m` : "",
+    policy,
+  ].filter(Boolean).join(" - ");
 }
 
 function DomainCard({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
@@ -2625,9 +2667,18 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               />
             </div>
             <div className="space-y-0.5">
-              <StatRow label="TP model" value={JSON.stringify(researchProfile.recommendedTpModel ?? {})} />
-              <StatRow label="SL model" value={JSON.stringify(researchProfile.recommendedSlModel ?? {})} />
-              <StatRow label="Trailing model" value={JSON.stringify(researchProfile.recommendedTrailingModel ?? {})} />
+              <StatRow
+                label="TP model"
+                value={formatModelDetails(researchProfile.recommendedTpModel, "tp") || "n/a"}
+              />
+              <StatRow
+                label="SL model"
+                value={formatModelDetails(researchProfile.recommendedSlModel, "sl") || "n/a"}
+              />
+              <StatRow
+                label="Trailing model"
+                value={formatModelDetails(researchProfile.recommendedTrailingModel, "trailing") || "n/a"}
+              />
               <StatRow label="Profitability summary" value={researchProfile.estimatedFitAdjustedMonthlyReturnPct != null ? `${researchProfile.estimatedFitAdjustedMonthlyReturnPct.toFixed(2)}%/mo` : ""} />
               <StatRow label="Engine recommendation" value={researchProfile.engineTypeRecommendation ?? ""} />
             </div>

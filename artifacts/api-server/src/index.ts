@@ -351,6 +351,31 @@ async function initDb(): Promise<void> {
       ON symbol_research_profiles (symbol, window_days);
   `);
 
+  // Any in-flight calibration pass runs are process-bound and cannot survive a restart.
+  // On boot, mark orphaned "running" rows as failed so the UI never stays stuck forever.
+  await db.execute(sql`
+    UPDATE calibration_pass_runs
+    SET
+      status = 'failed',
+      completed_at = COALESCE(completed_at, NOW()),
+      failed_moves = GREATEST(failed_moves, 1),
+      error_summary = COALESCE(error_summary, '[]'::jsonb) || jsonb_build_array(
+        jsonb_build_object(
+          'moveId', -1,
+          'pass', 'runner',
+          'error', 'Calibration run canceled on server restart before completion'
+        )
+      ),
+      meta_json = COALESCE(meta_json, '{}'::jsonb) || jsonb_build_object(
+        'stage', 'Failed',
+        'failure', jsonb_build_object(
+          'kind', 'server_restart_canceled_run',
+          'message', 'Run was marked failed at startup because the previous process exited during execution'
+        )
+      )
+    WHERE status = 'running'
+  `);
+
   const migrations = [
     "ALTER TABLE candles ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'historical'",
     "ALTER TABLE candles ADD COLUMN IF NOT EXISTS is_interpolated BOOLEAN NOT NULL DEFAULT FALSE",

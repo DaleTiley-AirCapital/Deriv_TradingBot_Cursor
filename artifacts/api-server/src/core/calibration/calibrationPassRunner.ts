@@ -177,6 +177,39 @@ async function updateRunRecord(
     .where(eq(calibrationPassRunsTable.id, runId));
 }
 
+const STALE_RUNNING_MS = 6 * 60 * 60 * 1000; // 6h
+
+function isStaleRunningRun(row: typeof calibrationPassRunsTable.$inferSelect): boolean {
+  if (row.status !== "running") return false;
+  const startedMs = row.startedAt ? new Date(row.startedAt).getTime() : 0;
+  return startedMs > 0 && Date.now() - startedMs > STALE_RUNNING_MS;
+}
+
+async function failStaleRunningRun(row: typeof calibrationPassRunsTable.$inferSelect): Promise<void> {
+  const staleError = {
+    moveId: -1,
+    pass: "runner",
+    error: "Run auto-failed because it was stale in running state for more than 6 hours",
+  };
+  await db
+    .update(calibrationPassRunsTable)
+    .set({
+      status: "failed",
+      completedAt: new Date(),
+      failedMoves: Math.max(1, row.failedMoves ?? 0),
+      errorSummary: [staleError] as never,
+      metaJson: {
+        ...(row.metaJson && typeof row.metaJson === "object" ? row.metaJson as Record<string, unknown> : {}),
+        stage: "Failed",
+        failure: {
+          kind: "stale_running_timeout",
+          message: "Run was auto-failed after remaining in running state > 6 hours",
+        },
+      } as never,
+    })
+    .where(eq(calibrationPassRunsTable.id, row.id));
+}
+
 /** Merge into meta_json for live progress while a run is executing (poll GET /run-status). */
 async function mergeRunMeta(
   runId: number,
@@ -492,10 +525,17 @@ export async function runCalibrationPasses(opts: RunPassesOptions): Promise<RunP
 export async function getPassRunStatus(
   runId: number,
 ): Promise<typeof calibrationPassRunsTable.$inferSelect | null> {
-  const [row] = await db
+  let [row] = await db
     .select()
     .from(calibrationPassRunsTable)
     .where(eq(calibrationPassRunsTable.id, runId));
+  if (row && isStaleRunningRun(row)) {
+    await failStaleRunningRun(row);
+    [row] = await db
+      .select()
+      .from(calibrationPassRunsTable)
+      .where(eq(calibrationPassRunsTable.id, runId));
+  }
   return row ?? null;
 }
 
@@ -514,7 +554,15 @@ export async function getRunningPassRunForSymbol(
     )
     .orderBy(desc(calibrationPassRunsTable.startedAt))
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  if (!row) return null;
+
+  if (isStaleRunningRun(row)) {
+    await failStaleRunningRun(row);
+    return null;
+  }
+
+  return row;
 }
 
 export async function getLatestPassRun(
@@ -532,9 +580,21 @@ export async function getLatestPassRun(
 export async function getAllPassRuns(
   symbol: string,
 ): Promise<typeof calibrationPassRunsTable.$inferSelect[]> {
-  return db
+  const rows = await db
     .select()
     .from(calibrationPassRunsTable)
     .where(eq(calibrationPassRunsTable.symbol, symbol))
     .orderBy(desc(calibrationPassRunsTable.startedAt));
+  const staleRows = rows.filter(isStaleRunningRun);
+  if (staleRows.length > 0) {
+    for (const row of staleRows) {
+      await failStaleRunningRun(row);
+    }
+    return db
+      .select()
+      .from(calibrationPassRunsTable)
+      .where(eq(calibrationPassRunsTable.symbol, symbol))
+      .orderBy(desc(calibrationPassRunsTable.startedAt));
+  }
+  return rows;
 }
