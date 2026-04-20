@@ -1,4 +1,4 @@
-﻿import { useState, useRef, useEffect, useCallback, createContext, useContext, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, createContext, useContext, type ReactNode } from "react";
 import {
   FlaskConical, Brain, Play, RefreshCw,
   Loader2, CheckCircle, XCircle,
@@ -136,7 +136,7 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
           setStatus(null);
         }
       } catch {
-        /* transient network errors â€” keep polling */
+        /* transient network errors  keep polling */
       }
     };
 
@@ -249,14 +249,14 @@ function SymbolSelect({
         className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
       >
         {symbols.map(s => (
-          <option key={s} value={s}>{s}{ACTIVE_SYMBOLS.includes(s) ? " â—" : ""}</option>
+          <option key={s} value={s}>{s}{ACTIVE_SYMBOLS.includes(s) ? " " : ""}</option>
         ))}
       </select>
     </div>
   );
 }
 
-// â”€â”€â”€ AI Analysis Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  AI Analysis Tab 
 
 function AiAnalysisTab({ domain, windowDays }: { domain: DomainId; windowDays: number }) {
   const domainSymbols = domain === "active" ? ACTIVE_SYMBOLS : RESEARCH_ONLY_SYMBOLS;
@@ -323,7 +323,7 @@ function AiAnalysisTab({ domain, windowDays }: { domain: DomainId; windowDays: n
           <p className="text-xs text-muted-foreground leading-relaxed">
             Runs a structured analysis on stored candle data for the selected symbol.
             Extracts swing patterns, move size distribution, frequency, and behavioral drift.
-            Produces a research report. <strong className="text-foreground">Sync mode blocks until complete (~10â€“30s).</strong>
+            Produces a research report. <strong className="text-foreground">Sync mode blocks until complete (~1030s).</strong>
           </p>
         </div>
         <div className="flex items-center gap-4 flex-wrap">
@@ -347,7 +347,7 @@ function AiAnalysisTab({ domain, windowDays }: { domain: DomainId; windowDays: n
             className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-            {running ? "Analyzingâ€¦" : "Run Sync Analysis"}
+            {running ? "Analyzing" : "Run Sync Analysis"}
           </button>
           <button
             onClick={runBackground}
@@ -389,7 +389,7 @@ function AiAnalysisTab({ domain, windowDays }: { domain: DomainId; windowDays: n
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4 text-primary" />
-            <h3 className="text-sm font-semibold">Research Report â€” {symbol}</h3>
+            <h3 className="text-sm font-semibold">Research Report  {symbol}</h3>
           </div>
           {typeof displayResult === "string" ? (
             <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap bg-muted/20 rounded p-3 leading-relaxed max-h-96 overflow-y-auto">
@@ -411,7 +411,7 @@ function AiAnalysisTab({ domain, windowDays }: { domain: DomainId; windowDays: n
   );
 }
 
-// â”€â”€â”€ Backtest Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  Backtest Tab 
 
 interface V3Trade {
   entryTs: number;
@@ -514,7 +514,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
         <SummaryCard label="Win rate" value={pct(s.winRate)} />
         <SummaryCard label="Avg P&L" value={pct(s.avgPnlPct)} />
         <SummaryCard label="Total P&L" value={pct(s.totalPnlPct)} />
-        <SummaryCard label="Profit factor" value={isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "âˆž"} />
+        <SummaryCard label="Profit factor" value={isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : ""} />
         <SummaryCard label="Max drawdown" value={pct(s.maxDrawdownPct)} />
         <SummaryCard label="Avg hold" value={holdLabel(s.avgHoldBars)} />
         <SummaryCard label="Leg1 hit rate" value={pct(s.leg1HitRate)} />
@@ -550,7 +550,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
           {Object.entries(s.byExitReason).map(([reason, count]) => (
             <span key={reason} className="flex items-center gap-1">
               <ExitReasonBadge reason={reason} />
-              <span className="text-[10px] text-muted-foreground">Ã—{count}</span>
+              <span className="text-[10px] text-muted-foreground">{count}</span>
             </span>
           ))}
         </div>
@@ -767,7 +767,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
           <h3 className="text-sm font-semibold">V3 Isolated Backtest Engine</h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
             Replays historical 1m candles through the live V3 engines (CRASH300, BOOM300, R_75, R_100) with a hybrid exit model.
-            Spike hazard is set to neutral â€” a conservative assumption for backtesting. All scoring and engine logic is identical to live.
+            Spike hazard is set to neutral  a conservative assumption for backtesting. All scoring and engine logic is identical to live.
             <strong className="text-foreground"> Running all symbols over {windowLabel(windowDays)} takes ~60s.</strong>
           </p>
         </div>
@@ -800,7 +800,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
           <div className="space-y-1">
             <label className="text-[11px] text-muted-foreground">Range</label>
             <div className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground font-mono">
-              {getWindowRange(windowDays).startDateStr} → {getWindowRange(windowDays).endDateStr}
+              {getWindowRange(windowDays).startDateStr}  {getWindowRange(windowDays).endDateStr}
             </div>
           </div>
 
@@ -827,7 +827,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
             {running
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
               : <BarChart2 className="w-3.5 h-3.5" />}
-            {running ? `Runningâ€¦ ${elapsed}s` : "Run Backtest"}
+            {running ? `Running ${elapsed}s` : "Run Backtest"}
           </button>
 
           {results !== null && totalTrades !== null && totalTrades > 0 && (
@@ -849,7 +849,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
             </>
           )}
 
-          {/* Signals export is gated only on valid date inputs â€” includes blocked + allowed, not just executed trades */}
+          {/* Signals export is gated only on valid date inputs  includes blocked + allowed, not just executed trades */}
           {windowDays > 0 && (
             <button
               onClick={exportSignals}
@@ -863,7 +863,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
 
           {running && (
             <p className="text-xs text-muted-foreground">
-              Loading candles and replaying bars â€” this may take up to 2 minutes for all symbols.
+              Loading candles and replaying bars  this may take up to 2 minutes for all symbols.
             </p>
           )}
         </div>
@@ -879,7 +879,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
               <BarChart2 className="w-8 h-8 mx-auto mb-2 text-muted-foreground/40" />
               <p className="text-sm font-medium text-muted-foreground">0 trades returned</p>
               <p className="text-xs text-muted-foreground mt-1">
-                No signals passed engine gates in the selected range ({getWindowRange(windowDays).startDateStr} → {getWindowRange(windowDays).endDateStr}).
+                No signals passed engine gates in the selected range ({getWindowRange(windowDays).startDateStr}  {getWindowRange(windowDays).endDateStr}).
                 Try a wider date range or lower min score.
               </p>
             </div>
@@ -891,7 +891,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
                     <ChevronRight className="w-4 h-4 text-primary" />
                     <h3 className="text-sm font-semibold">{sym}</h3>
                     <span className="text-xs text-muted-foreground ml-auto">
-                      {result.totalBars.toLocaleString()} bars Â· {result.trades.length} trades
+                      {result.totalBars.toLocaleString()} bars  {result.trades.length} trades
                     </span>
                   </div>
                   <SymbolBacktestSection result={result} />
@@ -905,7 +905,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
             <div key={sym} className="rounded-xl border border-border/30 bg-card p-3 flex items-center gap-3">
               <span className="text-xs font-medium text-muted-foreground">{sym}</span>
               <span className="text-xs text-muted-foreground">
-                â€” {r.totalBars.toLocaleString()} bars processed, 0 trades
+                 {r.totalBars.toLocaleString()} bars processed, 0 trades
               </span>
             </div>
           ))}
@@ -915,7 +915,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   );
 }
 
-// â”€â”€â”€ Move Calibration support types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  Move Calibration support types 
 
 interface BehaviorOverview {
   symbol: string;
@@ -1001,7 +1001,7 @@ interface SymbolResearchProfileUi {
   researchStatus?: string;
 }
 
-// â”€â”€â”€ Move Calibration Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  Move Calibration Tab 
 
 const CALIB_ACTIVE_SYMBOLS = [...ACTIVE_SYMBOLS];
 const CALIB_RESEARCH_SYMBOLS = [...RESEARCH_ONLY_SYMBOLS];
@@ -1291,7 +1291,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       setCalibProfile(calib ?? null);
       setResearchProfile(rp ?? null);
 
-      // Compute Target Moves stats directly from the moves endpoint (constraint #9 â€” source: /api/calibration/moves/:symbol)
+      // Compute Target Moves stats directly from the moves endpoint (constraint #9  source: /api/calibration/moves/:symbol)
       const rawMoves: Array<{ movePct?: number | string | null; moveType?: string | null; qualityTier?: string | null; qualityScore?: number | string | null }> =
         rawMovesResp?.moves ?? [];
       if (rawMoves.length > 0) {
@@ -1691,7 +1691,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   return (
     <div className="space-y-5">
 
-      {/* â”€â”€ Controls â”€â”€ */}
+      {/*  Controls  */}
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
         {/* Scope row */}
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1844,7 +1844,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             )}
           >
             {(detecting || passForThisSymbol) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            {detecting ? "Detectingâ€¦" : passForThisSymbol ? "Running passesâ€¦" :
+            {detecting ? "Detecting" : passForThisSymbol ? "Running passes" :
               effectiveScope === "detect" ? "Detect Moves" : effectiveScope === "passes" ? "Run AI Passes" : "Run Full Calibration"}
           </button>
 
@@ -1876,9 +1876,9 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             Elapsed: <strong className="text-foreground font-mono">{runElapsed}s</strong>
             {passForThisSymbol && passStatus && (
               <span className="ml-2 text-foreground">
-                Â·{" "}
+                {" "}
                 {(passStatus.metaJson as { progress?: { label?: string } } | null)?.progress?.label
-                  ?? `${passStatus.processedMoves ?? 0}/${passStatus.totalMoves ?? "â€”"} moves Â· ${passStatus.passName ?? "all"}`}
+                  ?? `${passStatus.processedMoves ?? 0}/${passStatus.totalMoves ?? ""} moves  ${passStatus.passName ?? "all"}`}
               </span>
             )}
           </div>
@@ -1924,24 +1924,24 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               <div className="font-mono text-foreground">
                 {preflight?.latestCandleTs
                   ? new Date(preflight.latestCandleTs * 1000).toLocaleString()
-                  : "â€”"}
+                  : ""}
               </div>
             </div>
             <div className="rounded border border-border/30 bg-background/40 p-2">
               <div className="text-muted-foreground">1m candles</div>
-              <div className="font-mono text-foreground">{preflight?.base1mCount?.toLocaleString?.() ?? "â€”"}</div>
+              <div className="font-mono text-foreground">{preflight?.base1mCount?.toLocaleString?.() ?? ""}</div>
             </div>
             <div className="rounded border border-border/30 bg-background/40 p-2">
               <div className="text-muted-foreground">Missing gaps</div>
-              <div className="font-mono text-foreground">{preflight?.base1mGapCount ?? "â€”"}</div>
+              <div className="font-mono text-foreground">{preflight?.base1mGapCount ?? ""}</div>
             </div>
             <div className="rounded border border-border/30 bg-background/40 p-2">
               <div className="text-muted-foreground">Interpolated</div>
-              <div className="font-mono text-foreground">{preflight?.base1mInterpolatedCount ?? "â€”"}</div>
+              <div className="font-mono text-foreground">{preflight?.base1mInterpolatedCount ?? ""}</div>
             </div>
             <div className="rounded border border-border/30 bg-background/40 p-2">
               <div className="text-muted-foreground">Coverage</div>
-              <div className="font-mono text-foreground">{preflight?.base1mCoveragePct != null ? `${preflight.base1mCoveragePct}%` : "â€”"}</div>
+              <div className="font-mono text-foreground">{preflight?.base1mCoveragePct != null ? `${preflight.base1mCoveragePct}%` : ""}</div>
             </div>
           </div>
           {preflight?.recommendedAction && (
@@ -1956,7 +1956,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           <div className="rounded-lg bg-primary/5 border border-primary/20 p-3 space-y-1.5">
             <div className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-primary" />
-              <span className="text-xs font-semibold text-foreground">{detectResult.movesDetected} moves detected â€” {symbol} ({windowDays}d window)</span>
+              <span className="text-xs font-semibold text-foreground">{detectResult.movesDetected} moves detected  {symbol} ({windowDays}d window)</span>
             </div>
             <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
               <span>Candles scanned: <strong className="text-foreground">{detectResult.totalCandlesScanned?.toLocaleString()}</strong></span>
@@ -1994,7 +1994,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               {passStatus.status === "completed" && <CheckCircle className="w-3.5 h-3.5 text-green-400" />}
               {passStatus.status === "failed"    && <XCircle    className="w-3.5 h-3.5 text-red-400"   />}
               <span className="text-xs font-semibold text-foreground">
-                {passStatus.status === "running"   ? "Passes runningâ€¦" :
+                {passStatus.status === "running"   ? "Passes running" :
                  passStatus.status === "completed" ? "Passes completed" :
                  passStatus.status === "failed"    ? "Pass run failed" :
                  `Status: ${passStatus.status}`}
@@ -2050,8 +2050,8 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               if (!f || passStatus.status === "running") return null;
               return (
                 <div className="rounded border border-amber-500/25 bg-amber-500/5 p-2 text-[11px] text-amber-100/90 space-y-1">
-                  <p className="font-semibold text-amber-200">Run stopped â€” {f.kind ?? "failure"}</p>
-                  {typeof f.moveId === "number" && <p className="font-mono">move id {f.moveId}{typeof f.pass === "string" ? ` Â· ${f.pass}` : ""}</p>}
+                  <p className="font-semibold text-amber-200">Run stopped  {f.kind ?? "failure"}</p>
+                  {typeof f.moveId === "number" && <p className="font-mono">move id {f.moveId}{typeof f.pass === "string" ? `  ${f.pass}` : ""}</p>}
                   {typeof f.error === "string" && <p className="font-mono text-red-300/95 whitespace-pre-wrap">{f.error}</p>}
                   {typeof f.hint === "string" && <p className="text-muted-foreground">{f.hint}</p>}
                 </div>
@@ -2068,18 +2068,18 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
         )}
       </div>
 
-      {/* â”€â”€ 3-Domain Comparison â”€â”€ */}
+      {/*  3-Domain Comparison  */}
       <div>
         <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-0.5 mb-2">3-Domain Comparison</h3>
         {(aggLoading || domainLoading || engineLoading) && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground py-3">
-            <Loader2 className="w-4 h-4 animate-spin" />Loading calibration domainsâ€¦
+            <Loader2 className="w-4 h-4 animate-spin" />Loading calibration domains
           </div>
         )}
         {!(aggLoading || domainLoading || engineLoading) && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
 
-            {/* Domain A â€” Current Engine Behavior (signal-first, from behavior layer) */}
+            {/* Domain A  Current Engine Behavior (signal-first, from behavior layer) */}
             <DomainCard title="Current Engine Behavior" icon={<Activity className="w-3.5 h-3.5 text-amber-400" />}>
               {!behaviorProfile ? (
                 <div className="space-y-2">
@@ -2101,7 +2101,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border/50 text-muted-foreground text-[11px] hover:border-border hover:bg-muted/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {buildingProfile ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                    {buildingProfile ? "Buildingâ€¦" : "Build Behavior Profile"}
+                    {buildingProfile ? "Building" : "Build Behavior Profile"}
                   </button>
                 </div>
               ) : (
@@ -2120,7 +2120,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                           <p className="text-[10px] font-mono font-semibold text-foreground truncate">{ep.engineName}</p>
                           <div className="flex justify-between text-[11px]">
                             <span className="text-muted-foreground">Trades / WR</span>
-                            <span className="font-mono text-foreground">{ep.tradeCount} Â· {(ep.winRate * 100).toFixed(1)}%</span>
+                            <span className="font-mono text-foreground">{ep.tradeCount}  {(ep.winRate * 100).toFixed(1)}%</span>
                           </div>
                           <div className="flex justify-between text-[11px]">
                             <span className="text-muted-foreground">Avg PnL % (extracted)</span>
@@ -2142,7 +2142,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                         label="Avg MFE (structural)"
                         value={`${aggregate.overall.avgMfe.toFixed(2)}%`}
                       />
-                      <p className="text-[9px] text-muted-foreground/60 mt-0.5">From behavior pass Â· max favorable excursion per move</p>
+                      <p className="text-[9px] text-muted-foreground/60 mt-0.5">From behavior pass  max favorable excursion per move</p>
                     </div>
                   )}
                   <p className="text-[10px] text-muted-foreground mt-2">
@@ -2152,7 +2152,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               )}
             </DomainCard>
 
-            {/* Domain B â€” Target Moves (sourced from /api/calibration/moves/:symbol â€” constraint #9) */}
+            {/* Domain B  Target Moves (sourced from /api/calibration/moves/:symbol  constraint #9) */}
             <DomainCard title="Target Moves" icon={<Target className="w-3.5 h-3.5 text-primary" />}>
               {!targetMovesStats ? (
                 <p className="text-[11px] text-muted-foreground">No moves detected. Run "Detect Moves" first.</p>
@@ -2163,19 +2163,19 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     label="Median magnitude %"
                     value={targetMovesStats.medianMagnitudePct != null
                       ? `${(targetMovesStats.medianMagnitudePct * 100).toFixed(2)}%`
-                      : "â€”"}
+                      : ""}
                   />
                   <StatRow
                     label="Median quality score"
                     value={targetMovesStats.medianQualityScore != null
                       ? targetMovesStats.medianQualityScore.toFixed(1)
-                      : "â€”"}
+                      : ""}
                   />
                   {/* Avg hold from aggregate (computed from same moves table) */}
                   {aggregate?.overall && (
                     <>
                       <StatRow label="Avg move %" value={`${aggregate.overall.avgMovePct.toFixed(1)}%`} />
-                      <StatRow label="Avg hold (hrs)" value={aggregate.overall.avgHoldHours?.toFixed(1) ?? "â€”"} />
+                      <StatRow label="Avg hold (hrs)" value={aggregate.overall.avgHoldHours?.toFixed(1) ?? ""} />
                       <StatRow label="Direction up/down" value={`${aggregate.overall.directionSplit?.up ?? 0} / ${aggregate.overall.directionSplit?.down ?? 0}`} />
                     </>
                   )}
@@ -2184,7 +2184,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     {Object.entries(targetMovesStats.moveTypeDistribution).map(([type, count]) => (
                       <div key={type} className="flex items-center justify-between text-[11px]">
                         <TypePill type={type} />
-                        <span className="font-mono text-foreground">{count}Ã—</span>
+                        <span className="font-mono text-foreground">{count}</span>
                       </div>
                     ))}
                   </div>
@@ -2213,7 +2213,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               )}
             </DomainCard>
 
-            {/* Domain C â€” Recommended Calibration (from stored profile, post AI passes) */}
+            {/* Domain C  Recommended Calibration (from stored profile, post AI passes) */}
             <DomainCard title="Recommended Calibration" icon={<Zap className="w-3.5 h-3.5 text-sky-400" />}>
               {!calibProfile ? (
                 <p className="text-[11px] text-muted-foreground">No calibration profile yet. Detect moves then run AI passes to populate.</p>
@@ -2233,7 +2233,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     return (
                       <details className="mt-1.5 pt-1.5 border-t border-border/20" open>
                         <summary className="text-[10px] text-amber-400/80 uppercase tracking-wide cursor-pointer hover:text-amber-300">
-                          Pass 1 Â· Precursor Conditions
+                          Pass 1  Precursor Conditions
                         </summary>
                         <div className="mt-1 space-y-0.5">
                           {avgBars != null && (
@@ -2271,7 +2271,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     return (
                       <details className="mt-1.5 pt-1.5 border-t border-border/20" open>
                         <summary className="text-[10px] text-sky-400/80 uppercase tracking-wide cursor-pointer hover:text-sky-300">
-                          Pass 2 Â· Trigger Zone (In-Move Behavior)
+                          Pass 2  Trigger Zone (In-Move Behavior)
                         </summary>
                         <div className="mt-1 space-y-0.5">
                           {triggerType != null && (
@@ -2311,10 +2311,10 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                       </details>
                     );
                   })()}
-                  {/* Pass 3: In-Move Behavior Card â€” behavior pass structural metrics */}
+                  {/* Pass 3: In-Move Behavior Card  behavior pass structural metrics */}
                   <details className="mt-1.5 pt-1.5 border-t border-border/20" open>
                     <summary className="text-[10px] text-violet-400/80 uppercase tracking-wide cursor-pointer hover:text-violet-300">
-                      Pass 3 Â· In-Move Behavior
+                      Pass 3  In-Move Behavior
                     </summary>
                     <div className="mt-1 space-y-0.5">
                       <div className="flex justify-between text-[11px]">
@@ -2415,7 +2415,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     return (
                       <details className="mt-1.5 pt-1.5 border-t border-border/20" open>
                         <summary className="text-[10px] text-emerald-400/80 uppercase tracking-wide cursor-pointer hover:text-emerald-300">
-                          Pass 4 Â· Best Extraction Path
+                          Pass 4  Best Extraction Path
                         </summary>
                         <div className="mt-1 space-y-1.5">
                           {ps.topPath && (
@@ -2442,9 +2442,9 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                                 </span>
                               </div>
                               <div className="flex justify-between text-[11px]">
-                                <span className="text-muted-foreground">Capturable Â· hold</span>
+                                <span className="text-muted-foreground">Capturable  hold</span>
                                 <span className="font-mono text-foreground">
-                                  {(path.captureablePct * 100).toFixed(0)}% Â· {path.holdDays}d
+                                  {(path.captureablePct * 100).toFixed(0)}%  {path.holdDays}d
                                 </span>
                               </div>
                               <div className="flex justify-between text-[11px]">
@@ -2462,14 +2462,14 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Engine coverage</p>
                       {engines.map((eng) => (
                         <div key={eng.engineName ?? "unknown"} className="space-y-0.5">
-                          <p className="text-[10px] font-semibold text-foreground truncate">{eng.engineName ?? "â€”"}</p>
+                          <p className="text-[10px] font-semibold text-foreground truncate">{eng.engineName ?? ""}</p>
                           <div className="flex justify-between text-[11px]">
                             <span className="text-muted-foreground">Matched / fire rate</span>
-                            <span className="font-mono text-foreground">{eng.matchedMoves} Â· {(eng.fireRate * 100).toFixed(1)}%</span>
+                            <span className="font-mono text-foreground">{eng.matchedMoves}  {(eng.fireRate * 100).toFixed(1)}%</span>
                           </div>
                           {(eng.topMissReasons?.length ?? 0) > 0 && (
                             <div className="text-[10px] text-muted-foreground">
-                              Miss: {(eng.topMissReasons ?? []).slice(0, 2).join(" Â· ")}
+                              Miss: {(eng.topMissReasons ?? []).slice(0, 2).join("  ")}
                             </div>
                           )}
                         </div>
@@ -2477,7 +2477,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     </div>
                   )}
                   <p className="text-[10px] text-muted-foreground mt-2">
-                    Built {new Date(calibProfile.generatedAt).toLocaleDateString()} Â· window {calibProfile.windowDays}d
+                    Built {new Date(calibProfile.generatedAt).toLocaleDateString()}  window {calibProfile.windowDays}d
                   </p>
                 </>
               )}
@@ -2487,7 +2487,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
         )}
       </div>
 
-      {/* â”€â”€ Honest Fit & Profitability â”€â”€ */}
+      {/*  Honest Fit & Profitability  */}
       {(aggregate?.overall?.capturedMoves !== undefined || calibProfile?.profitabilitySummary) && (
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
@@ -2536,12 +2536,12 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                 <p className="text-[11px] text-muted-foreground">Run AI passes (extraction) to generate profitability estimates.</p>
               ) : (
                 <>
-                  <StatRow label="Top path" value={calibProfile.profitabilitySummary.topPath ?? "â€”"} />
+                  <StatRow label="Top path" value={calibProfile.profitabilitySummary.topPath ?? ""} />
                   <StatRow
                     label="Fit-adjusted return"
                     value={calibProfile.profitabilitySummary.estimatedFitAdjustedReturn != null
                       ? `${(calibProfile.profitabilitySummary.estimatedFitAdjustedReturn * 100).toFixed(1)}%/mo`
-                      : "â€”"}
+                      : ""}
                   />
                   {(calibProfile.profitabilitySummary.paths ?? []).map((path) => (
                     <div key={path.name} className="mt-1.5 pt-1.5 border-t border-border/20">
@@ -2609,10 +2609,10 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-0.5">
-              <StatRow label="Move count" value={researchProfile.moveCount ?? "â€”"} />
-              <StatRow label="Estimated trades / month" value={researchProfile.estimatedTradesPerMonth?.toFixed?.(1) ?? "â€”"} />
-              <StatRow label="Scan cadence" value={researchProfile.recommendedScanIntervalSeconds ? `${researchProfile.recommendedScanIntervalSeconds}s` : "â€”"} />
-              <StatRow label="Entry model" value={researchProfile.recommendedEntryModel ?? "â€”"} />
+              <StatRow label="Move count" value={researchProfile.moveCount ?? ""} />
+              <StatRow label="Estimated trades / month" value={researchProfile.estimatedTradesPerMonth?.toFixed?.(1) ?? ""} />
+              <StatRow label="Scan cadence" value={researchProfile.recommendedScanIntervalSeconds ? `${researchProfile.recommendedScanIntervalSeconds}s` : ""} />
+              <StatRow label="Entry model" value={researchProfile.recommendedEntryModel ?? ""} />
               <StatRow
                 label="Hold duration bands"
                 value={(() => {
@@ -2628,8 +2628,8 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               <StatRow label="TP model" value={JSON.stringify(researchProfile.recommendedTpModel ?? {})} />
               <StatRow label="SL model" value={JSON.stringify(researchProfile.recommendedSlModel ?? {})} />
               <StatRow label="Trailing model" value={JSON.stringify(researchProfile.recommendedTrailingModel ?? {})} />
-              <StatRow label="Profitability summary" value={researchProfile.estimatedFitAdjustedMonthlyReturnPct != null ? `${researchProfile.estimatedFitAdjustedMonthlyReturnPct.toFixed(2)}%/mo` : "â€”"} />
-              <StatRow label="Engine recommendation" value={researchProfile.engineTypeRecommendation ?? "â€”"} />
+              <StatRow label="Profitability summary" value={researchProfile.estimatedFitAdjustedMonthlyReturnPct != null ? `${researchProfile.estimatedFitAdjustedMonthlyReturnPct.toFixed(2)}%/mo` : ""} />
+              <StatRow label="Engine recommendation" value={researchProfile.engineTypeRecommendation ?? ""} />
             </div>
           </div>
           {(researchProfile.moveFamilyDistribution && Object.keys(researchProfile.moveFamilyDistribution).length > 0) && (
@@ -2647,7 +2647,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
         </div>
       )}
 
-      {/* â”€â”€ Detected Moves List â”€â”€ */}
+      {/*  Detected Moves List  */}
       <div className="rounded-xl border border-border/50 bg-card">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border/30">
           <div className="flex items-center gap-2">
@@ -2678,7 +2678,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
 
         {movesLoading && (
           <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin" />Loading movesâ€¦
+            <Loader2 className="w-4 h-4 animate-spin" />Loading moves
           </div>
         )}
 
@@ -2730,17 +2730,17 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                           : <TrendingDown className="w-3.5 h-3.5 text-red-400" />}
                       </td>
                       <td className="px-3 py-1.5 font-mono text-foreground">
-                        {m.movePct != null ? `${(m.movePct * 100).toFixed(1)}%` : "â€”"}
+                        {m.movePct != null ? `${(m.movePct * 100).toFixed(1)}%` : ""}
                       </td>
                       <td className="px-3 py-1.5 font-mono text-foreground">
-                        {m.holdingMinutes != null ? (m.holdingMinutes / 60).toFixed(1) : "â€”"}
+                        {m.holdingMinutes != null ? (m.holdingMinutes / 60).toFixed(1) : ""}
                       </td>
                       <td className="px-3 py-1.5 font-mono text-foreground">
-                        {m.qualityScore != null ? m.qualityScore.toFixed(0) : "â€”"}
+                        {m.qualityScore != null ? m.qualityScore.toFixed(0) : ""}
                       </td>
-                      <td className="px-3 py-1.5 text-muted-foreground">{m.leadInShape ?? "â€”"}</td>
+                      <td className="px-3 py-1.5 text-muted-foreground">{m.leadInShape ?? ""}</td>
                       <td className="px-3 py-1.5 text-muted-foreground">
-                        {m.startTs ? new Date(m.startTs * 1000).toLocaleDateString() : "â€”"}
+                        {m.startTs ? new Date(m.startTs * 1000).toLocaleDateString() : ""}
                       </td>
                     </tr>
                   ))}
@@ -2761,7 +2761,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
         )}
       </div>
 
-      {/* â”€â”€ Export Buttons â”€â”€ */}
+      {/*  Export Buttons  */}
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
         <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Export Calibration Data</h3>
         <div className="flex flex-wrap gap-2">
@@ -2857,7 +2857,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
         </div>
       </div>
 
-      {/* â”€â”€ Run History â”€â”€ */}
+      {/*  Run History  */}
       <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
         <button
           onClick={() => {
@@ -2880,7 +2880,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           <div className="border-t border-border/30">
             {runsLoading && (
               <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground">
-                <Loader2 className="w-4 h-4 animate-spin" />Loading run historyâ€¦
+                <Loader2 className="w-4 h-4 animate-spin" />Loading run history
               </div>
             )}
             {!runsLoading && runs.length === 0 && (
@@ -2940,15 +2940,15 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                             {run.status}
                           </span>
                         </td>
-                        <td className="px-3 py-1.5 font-mono text-foreground">{run.totalMoves ?? "â€”"}</td>
-                        <td className="px-3 py-1.5 font-mono text-foreground">{run.processedMoves ?? "â€”"}</td>
-                        <td className="px-3 py-1.5 font-mono text-foreground">{run.failedMoves ?? "â€”"}</td>
+                        <td className="px-3 py-1.5 font-mono text-foreground">{run.totalMoves ?? ""}</td>
+                        <td className="px-3 py-1.5 font-mono text-foreground">{run.processedMoves ?? ""}</td>
+                        <td className="px-3 py-1.5 font-mono text-foreground">{run.failedMoves ?? ""}</td>
                         <td className="px-3 py-1.5 font-mono text-muted-foreground">
-                          {elapsedSec !== null ? `${elapsedSec}s` : "â€”"}
+                          {elapsedSec !== null ? `${elapsedSec}s` : ""}
                         </td>
                         <td className="px-3 py-1.5 font-mono text-muted-foreground">{run.windowDays}d</td>
                         <td className="px-3 py-1.5 text-muted-foreground">
-                          {run.startedAt ? new Date(run.startedAt).toLocaleString() : "â€”"}
+                          {run.startedAt ? new Date(run.startedAt).toLocaleString() : ""}
                         </td>
                         <td className="px-3 py-1.5">
                           <button
@@ -2987,7 +2987,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     </div>
                     {historyDetailLoading && (
                       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading run detailsâ€¦
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading run details
                       </div>
                     )}
                     {!historyDetailLoading && historyDetail && (
@@ -3034,7 +3034,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   );
 }
 
-// â”€â”€â”€ Tab Navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  Tab Navigation 
 
 type TabId = "ai" | "backtest" | "calibration";
 type DomainTabId = "active" | "research";
@@ -3049,7 +3049,7 @@ const DOMAIN_TABS: { id: DomainTabId; label: string }[] = [
   { id: "research", label: "New Symbols" },
 ];
 
-// â”€â”€â”€ Main Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//  Main Page 
 
 export default function Research() {
   const [activeDomain, setActiveDomain] = useState<DomainTabId>("active");

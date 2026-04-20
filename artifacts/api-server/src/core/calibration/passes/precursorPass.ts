@@ -56,8 +56,14 @@ function findMatchingEngine(move: DetectedMoveRow): string | null {
 
 function wouldEngineFire(move: DetectedMoveRow, engineMatched: string | null): boolean {
   if (!engineMatched) return false;
-  // Heuristic: engine fires if quality tier is A or B (move was strong/clear enough)
-  return move.qualityTier === "A" || move.qualityTier === "B";
+  // Calibration coverage must not be hard-coupled to A/B quality tiers.
+  // R_75 / R_100 runs frequently score C/D under current move-quality rubric,
+  // yet still represent structurally valid moves for engine coverage analysis.
+  //
+  // Use a permissive structural threshold so precursor coverage reflects
+  // symbol-engine compatibility instead of tier labels.
+  const qualityScore = Number(move.qualityScore ?? 0);
+  return Number.isFinite(qualityScore) ? qualityScore >= 30 : true;
 }
 
 type PrecursorPayload = {
