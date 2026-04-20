@@ -3,6 +3,7 @@ import { db, ticksTable, candlesTable, spikeEventsTable, platformStateTable } fr
 import { eq, and, count, sql } from "drizzle-orm";
 import { createDecipheriv, scryptSync } from "crypto";
 import { recordTick, validateActiveSymbols, isSymbolValid, markSymbolError, markSymbolSubscribed, startWatchdog, getAllSymbolStatuses, getApiSymbol, isSymbolStreamingDisabled } from "./symbolValidator.js";
+import { enrichTimeframes } from "../core/candleEnrichment.js";
 
 const DERIV_WS_URL = "wss://ws.binaryws.com/websockets/v3?app_id=1089";
 
@@ -371,7 +372,60 @@ class DerivClient {
     }).onConflictDoNothing();
 
     await detectAndStoreSpike(configuredSymbol, quote, epoch);
-    await updateOpenCandles(configuredSymbol, quote, epoch);
+  }
+
+  /**
+   * Canonical live-candle sync:
+   * pulls the latest closed 1m candles from Deriv API and upserts them as
+   * source='live_api' (never tick-derived).
+   */
+  async syncLatestClosed1mFromApi(configuredSymbol: string, count = 4): Promise<number> {
+    if (isSymbolStreamingDisabled(configuredSymbol)) return 0;
+    if (!this._authorized) throw new Error("Not authorized");
+
+    const apiSymbol = getApiSymbol(configuredSymbol);
+    const candles = await this.getCandleHistoryWithEnd(apiSymbol, 60, Math.max(2, count), undefined, true);
+    if (!candles || candles.length === 0) return 0;
+
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    const closed = candles.filter((c) => Number.isFinite(c.epoch) && (c.epoch + 60) <= nowEpoch);
+    if (closed.length === 0) return 0;
+
+    const values = closed.map((c) => ({
+      symbol: configuredSymbol,
+      timeframe: "1m",
+      openTs: c.epoch,
+      closeTs: c.epoch + 60,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      tickCount: 0,
+      source: "live_api",
+      isInterpolated: false,
+    }));
+
+    await db.insert(candlesTable).values(values).onConflictDoUpdate({
+      target: [candlesTable.symbol, candlesTable.timeframe, candlesTable.openTs],
+      set: {
+        closeTs: sql`excluded.close_ts`,
+        open: sql`excluded.open`,
+        high: sql`excluded.high`,
+        low: sql`excluded.low`,
+        close: sql`excluded.close`,
+        tickCount: sql`excluded.tick_count`,
+        source: sql`excluded.source`,
+        isInterpolated: sql`excluded.is_interpolated`,
+      },
+    });
+
+    const firstOpenTs = Math.min(...closed.map((c) => c.epoch));
+    const lastCloseTs = Math.max(...closed.map((c) => c.epoch + 60));
+    await enrichTimeframes(configuredSymbol, firstOpenTs, lastCloseTs).catch(() => {
+      // non-fatal; scanner can still run on 1m
+    });
+
+    return values.length;
   }
 
   public authData: Record<string, unknown> | null = null;
@@ -992,6 +1046,11 @@ export async function getDerivClientWithDbToken(): Promise<DerivClient> {
     await derivClient.connect();
   }
   return derivClient;
+}
+
+export async function syncLatestCanonical1mForSymbol(symbol: string): Promise<number> {
+  const client = await getDerivClientWithDbToken();
+  return client.syncLatestClosed1mFromApi(symbol);
 }
 
 export async function getDerivClientForMode(mode: TradingMode): Promise<DerivClient | null> {

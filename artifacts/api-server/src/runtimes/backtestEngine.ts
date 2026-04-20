@@ -703,6 +703,7 @@ export async function loadCandles(
   const conditions = [
     eq(candlesTable.symbol, symbol),
     eq(candlesTable.timeframe, "1m"),
+    eq(candlesTable.isInterpolated, false),
   ];
   if (startDate) {
     conditions.push(gte(candlesTable.openTs, Math.floor(startDate.getTime() / 1000)));

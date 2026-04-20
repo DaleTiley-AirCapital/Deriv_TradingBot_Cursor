@@ -7,7 +7,7 @@ import { z } from "zod/v4";
  *
  * All pipelines write here:
  *   source='historical'   — initial API backfill (deriv.ts backfill())
- *   source='live'         — completed live candles from tick stream (deriv.ts updateOpenCandles())
+ *   source='live_api'     — completed live candles pulled from Deriv API
  *   source='topup'        — gap-fill from API (dataIntegrity.ts repairGapFromApi())
  *   source='enriched'     — derived from 1m aggregation (candleEnrichment.ts)
  *   source='interpolated' — carry-forward fill when API returns no data (dataIntegrity.ts interpolateGap())

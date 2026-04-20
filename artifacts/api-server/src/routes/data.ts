@@ -106,9 +106,14 @@ router.get("/data/ticks", async (req, res): Promise<void> => {
 router.get("/data/candles", async (req, res): Promise<void> => {
   const symbol = String(req.query.symbol || "BOOM1000");
   const timeframe = normalizeTimeframe(String(req.query.timeframe || "1m"));
+  const includeInterpolated = String(req.query.includeInterpolated || "false") === "true";
   const limit = Math.min(Number(req.query.limit || 200), 1000);
   const rows = await db.select().from(candlesTable)
-    .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, timeframe)))
+    .where(and(
+      eq(candlesTable.symbol, symbol),
+      eq(candlesTable.timeframe, timeframe),
+      includeInterpolated ? sql`true` : eq(candlesTable.isInterpolated, false),
+    ))
     .orderBy(desc(candlesTable.openTs))
     .limit(limit);
   res.json(rows.map(r => ({

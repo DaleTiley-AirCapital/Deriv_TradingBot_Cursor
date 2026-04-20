@@ -5,6 +5,7 @@ import { eq, desc, and, gte, sql } from "drizzle-orm";
 import { getActiveModes, isAnyModeActive } from "./deriv.js";
 import type { TradingMode } from "./deriv.js";
 import { ACTIVE_TRADING_SYMBOLS } from "./deriv.js";
+import { syncLatestCanonical1mForSymbol } from "./deriv.js";
 import { scanSymbolV3 } from "../core/engineRouterV3.js";
 import { allocateV3Signal } from "../core/portfolioAllocatorV3.js";
 import { getLiveCalibrationProfile } from "../core/calibration/liveCalibrationProfile.js";
@@ -90,6 +91,14 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   lastScanTime = new Date();
   lastScanSymbol = symbol;
   totalScansRun++;
+
+  try {
+    await syncLatestCanonical1mForSymbol(symbol);
+  } catch (err) {
+    console.warn(
+      `[V3Scan] ${symbol} | canonical_1m_sync_failed | ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   const aiEnabled = stateMap["ai_verification_enabled"] === "true";
   const activeModes = getActiveModes(stateMap);
