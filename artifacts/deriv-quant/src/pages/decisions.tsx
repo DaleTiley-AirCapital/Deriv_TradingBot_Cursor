@@ -1,6 +1,16 @@
 import React, { useState, useMemo } from "react";
-import { useGetLatestSignals, useGetPendingSignals } from "@workspace/api-client-react";
-import type { GetLatestSignalsParams, SignalLog } from "@workspace/api-client-react";
+import {
+  useGetLatestSignals,
+  useGetPendingSignals,
+  getGetLatestSignalsQueryKey,
+  getGetPendingSignalsQueryKey,
+} from "@workspace/api-client-react";
+import type {
+  GetLatestSignalsParams,
+  SignalLog,
+  SignalReviewResponse,
+  PendingSignalsResponse,
+} from "@workspace/api-client-react";
 import { formatNumber, cn } from "@/lib/utils";
 import { downloadCSV, downloadJSON } from "@/lib/export";
 import { motion, AnimatePresence } from "framer-motion";
@@ -825,7 +835,7 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
 
 // ── Pending Confirmations Block ───────────────────────────────────────────────
 
-function PendingBlock({ data }: { data: ReturnType<typeof useGetPendingSignals>["data"] }) {
+function PendingBlock({ data }: { data: PendingSignalsResponse | undefined }) {
   if (!data || data.count === 0) return null;
   return (
     <div className="rounded-xl border border-amber-500/20 bg-amber-500/3">
@@ -834,7 +844,7 @@ function PendingBlock({ data }: { data: ReturnType<typeof useGetPendingSignals>[
         <span className="text-xs font-semibold text-amber-400">Awaiting Confirmation ({data.count})</span>
       </div>
       <div className="p-3 space-y-2">
-        {data.signals.map(ps => (
+        {data.signals.map((ps) => (
           <div key={`${ps.symbol}-${ps.strategyName}-${ps.direction}`}
             className="rounded-lg border border-border/50 bg-card p-3 flex items-center gap-4">
             <div className="flex items-center gap-2.5 flex-1 min-w-0">
@@ -889,8 +899,12 @@ export default function Decisions() {
     return p;
   }, [symbolFilter, engineFilter, statusFilter, aiFilter, page, dateFrom, dateTo]);
 
-  const { data, isLoading } = useGetLatestSignals(params, { query: { refetchInterval: 5000 } });
-  const { data: pendingData } = useGetPendingSignals({ query: { refetchInterval: 5000 } });
+  const { data, isLoading } = useGetLatestSignals<SignalReviewResponse>(params, {
+    query: { queryKey: getGetLatestSignalsQueryKey(params), refetchInterval: 5000 },
+  });
+  const { data: pendingData } = useGetPendingSignals<PendingSignalsResponse>({
+    query: { queryKey: getGetPendingSignalsQueryKey(), refetchInterval: 5000 },
+  });
 
   const signals = data?.signals ?? [];
   const total = data?.total ?? 0;

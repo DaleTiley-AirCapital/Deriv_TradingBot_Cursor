@@ -6,6 +6,9 @@ import {
   useGetSpikeEvents,
   useGetOverview,
   getGetDataStatusQueryKey,
+  getGetTicksQueryKey,
+  getGetCandlesQueryKey,
+  getGetSpikeEventsQueryKey,
 } from "@workspace/api-client-react";
 import { formatNumber, cn } from "@/lib/utils";
 import {
@@ -79,6 +82,19 @@ interface ResearchDataStatus {
   symbols: DataStatusSymbol[];
   totalStorage: number;
   symbolCount: number;
+}
+
+interface DataTopUpTracker {
+  symbol: string;
+  status: "running" | "completed" | "failed";
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  baseline1mCount: number;
+  current1mCount: number;
+  downloaded1mCount: number;
+  message: string;
+  error?: string | null;
 }
 
 type OpResult = { ok: boolean; msg: string; detail?: Record<string, string> } | null;
@@ -548,11 +564,7 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
-  const [tracking, setTracking] = useState(false);
-  const [baselineCount, setBaselineCount] = useState(0);
-  const [currentCount, setCurrentCount] = useState(0);
-  const [pollsWithoutChange, setPollsWithoutChange] = useState(0);
-  const [lastTrackedAt, setLastTrackedAt] = useState<string | null>(null);
+  const [tracker, setTracker] = useState<DataTopUpTracker | null>(null);
 
   const noDataSymbols = useMemo(() => {
     const map = new Map((statusData?.symbols ?? []).map(s => [s.symbol, s.totalCandles]));
@@ -560,34 +572,23 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
   }, [statusData]);
 
   useEffect(() => {
-    if (!tracking) return;
     let cancelled = false;
-    const id = setInterval(async () => {
+    const loadTracker = async () => {
       try {
-        const d = await apiFetch<ResearchDataStatus>("research/data-status");
-        if (cancelled) return;
-        const row = d.symbols.find(s => s.symbol === symbol);
-        const nextCount = row?.count1m ?? 0;
-        setCurrentCount(nextCount);
-        setLastTrackedAt(new Date().toLocaleTimeString());
-        if (nextCount > currentCount) {
-          setPollsWithoutChange(0);
-          return;
-        }
-        setPollsWithoutChange(prev => {
-          const next = prev + 1;
-          if (next >= 6) setTracking(false);
-          return next;
-        });
+        const d = await apiFetch<{ tracker: DataTopUpTracker | null }>(`research/data-top-up-status/${symbol}`);
+        if (!cancelled) setTracker(d.tracker ?? null);
       } catch {
-        // keep trying until user refreshes / tracker auto-stops
+        if (!cancelled) setTracker(null);
       }
-    }, 5000);
+    };
+
+    void loadTracker();
+    const id = setInterval(() => { void loadTracker(); }, 5000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [tracking, symbol, currentCount]);
+  }, [symbol]);
 
   useEffect(() => {
     if (noDataSymbols.length > 0 && !noDataSymbols.includes(symbol)) {
@@ -600,21 +601,15 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
     setErr(null);
     setOk(null);
     try {
-      const baseline = statusData?.symbols.find(s => s.symbol === symbol)?.count1m ?? 0;
-      setBaselineCount(baseline);
-      setCurrentCount(baseline);
-      setPollsWithoutChange(0);
-      setLastTrackedAt(new Date().toLocaleTimeString());
-      const d = await apiFetch("research/data-top-up?background=true", {
+      const d = await apiFetch<{ message?: string; tracker?: DataTopUpTracker }>("research/data-top-up?background=true", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ symbol }),
       });
       setOk(d.message ?? `Historical download started for ${symbol}`);
-      setTracking(true);
+      setTracker(d.tracker ?? null);
     } catch (e) {
       setErr((e as Error).message);
-      setTracking(false);
     } finally {
       setRunning(false);
     }
@@ -650,39 +645,48 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
       </div>
       {err && <ErrorBox msg={err} />}
       {ok && <SuccessBox msg={ok} />}
-      {(tracking || baselineCount !== currentCount) && (
+      {tracker && (
         <div className="rounded-lg bg-muted/20 border border-border/30 px-4 py-3 space-y-2">
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-muted-foreground">Download tracker ({symbol})</span>
-            <span className={cn("font-medium", tracking ? "text-primary" : "text-foreground")}>
-              {tracking ? "in progress" : "idle"}
+            <span className={cn(
+              "font-medium",
+              tracker.status === "running"
+                ? "text-primary"
+                : tracker.status === "completed"
+                  ? "text-green-400"
+                  : "text-red-400",
+            )}>
+              {tracker.status}
             </span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
             <div className="rounded bg-background/50 border border-border/30 p-2">
               <div className="text-muted-foreground text-[10px] uppercase tracking-wide">Baseline M1</div>
-              <div className="font-mono text-foreground">{baselineCount.toLocaleString()}</div>
+              <div className="font-mono text-foreground">{tracker.baseline1mCount.toLocaleString()}</div>
             </div>
             <div className="rounded bg-background/50 border border-border/30 p-2">
               <div className="text-muted-foreground text-[10px] uppercase tracking-wide">Current M1</div>
-              <div className="font-mono text-foreground">{currentCount.toLocaleString()}</div>
+              <div className="font-mono text-foreground">{tracker.current1mCount.toLocaleString()}</div>
             </div>
             <div className="rounded bg-background/50 border border-border/30 p-2">
               <div className="text-muted-foreground text-[10px] uppercase tracking-wide">Downloaded</div>
-              <div className="font-mono text-green-400">+{Math.max(0, currentCount - baselineCount).toLocaleString()}</div>
+              <div className="font-mono text-green-400">+{tracker.downloaded1mCount.toLocaleString()}</div>
             </div>
             <div className="rounded bg-background/50 border border-border/30 p-2">
               <div className="text-muted-foreground text-[10px] uppercase tracking-wide">Last update</div>
-              <div className="font-mono text-foreground">{lastTrackedAt ?? "—"}</div>
+              <div className="font-mono text-foreground">{new Date(tracker.updatedAt).toLocaleTimeString()}</div>
             </div>
           </div>
-          {tracking && (
+          {tracker.status === "running" && (
             <div className="w-full h-1.5 rounded bg-background/60 overflow-hidden">
               <div className="h-full w-1/3 bg-primary animate-pulse" />
             </div>
           )}
+          <p className="text-[11px] text-foreground">{tracker.message}</p>
+          {tracker.error && <ErrorBox msg={tracker.error} />}
           <p className="text-[11px] text-muted-foreground">
-            Tracker reads live candle counts from Data Status every 5s and auto-stops after repeated unchanged polls.
+            Tracker is persisted on the backend and remains visible after navigation or refresh.
           </p>
         </div>
       )}
@@ -1202,20 +1206,20 @@ export default function DataManager() {
 
   const { data: ticks } = useGetTicks(
     { symbol, limit: 30 },
-    { query: { enabled: tab === "live" && liveSubtab === "ticks", refetchInterval: 2000 } }
+    { query: { queryKey: getGetTicksQueryKey({ symbol, limit: 30 }), enabled: tab === "live" && liveSubtab === "ticks", refetchInterval: 2000 } }
   );
   const { data: candles } = useGetCandles(
     { symbol, timeframe: "M1", limit: 30 },
-    { query: { enabled: tab === "live" && liveSubtab === "candles", refetchInterval: 5000 } }
+    { query: { queryKey: getGetCandlesQueryKey({ symbol, timeframe: "M1", limit: 30 }), enabled: tab === "live" && liveSubtab === "candles", refetchInterval: 5000 } }
   );
   const { data: spikes } = useGetSpikeEvents(
     { symbol, limit: 30 },
-    { query: { enabled: tab === "live" && liveSubtab === "spikes", refetchInterval: 5000 } }
+    { query: { queryKey: getGetSpikeEventsQueryKey({ symbol, limit: 30 }), enabled: tab === "live" && liveSubtab === "spikes", refetchInterval: 5000 } }
   );
 
   const diagSymbols = diagData?.symbols ?? [];
   const streamingCount = diagSymbols.filter(d => d.streamingState === "streaming").length;
-  const activeDiag = ACTIVE_SYMBOLS.map(sym => diagSymbols.find(d => d.symbol === sym || d.configured === sym)).filter(Boolean) as SymbolDiagnostic[];
+  const activeDiag = ACTIVE_SYMBOLS.map(sym => diagSymbols.find(d => d.symbol === sym)).filter(Boolean) as SymbolDiagnostic[];
   const activeStreamingCount = activeDiag.filter(d => d.streamingState === "streaming").length;
   const activePausedCount = activeDiag.filter(d => d.streamingState === "disabled" || d.streamingState === "available").length;
   const staleActiveCount = activeDiag.filter(d => {
@@ -1562,3 +1566,4 @@ export default function DataManager() {
     </div>
   );
 }
+

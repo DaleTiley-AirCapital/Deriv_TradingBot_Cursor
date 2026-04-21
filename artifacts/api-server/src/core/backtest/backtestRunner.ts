@@ -32,7 +32,7 @@
  */
 
 import { db, candlesTable, platformStateTable, detectedMovesTable } from "@workspace/db";
-import { eq, and, gte, lte, asc } from "drizzle-orm";
+import { eq, and, gte, lte, asc, inArray } from "drizzle-orm";
 import { computeFeaturesFromSlice, type CandleRow } from "./featureSlice.js";
 import { classifyRegimeFromSamples } from "../regimeEngine.js";
 import {
@@ -1270,6 +1270,7 @@ export async function runV3BacktestMulti(
       signalsFired:           0,
       signalsBlocked:         0,
       blockedByEngine:        {},
+      runtimeCalibration:     null,
       trailingActivationThresholdPct: undefined,
       trailingDistancePct: undefined,
       trailingMinHoldBars: undefined,

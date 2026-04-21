@@ -34,15 +34,34 @@ import { retrieveContext } from "./ai/contextRetriever.js";
 const DEFAULT_WINDOW_DAYS = 365;
 const MAX_CANDLES_FOR_ANALYSIS = 15_000;
 
+function extractJsonObject(text: string): string {
+  const fenceStripped = text
+    .replace(/```json/gi, "```")
+    .replace(/```/g, "")
+    .trim();
+  const start = fenceStripped.indexOf("{");
+  const end = fenceStripped.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("No JSON found in OpenAI response");
+  return fenceStripped.slice(start, end + 1);
+}
+
+function normalizeJsonish(text: string): string {
+  return text
+    .replace(/\u201c|\u201d/g, "\"")
+    .replace(/\u2018|\u2019/g, "'")
+    .replace(/,\s*([}\]])/g, "$1")
+    .replace(/}\s*\n\s*{/g, "},\n{")
+    .replace(/]\s*\n\s*{/g, "],\n{")
+    .replace(/([}\]"0-9a-zA-Z])\s*\n\s*("([^"\\]|\\.)+"\s*:)/g, "$1,\n$2")
+    .replace(/([}\]"0-9a-zA-Z])\s*("([^"\\]|\\.)+"\s*:)/g, "$1,$2");
+}
+
 function extractAndParseJson(text: string): Record<string, unknown> {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("No JSON found in OpenAI response");
-  const jsonText = match[0];
+  const jsonText = extractJsonObject(text);
   try {
     return JSON.parse(jsonText) as Record<string, unknown>;
   } catch {
-    // Best-effort cleanup for common LLM JSON defects (trailing commas)
-    const cleaned = jsonText.replace(/,\s*([}\]])/g, "$1");
+    const cleaned = normalizeJsonish(jsonText);
     return JSON.parse(cleaned) as Record<string, unknown>;
   }
 }
@@ -558,8 +577,9 @@ Respond ONLY with valid JSON (no markdown, no preamble). All string values must 
     let p: Partial<ParsedResult>;
     try {
       p = extractAndParseJson(rawText) as Partial<ParsedResult>;
-    } catch {
+    } catch (firstErr) {
       // One strict repair attempt to prevent hard-failing Research tab.
+      const jsonish = normalizeJsonish(extractJsonObject(rawText));
       const repair = await chatComplete({
         messages: [
           { role: "system", content: "You repair malformed JSON. Return valid JSON only, no markdown, no explanation." },
@@ -567,8 +587,10 @@ Respond ONLY with valid JSON (no markdown, no preamble). All string values must 
             role: "user",
             content:
               "Fix the JSON below so it is strict valid JSON and preserves all fields. " +
-              "Return only the corrected JSON object.\n\n" +
-              rawText,
+              `Return only the corrected JSON object. Parse error was: ${
+                firstErr instanceof Error ? firstErr.message : String(firstErr)
+              }\n\n` +
+              jsonish,
           },
         ],
         max_completion_tokens: 3000,
@@ -576,7 +598,7 @@ Respond ONLY with valid JSON (no markdown, no preamble). All string values must 
       });
       const repairedText = repair.choices[0]?.message?.content?.trim() ?? "";
       p = extractAndParseJson(repairedText) as Partial<ParsedResult>;
-      rawText = repairedText;
+      rawText = normalizeJsonish(extractJsonObject(repairedText));
     }
 
     parsed = {

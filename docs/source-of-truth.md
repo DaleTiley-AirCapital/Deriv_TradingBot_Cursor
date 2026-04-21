@@ -6,6 +6,8 @@ Use this map to avoid doc and implementation drift.
 
 - Canonical runtime policy snapshot:
   - `docs/current-operating-policy.md`
+- Runtime model lifecycle and promotion policy:
+  - `docs/runtime-model-lifecycle.md`
 - Deep strategy doctrine:
   - `.agents/skills/deriv-trading-strategy/SKILL.md`
 - Contextual project state summary:
@@ -40,6 +42,15 @@ Use this map to avoid doc and implementation drift.
   - `artifacts/api-server/calibration-report.md`
   - `artifacts/api-server/calibration-reports/calibration-report.md`
 - These may include historical or scenario-specific threshold narratives; cross-check against `docs/current-operating-policy.md` for current runtime values.
+
+## Runtime Model Ownership
+
+- Suggested research outputs:
+  - `symbol_research_profiles`
+- Promoted runtime owner for trading behavior:
+  - `platform_state` promoted symbol model entries
+- Rule:
+  - latest research output is not allowed to change runtime behavior until explicitly promoted
 
 ## Change Ownership Rule
 

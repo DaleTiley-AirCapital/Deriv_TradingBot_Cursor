@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Cpu, RefreshCw, XCircle, ArrowRight } from "lucide-react";
-import { useGetOverview } from "@workspace/api-client-react";
+import { useGetOverview, getGetOverviewQueryKey } from "@workspace/api-client-react";
 import { Link } from "wouter";
 
 const BASE = import.meta.env.BASE_URL || "/";
@@ -42,7 +42,7 @@ export default function Diagnostics() {
   const [featErr, setFeatErr] = useState<string | null>(null);
 
   const { data: rawData, isLoading, refetch } = useGetOverview({
-    query: { refetchInterval: 8000 },
+    query: { queryKey: getGetOverviewQueryKey(), refetchInterval: 8000 },
   });
   const ov = rawData as any;
 

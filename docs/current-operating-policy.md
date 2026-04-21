@@ -37,6 +37,13 @@ Live signal flow is V3-native:
 - `engineRouterV3.ts` -> `symbolCoordinator.ts` -> `portfolioAllocatorV3.ts`
 - backtest-only modules (`strategies.ts`, `signalRouter.ts`, `scoring.ts`) must not be reintroduced into the live path
 
+## Runtime Model Promotion Guardrail
+
+- Calibration and AI analysis produce suggestions, not automatic runtime changes.
+- Live and paper runtime calibration behavior must be sourced from explicitly promoted symbol models only.
+- The latest research profile must never be treated as the active runtime model by default.
+- Promotion is the only path that may change runtime behavior for paper, demo, or real trading.
+
 ## Non-Negotiable Behavior Constraints
 
 - No time-based forced exits.

@@ -198,4 +198,35 @@ router.get("/trade/history", async (req, res): Promise<void> => {
   res.json(rows.map(serializeTrade));
 });
 
+router.post("/trade/paper/reset", async (_req, res): Promise<void> => {
+  try {
+    await db.delete(tradesTable).where(eq(tradesTable.mode, "paper"));
+    await db.delete(signalLogTable).where(eq(signalLogTable.mode, "paper"));
+
+    await db.insert(platformStateTable).values({ key: "paper_capital", value: "600" })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "600", updatedAt: new Date() } });
+
+    await db.insert(platformStateTable).values({ key: "paper_mode_active", value: "false" })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "false", updatedAt: new Date() } });
+
+    await db.insert(platformStateTable).values({ key: "mode", value: "idle" })
+      .onConflictDoUpdate({ target: platformStateTable.key, set: { value: "idle", updatedAt: new Date() } });
+
+    res.json({
+      success: true,
+      message: "Paper trading reset complete. Trades and engine decisions cleared, paper capital reset to 600 USD.",
+      reset: {
+        clearedTradesMode: "paper",
+        clearedSignalLogMode: "paper",
+        paperCapital: 600,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err instanceof Error ? err.message : "Paper reset failed",
+    });
+  }
+});
+
 export default router;

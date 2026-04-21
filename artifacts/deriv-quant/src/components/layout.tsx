@@ -27,6 +27,7 @@ import {
   getGetLivePositionsQueryKey,
   getGetOverviewQueryKey,
   getGetDataStatusQueryKey,
+  getGetAccountInfoQueryKey,
 } from "@workspace/api-client-react";
 import type { ToggleTradingModeRequestMode } from "@workspace/api-client-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -80,14 +81,14 @@ function useBreakpoint(): Breakpoint {
 
 function useModeInfo() {
   const { data: overviewData } = useGetOverview({
-    query: { refetchInterval: 5000, retry: false },
+    query: { queryKey: getGetOverviewQueryKey(), refetchInterval: 5000, retry: false },
   });
   const mode = overviewData?.mode || "idle";
   const isLive      = mode === "live";
   const isDemo      = mode === "demo";
   const isPaper     = mode === "paper";
-  const isScanning  = mode === "scanning";
   const isCollect   = mode === "collecting";
+  const isScanning  = Boolean(overviewData?.scannerRunning);
   const isActive    = isLive || isDemo || isPaper || isScanning || isCollect;
 
   const modeColor   = isLive ? "text-destructive" : isDemo ? "text-primary" : isPaper ? "text-warning" : isScanning ? "text-green-400" : isCollect ? "text-primary" : "text-muted-foreground";
@@ -100,8 +101,8 @@ function useModeInfo() {
 
 function useTradingControls() {
   const queryClient = useQueryClient();
-  const { data: overview } = useGetOverview({ query: { refetchInterval: 5000 } });
-  const { data: accountInfo } = useGetAccountInfo({ query: { refetchInterval: 30000 } });
+  const { data: overview } = useGetOverview({ query: { queryKey: getGetOverviewQueryKey(), refetchInterval: 5000 } });
+  const { data: accountInfo } = useGetAccountInfo({ query: { queryKey: getGetAccountInfoQueryKey(), refetchInterval: 30000 } });
 
   const invalidator = {
     onSuccess: () => {

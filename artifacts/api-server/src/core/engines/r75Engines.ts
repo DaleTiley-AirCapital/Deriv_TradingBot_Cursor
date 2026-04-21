@@ -30,6 +30,49 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+function asFinite(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getR75EngineOverride(ctx: EngineContext, engineName: string): Record<string, unknown> {
+  const root = asRecord(ctx.runtimeCalibration?.formulaOverride);
+  const engines = asRecord(root.engines);
+  return asRecord(engines[engineName] ?? root[engineName]);
+}
+
+function resolveR75RuntimeGate(
+  ctx: EngineContext,
+  engineName: string,
+  baseGate: number,
+): { gate: number; calibrated: boolean; sourceRunId: number | null } {
+  const paperGate = asFinite(ctx.runtimeCalibration?.recommendedScoreGates?.paper);
+  const engineOverride = getR75EngineOverride(ctx, engineName);
+  const overrideGate = asFinite(
+    engineOverride.minGate ?? engineOverride.gate ?? engineOverride.threshold,
+  );
+  if (paperGate === null) {
+    return {
+      gate: clamp(Math.round(overrideGate ?? baseGate), 40, 95),
+      calibrated: false,
+      sourceRunId: null,
+    };
+  }
+
+  const blendedGate = clamp(Math.round(baseGate * 0.7 + paperGate * 0.3), 45, 90);
+  return {
+    gate: clamp(Math.round(overrideGate ?? blendedGate), 40, 95),
+    calibrated: true,
+    sourceRunId: ctx.runtimeCalibration?.sourceRunId ?? null,
+  };
+}
+
 //  Projected move calibration (R_75 empirical swing data) 
 const R75_REVERSAL_PROJECTED_PCT     = 0.22;   // avg swing ~22% from 30d extreme
 const R75_CONTINUATION_PROJECTED_PCT = 0.15;   // continuation captures mid-leg
@@ -399,6 +442,7 @@ function buildReversalRejectionReason(
 export function r75ReversalEngine(ctx: EngineContext): EngineResult | null {
   const { features: f, operationalRegime, regimeConfidence } = ctx;
   if (f.symbol !== SYMBOL) return null;
+  const runtimeGate = resolveR75RuntimeGate(ctx, "r75_reversal_engine", R75_REVERSAL_MIN_GATE);
 
   //  Regime filters 
   // BUY reversals blocked in strong established downtrends (trend is still valid)
@@ -468,11 +512,11 @@ export function r75ReversalEngine(ctx: EngineContext): EngineResult | null {
   );
 
   //  Engine-native gate 
-  const gatePassed = nativeScore >= R75_REVERSAL_MIN_GATE;
+  const gatePassed = nativeScore >= runtimeGate.gate;
   const blockReasons: string[] = [];
 
   if (!gatePassed) {
-    blockReasons.push(`native_score_${nativeScore}_below_reversal_gate_${R75_REVERSAL_MIN_GATE}`);
+    blockReasons.push(`native_score_${nativeScore}_below_reversal_gate_${runtimeGate.gate}`);
     const weakComponents = Object.entries(componentScores)
       .filter(([, v]) => v < 50)
       .map(([k, v]) => `${k}(${v}/100)`);
@@ -514,7 +558,9 @@ export function r75ReversalEngine(ctx: EngineContext): EngineResult | null {
     metadata: {
       r75ReversalNativeScore:   nativeScore,
       r75ReversalGatePassed:    gatePassed,
-      r75ReversalGateThreshold: R75_REVERSAL_MIN_GATE,
+      r75ReversalGateThreshold: runtimeGate.gate,
+      r75ReversalRuntimeCalibrated: runtimeGate.calibrated,
+      r75ReversalRuntimeCalibrationRunId: runtimeGate.sourceRunId,
       r75ReversalBlockReasons:  blockReasons,
       setupDetected,
       setupFamily:              "r75_swing_structure",
@@ -806,6 +852,7 @@ function buildContinuationRejectionReason(
 export function r75ContinuationEngine(ctx: EngineContext): EngineResult | null {
   const { features: f, operationalRegime, regimeConfidence } = ctx;
   if (f.symbol !== SYMBOL) return null;
+  const runtimeGate = resolveR75RuntimeGate(ctx, "r75_continuation_engine", R75_CONTINUATION_MIN_GATE);
 
   //  Regime filter 
   // Continuation requires a clear trend; block in mean_reversion or ranging
@@ -854,11 +901,11 @@ export function r75ContinuationEngine(ctx: EngineContext): EngineResult | null {
   );
 
   //  Engine-native gate 
-  const gatePassed = nativeScore >= R75_CONTINUATION_MIN_GATE;
+  const gatePassed = nativeScore >= runtimeGate.gate;
   const blockReasons: string[] = [];
 
   if (!gatePassed) {
-    blockReasons.push(`native_score_${nativeScore}_below_continuation_gate_${R75_CONTINUATION_MIN_GATE}`);
+    blockReasons.push(`native_score_${nativeScore}_below_continuation_gate_${runtimeGate.gate}`);
     return null;
   }
 
@@ -892,7 +939,9 @@ export function r75ContinuationEngine(ctx: EngineContext): EngineResult | null {
     metadata: {
       r75ContinuationNativeScore:   nativeScore,
       r75ContinuationGatePassed:    gatePassed,
-      r75ContinuationGateThreshold: R75_CONTINUATION_MIN_GATE,
+      r75ContinuationGateThreshold: runtimeGate.gate,
+      r75ContinuationRuntimeCalibrated: runtimeGate.calibrated,
+      r75ContinuationRuntimeCalibrationRunId: runtimeGate.sourceRunId,
       r75ContinuationBlockReasons:  blockReasons,
       setupDetected,
       setupFamily:                  "r75_swing_structure",
@@ -1149,6 +1198,7 @@ function buildBreakoutRejectionReason(
 export function r75BreakoutEngine(ctx: EngineContext): EngineResult | null {
   const { features: f, operationalRegime, regimeConfidence } = ctx;
   if (f.symbol !== SYMBOL) return null;
+  const runtimeGate = resolveR75RuntimeGate(ctx, "r75_breakout_engine", R75_BREAKOUT_MIN_GATE);
 
   //  Regime filter 
   // Breakouts are unreliable in mean_reversion and ranging regimes
@@ -1208,11 +1258,11 @@ export function r75BreakoutEngine(ctx: EngineContext): EngineResult | null {
   );
 
   //  Engine-native gate 
-  const gatePassed = nativeScore >= R75_BREAKOUT_MIN_GATE;
+  const gatePassed = nativeScore >= runtimeGate.gate;
   const blockReasons: string[] = [];
 
   if (!gatePassed) {
-    blockReasons.push(`native_score_${nativeScore}_below_breakout_gate_${R75_BREAKOUT_MIN_GATE}`);
+    blockReasons.push(`native_score_${nativeScore}_below_breakout_gate_${runtimeGate.gate}`);
     return null;
   }
 
@@ -1246,7 +1296,9 @@ export function r75BreakoutEngine(ctx: EngineContext): EngineResult | null {
     metadata: {
       r75BreakoutNativeScore:   nativeScore,
       r75BreakoutGatePassed:    gatePassed,
-      r75BreakoutGateThreshold: R75_BREAKOUT_MIN_GATE,
+      r75BreakoutGateThreshold: runtimeGate.gate,
+      r75BreakoutRuntimeCalibrated: runtimeGate.calibrated,
+      r75BreakoutRuntimeCalibrationRunId: runtimeGate.sourceRunId,
       r75BreakoutBlockReasons:  blockReasons,
       setupDetected,
       setupFamily:              "r75_swing_structure",

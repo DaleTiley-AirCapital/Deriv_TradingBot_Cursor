@@ -30,6 +30,49 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+function asFinite(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getR100EngineOverride(ctx: EngineContext, engineName: string): Record<string, unknown> {
+  const root = asRecord(ctx.runtimeCalibration?.formulaOverride);
+  const engines = asRecord(root.engines);
+  return asRecord(engines[engineName] ?? root[engineName]);
+}
+
+function resolveR100RuntimeGate(
+  ctx: EngineContext,
+  engineName: string,
+  baseGate: number,
+): { gate: number; calibrated: boolean; sourceRunId: number | null } {
+  const paperGate = asFinite(ctx.runtimeCalibration?.recommendedScoreGates?.paper);
+  const engineOverride = getR100EngineOverride(ctx, engineName);
+  const overrideGate = asFinite(
+    engineOverride.minGate ?? engineOverride.gate ?? engineOverride.threshold,
+  );
+  if (paperGate === null) {
+    return {
+      gate: clamp(Math.round(overrideGate ?? baseGate), 40, 95),
+      calibrated: false,
+      sourceRunId: null,
+    };
+  }
+
+  const blendedGate = clamp(Math.round(baseGate * 0.7 + paperGate * 0.3), 45, 90);
+  return {
+    gate: clamp(Math.round(overrideGate ?? blendedGate), 40, 95),
+    calibrated: true,
+    sourceRunId: ctx.runtimeCalibration?.sourceRunId ?? null,
+  };
+}
+
 //  Projected move calibration (R_100 empirical swing data) 
 const R100_REVERSAL_PROJECTED_PCT     = 0.35;   // avg major swing ~35% from 30d extreme
 const R100_BREAKOUT_PROJECTED_PCT     = 0.42;   // breakout can extend well beyond range
@@ -400,6 +443,7 @@ function buildR100ReversalRejectionReason(
 export function r100ReversalEngine(ctx: EngineContext): EngineResult | null {
   const { features: f, operationalRegime, regimeConfidence } = ctx;
   if (f.symbol !== SYMBOL) return null;
+  const runtimeGate = resolveR100RuntimeGate(ctx, "r100_reversal_engine", R100_REVERSAL_MIN_GATE);
 
   //  Candidate direction from 30d range extremity 
   // R_100 has bigger ranges  allow up to 18% from extreme as candidate
@@ -461,11 +505,11 @@ export function r100ReversalEngine(ctx: EngineContext): EngineResult | null {
   );
 
   //  Engine-native gate 
-  const gatePassed = nativeScore >= R100_REVERSAL_MIN_GATE;
+  const gatePassed = nativeScore >= runtimeGate.gate;
   const blockReasons: string[] = [];
 
   if (!gatePassed) {
-    blockReasons.push(`native_score_${nativeScore}_below_reversal_gate_${R100_REVERSAL_MIN_GATE}`);
+    blockReasons.push(`native_score_${nativeScore}_below_reversal_gate_${runtimeGate.gate}`);
     const weakComponents = Object.entries(componentScores)
       .filter(([, v]) => v < 50)
       .map(([k, v]) => `${k}(${v}/100)`);
@@ -507,7 +551,9 @@ export function r100ReversalEngine(ctx: EngineContext): EngineResult | null {
     metadata: {
       r100ReversalNativeScore:   nativeScore,
       r100ReversalGatePassed:    gatePassed,
-      r100ReversalGateThreshold: R100_REVERSAL_MIN_GATE,
+      r100ReversalGateThreshold: runtimeGate.gate,
+      r100ReversalRuntimeCalibrated: runtimeGate.calibrated,
+      r100ReversalRuntimeCalibrationRunId: runtimeGate.sourceRunId,
       r100ReversalBlockReasons:  blockReasons,
       componentScores,
       componentFlags: {
@@ -802,6 +848,7 @@ function buildR100BreakoutRejectionReason(
 export function r100BreakoutEngine(ctx: EngineContext): EngineResult | null {
   const { features: f, operationalRegime, regimeConfidence } = ctx;
   if (f.symbol !== SYMBOL) return null;
+  const runtimeGate = resolveR100RuntimeGate(ctx, "r100_breakout_engine", R100_BREAKOUT_MIN_GATE);
 
   //  Regime filter: breakout is invalid in mean_reversion / ranging 
   if (operationalRegime === "mean_reversion" || operationalRegime === "ranging") return null;
@@ -852,11 +899,11 @@ export function r100BreakoutEngine(ctx: EngineContext): EngineResult | null {
   );
 
   //  Engine-native gate 
-  const gatePassed = nativeScore >= R100_BREAKOUT_MIN_GATE;
+  const gatePassed = nativeScore >= runtimeGate.gate;
   const blockReasons: string[] = [];
 
   if (!gatePassed) {
-    blockReasons.push(`native_score_${nativeScore}_below_breakout_gate_${R100_BREAKOUT_MIN_GATE}`);
+    blockReasons.push(`native_score_${nativeScore}_below_breakout_gate_${runtimeGate.gate}`);
     const weakComponents = Object.entries(componentScores)
       .filter(([, v]) => v < 50)
       .map(([k, v]) => `${k}(${v}/100)`);
@@ -894,7 +941,9 @@ export function r100BreakoutEngine(ctx: EngineContext): EngineResult | null {
     metadata: {
       r100BreakoutNativeScore:   nativeScore,
       r100BreakoutGatePassed:    gatePassed,
-      r100BreakoutGateThreshold: R100_BREAKOUT_MIN_GATE,
+      r100BreakoutGateThreshold: runtimeGate.gate,
+      r100BreakoutRuntimeCalibrated: runtimeGate.calibrated,
+      r100BreakoutRuntimeCalibrationRunId: runtimeGate.sourceRunId,
       r100BreakoutBlockReasons:  blockReasons,
       componentScores,
       componentFlags: {
@@ -1220,6 +1269,7 @@ function buildR100ContinuationRejectionReason(
 export function r100ContinuationEngine(ctx: EngineContext): EngineResult | null {
   const { features: f, operationalRegime, regimeConfidence } = ctx;
   if (f.symbol !== SYMBOL) return null;
+  const runtimeGate = resolveR100RuntimeGate(ctx, "r100_continuation_engine", R100_CONTINUATION_MIN_GATE);
 
   //  Regime filter: continuation is invalid without an established trend 
   if (
@@ -1264,11 +1314,11 @@ export function r100ContinuationEngine(ctx: EngineContext): EngineResult | null 
   );
 
   //  Engine-native gate 
-  const gatePassed = nativeScore >= R100_CONTINUATION_MIN_GATE;
+  const gatePassed = nativeScore >= runtimeGate.gate;
   const blockReasons: string[] = [];
 
   if (!gatePassed) {
-    blockReasons.push(`native_score_${nativeScore}_below_continuation_gate_${R100_CONTINUATION_MIN_GATE}`);
+    blockReasons.push(`native_score_${nativeScore}_below_continuation_gate_${runtimeGate.gate}`);
     const weakComponents = Object.entries(componentScores)
       .filter(([, v]) => v < 50)
       .map(([k, v]) => `${k}(${v}/100)`);
@@ -1306,7 +1356,9 @@ export function r100ContinuationEngine(ctx: EngineContext): EngineResult | null 
     metadata: {
       r100ContinuationNativeScore:   nativeScore,
       r100ContinuationGatePassed:    gatePassed,
-      r100ContinuationGateThreshold: R100_CONTINUATION_MIN_GATE,
+      r100ContinuationGateThreshold: runtimeGate.gate,
+      r100ContinuationRuntimeCalibrated: runtimeGate.calibrated,
+      r100ContinuationRuntimeCalibrationRunId: runtimeGate.sourceRunId,
       r100ContinuationBlockReasons:  blockReasons,
       componentScores,
       componentFlags: {

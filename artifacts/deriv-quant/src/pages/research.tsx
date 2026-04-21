@@ -729,7 +729,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     if (!results) return;
     const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
     const allTrades = Object.entries(results).flatMap(([sym, r]) =>
-      r.trades.map(t => ({ symbol: sym, ...t }))
+      r.trades.map(t => ({ ...t, symbol: sym }))
     ).sort((a, b) => (a.entryTs ?? 0) - (b.entryTs ?? 0));
     downloadJson({
       exported_at: new Date().toISOString(),

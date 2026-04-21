@@ -1,14 +1,14 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpRight, ArrowDownRight, Clock, BarChart2, Target, Shield,
   TrendingUp, TrendingDown, Activity, CircleSlash, ChevronDown, ChevronUp,
-  Zap, Timer, AlertTriangle,
+  Zap, Timer, AlertTriangle, RotateCcw, Loader2,
 } from "lucide-react";
 
 const BASE = import.meta.env.BASE_URL || "/";
-function apiFetch<T>(path: string): Promise<T> {
-  return fetch(`${BASE}${path.replace(/^\//, "")}`).then(r => {
+function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
+  return fetch(`${BASE}${path.replace(/^\//, "")}`, opts).then(async r => {
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
   });
@@ -62,6 +62,11 @@ interface ClosedTrade {
   peakPrice: number | null;
   maxExitTs: string | null;
   currentPrice: number | null;
+}
+
+interface OverviewMode {
+  mode: string;
+  paperModeActive: boolean;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -542,9 +547,13 @@ function AttributionSection({ closed }: { closed: ClosedTrade[] }) {
 type Tab = "open" | "closed" | "attribution";
 
 export default function Trades() {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>("open");
   const [modeFilter, setModeFilter] = useState("");
   const [symbolFilter, setSymbolFilter] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetMsg, setResetMsg] = useState<string | null>(null);
+  const [resetErr, setResetErr] = useState<string | null>(null);
 
   const { data: openPositions = [], isLoading: openLoading } = useQuery<OpenPosition[]>({
     queryKey: ["api/trade/positions"],
@@ -565,6 +574,13 @@ export default function Trades() {
     staleTime: 15_000,
   });
 
+  const { data: overview } = useQuery<OverviewMode>({
+    queryKey: ["api/overview-mode"],
+    queryFn: () => apiFetch("api/overview"),
+    refetchInterval: 10_000,
+    staleTime: 5000,
+  });
+
   const winners = closedTrades.filter(t => (t.pnl ?? 0) > 0);
   const losers = closedTrades.filter(t => (t.pnl ?? 0) < 0);
   const totalPnl = closedTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
@@ -580,16 +596,51 @@ export default function Trades() {
     { id: "attribution", label: "Attribution" },
   ];
 
+  const resetPaperTrading = async () => {
+    setResetBusy(true);
+    setResetErr(null);
+    setResetMsg(null);
+    try {
+      const d = await apiFetch<{ message?: string }>("api/trade/paper/reset", {
+        method: "POST",
+      });
+      setResetMsg(d.message ?? "Paper trading reset complete.");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["api/trade/positions"] }),
+        queryClient.invalidateQueries({ queryKey: ["api/trade/history"] }),
+        queryClient.invalidateQueries({ queryKey: ["api/overview-mode"] }),
+      ]);
+    } catch (e) {
+      setResetErr(e instanceof Error ? e.message : "Paper reset failed");
+    } finally {
+      setResetBusy(false);
+    }
+  };
+
   return (
     <div className="p-6 space-y-6 max-w-7xl">
 
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Trade Lifecycle</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Open positions, closed trade history, exit reasons, and engine attribution
-        </p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Trade Lifecycle</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Open positions, closed trade history, exit reasons, and engine attribution
+          </p>
+        </div>
+        {overview?.mode === "paper" && (
+          <button
+            onClick={() => void resetPaperTrading()}
+            disabled={resetBusy}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 text-xs font-semibold hover:bg-amber-500/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {resetBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+            {resetBusy ? "Resetting Paper..." : "Reset Paper Trading"}
+          </button>
+        )}
       </div>
+      {resetMsg && <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-4 py-3 text-xs text-green-400">{resetMsg}</div>}
+      {resetErr && <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-xs text-red-400">{resetErr}</div>}
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">

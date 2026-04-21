@@ -17,6 +17,57 @@ const MAX_CONSECUTIVE_ERRORS = 5;
 const API_RATE_DELAY_MS = 150;
 const DEFAULT_CAPITAL = 600;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
+const DATA_TOP_UP_JOB_PREFIX = "data_top_up_job_";
+
+type DataTopUpJobState = {
+  symbol: string;
+  status: "running" | "completed" | "failed";
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+  baseline1mCount: number;
+  current1mCount: number;
+  downloaded1mCount: number;
+  message: string;
+  error?: string | null;
+};
+
+function topUpJobKey(symbol: string): string {
+  return `${DATA_TOP_UP_JOB_PREFIX}${symbol}`;
+}
+
+async function getCurrent1mCount(symbol: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(candlesTable)
+    .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")));
+  return Number(row?.n ?? 0);
+}
+
+async function readDataTopUpJob(symbol: string): Promise<DataTopUpJobState | null> {
+  const rows = await db
+    .select()
+    .from(platformStateTable)
+    .where(eq(platformStateTable.key, topUpJobKey(symbol)))
+    .limit(1);
+  const raw = rows[0]?.value;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as DataTopUpJobState;
+  } catch {
+    return null;
+  }
+}
+
+async function writeDataTopUpJob(symbol: string, job: DataTopUpJobState): Promise<void> {
+  await db
+    .insert(platformStateTable)
+    .values({ key: topUpJobKey(symbol), value: JSON.stringify(job) })
+    .onConflictDoUpdate({
+      target: platformStateTable.key,
+      set: { value: JSON.stringify(job), updatedAt: new Date() },
+    });
+}
 
 export async function pruneOldCandles(): Promise<number> {
   const cutoffEpoch = Math.floor(Date.now() / 1000) - TWELVE_MONTHS_SECONDS;
@@ -662,18 +713,110 @@ router.post("/research/data-top-up", async (req, res): Promise<void> => {
   try {
     const derivClient = await getDerivClientWithDbToken();
     const { runDataTopUp } = await import("../core/dataIntegrity.js");
+    const existingJob = await readDataTopUpJob(symbol);
+    if (existingJob?.status === "running") {
+      res.status(409).json({
+        success: false,
+        error: `A historical download is already running for ${symbol}`,
+        tracker: existingJob,
+      });
+      return;
+    }
 
     if (background) {
-      runDataTopUp(symbol, derivClient).catch(err =>
-        console.error(`[DataTopUp] background run failed for ${symbol}:`, err),
-      );
-      res.json({ success: true, message: `Data top-up started in background for ${symbol}` });
+      const baseline1mCount = await getCurrent1mCount(symbol);
+      const startedAt = new Date().toISOString();
+      const runningJob: DataTopUpJobState = {
+        symbol,
+        status: "running",
+        startedAt,
+        updatedAt: startedAt,
+        completedAt: null,
+        baseline1mCount,
+        current1mCount: baseline1mCount,
+        downloaded1mCount: 0,
+        message: `Historical download running for ${symbol}`,
+        error: null,
+      };
+      await writeDataTopUpJob(symbol, runningJob);
+
+      void runDataTopUp(symbol, derivClient)
+        .then(async () => {
+          const current1mCount = await getCurrent1mCount(symbol);
+          await writeDataTopUpJob(symbol, {
+            ...runningJob,
+            status: "completed",
+            updatedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            current1mCount,
+            downloaded1mCount: Math.max(0, current1mCount - baseline1mCount),
+            message: `Historical download completed for ${symbol}`,
+          });
+        })
+        .catch(async err => {
+          console.error(`[DataTopUp] background run failed for ${symbol}:`, err);
+          const current1mCount = await getCurrent1mCount(symbol).catch(() => baseline1mCount);
+          await writeDataTopUpJob(symbol, {
+            ...runningJob,
+            status: "failed",
+            updatedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            current1mCount,
+            downloaded1mCount: Math.max(0, current1mCount - baseline1mCount),
+            message: `Historical download failed for ${symbol}`,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+
+      res.json({
+        success: true,
+        message: `Historical download started for ${symbol}`,
+        tracker: runningJob,
+      });
     } else {
       const result = await runDataTopUp(symbol, derivClient);
       res.json({ success: true, result });
     }
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Data top-up failed" });
+  }
+});
+
+router.get("/research/data-top-up-status/:symbol", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  if (!ALL_SYMBOLS.includes(symbol)) {
+    res.status(400).json({ error: `Unknown symbol: ${symbol}` });
+    return;
+  }
+
+  try {
+    const tracker = await readDataTopUpJob(symbol);
+    const current1mCount = await getCurrent1mCount(symbol);
+    if (!tracker) {
+      res.json({
+        success: true,
+        tracker: null,
+        current1mCount,
+      });
+      return;
+    }
+
+    const hydrated: DataTopUpJobState = {
+      ...tracker,
+      current1mCount,
+      downloaded1mCount: Math.max(0, current1mCount - tracker.baseline1mCount),
+      updatedAt: new Date().toISOString(),
+    };
+    if (tracker.status === "running") {
+      await writeDataTopUpJob(symbol, hydrated);
+    }
+
+    res.json({
+      success: true,
+      tracker: hydrated,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Top-up status failed" });
   }
 });
 

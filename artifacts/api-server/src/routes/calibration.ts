@@ -24,6 +24,7 @@ import {
   moveBehaviorPassesTable,
   calibrationPassRunsTable,
   detectedMovesTable,
+  platformStateTable,
   strategyCalibrationProfilesTable,
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -58,6 +59,12 @@ import {
   getLatestSymbolResearchProfile,
   upsertSymbolResearchProfile,
 } from "../core/calibration/symbolResearchProfile.js";
+import {
+  getPromotedSymbolRuntimeModel,
+  getStagedSymbolRuntimeModel,
+  promoteLatestSymbolResearchProfile,
+  stageLatestSymbolResearchProfile,
+} from "../core/calibration/promotedSymbolModel.js";
 
 const router: IRouter = Router();
 
@@ -1088,6 +1095,126 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Calibration import failed";
     console.error(`[calibration/import/${symbol}] error:`, message);
+    res.status(500).json({ error: message });
+  }
+});
+
+// —— GET /api/calibration/runtime-model/:symbol ————————————————————————————————————————
+// Returns the latest research profile plus staged/promoted runtime model state.
+router.get("/calibration/runtime-model/:symbol", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  const { symbolDomain } = checked;
+
+  try {
+    const [researchProfile, stagedModel, promotedModel] = await Promise.all([
+      getLatestSymbolResearchProfile(symbol),
+      getStagedSymbolRuntimeModel(symbol),
+      getPromotedSymbolRuntimeModel(symbol),
+    ]);
+
+    const latestRunId = researchProfile?.lastRunId ?? null;
+    const promotedRunId = promotedModel?.sourceRunId ?? null;
+    const stagedRunId = stagedModel?.sourceRunId ?? null;
+
+    res.json(withSymbolDomain(symbol, symbolDomain, {
+      ok: true,
+      researchProfile,
+      stagedModel,
+      promotedModel,
+      lifecycle: {
+        hasResearchProfile: Boolean(researchProfile),
+        hasStagedModel: Boolean(stagedModel),
+        hasPromotedModel: Boolean(promotedModel),
+        latestRunId,
+        stagedRunId,
+        promotedRunId,
+        runtimeSource: promotedModel ? "promoted_symbol_model" : "none",
+        driftPendingPromotion: Boolean(
+          latestRunId &&
+            ((promotedRunId !== null && latestRunId !== promotedRunId) ||
+              (promotedRunId === null && researchProfile)),
+        ),
+      },
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Runtime model fetch failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+// —— POST /api/calibration/runtime-model/:symbol/stage ———————————————————————————————————
+// Builds a non-runtime staged model from the latest research profile.
+router.post("/calibration/runtime-model/:symbol/stage", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  const { symbolDomain } = checked;
+
+  try {
+    const stateRows = await db.select().from(platformStateTable);
+    const stateMap: Record<string, string> = {};
+    for (const row of stateRows) stateMap[row.key] = row.value;
+
+    const model = await stageLatestSymbolResearchProfile(symbol, stateMap);
+    if (!model) {
+      res.status(404).json(withSymbolDomain(symbol, symbolDomain, {
+        error: `No symbol research profile for ${symbol}. Run full calibration first.`,
+      }));
+      return;
+    }
+
+    res.json(withSymbolDomain(symbol, symbolDomain, {
+      ok: true,
+      staged: true,
+      runtimeChanged: false,
+      model,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Runtime model staging failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+// —— POST /api/calibration/runtime-model/:symbol/promote —————————————————————————————————
+// Explicitly promotes the latest research profile into the runtime owner store.
+router.post("/calibration/runtime-model/:symbol/promote", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  const { symbolDomain } = checked;
+
+  try {
+    const stateRows = await db.select().from(platformStateTable);
+    const stateMap: Record<string, string> = {};
+    for (const row of stateRows) stateMap[row.key] = row.value;
+
+    const model = await promoteLatestSymbolResearchProfile(symbol, stateMap);
+    if (!model) {
+      res.status(404).json(withSymbolDomain(symbol, symbolDomain, {
+        error: `No symbol research profile for ${symbol}. Run full calibration first.`,
+      }));
+      return;
+    }
+
+    res.json(withSymbolDomain(symbol, symbolDomain, {
+      ok: true,
+      promoted: true,
+      runtimeChanged: true,
+      model,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Runtime model promotion failed";
     res.status(500).json({ error: message });
   }
 });
