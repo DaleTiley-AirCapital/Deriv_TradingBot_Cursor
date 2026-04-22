@@ -11,7 +11,10 @@
  */
 
 export const PRIMARY_MODEL = "gpt-5.1" as const;
-export const FALLBACK_MODEL = "gpt-5-mini" as const;
+// Keep fallback on the approved GPT-5.1 line.
+// We must not silently downgrade calibration/research runs to a different model
+// family that the project may not have access to.
+export const FALLBACK_MODEL = "gpt-5.1" as const;
 export const EMBEDDING_MODEL = "text-embedding-3-large" as const;
 
 export const MAX_RETRIEVAL_TOKENS = 20_000;
