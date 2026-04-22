@@ -6,6 +6,7 @@ import {
   Target, Zap, TrendingUp, TrendingDown, Search, ChevronDown, ChevronUp, Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDurationCompact } from "@/lib/time";
 
 const BASE = import.meta.env.BASE_URL || "/";
 
@@ -827,7 +828,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
             {running
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
               : <BarChart2 className="w-3.5 h-3.5" />}
-            {running ? `Running ${elapsed}s` : "Run Backtest"}
+            {running ? `Running ${formatDurationCompact(elapsed)}` : "Run Backtest"}
           </button>
 
           {results !== null && totalTrades !== null && totalTrades > 0 && (
@@ -1915,14 +1916,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
         {(detecting || passForThisSymbol) && runElapsed > 0 && (
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground flex-wrap">
             <Loader2 className="w-3 h-3 animate-spin" />
-            Elapsed: <strong className="text-foreground font-mono">{runElapsed}s</strong>
-            {passForThisSymbol && passStatus && (
-              <span className="ml-2 text-foreground">
-                {" "}
-                {(passStatus.metaJson as { progress?: { label?: string } } | null)?.progress?.label
-                  ?? `${passStatus.processedMoves ?? 0}/${passStatus.totalMoves ?? ""} moves  ${passStatus.passName ?? "all"}`}
-              </span>
-            )}
+            Elapsed: <strong className="text-foreground font-mono">{formatDurationCompact(runElapsed)}</strong>
           </div>
         )}
 
@@ -2653,7 +2647,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             <div className="space-y-0.5">
               <StatRow label="Move count" value={researchProfile.moveCount ?? ""} />
               <StatRow label="Estimated trades / month" value={researchProfile.estimatedTradesPerMonth?.toFixed?.(1) ?? ""} />
-              <StatRow label="Scan cadence" value={researchProfile.recommendedScanIntervalSeconds ? `${researchProfile.recommendedScanIntervalSeconds}s` : ""} />
+              <StatRow label="Scan cadence" value={researchProfile.recommendedScanIntervalSeconds ? formatDurationCompact(researchProfile.recommendedScanIntervalSeconds) : ""} />
               <StatRow label="Entry model" value={researchProfile.recommendedEntryModel ?? ""} />
               <StatRow
                 label="Hold duration bands"
@@ -2995,7 +2989,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                         <td className="px-3 py-1.5 font-mono text-foreground">{run.processedMoves ?? ""}</td>
                         <td className="px-3 py-1.5 font-mono text-foreground">{run.failedMoves ?? ""}</td>
                         <td className="px-3 py-1.5 font-mono text-muted-foreground">
-                          {elapsedSec !== null ? `${elapsedSec}s` : ""}
+                          {elapsedSec !== null ? formatDurationCompact(elapsedSec) : ""}
                         </td>
                         <td className="px-3 py-1.5 font-mono text-muted-foreground">{run.windowDays}d</td>
                         <td className="px-3 py-1.5 text-muted-foreground">

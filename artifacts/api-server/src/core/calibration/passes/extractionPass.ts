@@ -15,8 +15,13 @@
 
 import { db } from "@workspace/db";
 import {
+  calibrationEntryIdealsTable,
+  calibrationExitRiskProfilesTable,
+  calibrationFeatureRelevanceTable,
   detectedMovesTable,
+  moveFamilyInferencesTable,
   movePrecursorPassesTable,
+  moveProgressionArtifactsTable,
   moveBehaviorPassesTable,
   strategyCalibrationProfilesTable,
   type DetectedMoveRow,
@@ -26,6 +31,7 @@ import { chatCompleteJsonPrefer } from "../../../infrastructure/openai.js";
 import { retrieveContext } from "../../ai/contextRetriever.js";
 import { parseAiJsonObject } from "../parseAiJson.js";
 import { upsertSymbolResearchProfile } from "../symbolResearchProfile.js";
+import { runEntryProgressionAnalysis, runExitRiskAnalysis } from "../progressionArtifacts.js";
 
 function median(arr: number[]): number {
   if (arr.length === 0) return 0;
@@ -65,6 +71,20 @@ export async function runExtractionPass(
 
   const behaviorRows = triggerRows.filter(r => r.passName === "behavior");
   const triggerOnlyRows = triggerRows.filter(r => r.passName === "trigger");
+  const familyRows = currentMoveIds.length > 0
+    ? await db.select().from(moveFamilyInferencesTable)
+        .where(and(
+          eq(moveFamilyInferencesTable.symbol, symbol),
+          inArray(moveFamilyInferencesTable.moveId, currentMoveIds),
+        ))
+    : [];
+  const progressionRows = currentMoveIds.length > 0
+    ? await db.select().from(moveProgressionArtifactsTable)
+        .where(and(
+          eq(moveProgressionArtifactsTable.symbol, symbol),
+          inArray(moveProgressionArtifactsTable.moveId, currentMoveIds),
+        ))
+    : [];
 
   // Compute aggregate stats
   const movePcts      = moves.map(m => m.movePct * 100);
@@ -218,6 +238,75 @@ Respond with ONLY valid JSON:
     rawExtraction:          parsed,
   };
 
+  const strategyFamilies = [...new Set(
+    familyRows
+      .map((row) => row.strategyFamily)
+      .filter((value): value is string => typeof value === "string" && value.length > 0),
+  )];
+  const progressionOutputs: Record<string, unknown> = {};
+  const windowModelByFamily: Record<string, unknown> = {};
+
+  for (const family of strategyFamilies) {
+    const [entryAnalysis, exitAnalysis, featureRows, entryIdealRow, exitRiskRow] = await Promise.all([
+      runEntryProgressionAnalysis(symbol, family, runId),
+      runExitRiskAnalysis(symbol, family, runId),
+      db.select().from(calibrationFeatureRelevanceTable)
+        .where(and(
+          eq(calibrationFeatureRelevanceTable.symbol, symbol),
+          eq(calibrationFeatureRelevanceTable.strategyFamily, family),
+        )),
+      db.select().from(calibrationEntryIdealsTable)
+        .where(and(
+          eq(calibrationEntryIdealsTable.symbol, symbol),
+          eq(calibrationEntryIdealsTable.strategyFamily, family),
+        ))
+        .limit(1),
+      db.select().from(calibrationExitRiskProfilesTable)
+        .where(and(
+          eq(calibrationExitRiskProfilesTable.symbol, symbol),
+          eq(calibrationExitRiskProfilesTable.strategyFamily, family),
+        ))
+        .limit(1),
+    ]);
+
+    const familyWindowRows = familyRows.filter((row) => row.strategyFamily === family);
+    windowModelByFamily[family] = {
+      developmentBars: average(familyWindowRows.map((row) => Number(row.developmentBars ?? 0))),
+      precursorBars: average(familyWindowRows.map((row) => Number(row.precursorBars ?? 0))),
+      triggerBars: average(familyWindowRows.map((row) => Number(row.triggerBars ?? 0))),
+      behaviorBars: average(familyWindowRows.map((row) => Number(row.behaviorBars ?? 0))),
+      confidenceScore: average(familyWindowRows.map((row) => Number(row.confidenceScore ?? 0))),
+      moveCount: familyWindowRows.length,
+    };
+
+    progressionOutputs[family] = {
+      moveCount: familyWindowRows.length,
+      progressionArtifactCount: progressionRows.filter((row) => row.strategyFamily === family).length,
+      windowModel: windowModelByFamily[family],
+      featureRelevance: featureRows,
+      entryIdealProfile: entryIdealRow[0] ?? entryAnalysis ?? null,
+      exitRiskProfile: exitRiskRow[0] ?? exitAnalysis ?? null,
+      progressionSummary: asProgressionSummary(entryIdealRow[0]?.progressionSummary ?? (entryAnalysis as Record<string, unknown> | null)?.progressionSummary ?? null),
+    };
+  }
+
+  const enrichedFeeddownSchema = {
+    ...feeddownSchema,
+    windowModel: windowModelByFamily,
+    featureRelevance: Object.fromEntries(
+      Object.entries(progressionOutputs).map(([family, value]) => [family, (value as Record<string, unknown>).featureRelevance ?? []]),
+    ),
+    entryIdealProfile: Object.fromEntries(
+      Object.entries(progressionOutputs).map(([family, value]) => [family, (value as Record<string, unknown>).entryIdealProfile ?? null]),
+    ),
+    exitRiskProfile: Object.fromEntries(
+      Object.entries(progressionOutputs).map(([family, value]) => [family, (value as Record<string, unknown>).exitRiskProfile ?? null]),
+    ),
+    progressionSummary: Object.fromEntries(
+      Object.entries(progressionOutputs).map(([family, value]) => [family, (value as Record<string, unknown>).progressionSummary ?? null]),
+    ),
+  };
+
   const avgMovePct      = movePcts.length  > 0 ? movePcts.reduce((a, b) => a + b, 0) / movePcts.length : 0;
   const avgHoldHours    = holdHours.length > 0 ? holdHours.reduce((a, b) => a + b, 0) / holdHours.length : 0;
   const avgCaptureable  = capturable.length > 0 ? capturable.reduce((a, b) => a + b, 0) / capturable.length : 0;
@@ -248,7 +337,7 @@ Respond with ONLY valid JSON:
       engineCoverage:     buildEngineCoverage(precursorRows),
       precursorSummary:   topConditions.slice(0, 10),
       triggerSummary:     topTriggers.slice(0, 10),
-      feeddownSchema,
+      feeddownSchema:     enrichedFeeddownSchema,
       profitabilitySummary,
       lastRunId:          runId,
     })
@@ -268,7 +357,7 @@ Respond with ONLY valid JSON:
         engineCoverage:     buildEngineCoverage(precursorRows),
         precursorSummary:   topConditions.slice(0, 10),
         triggerSummary:     topTriggers.slice(0, 10),
-        feeddownSchema,
+        feeddownSchema:     enrichedFeeddownSchema,
         profitabilitySummary,
         lastRunId:          runId,
         generatedAt:        new Date(),
@@ -326,6 +415,17 @@ Respond with ONLY valid JSON:
   }
 
   await upsertSymbolResearchProfile(symbol, runId);
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+  return Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(4));
+}
+
+function asProgressionSummary(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 // ── Profitability summary builder ─────────────────────────────────────────────

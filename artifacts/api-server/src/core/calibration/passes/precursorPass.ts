@@ -19,6 +19,8 @@ import { chatCompletePrecursorPassPrefer } from "../../../infrastructure/openai.
 import { retrieveContext } from "../../ai/contextRetriever.js";
 import { parseAiJsonObject } from "../parseAiJson.js";
 import { repairCalibrationJson } from "../jsonRepairAssistant.js";
+import { runFamilyWindowInferencePass } from "./familyWindowInferencePass.js";
+import { upsertMoveProgressionArtifact } from "../progressionArtifacts.js";
 
 const PRECURSOR_LOOKBACK_BARS = 96;
 
@@ -140,6 +142,9 @@ export async function runPrecursorPass(
   move: DetectedMoveRow,
   runId: number,
 ): Promise<void> {
+  const familyInference = await runFamilyWindowInferencePass(move, runId);
+  await upsertMoveProgressionArtifact(move, familyInference, runId);
+
   const precursorFrom = move.startTs - PRECURSOR_LOOKBACK_BARS * 60;
 
   const candles = await backgroundDb

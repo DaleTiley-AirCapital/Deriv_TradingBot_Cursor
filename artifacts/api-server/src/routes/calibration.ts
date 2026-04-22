@@ -20,10 +20,15 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import {
+  calibrationEntryIdealsTable,
+  calibrationExitRiskProfilesTable,
+  calibrationFeatureRelevanceTable,
   movePrecursorPassesTable,
   moveBehaviorPassesTable,
   calibrationPassRunsTable,
   detectedMovesTable,
+  moveFamilyInferencesTable,
+  moveProgressionArtifactsTable,
   platformStateTable,
   strategyCalibrationProfilesTable,
 } from "@workspace/db";
@@ -139,7 +144,7 @@ router.post("/calibration/reset/:symbol", async (req, res): Promise<void> => {
     await clearCalibrationArtifactsForSymbol(symbol);
     res.json(withSymbolDomain(symbol, symbolDomain, {
       ok: true,
-      cleared: ["profiles", "precursor_passes", "behavior_passes", "pass_runs", "detected_moves"],
+      cleared: ["profiles", "precursor_passes", "behavior_passes", "pass_runs", "detected_moves", "family_inferences", "progression_artifacts", "feature_relevance", "entry_ideals", "exit_risk_profiles"],
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Calibration reset failed";
@@ -713,11 +718,16 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
 
     } else if (exportType === "passes") {
       // Return run headers + raw per-move pass records (precursor pass + behavior/trigger passes)
-      const [runs, profiles, precursorRaw, behaviorRaw] = await Promise.all([
+      const [runs, profiles, precursorRaw, behaviorRaw, familyInferences, progressionArtifacts, featureRelevance, entryIdeals, exitRiskProfiles] = await Promise.all([
         getAllPassRuns(symbol),
         getAllCalibrationProfiles(symbol),
         db.select().from(movePrecursorPassesTable).where(eq(movePrecursorPassesTable.symbol, symbol)),
         db.select().from(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol)),
+        db.select().from(moveFamilyInferencesTable).where(eq(moveFamilyInferencesTable.symbol, symbol)),
+        db.select().from(moveProgressionArtifactsTable).where(eq(moveProgressionArtifactsTable.symbol, symbol)),
+        db.select().from(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol)),
+        db.select().from(calibrationEntryIdealsTable).where(eq(calibrationEntryIdealsTable.symbol, symbol)),
+        db.select().from(calibrationExitRiskProfilesTable).where(eq(calibrationExitRiskProfilesTable.symbol, symbol)),
       ]);
       response = {
         ...withSymbolDomain(symbol, symbolDomain, {}),
@@ -731,6 +741,16 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
           precursorPasses: precursorRaw,
           behaviorPassCount: behaviorRaw.length,
           behaviorPasses: behaviorRaw,
+          familyInferenceCount: familyInferences.length,
+          familyInferences,
+          progressionArtifactCount: progressionArtifacts.length,
+          progressionArtifacts,
+          featureRelevanceCount: featureRelevance.length,
+          featureRelevance,
+          entryIdealCount: entryIdeals.length,
+          entryIdeals,
+          exitRiskProfileCount: exitRiskProfiles.length,
+          exitRiskProfiles,
         },
         profileSummaries: {
           description: "Aggregated calibration profiles per move type from all passes (extraction pass output).",
@@ -854,13 +874,18 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
     v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 
   try {
-    let imported = {
-      moves: 0,
-      passRuns: 0,
-      precursorPasses: 0,
-      behaviorPasses: 0,
-      profiles: 0,
-    };
+      let imported = {
+        moves: 0,
+        passRuns: 0,
+        precursorPasses: 0,
+        behaviorPasses: 0,
+        profiles: 0,
+        familyInferences: 0,
+        progressionArtifacts: 0,
+        featureRelevance: 0,
+        entryIdeals: 0,
+        exitRiskProfiles: 0,
+      };
 
     if (importType === "moves") {
       const moves = asArray((payload as Record<string, unknown>).moves ?? (payload as Record<string, unknown>).detected_moves);
@@ -900,9 +925,19 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
       const raw = json((payload as Record<string, unknown>).rawPassRecords) ?? {};
       const precursor = asArray(raw.precursorPasses ?? (payload as Record<string, unknown>).precursorPasses);
       const behavior = asArray(raw.behaviorPasses ?? (payload as Record<string, unknown>).behaviorPasses);
+      const familyInferences = asArray(raw.familyInferences ?? (payload as Record<string, unknown>).familyInferences);
+      const progressionArtifacts = asArray(raw.progressionArtifacts ?? (payload as Record<string, unknown>).progressionArtifacts);
+      const featureRelevance = asArray(raw.featureRelevance ?? (payload as Record<string, unknown>).featureRelevance);
+      const entryIdeals = asArray(raw.entryIdeals ?? (payload as Record<string, unknown>).entryIdeals);
+      const exitRiskProfiles = asArray(raw.exitRiskProfiles ?? (payload as Record<string, unknown>).exitRiskProfiles);
       const profiles = asArray((payload as Record<string, unknown>).profiles ?? json((payload as Record<string, unknown>).profileSummaries)?.profiles);
 
       if (replace) {
+        await db.delete(calibrationEntryIdealsTable).where(eq(calibrationEntryIdealsTable.symbol, symbol));
+        await db.delete(calibrationExitRiskProfilesTable).where(eq(calibrationExitRiskProfilesTable.symbol, symbol));
+        await db.delete(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol));
+        await db.delete(moveProgressionArtifactsTable).where(eq(moveProgressionArtifactsTable.symbol, symbol));
+        await db.delete(moveFamilyInferencesTable).where(eq(moveFamilyInferencesTable.symbol, symbol));
         await db.delete(movePrecursorPassesTable).where(eq(movePrecursorPassesTable.symbol, symbol));
         await db.delete(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol));
         await db.delete(calibrationPassRunsTable).where(eq(calibrationPassRunsTable.symbol, symbol));
@@ -959,6 +994,111 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
           rawAiResponse: json(b.rawAiResponse),
           passRunId: Number.isFinite(num(b.passRunId, NaN)) ? Math.round(num(b.passRunId, 0)) : null,
         })));
+      }
+      if (familyInferences.length > 0) {
+        await db.insert(moveFamilyInferencesTable).values(familyInferences.map((f) => ({
+          moveId: Math.round(num(f.moveId, 0)),
+          symbol,
+          strategyFamily: txt(f.strategyFamily, "unknown"),
+          confidenceScore: num(f.confidenceScore, 0),
+          developmentBars: Math.round(num(f.developmentBars, 0)),
+          precursorBars: Math.round(num(f.precursorBars, 0)),
+          triggerBars: Math.round(num(f.triggerBars, 0)),
+          behaviorBars: Math.round(num(f.behaviorBars, 0)),
+          reasoningSummary: txt(f.reasoningSummary, ""),
+          rawAiResponse: json(f.rawAiResponse),
+          passRunId: Number.isFinite(num(f.passRunId, NaN)) ? Math.round(num(f.passRunId, 0)) : null,
+        })));
+      }
+      if (progressionArtifacts.length > 0) {
+        await db.insert(moveProgressionArtifactsTable).values(progressionArtifacts.map((p) => ({
+          moveId: Math.round(num(p.moveId, 0)),
+          symbol,
+          strategyFamily: txt(p.strategyFamily, "unknown"),
+          windowModel: p.windowModel as never,
+          progressionSummary: p.progressionSummary as never,
+          featureStats: p.featureStats as never,
+          compactRawSlices: p.compactRawSlices as never,
+          passRunId: Number.isFinite(num(p.passRunId, NaN)) ? Math.round(num(p.passRunId, 0)) : null,
+        })));
+      }
+      if (featureRelevance.length > 0) {
+        for (const row of featureRelevance) {
+          await db.insert(calibrationFeatureRelevanceTable).values({
+            symbol,
+            strategyFamily: txt(row.strategyFamily, "unknown"),
+            featureName: txt(row.featureName, "unknown"),
+            relevanceScore: num(row.relevanceScore, 0),
+            precursorUsefulness: num(row.precursorUsefulness, 0),
+            triggerUsefulness: num(row.triggerUsefulness, 0),
+            behaviorUsefulness: num(row.behaviorUsefulness, 0),
+            notes: txt(row.notes, ""),
+            sourceRunId: Number.isFinite(num(row.sourceRunId, NaN)) ? Math.round(num(row.sourceRunId, 0)) : null,
+          }).onConflictDoUpdate({
+            target: [
+              calibrationFeatureRelevanceTable.symbol,
+              calibrationFeatureRelevanceTable.strategyFamily,
+              calibrationFeatureRelevanceTable.featureName,
+            ],
+            set: {
+              relevanceScore: num(row.relevanceScore, 0),
+              precursorUsefulness: num(row.precursorUsefulness, 0),
+              triggerUsefulness: num(row.triggerUsefulness, 0),
+              behaviorUsefulness: num(row.behaviorUsefulness, 0),
+              notes: txt(row.notes, ""),
+              sourceRunId: Number.isFinite(num(row.sourceRunId, NaN)) ? Math.round(num(row.sourceRunId, 0)) : null,
+              updatedAt: new Date(),
+            },
+          });
+        }
+      }
+      if (entryIdeals.length > 0) {
+        for (const row of entryIdeals) {
+          await db.insert(calibrationEntryIdealsTable).values({
+            symbol,
+            strategyFamily: txt(row.strategyFamily, "unknown"),
+            idealPrecursorProfile: row.idealPrecursorProfile as never,
+            idealTriggerProfile: row.idealTriggerProfile as never,
+            featureBands: row.featureBands as never,
+            entryQualityNarrative: txt(row.entryQualityNarrative, ""),
+            progressionSummary: row.progressionSummary as never,
+            sourceRunId: Number.isFinite(num(row.sourceRunId, NaN)) ? Math.round(num(row.sourceRunId, 0)) : null,
+          }).onConflictDoUpdate({
+            target: [calibrationEntryIdealsTable.symbol, calibrationEntryIdealsTable.strategyFamily],
+            set: {
+              idealPrecursorProfile: row.idealPrecursorProfile as never,
+              idealTriggerProfile: row.idealTriggerProfile as never,
+              featureBands: row.featureBands as never,
+              entryQualityNarrative: txt(row.entryQualityNarrative, ""),
+              progressionSummary: row.progressionSummary as never,
+              sourceRunId: Number.isFinite(num(row.sourceRunId, NaN)) ? Math.round(num(row.sourceRunId, 0)) : null,
+              updatedAt: new Date(),
+            },
+          });
+        }
+      }
+      if (exitRiskProfiles.length > 0) {
+        for (const row of exitRiskProfiles) {
+          await db.insert(calibrationExitRiskProfilesTable).values({
+            symbol,
+            strategyFamily: txt(row.strategyFamily, "unknown"),
+            regressionFingerprints: row.regressionFingerprints as never,
+            moveBreakWarningPatterns: row.moveBreakWarningPatterns as never,
+            closureSignals: row.closureSignals as never,
+            trailingInterpretationNotes: txt(row.trailingInterpretationNotes, ""),
+            sourceRunId: Number.isFinite(num(row.sourceRunId, NaN)) ? Math.round(num(row.sourceRunId, 0)) : null,
+          }).onConflictDoUpdate({
+            target: [calibrationExitRiskProfilesTable.symbol, calibrationExitRiskProfilesTable.strategyFamily],
+            set: {
+              regressionFingerprints: row.regressionFingerprints as never,
+              moveBreakWarningPatterns: row.moveBreakWarningPatterns as never,
+              closureSignals: row.closureSignals as never,
+              trailingInterpretationNotes: txt(row.trailingInterpretationNotes, ""),
+              sourceRunId: Number.isFinite(num(row.sourceRunId, NaN)) ? Math.round(num(row.sourceRunId, 0)) : null,
+              updatedAt: new Date(),
+            },
+          });
+        }
       }
 
       if (profiles.length > 0) {
@@ -1017,6 +1157,11 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
       imported.precursorPasses = precursor.length;
       imported.behaviorPasses = behavior.length;
       imported.profiles = profiles.length;
+      imported.familyInferences = familyInferences.length;
+      imported.progressionArtifacts = progressionArtifacts.length;
+      imported.featureRelevance = featureRelevance.length;
+      imported.entryIdeals = entryIdeals.length;
+      imported.exitRiskProfiles = exitRiskProfiles.length;
     }
 
     if (importType === "profile") {

@@ -13,9 +13,14 @@
 
 import { db } from "@workspace/db";
 import {
+  calibrationEntryIdealsTable,
+  calibrationExitRiskProfilesTable,
+  calibrationFeatureRelevanceTable,
   detectedMovesTable,
   movePrecursorPassesTable,
+  moveFamilyInferencesTable,
   moveBehaviorPassesTable,
+  moveProgressionArtifactsTable,
   strategyCalibrationProfilesTable,
   calibrationPassRunsTable,
 } from "@workspace/db";
@@ -73,6 +78,11 @@ export interface FullCalibrationExport {
   };
   aggregate: CalibrationAggregateSummary;
   profiles: typeof strategyCalibrationProfilesTable.$inferSelect[];
+  familyInferences: typeof moveFamilyInferencesTable.$inferSelect[];
+  progressionArtifacts: typeof moveProgressionArtifactsTable.$inferSelect[];
+  featureRelevance: typeof calibrationFeatureRelevanceTable.$inferSelect[];
+  entryIdeals: typeof calibrationEntryIdealsTable.$inferSelect[];
+  exitRiskProfiles: typeof calibrationExitRiskProfilesTable.$inferSelect[];
   latestRunStatus: typeof calibrationPassRunsTable.$inferSelect | null;
   researchProfile: SymbolResearchProfile | null;
   costTelemetry: {
@@ -290,6 +300,13 @@ export async function getFullCalibrationExport(
       .limit(1),
     getLatestSymbolResearchProfile(symbol),
   ]);
+  const [familyInferences, progressionArtifacts, featureRelevance, entryIdeals, exitRiskProfiles] = await Promise.all([
+    db.select().from(moveFamilyInferencesTable).where(eq(moveFamilyInferencesTable.symbol, symbol)),
+    db.select().from(moveProgressionArtifactsTable).where(eq(moveProgressionArtifactsTable.symbol, symbol)),
+    db.select().from(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol)),
+    db.select().from(calibrationEntryIdealsTable).where(eq(calibrationEntryIdealsTable.symbol, symbol)),
+    db.select().from(calibrationExitRiskProfilesTable).where(eq(calibrationExitRiskProfilesTable.symbol, symbol)),
+  ]);
   const latest = latestRun[0] ?? null;
   const meta = latest?.metaJson && typeof latest.metaJson === "object"
     ? (latest.metaJson as Record<string, unknown>)
@@ -320,6 +337,11 @@ export async function getFullCalibrationExport(
     },
     aggregate,
     profiles,
+    familyInferences,
+    progressionArtifacts,
+    featureRelevance,
+    entryIdeals,
+    exitRiskProfiles,
     latestRunStatus: latest,
     researchProfile,
     costTelemetry: usage

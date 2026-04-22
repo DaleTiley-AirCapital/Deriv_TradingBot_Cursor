@@ -20,6 +20,8 @@
 import { db } from "@workspace/db";
 import {
   calibrationPassRunsTable,
+  moveFamilyInferencesTable,
+  moveProgressionArtifactsTable,
   detectedMovesTable,
   strategyCalibrationProfilesTable,
   type DetectedMoveRow,
@@ -177,6 +179,24 @@ async function updateRunRecord(
     .where(eq(calibrationPassRunsTable.id, runId));
 }
 
+async function hasFamilyInference(moveId: number): Promise<boolean> {
+  const rows = await db
+    .select({ id: moveFamilyInferencesTable.id })
+    .from(moveFamilyInferencesTable)
+    .where(eq(moveFamilyInferencesTable.moveId, moveId))
+    .limit(1);
+  return rows.length > 0;
+}
+
+async function hasProgressionArtifact(moveId: number): Promise<boolean> {
+  const rows = await db
+    .select({ id: moveProgressionArtifactsTable.id })
+    .from(moveProgressionArtifactsTable)
+    .where(eq(moveProgressionArtifactsTable.moveId, moveId))
+    .limit(1);
+  return rows.length > 0;
+}
+
 const STALE_RUNNING_MS = 6 * 60 * 60 * 1000; // 6h
 
 function isStaleRunningRun(row: typeof calibrationPassRunsTable.$inferSelect): boolean {
@@ -286,7 +306,9 @@ async function executeCalibrationRun(
       if (!force) {
         const alreadyDone =
           pass === "precursor"
-            ? await hasPrecursorPass(move.id)
+            ? (await hasPrecursorPass(move.id)) &&
+              (await hasFamilyInference(move.id)) &&
+              (await hasProgressionArtifact(move.id))
             : await hasBehaviorPass(move.id, pass as "trigger" | "behavior");
         if (alreadyDone) continue;
       }

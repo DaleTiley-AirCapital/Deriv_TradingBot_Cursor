@@ -17,10 +17,15 @@
 
 import { db, backgroundDb } from "@workspace/db";
 import {
+  calibrationEntryIdealsTable,
+  calibrationExitRiskProfilesTable,
+  calibrationFeatureRelevanceTable,
   candlesTable,
   detectedMovesTable,
+  moveFamilyInferencesTable,
   movePrecursorPassesTable,
   moveBehaviorPassesTable,
+  moveProgressionArtifactsTable,
   strategyCalibrationProfilesTable,
   calibrationPassRunsTable,
   type InsertDetectedMoveRow,
@@ -62,6 +67,26 @@ async function safeDeleteForSymbol(op: () => Promise<unknown>, label: string): P
  * reference old move IDs or block new runs (409).
  */
 export async function clearCalibrationArtifactsForSymbol(symbol: string): Promise<void> {
+  await safeDeleteForSymbol(
+    () => db.delete(calibrationEntryIdealsTable).where(eq(calibrationEntryIdealsTable.symbol, symbol)),
+    "calibration_entry_ideals",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(calibrationExitRiskProfilesTable).where(eq(calibrationExitRiskProfilesTable.symbol, symbol)),
+    "calibration_exit_risk_profiles",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol)),
+    "calibration_feature_relevance",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(moveProgressionArtifactsTable).where(eq(moveProgressionArtifactsTable.symbol, symbol)),
+    "move_progression_artifacts",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(moveFamilyInferencesTable).where(eq(moveFamilyInferencesTable.symbol, symbol)),
+    "move_family_inferences",
+  );
   await safeDeleteForSymbol(
     () => db.delete(strategyCalibrationProfilesTable).where(eq(strategyCalibrationProfilesTable.symbol, symbol)),
     "strategy_calibration_profiles",

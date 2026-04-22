@@ -32,6 +32,13 @@ type DataTopUpJobState = {
   error?: string | null;
 };
 
+type HistoricalDownloadProgress = {
+  tf: "1m" | "5m";
+  message: string;
+  current1mCount?: number;
+  downloaded1mCount?: number;
+};
+
 function topUpJobKey(symbol: string): string {
   return `${DATA_TOP_UP_JOB_PREFIX}${symbol}`;
 }
@@ -67,6 +74,145 @@ async function writeDataTopUpJob(symbol: string, job: DataTopUpJobState): Promis
       target: platformStateTable.key,
       set: { value: JSON.stringify(job), updatedAt: new Date() },
     });
+}
+
+async function downloadHistoricalDataForSymbol(
+  symbol: string,
+  onProgress?: (progress: HistoricalDownloadProgress) => Promise<void> | void,
+): Promise<{
+  totalInserted: number;
+  inserted1mCount: number;
+  final1mCount: number;
+  allSkipped: boolean;
+}> {
+  const client = await getDerivClientWithDbToken();
+  await client.connect();
+  const apiSymbol = getApiSymbol(symbol);
+
+  const nowEpoch = Math.floor(Date.now() / 1000);
+  const oneYearAgoEpoch = nowEpoch - TWELVE_MONTHS_SECONDS;
+  const timeframes = [
+    { tf: "1m" as const, granularity: GRANULARITY_1M },
+    { tf: "5m" as const, granularity: GRANULARITY_5M },
+  ];
+
+  let totalInserted = 0;
+  let inserted1mCount = 0;
+  let allSkipped = true;
+
+  for (const { tf, granularity } of timeframes) {
+    const coverageResult = await db
+      .select({
+        cnt: count(),
+        maxTs: sql<number>`MAX(${candlesTable.openTs})`,
+      })
+      .from(candlesTable)
+      .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, tf)));
+    const existingCnt = Number(coverageResult[0]?.cnt ?? 0);
+    const existingMaxTs = Number(coverageResult[0]?.maxTs ?? 0);
+
+    const minSufficientCount = tf === "1m" ? 200_000 : 40_000;
+    const hasEnoughData = existingCnt >= minSufficientCount;
+    const isRecent = existingMaxTs > 0 && existingMaxTs >= nowEpoch - Math.max(granularity * 2, 3600);
+    const stopEpoch = existingMaxTs > oneYearAgoEpoch && hasEnoughData ? existingMaxTs + 1 : oneYearAgoEpoch;
+
+    if (isRecent && hasEnoughData) {
+      await onProgress?.({
+        tf,
+        message: `${symbol} ${tf}: up to date (${existingCnt.toLocaleString()} candles), skipping`,
+        current1mCount: tf === "1m" ? existingCnt : undefined,
+        downloaded1mCount: inserted1mCount,
+      });
+      continue;
+    }
+
+    allSkipped = false;
+    await onProgress?.({
+      tf,
+      message: existingCnt > 0
+        ? `${symbol} ${tf}: ${existingCnt.toLocaleString()} candles exist, gap-filling to now`
+        : `${symbol} ${tf}: no candles found, backfilling the full 12-month window`,
+      current1mCount: tf === "1m" ? existingCnt : undefined,
+      downloaded1mCount: inserted1mCount,
+    });
+
+    let endEpoch = nowEpoch;
+    let page = 0;
+    let consecutiveErrors = 0;
+
+    while (true) {
+      page++;
+      let candles;
+      try {
+        candles = await client.getCandleHistoryWithEnd(apiSymbol, granularity, MAX_BATCH, endEpoch, true);
+        consecutiveErrors = 0;
+      } catch (err) {
+        consecutiveErrors++;
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          throw new Error(`Failed after ${consecutiveErrors} retries for ${symbol} ${tf}`);
+        }
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes("not connected") || errMsg.includes("timed out")) {
+          await new Promise(r => setTimeout(r, 3000));
+          try { await client.connect(); } catch { await new Promise(r => setTimeout(r, 5000)); }
+        } else {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        continue;
+      }
+
+      if (!candles || candles.length === 0) break;
+
+      const sorted = [...candles].sort((a, b) => a.epoch - b.epoch);
+      const earliestEpoch = sorted[0].epoch;
+      const filtered = sorted.filter(c => c.epoch >= stopEpoch);
+
+      if (filtered.length > 0) {
+        const newRows = filtered.map(c => ({
+          symbol,
+          timeframe: tf,
+          openTs: c.epoch,
+          closeTs: c.epoch + granularity,
+          open: Number(c.open),
+          high: Number(c.high),
+          low: Number(c.low),
+          close: Number(c.close),
+          tickCount: 0,
+        }));
+
+        for (let chunk = 0; chunk < newRows.length; chunk += 1000) {
+          await db
+            .insert(candlesTable)
+            .values(newRows.slice(chunk, chunk + 1000))
+            .onConflictDoNothing({ target: [candlesTable.symbol, candlesTable.timeframe, candlesTable.openTs] });
+        }
+
+        totalInserted += newRows.length;
+        if (tf === "1m") inserted1mCount += newRows.length;
+      }
+
+      const current1mCount = tf === "1m" ? await getCurrent1mCount(symbol) : undefined;
+      if (page % 3 === 0 || filtered.length > 0) {
+        await onProgress?.({
+          tf,
+          message: `${symbol} ${tf}: ${tf === "1m" ? inserted1mCount : totalInserted - inserted1mCount} candles downloaded so far`,
+          current1mCount,
+          downloaded1mCount: inserted1mCount,
+        });
+      }
+
+      if (earliestEpoch <= stopEpoch) break;
+      if (candles.length < MAX_BATCH) break;
+
+      const newEnd = earliestEpoch - 1;
+      if (newEnd >= endEpoch || newEnd < stopEpoch) break;
+      endEpoch = newEnd;
+      await new Promise(r => setTimeout(r, API_RATE_DELAY_MS));
+    }
+  }
+
+  const final1mCount = await getCurrent1mCount(symbol);
+  return { totalInserted, inserted1mCount, final1mCount, allSkipped };
 }
 
 export async function pruneOldCandles(): Promise<number> {
@@ -161,126 +307,23 @@ router.post("/research/download-simulate", async (req, res): Promise<void> => {
 
   try {
     send({ phase: "download_start", symbol, message: `Checking data for ${symbol}...` });
-
-    const client = await getDerivClientWithDbToken();
-    await client.connect();
-    const apiSymbol = getApiSymbol(symbol);
-
-    const nowEpoch = Math.floor(Date.now() / 1000);
-    const oneYearAgoEpoch = nowEpoch - TWELVE_MONTHS_SECONDS;
-
-    const timeframes = [
-      { tf: "1m" as const, granularity: GRANULARITY_1M },
-      { tf: "5m" as const, granularity: GRANULARITY_5M },
-    ];
-
-    let totalInserted = 0;
-    let allSkipped = true;
-
-    for (const { tf, granularity } of timeframes) {
-      const coverageResult = await db
-        .select({
-          cnt: count(),
-          maxTs: sql<number>`MAX(${candlesTable.openTs})`,
-        })
-        .from(candlesTable)
-        .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, tf)));
-      const existingCnt = coverageResult[0]?.cnt ?? 0;
-      const existingMaxTs = coverageResult[0]?.maxTs ?? 0;
-
-      const minSufficientCount = tf === "1m" ? 200_000 : 40_000;
-      const hasEnoughData = existingCnt >= minSufficientCount;
-      const isRecent = existingMaxTs > 0 && existingMaxTs >= nowEpoch - Math.max(granularity * 2, 3600);
-      const stopEpoch = (existingMaxTs > oneYearAgoEpoch && hasEnoughData) ? existingMaxTs + 1 : oneYearAgoEpoch;
-
-      if (isRecent && hasEnoughData) {
-        send({
-          phase: "download_progress", symbol, tf,
-          candles: existingCnt,
-          message: `${symbol} ${tf}: up to date (${existingCnt.toLocaleString()} candles), skipping...`,
-        });
-        totalInserted += existingCnt;
-        continue;
-      }
-
-      allSkipped = false;
-      if (existingCnt > 0) {
-        send({
-          phase: "download_progress", symbol, tf,
-          candles: existingCnt,
-          message: `${symbol} ${tf}: ${existingCnt.toLocaleString()} candles exist, gap-filling to now...`,
-        });
-      }
-
-      let endEpoch = nowEpoch;
-      let page = 0;
-      let consecutiveErrors = 0;
-
-      while (true) {
-        page++;
-        let candles;
-        try {
-          candles = await client.getCandleHistoryWithEnd(apiSymbol, granularity, MAX_BATCH, endEpoch, true);
-          consecutiveErrors = 0;
-        } catch (err) {
-          consecutiveErrors++;
-          if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-            send({ phase: "download_error", symbol, tf, message: `Failed after ${consecutiveErrors} retries for ${symbol} ${tf}` });
-            break;
-          }
-          const errMsg = err instanceof Error ? err.message : String(err);
-          if (errMsg.includes("not connected") || errMsg.includes("timed out")) {
-            await new Promise(r => setTimeout(r, 3000));
-            try { await client.connect(); } catch { await new Promise(r => setTimeout(r, 5000)); }
-          } else {
-            await new Promise(r => setTimeout(r, 2000));
-          }
-          continue;
-        }
-
-        if (!candles || candles.length === 0) break;
-
-        const sorted = [...candles].sort((a, b) => a.epoch - b.epoch);
-        const earliestEpoch = sorted[0].epoch;
-
-        const filtered = sorted.filter(c => c.epoch >= stopEpoch);
-        if (filtered.length > 0) {
-          const newRows = filtered.map(c => ({
-            symbol, timeframe: tf, openTs: c.epoch, closeTs: c.epoch + granularity,
-            open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), tickCount: 0,
-          }));
-          for (let chunk = 0; chunk < newRows.length; chunk += 1000) {
-            await db.insert(candlesTable).values(newRows.slice(chunk, chunk + 1000))
-              .onConflictDoNothing({ target: [candlesTable.symbol, candlesTable.timeframe, candlesTable.openTs] });
-          }
-          totalInserted += newRows.length;
-        }
-
-        if (earliestEpoch <= stopEpoch) break;
-        if (candles.length < MAX_BATCH) break;
-
-        const newEnd = earliestEpoch - 1;
-        if (newEnd >= endEpoch || newEnd < stopEpoch) break;
-        endEpoch = newEnd;
-
-        if (page % 3 === 0) {
-          send({
-            phase: "download_progress", symbol, tf,
-            candles: totalInserted,
-            message: `${symbol} ${tf}: ${totalInserted.toLocaleString()} candles downloaded...`,
-          });
-        }
-
-        await new Promise(r => setTimeout(r, API_RATE_DELAY_MS));
-      }
-    }
+    const result = await downloadHistoricalDataForSymbol(symbol, async progress => {
+      send({
+        phase: "download_progress",
+        symbol,
+        tf: progress.tf,
+        candles: progress.current1mCount ?? 0,
+        message: progress.message,
+      });
+    });
 
     send({
-      phase: "download_complete", symbol,
-      candles: totalInserted,
-      message: allSkipped
-        ? `${symbol}: all data up to date (${totalInserted.toLocaleString()} candles), running simulation...`
-        : `Download complete: ${totalInserted.toLocaleString()} candles for ${symbol}`,
+      phase: "download_complete",
+      symbol,
+      candles: result.totalInserted,
+      message: result.allSkipped
+        ? `${symbol}: all data up to date (${result.totalInserted.toLocaleString()} candles), running simulation...`
+        : `Download complete: ${result.totalInserted.toLocaleString()} candles for ${symbol}`,
     });
 
     send({ phase: "backtest_start", symbol, message: `Running all strategies on ${symbol}...` });
@@ -711,8 +754,6 @@ router.post("/research/data-top-up", async (req, res): Promise<void> => {
   }
 
   try {
-    const derivClient = await getDerivClientWithDbToken();
-    const { runDataTopUp } = await import("../core/dataIntegrity.js");
     const existingJob = await readDataTopUpJob(symbol);
     if (existingJob?.status === "running") {
       res.status(409).json({
@@ -740,17 +781,28 @@ router.post("/research/data-top-up", async (req, res): Promise<void> => {
       };
       await writeDataTopUpJob(symbol, runningJob);
 
-      void runDataTopUp(symbol, derivClient)
-        .then(async () => {
-          const current1mCount = await getCurrent1mCount(symbol);
+      void downloadHistoricalDataForSymbol(symbol, async progress => {
+        await writeDataTopUpJob(symbol, {
+          ...runningJob,
+          status: "running",
+          updatedAt: new Date().toISOString(),
+          current1mCount: progress.current1mCount ?? await getCurrent1mCount(symbol),
+          downloaded1mCount: progress.downloaded1mCount ?? 0,
+          message: progress.message,
+          error: null,
+        });
+      })
+        .then(async result => {
           await writeDataTopUpJob(symbol, {
             ...runningJob,
             status: "completed",
             updatedAt: new Date().toISOString(),
             completedAt: new Date().toISOString(),
-            current1mCount,
-            downloaded1mCount: Math.max(0, current1mCount - baseline1mCount),
-            message: `Historical download completed for ${symbol}`,
+            current1mCount: result.final1mCount,
+            downloaded1mCount: Math.max(0, result.final1mCount - baseline1mCount),
+            message: result.allSkipped
+              ? `Historical data already complete for ${symbol}`
+              : `Historical download completed for ${symbol} (+${Math.max(0, result.final1mCount - baseline1mCount).toLocaleString()} M1 candles)`,
           });
         })
         .catch(async err => {
@@ -774,7 +826,7 @@ router.post("/research/data-top-up", async (req, res): Promise<void> => {
         tracker: runningJob,
       });
     } else {
-      const result = await runDataTopUp(symbol, derivClient);
+      const result = await downloadHistoricalDataForSymbol(symbol);
       res.json({ success: true, result });
     }
   } catch (err) {

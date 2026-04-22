@@ -6,6 +6,7 @@ import {
   AlertTriangle, CheckCircle, Clock, BookOpen, Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDurationCompact } from "@/lib/time";
 
 const BASE = import.meta.env.BASE_URL || "/";
 
@@ -20,6 +21,19 @@ interface VersionInfo {
   version: string;
   lastUpdated: string;
   releases: ReleaseEntry[];
+}
+
+interface DeployStatusInfo {
+  provider: string;
+  appVersion: string;
+  status: string;
+  lastRebuildAt: string;
+  processStartedAt: string;
+  uptimeSeconds: number;
+  commitSha: string | null;
+  deploymentId: string | null;
+  environmentName: string | null;
+  serviceName: string | null;
 }
 
 const ENGINES: {
@@ -145,8 +159,18 @@ export default function Help() {
     },
     staleTime: 60_000,
   });
+  const { data: deploy } = useQuery<DeployStatusInfo>({
+    queryKey: ["/api/deploy-status"],
+    queryFn: async () => {
+      const res = await fetch(`${BASE}api/deploy-status`);
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  });
 
-  const [relExpanded, setRelExpanded] = useState<Record<string, boolean>>({ "3.0.0": true });
+  const [relExpanded, setRelExpanded] = useState<Record<string, boolean>>({ "3.0.1": true });
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-10">
@@ -164,11 +188,30 @@ export default function Help() {
           </p>
           <div className="flex items-center gap-4 mt-3">
             <span className="inline-flex items-center gap-1.5 text-xs font-mono bg-primary/10 text-primary px-2.5 py-1 rounded-full">
-              <Package className="w-3 h-3" /> v{data?.version ?? "3.0.0"}
+              <Package className="w-3 h-3" /> v{data?.version ?? "3.0.1"}
             </span>
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <Calendar className="w-3 h-3" /> {data?.lastUpdated ?? "—"}
             </span>
+          </div>
+          <div className="mt-3 rounded-lg border border-border/40 bg-card px-3 py-2.5">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+              <span className="font-semibold text-foreground">Deploy</span>
+              <span className="text-muted-foreground">
+                {deploy?.status ? deploy.status.charAt(0).toUpperCase() + deploy.status.slice(1) : "Unknown"}
+              </span>
+              <span className="text-muted-foreground">
+                Last rebuild: <span className="text-foreground">{deploy?.lastRebuildAt ? new Date(deploy.lastRebuildAt).toLocaleString() : "—"}</span>
+              </span>
+              <span className="text-muted-foreground">
+                Uptime: <span className="font-mono text-foreground">{deploy ? formatDurationCompact(deploy.uptimeSeconds) : "—"}</span>
+              </span>
+              {deploy?.commitSha && (
+                <span className="text-muted-foreground">
+                  Commit: <span className="font-mono text-foreground">{deploy.commitSha.slice(0, 7)}</span>
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>

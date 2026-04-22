@@ -296,15 +296,11 @@ async function getConfiguredSymbols(): Promise<string[]> {
   try {
     const rows = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "enabled_symbols"));
     if (rows.length > 0 && rows[0].value) {
-      return rows[0].value.split(",").filter(Boolean);
+      const enabled = rows[0].value.split(",").filter(Boolean);
+      return Array.from(new Set([...getAllKnownSymbols(), ...enabled]));
     }
   } catch {}
-  return [
-    "BOOM1000", "CRASH1000", "BOOM900", "CRASH900",
-    "BOOM600", "CRASH600", "BOOM500", "CRASH500",
-    "BOOM300", "CRASH300",
-    "R_75", "R_100",
-  ];
+  return getAllKnownSymbols();
 }
 
 export function getValidatedSymbols(): string[] {

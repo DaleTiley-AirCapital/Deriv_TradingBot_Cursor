@@ -185,9 +185,9 @@ function SymbolSelectFull({ value, onChange }: { value: string; onChange: (s: st
 function StreamState({ state }: { state: string | undefined }) {
   const cfg: Record<string, { cls: string; label: string }> = {
     streaming: { cls: "bg-green-500/12 text-green-400 border-green-500/25",   label: "Streaming" },
-    available: { cls: "bg-blue-500/12 text-blue-400 border-blue-500/25",      label: "Available" },
-    idle:      { cls: "bg-muted/30 text-muted-foreground border-border/40",   label: "Idle"      },
-    disabled:  { cls: "bg-red-500/12 text-red-400 border-red-500/25",         label: "Disabled"  },
+    available: { cls: "bg-blue-500/12 text-blue-400 border-blue-500/25",      label: "Registered" },
+    idle:      { cls: "bg-muted/30 text-muted-foreground border-border/40",   label: "Pending"    },
+    disabled:  { cls: "bg-amber-500/12 text-amber-400 border-amber-500/25",   label: "Paused"     },
     no_data:   { cls: "bg-muted/20 text-muted-foreground/40 border-border/20",label: "No data"   },
   };
   const s = cfg[state ?? "idle"] ?? cfg.idle;
@@ -1371,8 +1371,9 @@ export default function DataManager() {
           </div>
           <div className="px-4 py-2 border-t border-border/20 bg-muted/5">
             <p className="text-[10px] text-muted-foreground">
-              <span className="text-green-400 font-medium">Streaming</span> = active tick feed ·
-              <span className="text-blue-400 font-medium ml-1">Available</span> = has stored data, not streaming ·
+              <span className="text-green-400 font-medium">Streaming</span> = active live tick feed ·
+              <span className="text-blue-400 font-medium ml-1">Registered</span> = validated with Deriv API and ready for historical data / optional streaming ·
+              <span className="text-amber-400 font-medium ml-1">Paused</span> = registered but live streaming intentionally switched off ·
               <span className="ml-1">No data</span> = not yet bootstrapped
             </p>
           </div>

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { CheckCircle2, Circle, Loader2, AlertCircle, Database, Zap, ArrowRight, ArrowLeft, Key, Eye, EyeOff, Radio, RefreshCw, RotateCcw, Wifi, WifiOff, AlertTriangle, ChevronDown, ChevronUp, XCircle } from "lucide-react";
+import { formatDurationCompact } from "@/lib/time";
 
 const BASE = import.meta.env.BASE_URL || "/";
 const api = (path: string) => `${BASE}api${path}`;
@@ -39,17 +40,7 @@ async function pollProgress(
 }
 
 function formatTime(seconds: number): string {
-  if (seconds >= 3600) {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    return `${h}h ${m}m`;
-  }
-  if (seconds >= 60) {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}m ${s}s`;
-  }
-  return `${seconds}s`;
+  return formatDurationCompact(seconds);
 }
 
 function formatNumber(n: number): string {

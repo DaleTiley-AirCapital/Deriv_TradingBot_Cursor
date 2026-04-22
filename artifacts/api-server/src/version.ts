@@ -1,6 +1,6 @@
-export const APP_VERSION = "3.0.0";
+export const APP_VERSION = "3.0.1";
 export const APP_NAME = "Deriv Trading - Long Hold V3";
-export const LAST_UPDATED = "2026-04-14";
+export const LAST_UPDATED = "2026-04-21";
 
 export interface ReleaseEntry {
   version: string;
@@ -10,6 +10,18 @@ export interface ReleaseEntry {
 }
 
 export const RELEASES: ReleaseEntry[] = [
+  {
+    version: "3.0.1",
+    date: "2026-04-21",
+    title: "Operational hardening and deploy UX cleanup",
+    changes: [
+      "Promoted runtime-model workflow keeps future research runs advisory until explicitly promoted",
+      "Paper-only trading reset now clears paper trades and paper decisions without touching candle or research data",
+      "Historical per-symbol download tracking is persisted across navigation and refresh",
+      "Help page now owns deploy status metadata; floating sidebar deploy card removed for mobile safety",
+      "Shared duration formatting now uses seconds / mm:ss / hh:mm:ss presentation for runtime timers",
+    ],
+  },
   {
     version: "3.0.0",
     date: "2026-04-14",
