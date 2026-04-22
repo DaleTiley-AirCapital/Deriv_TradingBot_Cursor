@@ -402,6 +402,8 @@ async function initDb(): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE calibration_feature_relevance
+      ADD COLUMN IF NOT EXISTS move_pct_bucket TEXT NOT NULL DEFAULT 'all';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_feature_relevance_symbol_family_feature
       ON calibration_feature_relevance (symbol, strategy_family, move_pct_bucket, feature_name);
 
@@ -419,6 +421,8 @@ async function initDb(): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE calibration_entry_ideals
+      ADD COLUMN IF NOT EXISTS move_pct_bucket TEXT NOT NULL DEFAULT 'all';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_entry_ideals_symbol_family
       ON calibration_entry_ideals (symbol, strategy_family, move_pct_bucket);
 
@@ -435,6 +439,8 @@ async function initDb(): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE calibration_exit_risk_profiles
+      ADD COLUMN IF NOT EXISTS move_pct_bucket TEXT NOT NULL DEFAULT 'all';
     CREATE UNIQUE INDEX IF NOT EXISTS idx_calibration_exit_risk_profiles_symbol_family
       ON calibration_exit_risk_profiles (symbol, strategy_family, move_pct_bucket);
 
