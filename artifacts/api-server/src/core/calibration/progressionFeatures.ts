@@ -15,7 +15,7 @@ import {
   getSymbolIndicatorTimeframeMins,
 } from "../features.js";
 
-type CandlePoint = {
+export type CandlePoint = {
   openTs: number;
   closeTs: number;
   open: number;
@@ -25,7 +25,23 @@ type CandlePoint = {
   tickCount?: number | null;
 };
 
-type NumericFeatureMap = Record<string, number>;
+export type NumericFeatureMap = Record<string, number>;
+
+export interface FeatureFramePoint {
+  openTs: number;
+  relativeBarFromMoveStart: number;
+  relativeBarToMoveEnd: number;
+  featureValues: NumericFeatureMap;
+  normalizedFeatureValues: NumericFeatureMap;
+}
+
+export interface MoveFeatureFrameDataset {
+  strategyFamily: string;
+  windowModel: ProgressionWindowModel;
+  frames: FeatureFramePoint[];
+  compactRawSlices: CompactRawSlices;
+  heuristicSummary: Record<string, unknown>;
+}
 
 export interface ProgressionWindowModel {
   strategyFamily: string;
@@ -227,7 +243,7 @@ function inferDirectionalSpike(rawMove: number, symbol: string): boolean {
   return Math.abs(rawMove) > 0.0125;
 }
 
-function buildWindowModel(move: DetectedMoveRow, inference: MoveFamilyInferenceRow): ProgressionWindowModel {
+export function buildWindowModel(move: DetectedMoveRow, inference: Pick<MoveFamilyInferenceRow, "strategyFamily" | "developmentBars" | "precursorBars" | "triggerBars" | "behaviorBars">): ProgressionWindowModel {
   const developmentBars = Math.max(30, Number(inference.developmentBars ?? 120));
   const precursorBars = Math.max(15, Math.min(developmentBars, Number(inference.precursorBars ?? 60)));
   const triggerBars = Math.max(3, Number(inference.triggerBars ?? 24));
@@ -253,7 +269,7 @@ function buildWindowModel(move: DetectedMoveRow, inference: MoveFamilyInferenceR
   };
 }
 
-async function fetchCanonicalWindow(symbol: string, fromTs: number, toTs: number): Promise<CandlePoint[]> {
+export async function fetchCanonicalWindow(symbol: string, fromTs: number, toTs: number): Promise<CandlePoint[]> {
   return backgroundDb
     .select({
       openTs: candlesTable.openTs,
@@ -290,7 +306,7 @@ function alignPairedCloses(pairedCandles: CandlePoint[], candle: CandlePoint, fa
   return match?.close ?? fallback;
 }
 
-function computeFeaturePoint(
+export function computeFeaturePoint(
   symbol: string,
   strategyFamily: string,
   candles: CandlePoint[],
@@ -550,7 +566,7 @@ function computeFeaturePoint(
   };
 }
 
-function buildWindowStats(values: number[], triggerValue: number): FeatureWindowStats {
+export function buildWindowStats(values: number[], triggerValue: number): FeatureWindowStats {
   const min = values.length > 0 ? Math.min(...values) : 0;
   const max = values.length > 0 ? Math.max(...values) : 0;
   const pointInTime = values.length > 0 ? values[values.length - 1]! : 0;
@@ -568,7 +584,7 @@ function buildWindowStats(values: number[], triggerValue: number): FeatureWindow
   };
 }
 
-function subsetIndices(candles: CandlePoint[], fromTs: number, toTs: number): number[] {
+export function subsetIndices(candles: CandlePoint[], fromTs: number, toTs: number): number[] {
   return candles
     .map((c, idx) => ({ c, idx }))
     .filter(({ c }) => c.openTs >= fromTs && c.openTs <= toTs)
@@ -579,51 +595,14 @@ export async function computeMoveProgressionArtifact(
   move: DetectedMoveRow,
   inference: MoveFamilyInferenceRow,
 ): Promise<MoveProgressionComputation> {
-  const windowModel = buildWindowModel(move, inference);
+  const dataset = await computeMoveFeatureFrameDataset(move, inference);
+  const { windowModel, compactRawSlices } = dataset;
   const candles = await fetchCanonicalWindow(move.symbol, windowModel.developmentStartTs, windowModel.behaviorEndTs);
-  if (candles.length < 30) {
-    throw new Error(`Insufficient canonical candles for move progression: moveId=${move.id}`);
-  }
-  const pairedCandles = await fetchPairedWindow(move.symbol, windowModel.developmentStartTs, windowModel.behaviorEndTs);
-  const spikeMagnitude = await getSpikeMagnitudeStats(move.symbol, 90, windowModel.behaviorEndTs);
-  const recentSpikes = await db
-    .select({
-      eventTs: spikeEventsTable.eventTs,
-      ticksSincePreviousSpike: spikeEventsTable.ticksSincePreviousSpike,
-    })
-    .from(spikeEventsTable)
-    .where(and(
-      eq(spikeEventsTable.symbol, move.symbol),
-      gte(spikeEventsTable.eventTs, windowModel.developmentStartTs - 7 * 24 * 3600),
-      lte(spikeEventsTable.eventTs, windowModel.behaviorEndTs),
-    ))
-    .orderBy(asc(spikeEventsTable.eventTs));
-
-  const triggerIndices = subsetIndices(candles, windowModel.triggerStartTs, windowModel.triggerStartTs + windowModel.triggerBars * 60);
-  const triggerIndex = triggerIndices.length > 0 ? triggerIndices[0]! : Math.max(0, candles.findIndex((c) => c.openTs >= move.startTs));
-  const featurePoints: NumericFeatureMap[] = [];
-  const spikeIntervals: number[] = [];
-
-  for (let idx = 0; idx < candles.length; idx++) {
-    const candle = candles[idx]!;
-    const intervalsAtPoint = recentSpikes
-      .filter((s) => s.eventTs <= candle.openTs)
-      .map((s) => Number(s.ticksSincePreviousSpike ?? 0))
-      .filter((v) => Number.isFinite(v) && v > 0);
-    spikeIntervals.splice(0, spikeIntervals.length, ...intervalsAtPoint);
-    featurePoints.push(computeFeaturePoint(
-      move.symbol,
-      inference.strategyFamily,
-      candles,
-      pairedCandles,
-      idx,
-      spikeIntervals,
-      spikeMagnitude,
-    ));
-  }
-
+  const featurePoints = dataset.frames.map((frame) => frame.featureValues);
   const developmentIndices = subsetIndices(candles, windowModel.developmentStartTs, move.startTs - 60);
   const precursorIndices = subsetIndices(candles, windowModel.precursorStartTs, move.startTs - 60);
+  const triggerIndices = subsetIndices(candles, windowModel.triggerStartTs, windowModel.triggerStartTs + windowModel.triggerBars * 60);
+  const triggerIndex = triggerIndices.length > 0 ? triggerIndices[0]! : Math.max(0, candles.findIndex((c) => c.openTs >= move.startTs));
   const behaviorIndices = subsetIndices(candles, windowModel.behaviorStartTs, windowModel.behaviorEndTs);
   const effectiveTriggerIndices = triggerIndices.length > 0 ? triggerIndices : [triggerIndex];
 
@@ -684,11 +663,117 @@ export async function computeMoveProgressionArtifact(
     windowModel,
     progressionSummary,
     featureStats,
+    compactRawSlices,
+  };
+}
+
+export function buildHeuristicWindowModel(move: DetectedMoveRow, strategyFamily?: string): ProgressionWindowModel {
+  const moveBars = Math.max(15, Math.round(move.holdingMinutes));
+  const developmentBars = Math.max(90, Math.min(360, moveBars * 3));
+  const precursorBars = Math.max(30, Math.min(120, Math.round(developmentBars * 0.5)));
+  const triggerBars = Math.max(6, Math.min(36, Math.round(moveBars * 0.15)));
+  const behaviorBars = Math.max(moveBars, 30);
+  return buildWindowModel(move, {
+    strategyFamily: strategyFamily ?? move.strategyFamilyCandidate ?? move.moveType,
+    developmentBars,
+    precursorBars,
+    triggerBars,
+    behaviorBars,
+  });
+}
+
+function normalizeFeatureFrames(featurePoints: NumericFeatureMap[]): NumericFeatureMap[] {
+  const featureNames = Object.keys(featurePoints[featurePoints.length - 1] ?? {});
+  const bounds = Object.fromEntries(
+    featureNames.map((featureName) => {
+      const values = featurePoints.map((point) => point[featureName] ?? 0);
+      return [featureName, { min: Math.min(...values), max: Math.max(...values) }];
+    }),
+  ) as Record<string, { min: number; max: number }>;
+
+  return featurePoints.map((point) =>
+    Object.fromEntries(
+      featureNames.map((featureName) => [
+        featureName,
+        Number(normalizeUnit(point[featureName] ?? 0, bounds[featureName]!.min, bounds[featureName]!.max).toFixed(6)),
+      ]),
+    ),
+  );
+}
+
+export async function computeMoveFeatureFrameDataset(
+  move: DetectedMoveRow,
+  inferenceLike?: Pick<MoveFamilyInferenceRow, "strategyFamily" | "developmentBars" | "precursorBars" | "triggerBars" | "behaviorBars">,
+): Promise<MoveFeatureFrameDataset> {
+  const windowModel = inferenceLike
+    ? buildWindowModel(move, inferenceLike)
+    : buildHeuristicWindowModel(move);
+  const candles = await fetchCanonicalWindow(move.symbol, windowModel.developmentStartTs, windowModel.behaviorEndTs);
+  if (candles.length < 30) {
+    throw new Error(`Insufficient canonical candles for move feature dataset: moveId=${move.id}`);
+  }
+  const pairedCandles = await fetchPairedWindow(move.symbol, windowModel.developmentStartTs, windowModel.behaviorEndTs);
+  const spikeMagnitude = await getSpikeMagnitudeStats(move.symbol, 90, windowModel.behaviorEndTs);
+  const recentSpikes = await db
+    .select({
+      eventTs: spikeEventsTable.eventTs,
+      ticksSincePreviousSpike: spikeEventsTable.ticksSincePreviousSpike,
+    })
+    .from(spikeEventsTable)
+    .where(and(
+      eq(spikeEventsTable.symbol, move.symbol),
+      gte(spikeEventsTable.eventTs, windowModel.developmentStartTs - 7 * 24 * 3600),
+      lte(spikeEventsTable.eventTs, windowModel.behaviorEndTs),
+    ))
+    .orderBy(asc(spikeEventsTable.eventTs));
+
+  const featurePoints: NumericFeatureMap[] = [];
+  const spikeIntervals: number[] = [];
+  for (let idx = 0; idx < candles.length; idx++) {
+    const candle = candles[idx]!;
+    const intervalsAtPoint = recentSpikes
+      .filter((s) => s.eventTs <= candle.openTs)
+      .map((s) => Number(s.ticksSincePreviousSpike ?? 0))
+      .filter((v) => Number.isFinite(v) && v > 0);
+    spikeIntervals.splice(0, spikeIntervals.length, ...intervalsAtPoint);
+    featurePoints.push(computeFeaturePoint(
+      move.symbol,
+      windowModel.strategyFamily,
+      candles,
+      pairedCandles,
+      idx,
+      spikeIntervals,
+      spikeMagnitude,
+    ));
+  }
+
+  const normalizedPoints = normalizeFeatureFrames(featurePoints);
+  const frames = candles.map((candle, idx) => ({
+    openTs: candle.openTs,
+    relativeBarFromMoveStart: Math.round((candle.openTs - move.startTs) / 60),
+    relativeBarToMoveEnd: Math.round((move.endTs - candle.openTs) / 60),
+    featureValues: featurePoints[idx]!,
+    normalizedFeatureValues: normalizedPoints[idx]!,
+  }));
+
+  return {
+    strategyFamily: windowModel.strategyFamily,
+    windowModel,
+    frames,
     compactRawSlices: {
       developmentWindow: sampleCandles(candles.filter((c) => c.openTs >= windowModel.developmentStartTs && c.openTs < move.startTs)),
       precursorWindow: sampleCandles(candles.filter((c) => c.openTs >= windowModel.precursorStartTs && c.openTs < move.startTs)),
       triggerWindow: sampleCandles(candles.filter((c) => c.openTs >= windowModel.triggerStartTs && c.openTs <= windowModel.triggerStartTs + windowModel.triggerBars * 60)),
-      behaviorWindow: sampleCandles(behaviorCandles),
+      behaviorWindow: sampleCandles(candles.filter((c) => c.openTs >= windowModel.behaviorStartTs && c.openTs <= windowModel.behaviorEndTs)),
+    },
+    heuristicSummary: {
+      moveId: move.id,
+      strategyFamily: windowModel.strategyFamily,
+      developmentBars: windowModel.developmentBars,
+      precursorBars: windowModel.precursorBars,
+      triggerBars: windowModel.triggerBars,
+      behaviorBars: windowModel.behaviorBars,
+      frameCount: frames.length,
     },
   };
 }

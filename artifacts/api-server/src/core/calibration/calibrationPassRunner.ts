@@ -1,46 +1,28 @@
-/**
- * calibrationPassRunner.ts — Async AI Pass Pipeline Runner
- *
- * Runs 4 structured AI passes against detected moves for a symbol:
- *   Pass 1 (precursor)  — what conditions existed BEFORE the move?
- *   Pass 2 (trigger)    — what was the earliest valid entry?
- *   Pass 3 (behavior)   — how did the move progress bar-by-bar?
- *   Pass 4 (extraction) — what are the structural rules distilled across all moves?
- *
- * Each move runs precursor → trigger → behavior (when passName is "all").
- * By default, the **first** pass error aborts the run (status `failed`) so the
- * job cannot sit in `running` while hundreds of moves keep failing. Set
- * `continueOnMoveErrors: true` to record all per-move errors and finish with
- * `completed` / `partial` / `failed` using the legacy rules.
- *
- * Honest fit reporting: targetMoves vs capturedMoves vs missedMoves is always
- * truthful. Fit score is capturedMoves/targetMoves — never inflated.
- */
-
 import { db } from "@workspace/db";
 import {
+  calibrationEntryIdealsTable,
+  calibrationExitRiskProfilesTable,
+  calibrationFeatureFramesTable,
+  calibrationFeatureRelevanceTable,
+  calibrationFamilyBucketProfilesTable,
+  calibrationMoveWindowSummariesTable,
   calibrationPassRunsTable,
-  moveFamilyInferencesTable,
-  moveProgressionArtifactsTable,
   detectedMovesTable,
+  moveFamilyInferencesTable,
   strategyCalibrationProfilesTable,
   type DetectedMoveRow,
 } from "@workspace/db";
-import { eq, and, desc } from "drizzle-orm";
-import { movePrecursorPassesTable, moveBehaviorPassesTable } from "@workspace/db";
-import { runPrecursorPass } from "./passes/precursorPass.js";
-import { runTriggerPass } from "./passes/triggerPass.js";
-import { runBehaviorPass } from "./passes/behaviorPass.js";
-import { runExtractionPass } from "./passes/extractionPass.js";
-import { PRIMARY_MODEL } from "../ai/aiConfig.js";
+import { and, desc, eq } from "drizzle-orm";
+import { CALIBRATION_MODEL } from "../ai/aiConfig.js";
+import { runEnrichmentPass } from "./passes/enrichmentPass.js";
+import { runFamilyInferencePass } from "./passes/familyInferencePass.js";
+import { runModelSynthesisPass } from "./passes/modelSynthesisPass.js";
 import {
   clearCalibrationAiTelemetry,
   getCalibrationAiTelemetry,
 } from "./aiTelemetry.js";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-export type PassName = "precursor" | "trigger" | "behavior" | "extraction" | "all";
+export type PassName = "enrichment" | "family_inference" | "model_synthesis" | "all";
 
 export interface RunPassesOptions {
   symbol: string;
@@ -50,7 +32,6 @@ export interface RunPassesOptions {
   moveType?: string;
   maxMoves?: number;
   force?: boolean;
-  /** If true, collect errors for every move and only finish at the end. If false/omitted, abort on first pass error. */
   continueOnMoveErrors?: boolean;
 }
 
@@ -66,45 +47,8 @@ export interface RunPassesResult {
   durationMs: number;
 }
 
-// ── Already-completed pass check (resumability) ────────────────────────────────
-
-async function hasPrecursorPass(moveId: number): Promise<boolean> {
-  const rows = await db
-    .select({ id: movePrecursorPassesTable.id })
-    .from(movePrecursorPassesTable)
-    .where(eq(movePrecursorPassesTable.moveId, moveId))
-    .limit(1);
-  return rows.length > 0;
-}
-
-async function hasBehaviorPass(moveId: number, pass: "trigger" | "behavior"): Promise<boolean> {
-  const rows = await db
-    .select({ id: moveBehaviorPassesTable.id })
-    .from(moveBehaviorPassesTable)
-    .where(and(
-      eq(moveBehaviorPassesTable.moveId, moveId),
-      eq(moveBehaviorPassesTable.passName, pass),
-    ))
-    .limit(1);
-  return rows.length > 0;
-}
-
-async function hasResearchProfileForRun(symbol: string, runId: number): Promise<boolean> {
-  const rows = await db
-    .select({ id: strategyCalibrationProfilesTable.id })
-    .from(strategyCalibrationProfilesTable)
-    .where(and(
-      eq(strategyCalibrationProfilesTable.symbol, symbol),
-      eq(strategyCalibrationProfilesTable.moveType, "all"),
-      eq(strategyCalibrationProfilesTable.lastRunId, runId),
-    ))
-    .limit(1);
-  return rows.length > 0;
-}
-
-// ── Tier ordering ──────────────────────────────────────────────────────────────
-
 const TIER_ORDER: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
+const STALE_RUNNING_MS = 6 * 60 * 60 * 1000;
 
 function filterByMinTier(
   moves: DetectedMoveRow[],
@@ -112,25 +56,32 @@ function filterByMinTier(
 ): DetectedMoveRow[] {
   if (!minTier) return moves;
   const threshold = TIER_ORDER[minTier] ?? 3;
-  return moves.filter(m => TIER_ORDER[m.qualityTier] <= threshold);
+  return moves.filter((move) => TIER_ORDER[move.qualityTier] <= threshold);
 }
 
-// ── Pass router ────────────────────────────────────────────────────────────────
-
-async function runPassForMove(
-  move: DetectedMoveRow,
-  passName: Exclude<PassName, "all">,
-  runId: number,
-): Promise<void> {
-  switch (passName) {
-    case "precursor":  await runPrecursorPass(move, runId);  break;
-    case "trigger":    await runTriggerPass(move, runId);    break;
-    case "behavior":   await runBehaviorPass(move, runId);   break;
-    case "extraction": /* extraction is per-symbol, not per-move */ break;
-  }
+async function hasEnrichment(moveId: number): Promise<boolean> {
+  const [frame, summary] = await Promise.all([
+    db.select({ id: calibrationFeatureFramesTable.id }).from(calibrationFeatureFramesTable).where(eq(calibrationFeatureFramesTable.moveId, moveId)).limit(1),
+    db.select({ id: calibrationMoveWindowSummariesTable.id }).from(calibrationMoveWindowSummariesTable).where(eq(calibrationMoveWindowSummariesTable.moveId, moveId)).limit(1),
+  ]);
+  return frame.length > 0 && summary.length > 0;
 }
 
-// ── Create pass run record ─────────────────────────────────────────────────────
+async function hasFamilyInference(moveId: number): Promise<boolean> {
+  const rows = await db.select({ id: moveFamilyInferencesTable.id }).from(moveFamilyInferencesTable).where(eq(moveFamilyInferencesTable.moveId, moveId)).limit(1);
+  return rows.length > 0;
+}
+
+async function hasModelSynthesis(symbol: string, runId: number): Promise<boolean> {
+  const [profiles, featureRows, entryRows, exitRows] = await Promise.all([
+    db.select({ id: strategyCalibrationProfilesTable.id }).from(strategyCalibrationProfilesTable)
+      .where(and(eq(strategyCalibrationProfilesTable.symbol, symbol), eq(strategyCalibrationProfilesTable.lastRunId, runId))).limit(1),
+    db.select({ id: calibrationFeatureRelevanceTable.id }).from(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol)).limit(1),
+    db.select({ id: calibrationEntryIdealsTable.id }).from(calibrationEntryIdealsTable).where(eq(calibrationEntryIdealsTable.symbol, symbol)).limit(1),
+    db.select({ id: calibrationExitRiskProfilesTable.id }).from(calibrationExitRiskProfilesTable).where(eq(calibrationExitRiskProfilesTable.symbol, symbol)).limit(1),
+  ]);
+  return profiles.length > 0 && featureRows.length > 0 && entryRows.length > 0 && exitRows.length > 0;
+}
 
 async function createRunRecord(
   symbol: string,
@@ -149,16 +100,14 @@ async function createRunRecord(
       processedMoves: 0,
       failedMoves: 0,
       metaJson: {
-        model: PRIMARY_MODEL,
+        model: CALIBRATION_MODEL,
         startedAt: new Date().toISOString(),
-        stage: passName === "extraction" ? "Extraction Model" : "AI Passes",
+        stage: passName === "model_synthesis" ? "Bucket Model Synthesis" : "AI Passes",
       },
     })
     .returning({ id: calibrationPassRunsTable.id });
   return row.id;
 }
-
-// ── Update run record ──────────────────────────────────────────────────────────
 
 async function updateRunRecord(
   runId: number,
@@ -178,26 +127,6 @@ async function updateRunRecord(
     })
     .where(eq(calibrationPassRunsTable.id, runId));
 }
-
-async function hasFamilyInference(moveId: number): Promise<boolean> {
-  const rows = await db
-    .select({ id: moveFamilyInferencesTable.id })
-    .from(moveFamilyInferencesTable)
-    .where(eq(moveFamilyInferencesTable.moveId, moveId))
-    .limit(1);
-  return rows.length > 0;
-}
-
-async function hasProgressionArtifact(moveId: number): Promise<boolean> {
-  const rows = await db
-    .select({ id: moveProgressionArtifactsTable.id })
-    .from(moveProgressionArtifactsTable)
-    .where(eq(moveProgressionArtifactsTable.moveId, moveId))
-    .limit(1);
-  return rows.length > 0;
-}
-
-const STALE_RUNNING_MS = 6 * 60 * 60 * 1000; // 6h
 
 function isStaleRunningRun(row: typeof calibrationPassRunsTable.$inferSelect): boolean {
   if (row.status !== "running") return false;
@@ -230,11 +159,7 @@ async function failStaleRunningRun(row: typeof calibrationPassRunsTable.$inferSe
     .where(eq(calibrationPassRunsTable.id, row.id));
 }
 
-/** Merge into meta_json for live progress while a run is executing (poll GET /run-status). */
-async function mergeRunMeta(
-  runId: number,
-  patch: Record<string, unknown>,
-): Promise<void> {
+async function mergeRunMeta(runId: number, patch: Record<string, unknown>): Promise<void> {
   const [row] = await db
     .select({ meta: calibrationPassRunsTable.metaJson })
     .from(calibrationPassRunsTable)
@@ -265,110 +190,88 @@ async function loadFilteredMoves(opts: RunPassesOptions): Promise<DetectedMoveRo
   return filterByMinTier(allMoves, minTier).slice(0, maxMoves ?? allMoves.length);
 }
 
-/**
- * Execute calibration passes (long-running). Call from background after HTTP returns runId.
- */
+async function runPerMovePass(
+  move: DetectedMoveRow,
+  passName: Exclude<PassName, "all" | "model_synthesis">,
+  runId: number,
+): Promise<void> {
+  if (passName === "enrichment") {
+    await runEnrichmentPass(move, runId);
+    return;
+  }
+  await runFamilyInferencePass(move, runId);
+}
+
 async function executeCalibrationRun(
   runId: number,
   filteredMoves: DetectedMoveRow[],
   opts: RunPassesOptions,
 ): Promise<RunPassesResult> {
   const startMs = Date.now();
-  const {
-    symbol,
-    passName = "all",
-    force = false,
-    continueOnMoveErrors = false,
-  } = opts;
+  const { symbol, passName = "all", force = false, continueOnMoveErrors = false } = opts;
 
   clearCalibrationAiTelemetry(runId);
 
   const errors: Array<{ moveId: number; pass: string; error: string }> = [];
   let processedMoves = 0;
-  let skippedMoves   = 0;
   const phaseDurationsMs: Record<string, number> = {};
-  const perPassStartMs = new Map<string, number>();
-
-  const perMovePasses: Exclude<PassName, "all">[] =
-    passName === "all"
-      ? ["precursor", "trigger", "behavior"]
-      : passName !== "extraction" ? [passName] : [];
-
+  const perMovePasses: Array<Exclude<PassName, "all" | "model_synthesis">> =
+    passName === "all" ? ["enrichment", "family_inference"] : passName === "model_synthesis" ? [] : [passName];
   const totalMoves = filteredMoves.length;
-  let moveOrdinal = 0;
 
-  for (const move of filteredMoves) {
-    moveOrdinal++;
-    let moveFailed  = false;
-    let allPassesDone = perMovePasses.length > 0;
-
+  for (let index = 0; index < filteredMoves.length; index++) {
+    const move = filteredMoves[index]!;
+    let moveFailed = false;
     for (const pass of perMovePasses) {
       if (!force) {
-        const alreadyDone =
-          pass === "precursor"
-            ? (await hasPrecursorPass(move.id)) &&
-              (await hasFamilyInference(move.id)) &&
-              (await hasProgressionArtifact(move.id))
-            : await hasBehaviorPass(move.id, pass as "trigger" | "behavior");
-        if (alreadyDone) continue;
+        const done = pass === "enrichment"
+          ? await hasEnrichment(move.id)
+          : (await hasFamilyInference(move.id)) && (await hasEnrichment(move.id));
+        if (done) continue;
       }
-      allPassesDone = false;
 
-      const label = `${moveOrdinal}/${totalMoves} · ${pass}`;
       await mergeRunMeta(runId, {
-        stage: "AI Passes",
+        stage: pass === "enrichment" ? "Deterministic Enrichment" : "Family Inference",
         progress: {
           phase: "per_move",
           currentPass: pass,
-          moveIndex: moveOrdinal,
+          moveIndex: index + 1,
           totalMoves,
           moveId: move.id,
-          label,
+          label: `${index + 1}/${totalMoves} - ${pass}`,
         },
       });
-      if (!perPassStartMs.has(pass)) perPassStartMs.set(pass, Date.now());
-
+      const passStart = Date.now();
       try {
-        await runPassForMove(move, pass, runId);
-        const started = perPassStartMs.get(pass);
-        if (started && (moveOrdinal === totalMoves || moveOrdinal % 5 === 0)) {
-          phaseDurationsMs[pass] = Date.now() - started;
-        }
+        await runPerMovePass(move, pass, runId);
+        phaseDurationsMs[pass] = (phaseDurationsMs[pass] ?? 0) + (Date.now() - passStart);
       } catch (err) {
         moveFailed = true;
         const message = err instanceof Error ? err.message : "Unknown error";
-        errors.push({
-          moveId: move.id,
-          pass,
-          error: message,
-        });
-
+        errors.push({ moveId: move.id, pass, error: message });
         if (!continueOnMoveErrors) {
           const aiTelemetry = getCalibrationAiTelemetry(runId);
           phaseDurationsMs.total = Date.now() - startMs;
           await mergeRunMeta(runId, {
-            stage: "AI Passes",
+            stage: pass === "enrichment" ? "Deterministic Enrichment" : "Family Inference",
             phaseDurationsMs,
             usage: aiTelemetry,
             progress: {
               phase: "aborted",
               currentPass: pass,
-              moveIndex: moveOrdinal,
+              moveIndex: index + 1,
               totalMoves,
               moveId: move.id,
-              label: `Aborted on first error: ${pass} @ move ${moveOrdinal}/${totalMoves} (move id ${move.id})`,
+              label: `Aborted on first error: ${pass} @ move ${index + 1}/${totalMoves}`,
             },
             failure: {
               kind: "abort_on_first_pass_error",
               symbol,
-              moveOrdinal,
+              moveOrdinal: index + 1,
               totalMoves,
               moveId: move.id,
               pass,
               error: message,
-              hint:
-                "Fix the underlying issue (often malformed model JSON for this move), then re-run passes. " +
-                "Use POST /api/calibration/run-passes with passName targeting a single pass if needed.",
             },
           });
           await updateRunRecord(runId, processedMoves, errors.length, "failed", errors);
@@ -387,70 +290,49 @@ async function executeCalibrationRun(
         }
       }
     }
-
-    if (perMovePasses.length > 0) {
-      if (allPassesDone) {
-        skippedMoves++;
-      } else if (!moveFailed) {
-        processedMoves++;
-      }
-    }
-
-    if (moveOrdinal % 5 === 0 || moveOrdinal === totalMoves) {
-      await mergeRunMeta(runId, {
-        progress: {
-          phase: "per_move",
-          remainingMoves: Math.max(0, totalMoves - moveOrdinal),
-        },
-      });
+    if (!moveFailed && perMovePasses.length > 0) processedMoves++;
+    if ((index + 1) % 5 === 0 || index + 1 === totalMoves) {
       await updateRunRecord(runId, processedMoves, errors.length, "running", errors);
     }
   }
 
-  if (passName === "all" || passName === "extraction") {
-    const extractionStartedAt = Date.now();
+  if (passName === "all" || passName === "model_synthesis") {
+    const synthesisStart = Date.now();
     await mergeRunMeta(runId, {
-      stage: "Extraction Model",
+      stage: "Bucket Model Synthesis",
       progress: {
-        phase: "extraction",
-        currentPass: "extraction",
+        phase: "model_synthesis",
+        currentPass: "model_synthesis",
         moveIndex: totalMoves,
         totalMoves,
-        label: "Running extraction pass (aggregating all moves)…",
+        label: "Running deterministic family bucket aggregation and AI bucket synthesis...",
       },
     });
     try {
-      await runExtractionPass(symbol, filteredMoves, runId, opts.windowDays ?? 90);
-      phaseDurationsMs.extraction = Date.now() - extractionStartedAt;
-      const profileExists = await hasResearchProfileForRun(symbol, runId);
-      if (!profileExists) {
-        throw new Error("Extraction completed but canonical research profile was not persisted");
+      await runModelSynthesisPass(symbol, filteredMoves, runId, opts.windowDays ?? 90);
+      phaseDurationsMs.model_synthesis = Date.now() - synthesisStart;
+      if (!(await hasModelSynthesis(symbol, runId))) {
+        throw new Error("Model synthesis completed but calibration profiles were not persisted");
       }
     } catch (err) {
-      const exMsg = err instanceof Error ? err.message : "Extraction pass failed";
-      errors.push({
-        moveId: -1,
-        pass: "extraction",
-        error: exMsg,
-      });
+      const message = err instanceof Error ? err.message : "Model synthesis failed";
+      errors.push({ moveId: -1, pass: "model_synthesis", error: message });
       if (!continueOnMoveErrors) {
         const aiTelemetry = getCalibrationAiTelemetry(runId);
         phaseDurationsMs.total = Date.now() - startMs;
         await mergeRunMeta(runId, {
-          stage: "Extraction Model",
+          stage: "Bucket Model Synthesis",
           phaseDurationsMs,
           usage: aiTelemetry,
           progress: {
             phase: "aborted",
-            currentPass: "extraction",
-            label: "Aborted: extraction pass failed",
+            currentPass: "model_synthesis",
+            label: "Aborted: model synthesis failed",
           },
           failure: {
-            kind: "extraction_failed",
+            kind: "model_synthesis_failed",
             symbol,
-            pass: "extraction",
-            error: exMsg,
-            hint: "Ensure extraction pass writes strategy calibration profile rows before marking run complete.",
+            error: message,
           },
         });
         await updateRunRecord(runId, processedMoves, errors.length, "failed", errors);
@@ -472,19 +354,15 @@ async function executeCalibrationRun(
 
   const status: "completed" | "partial" | "failed" =
     errors.length === 0 ? "completed" :
-    processedMoves > 0  ? "partial"   : "failed";
+    processedMoves > 0 ? "partial" : "failed";
 
   const aiTelemetry = getCalibrationAiTelemetry(runId);
   phaseDurationsMs.total = Date.now() - startMs;
-
   await mergeRunMeta(runId, {
     stage: status === "completed" ? "Research Profile Complete" : "AI Passes",
     phaseDurationsMs,
     usage: aiTelemetry,
-    progress: {
-      phase: "done",
-      label: status === "completed" ? "Completed" : `Finished (${status})`,
-    },
+    progress: { phase: "done", label: status === "completed" ? "Completed" : `Finished (${status})` },
   });
   await updateRunRecord(runId, processedMoves, errors.length, status, errors);
   clearCalibrationAiTelemetry(runId);
@@ -502,23 +380,17 @@ async function executeCalibrationRun(
   };
 }
 
-/** Start pass run in the background; HTTP handler returns immediately with runId. */
 export async function startCalibrationPassesBackground(opts: RunPassesOptions): Promise<{ runId: number; totalMoves: number }> {
-  const {
-    symbol,
-    windowDays = 90,
-    passName = "all",
-  } = opts;
-
+  const { symbol, windowDays = 90, passName = "all" } = opts;
   const filteredMoves = await loadFilteredMoves(opts);
   const totalMoves = filteredMoves.length;
   const runId = await createRunRecord(symbol, windowDays, passName, totalMoves);
 
   void executeCalibrationRun(runId, filteredMoves, opts)
-    .then(result => {
+    .then((result) => {
       console.log(`[calibration] run ${runId} finished: ${result.status} in ${result.durationMs}ms`);
     })
-    .catch(err => {
+    .catch((err) => {
       console.error(`[calibration] run ${runId} crashed:`, err);
       clearCalibrationAiTelemetry(runId);
       void updateRunRecord(
@@ -533,7 +405,6 @@ export async function startCalibrationPassesBackground(opts: RunPassesOptions): 
   return { runId, totalMoves };
 }
 
-/** Run to completion in-process (tests / scripts). API uses startCalibrationPassesBackground. */
 export async function runCalibrationPasses(opts: RunPassesOptions): Promise<RunPassesResult> {
   const { symbol, windowDays = 90, passName = "all" } = opts;
   const filteredMoves = await loadFilteredMoves(opts);
@@ -542,54 +413,32 @@ export async function runCalibrationPasses(opts: RunPassesOptions): Promise<RunP
   return executeCalibrationRun(runId, filteredMoves, opts);
 }
 
-// ── Get run status ─────────────────────────────────────────────────────────────
-
-export async function getPassRunStatus(
-  runId: number,
-): Promise<typeof calibrationPassRunsTable.$inferSelect | null> {
-  let [row] = await db
-    .select()
-    .from(calibrationPassRunsTable)
-    .where(eq(calibrationPassRunsTable.id, runId));
+export async function getPassRunStatus(runId: number): Promise<typeof calibrationPassRunsTable.$inferSelect | null> {
+  let [row] = await db.select().from(calibrationPassRunsTable).where(eq(calibrationPassRunsTable.id, runId));
   if (row && isStaleRunningRun(row)) {
     await failStaleRunningRun(row);
-    [row] = await db
-      .select()
-      .from(calibrationPassRunsTable)
-      .where(eq(calibrationPassRunsTable.id, runId));
+    [row] = await db.select().from(calibrationPassRunsTable).where(eq(calibrationPassRunsTable.id, runId));
   }
   return row ?? null;
 }
 
-/** If a pass run is still `running` for this symbol, return it (most recent first). */
-export async function getRunningPassRunForSymbol(
-  symbol: string,
-): Promise<typeof calibrationPassRunsTable.$inferSelect | null> {
+export async function getRunningPassRunForSymbol(symbol: string): Promise<typeof calibrationPassRunsTable.$inferSelect | null> {
   const rows = await db
     .select()
     .from(calibrationPassRunsTable)
-    .where(
-      and(
-        eq(calibrationPassRunsTable.symbol, symbol),
-        eq(calibrationPassRunsTable.status, "running"),
-      ),
-    )
+    .where(and(eq(calibrationPassRunsTable.symbol, symbol), eq(calibrationPassRunsTable.status, "running")))
     .orderBy(desc(calibrationPassRunsTable.startedAt))
     .limit(1);
   const row = rows[0] ?? null;
   if (!row) return null;
-
   if (isStaleRunningRun(row)) {
     await failStaleRunningRun(row);
     return null;
   }
-
   return row;
 }
 
-export async function getLatestPassRun(
-  symbol: string,
-): Promise<typeof calibrationPassRunsTable.$inferSelect | null> {
+export async function getLatestPassRun(symbol: string): Promise<typeof calibrationPassRunsTable.$inferSelect | null> {
   const rows = await db
     .select()
     .from(calibrationPassRunsTable)
@@ -599,9 +448,7 @@ export async function getLatestPassRun(
   return rows[0] ?? null;
 }
 
-export async function getAllPassRuns(
-  symbol: string,
-): Promise<typeof calibrationPassRunsTable.$inferSelect[]> {
+export async function getAllPassRuns(symbol: string): Promise<typeof calibrationPassRunsTable.$inferSelect[]> {
   const rows = await db
     .select()
     .from(calibrationPassRunsTable)
@@ -609,9 +456,7 @@ export async function getAllPassRuns(
     .orderBy(desc(calibrationPassRunsTable.startedAt));
   const staleRows = rows.filter(isStaleRunningRun);
   if (staleRows.length > 0) {
-    for (const row of staleRows) {
-      await failStaleRunningRun(row);
-    }
+    for (const row of staleRows) await failStaleRunningRun(row);
     return db
       .select()
       .from(calibrationPassRunsTable)

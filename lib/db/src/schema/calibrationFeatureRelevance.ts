@@ -7,6 +7,7 @@ export const calibrationFeatureRelevanceTable = pgTable("calibration_feature_rel
   id:                 serial("id").primaryKey(),
   symbol:             text("symbol").notNull(),
   strategyFamily:     text("strategy_family").notNull(),
+  movePctBucket:      text("move_pct_bucket").notNull().default("all"),
   featureName:        text("feature_name").notNull(),
   relevanceScore:     doublePrecision("relevance_score").notNull().default(0),
   precursorUsefulness: doublePrecision("precursor_usefulness").notNull().default(0),
@@ -20,6 +21,7 @@ export const calibrationFeatureRelevanceTable = pgTable("calibration_feature_rel
   uniqueIndex("idx_calibration_feature_relevance_symbol_family_feature").on(
     table.symbol,
     table.strategyFamily,
+    table.movePctBucket,
     table.featureName,
   ),
 ]);

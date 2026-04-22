@@ -7,6 +7,7 @@ export const calibrationExitRiskProfilesTable = pgTable("calibration_exit_risk_p
   id:                      serial("id").primaryKey(),
   symbol:                  text("symbol").notNull(),
   strategyFamily:          text("strategy_family").notNull(),
+  movePctBucket:           text("move_pct_bucket").notNull().default("all"),
   regressionFingerprints:  jsonb("regression_fingerprints").notNull(),
   moveBreakWarningPatterns: jsonb("move_break_warning_patterns").notNull(),
   closureSignals:          jsonb("closure_signals").notNull(),
@@ -15,7 +16,7 @@ export const calibrationExitRiskProfilesTable = pgTable("calibration_exit_risk_p
   createdAt:               timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:               timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  uniqueIndex("idx_calibration_exit_risk_profiles_symbol_family").on(table.symbol, table.strategyFamily),
+  uniqueIndex("idx_calibration_exit_risk_profiles_symbol_family").on(table.symbol, table.strategyFamily, table.movePctBucket),
 ]);
 
 export type CalibrationExitRiskProfileRow = typeof calibrationExitRiskProfilesTable.$inferSelect;

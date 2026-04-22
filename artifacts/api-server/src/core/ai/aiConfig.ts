@@ -11,6 +11,8 @@
  */
 
 export const PRIMARY_MODEL = "gpt-5.1" as const;
+export const CALIBRATION_MODEL = "gpt-5.1" as const;
+export const CALIBRATION_REASONING_MODEL = "gpt-5.1" as const;
 // Keep fallback on the approved GPT-5.1 line.
 // We must not silently downgrade calibration/research runs to a different model
 // family that the project may not have access to.

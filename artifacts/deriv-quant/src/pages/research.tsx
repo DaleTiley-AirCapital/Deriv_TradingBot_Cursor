@@ -1006,7 +1006,7 @@ interface SymbolResearchProfileUi {
 
 const CALIB_ACTIVE_SYMBOLS = [...ACTIVE_SYMBOLS];
 const CALIB_RESEARCH_SYMBOLS = [...RESEARCH_ONLY_SYMBOLS];
-const PASS_NAMES = ["all", "precursor", "trigger", "behavior", "extraction"];
+const PASS_NAMES = ["all", "enrichment", "family_inference", "model_synthesis"];
 const MOVE_TYPES_FILTER_GENERIC = [
   "all",
   "breakout",
@@ -1887,8 +1887,8 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             )}
           >
             {(detecting || passForThisSymbol) ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            {detecting ? "Detecting" : passForThisSymbol ? "Running passes" :
-              effectiveScope === "detect" ? "Detect Moves" : effectiveScope === "passes" ? "Run AI Passes" : "Run Full Calibration"}
+            {detecting ? "Detecting" : passForThisSymbol ? "Running calibration" :
+              effectiveScope === "detect" ? "Detect Moves" : effectiveScope === "passes" ? "Run Calibration Pipeline" : "Run Full Calibration"}
           </button>
 
           <button
@@ -2030,14 +2030,14 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               {passStatus.status === "completed" && <CheckCircle className="w-3.5 h-3.5 text-green-400" />}
               {passStatus.status === "failed"    && <XCircle    className="w-3.5 h-3.5 text-red-400"   />}
               <span className="text-xs font-semibold text-foreground">
-                {passStatus.status === "running"   ? "Passes running" :
-                 passStatus.status === "completed" ? "Passes completed" :
+                {passStatus.status === "running"   ? "Calibration running" :
+                 passStatus.status === "completed" ? "Calibration completed" :
                  passStatus.status === "failed"    ? "Pass run failed" :
                  `Status: ${passStatus.status}`}
               </span>
             </div>
             <div className="flex flex-wrap gap-1">
-              {["Data Integrity", "Move Detection", "AI Passes", "Extraction Model", "Research Profile Complete"].map((stage) => {
+              {["Data Integrity", "Move Detection", "Deterministic Enrichment", "Family Inference", "Bucket Model Synthesis", "Research Profile Complete"].map((stage) => {
                 const currentStage = (passStatus.metaJson as { stage?: string } | null)?.stage ?? "";
                 const isActive = currentStage === stage;
                 const isDone = ["Research Profile Complete"].includes(stage)
@@ -2252,7 +2252,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             {/* Domain C  Recommended Calibration (from stored profile, post AI passes) */}
             <DomainCard title="Recommended Calibration" icon={<Zap className="w-3.5 h-3.5 text-sky-400" />}>
               {!calibProfile ? (
-                <p className="text-[11px] text-muted-foreground">No calibration profile yet. Detect moves then run AI passes to populate.</p>
+                <p className="text-[11px] text-muted-foreground">No calibration profile yet. Detect moves then run the calibration pipeline to populate.</p>
               ) : (
                 <>
                   <StatRow label="Fit score" value={`${(calibProfile.fitScore * 100).toFixed(1)}%`} />
@@ -2261,6 +2261,48 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                   <StatRow label="Avg hold (hrs)" value={calibProfile.avgHoldingHours.toFixed(1)} />
                   <StatRow label="Avg capturable %" value={`${(calibProfile.avgCaptureablePct * 100).toFixed(1)}%`} />
                   <StatRow label="Holdability score" value={calibProfile.avgHoldabilityScore.toFixed(2)} />
+                  {calibProfile.feeddownSchema && (() => {
+                    const fd = calibProfile.feeddownSchema as Record<string, unknown>;
+                    const families = Array.isArray(fd["familiesDiscovered"]) ? fd["familiesDiscovered"] as unknown[] : [];
+                    const bucketModels = Array.isArray(fd["bucketModels"]) ? fd["bucketModels"] as Array<Record<string, unknown>> : [];
+                    if (families.length === 0 && bucketModels.length === 0) return null;
+                    return (
+                      <details className="mt-1.5 pt-1.5 border-t border-border/20" open>
+                        <summary className="text-[10px] text-cyan-400/80 uppercase tracking-wide cursor-pointer hover:text-cyan-300">
+                          Deterministic Family And Bucket Models
+                        </summary>
+                        {families.length > 0 && (
+                          <div className="mt-1">
+                            <p className="text-[10px] text-muted-foreground mb-0.5">Families discovered from data</p>
+                            <div className="flex flex-wrap gap-1">
+                              {families.map((family, i) => (
+                                <span key={`${String(family)}-${i}`} className="text-[10px] px-1.5 py-0.5 rounded border border-cyan-500/20 bg-cyan-500/10 text-cyan-300">
+                                  {String(family)}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {bucketModels.length > 0 && (
+                          <div className="mt-1 space-y-1">
+                            <p className="text-[10px] text-muted-foreground mb-0.5">Bucket models</p>
+                            {bucketModels.slice(0, 8).map((bucket, i) => (
+                              <div key={`${String(bucket["strategyFamily"] ?? "bucket")}-${String(bucket["movePctBucket"] ?? i)}`} className="bg-muted/20 rounded p-1.5 space-y-0.5">
+                                <div className="flex justify-between text-[11px]">
+                                  <span className="text-foreground font-medium">{String(bucket["strategyFamily"] ?? "unknown")}</span>
+                                  <span className="font-mono text-cyan-300">{String(bucket["movePctBucket"] ?? "all")}</span>
+                                </div>
+                                <div className="flex justify-between text-[11px]">
+                                  <span className="text-muted-foreground">Move count</span>
+                                  <span className="font-mono text-foreground">{String(bucket["moveCount"] ?? "-")}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </details>
+                    );
+                  })()}
                   {/* Pass 1: Precursor Card */}
                   {calibProfile.precursorSummary && (() => {
                     const ps = calibProfile.precursorSummary as Record<string, unknown>;

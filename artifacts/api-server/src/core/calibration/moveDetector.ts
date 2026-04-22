@@ -17,9 +17,12 @@
 
 import { db, backgroundDb } from "@workspace/db";
 import {
+  calibrationFamilyBucketProfilesTable,
   calibrationEntryIdealsTable,
   calibrationExitRiskProfilesTable,
+  calibrationFeatureFramesTable,
   calibrationFeatureRelevanceTable,
+  calibrationMoveWindowSummariesTable,
   candlesTable,
   detectedMovesTable,
   moveFamilyInferencesTable,
@@ -78,6 +81,18 @@ export async function clearCalibrationArtifactsForSymbol(symbol: string): Promis
   await safeDeleteForSymbol(
     () => db.delete(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol)),
     "calibration_feature_relevance",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(calibrationFamilyBucketProfilesTable).where(eq(calibrationFamilyBucketProfilesTable.symbol, symbol)),
+    "calibration_family_bucket_profiles",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(calibrationMoveWindowSummariesTable).where(eq(calibrationMoveWindowSummariesTable.symbol, symbol)),
+    "calibration_move_window_summaries",
+  );
+  await safeDeleteForSymbol(
+    () => db.delete(calibrationFeatureFramesTable).where(eq(calibrationFeatureFramesTable.symbol, symbol)),
+    "calibration_feature_frames",
   );
   await safeDeleteForSymbol(
     () => db.delete(moveProgressionArtifactsTable).where(eq(moveProgressionArtifactsTable.symbol, symbol)),

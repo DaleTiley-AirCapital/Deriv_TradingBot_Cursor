@@ -13,6 +13,9 @@
 
 import { db } from "@workspace/db";
 import {
+  calibrationFamilyBucketProfilesTable,
+  calibrationFeatureFramesTable,
+  calibrationMoveWindowSummariesTable,
   calibrationEntryIdealsTable,
   calibrationExitRiskProfilesTable,
   calibrationFeatureRelevanceTable,
@@ -80,6 +83,9 @@ export interface FullCalibrationExport {
   profiles: typeof strategyCalibrationProfilesTable.$inferSelect[];
   familyInferences: typeof moveFamilyInferencesTable.$inferSelect[];
   progressionArtifacts: typeof moveProgressionArtifactsTable.$inferSelect[];
+  featureFrames: typeof calibrationFeatureFramesTable.$inferSelect[];
+  moveWindowSummaries: typeof calibrationMoveWindowSummariesTable.$inferSelect[];
+  familyBucketProfiles: typeof calibrationFamilyBucketProfilesTable.$inferSelect[];
   featureRelevance: typeof calibrationFeatureRelevanceTable.$inferSelect[];
   entryIdeals: typeof calibrationEntryIdealsTable.$inferSelect[];
   exitRiskProfiles: typeof calibrationExitRiskProfilesTable.$inferSelect[];
@@ -300,9 +306,12 @@ export async function getFullCalibrationExport(
       .limit(1),
     getLatestSymbolResearchProfile(symbol),
   ]);
-  const [familyInferences, progressionArtifacts, featureRelevance, entryIdeals, exitRiskProfiles] = await Promise.all([
+  const [familyInferences, progressionArtifacts, featureFrames, moveWindowSummaries, familyBucketProfiles, featureRelevance, entryIdeals, exitRiskProfiles] = await Promise.all([
     db.select().from(moveFamilyInferencesTable).where(eq(moveFamilyInferencesTable.symbol, symbol)),
     db.select().from(moveProgressionArtifactsTable).where(eq(moveProgressionArtifactsTable.symbol, symbol)),
+    db.select().from(calibrationFeatureFramesTable).where(eq(calibrationFeatureFramesTable.symbol, symbol)),
+    db.select().from(calibrationMoveWindowSummariesTable).where(eq(calibrationMoveWindowSummariesTable.symbol, symbol)),
+    db.select().from(calibrationFamilyBucketProfilesTable).where(eq(calibrationFamilyBucketProfilesTable.symbol, symbol)),
     db.select().from(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol)),
     db.select().from(calibrationEntryIdealsTable).where(eq(calibrationEntryIdealsTable.symbol, symbol)),
     db.select().from(calibrationExitRiskProfilesTable).where(eq(calibrationExitRiskProfilesTable.symbol, symbol)),
@@ -339,6 +348,9 @@ export async function getFullCalibrationExport(
     profiles,
     familyInferences,
     progressionArtifacts,
+    featureFrames,
+    moveWindowSummaries,
+    familyBucketProfiles,
     featureRelevance,
     entryIdeals,
     exitRiskProfiles,

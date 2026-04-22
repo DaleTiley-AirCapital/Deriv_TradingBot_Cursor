@@ -20,6 +20,9 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import {
+  calibrationFamilyBucketProfilesTable,
+  calibrationFeatureFramesTable,
+  calibrationMoveWindowSummariesTable,
   calibrationEntryIdealsTable,
   calibrationExitRiskProfilesTable,
   calibrationFeatureRelevanceTable,
@@ -54,8 +57,7 @@ import {
   getFullCalibrationExport,
 } from "../core/calibration/feeddown.js";
 import { deriveSymbolBehaviorProfile } from "../core/backtest/behaviorProfiler.js";
-import { getComprehensiveIntegrityReport, reconcileSymbolData } from "../core/dataIntegrity.js";
-import { getDerivClientWithDbToken } from "../infrastructure/deriv.js";
+import { getComprehensiveIntegrityReport } from "../core/dataIntegrity.js";
 import {
   assertCalibrationSymbol,
   type SymbolDomain,
@@ -73,7 +75,7 @@ import {
 
 const router: IRouter = Router();
 
-const VALID_PASS_NAMES: PassName[] = ["precursor", "trigger", "behavior", "extraction", "all"];
+const VALID_PASS_NAMES: PassName[] = ["enrichment", "family_inference", "model_synthesis", "all"];
 const VALID_TIERS = ["A", "B", "C", "D"];
 const VALID_MOVE_TYPES = ["breakout", "continuation", "reversal", "unknown", "boom_expansion", "crash_expansion", "all"];
 const MAX_BASE_1M_GAPS_FOR_HEALTHY = 0;
@@ -129,7 +131,7 @@ router.post("/calibration/detect-moves/:symbol", async (req, res): Promise<void>
 });
 
 // ── POST /api/calibration/reset/:symbol ───────────────────────────────────────
-// Removes profiles, precursor/behavior passes, calibration_pass_runs, and detected_moves.
+// Removes calibration-only artifacts, pass runs, and detected moves.
 
 router.post("/calibration/reset/:symbol", async (req, res): Promise<void> => {
   const { symbol } = req.params;
@@ -144,7 +146,7 @@ router.post("/calibration/reset/:symbol", async (req, res): Promise<void> => {
     await clearCalibrationArtifactsForSymbol(symbol);
     res.json(withSymbolDomain(symbol, symbolDomain, {
       ok: true,
-      cleared: ["profiles", "precursor_passes", "behavior_passes", "pass_runs", "detected_moves", "family_inferences", "progression_artifacts", "feature_relevance", "entry_ideals", "exit_risk_profiles"],
+      cleared: ["profiles", "pass_runs", "detected_moves", "feature_frames", "move_window_summaries", "family_inferences", "family_bucket_profiles", "progression_artifacts", "feature_relevance", "entry_ideals", "exit_risk_profiles"],
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Calibration reset failed";
@@ -258,8 +260,6 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
       return;
     }
 
-    const client = await getDerivClientWithDbToken();
-    const reconcile = await reconcileSymbolData(symbol, client);
     const integrity = await getComprehensiveIntegrityReport(symbol, Math.max(365, Number(windowDays)));
 
     const integrityHealthy =
@@ -268,11 +268,11 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
       integrity.base1mCoveragePct >= MIN_BASE_1M_COVERAGE_PCT;
 
     if (!integrityHealthy) {
-      res.status(422).json(withSymbolDomain(symbol, symbolDomain, {
+      res.status(409).json(withSymbolDomain(symbol, symbolDomain, {
         ok: false,
-        error: "Calibration aborted: data integrity is unhealthy after reconcile.",
+        error: "Calibration blocked: canonical data is not ready. Run Data Operations first.",
         failureReason: {
-          kind: "integrity_unhealthy_after_reconcile",
+          kind: "integrity_not_ready",
           minBase1mCandles: MIN_BASE_1M_CANDLES,
           minCoveragePct: MIN_BASE_1M_COVERAGE_PCT,
           maxAllowedGaps: MAX_BASE_1M_GAPS_FOR_HEALTHY,
@@ -281,7 +281,6 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
           base1mGapCount: integrity.base1mGapCount,
           base1mInterpolatedCount: integrity.base1mInterpolatedCount,
         },
-        reconcile,
         integrity,
       }));
       return;
@@ -312,12 +311,11 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
       .set({
         metaJson: {
           ...existingMeta,
-          stage: "AI Passes",
+          stage: "Deterministic Enrichment",
           preflight: {
             readyForCalibration: integrityHealthy,
             integrityStatus: integrityHealthy ? "healthy" : "reconcile_required",
           },
-          reconcileSummary: reconcile,
           integritySummary: integrity,
           detectSummary: detected,
         } as never,
@@ -332,11 +330,11 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
       stages: [
         "Data Integrity",
         "Move Detection",
-        "AI Passes",
-        "Extraction Model",
+        "Deterministic Enrichment",
+        "Family Inference",
+        "Bucket Model Synthesis",
         "Research Profile Complete",
       ],
-      reconcileSummary: reconcile,
       integritySummary: integrity,
       detectSummary: detected,
     }));
@@ -398,9 +396,9 @@ router.post("/calibration/run-passes/:symbol", async (req, res): Promise<void> =
   const body = req.body ?? {};
 
   // Accept both original field names and spec-aligned aliases.
-  // strategyFamily maps to moveType (same concept — "breakout"|"continuation"|"reversal"|"unknown"|"all")
-  // passNumber (1=precursor, 2=trigger, 3=behavior, 4=extraction) maps to passName.
-  const PASS_NUMBER_MAP: Record<number, PassName> = { 1: "precursor", 2: "trigger", 3: "behavior", 4: "extraction" };
+  // strategyFamily maps to moveType.
+  // passNumber maps to the new deterministic-first sequence.
+  const PASS_NUMBER_MAP: Record<number, PassName> = { 1: "enrichment", 2: "family_inference", 3: "model_synthesis" };
   const windowDays: number = Number(body.windowDays ?? 90);
   const resolvedPassName: PassName = (() => {
     if (body.passNumber !== undefined) return PASS_NUMBER_MAP[Number(body.passNumber)] ?? "all";
@@ -718,13 +716,16 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
 
     } else if (exportType === "passes") {
       // Return run headers + raw per-move pass records (precursor pass + behavior/trigger passes)
-      const [runs, profiles, precursorRaw, behaviorRaw, familyInferences, progressionArtifacts, featureRelevance, entryIdeals, exitRiskProfiles] = await Promise.all([
+      const [runs, profiles, precursorRaw, behaviorRaw, familyInferences, progressionArtifacts, featureFrames, moveWindowSummaries, familyBucketProfiles, featureRelevance, entryIdeals, exitRiskProfiles] = await Promise.all([
         getAllPassRuns(symbol),
         getAllCalibrationProfiles(symbol),
         db.select().from(movePrecursorPassesTable).where(eq(movePrecursorPassesTable.symbol, symbol)),
         db.select().from(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol)),
         db.select().from(moveFamilyInferencesTable).where(eq(moveFamilyInferencesTable.symbol, symbol)),
         db.select().from(moveProgressionArtifactsTable).where(eq(moveProgressionArtifactsTable.symbol, symbol)),
+        db.select().from(calibrationFeatureFramesTable).where(eq(calibrationFeatureFramesTable.symbol, symbol)),
+        db.select().from(calibrationMoveWindowSummariesTable).where(eq(calibrationMoveWindowSummariesTable.symbol, symbol)),
+        db.select().from(calibrationFamilyBucketProfilesTable).where(eq(calibrationFamilyBucketProfilesTable.symbol, symbol)),
         db.select().from(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol)),
         db.select().from(calibrationEntryIdealsTable).where(eq(calibrationEntryIdealsTable.symbol, symbol)),
         db.select().from(calibrationExitRiskProfilesTable).where(eq(calibrationExitRiskProfilesTable.symbol, symbol)),
@@ -745,6 +746,12 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
           familyInferences,
           progressionArtifactCount: progressionArtifacts.length,
           progressionArtifacts,
+          featureFrameCount: featureFrames.length,
+          featureFrames,
+          moveWindowSummaryCount: moveWindowSummaries.length,
+          moveWindowSummaries,
+          familyBucketProfileCount: familyBucketProfiles.length,
+          familyBucketProfiles,
           featureRelevanceCount: featureRelevance.length,
           featureRelevance,
           entryIdealCount: entryIdeals.length,
