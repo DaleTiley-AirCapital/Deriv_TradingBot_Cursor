@@ -199,6 +199,14 @@ interface FeatureSample {
   bbPctB: number;
 }
 
+interface ReplayCandidateWindow {
+  firstSeenTs: number;
+  lastSeenTs: number;
+  scanCount: number;
+  bestScore: number;
+  cooldownUntilTs: number;
+}
+
 // â”€â”€ Per-symbol context for synchronized multi-symbol replay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface SymCtx {
@@ -233,6 +241,7 @@ interface SymCtx {
   signalsBlocked: number;
   blockedByEngine: Record<string, number>;
   scoringSourceCounts: Record<string, number>;
+  candidateWindows: Map<string, ReplayCandidateWindow>;
   runtimeCalibration: LiveCalibrationProfile | null;
   runtimeCalibrationResolution: LiveCalibrationProfileResolution | null;
   trailingActivationThresholdPct?: number;
@@ -536,6 +545,99 @@ function scoringSourceFromWinner(winner: EngineResult): string {
   return typeof source === "string" ? source : "native_engine";
 }
 
+function parseRuntimeWindowSeconds(raw: string | undefined, fallbackSeconds: number): number {
+  if (!raw) return fallbackSeconds;
+  const match = raw.trim().match(/^(\d+(?:\.\d+)?)\s*(m|min|mins|h|hr|hrs|hour|hours)?$/i);
+  if (!match) return fallbackSeconds;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return fallbackSeconds;
+  const unit = (match[2] ?? "m").toLowerCase();
+  const minutes = unit.startsWith("h") ? value * 60 : value;
+  return Math.max(30, Math.round(minutes)) * 60;
+}
+
+function runtimeCandidateWindowSeconds(runtimeCalibration: LiveCalibrationProfile | null): number {
+  if (!runtimeCalibration) return 0;
+  return parseRuntimeWindowSeconds(runtimeCalibration.confirmationWindow, 2 * 60 * 60);
+}
+
+function runtimeCandidateCooldownSeconds(runtimeCalibration: LiveCalibrationProfile | null): number {
+  if (!runtimeCalibration) return 0;
+  const confirmationSeconds = runtimeCandidateWindowSeconds(runtimeCalibration);
+  const minHoldMinutes = Number(runtimeCalibration.trailingModel?.["minHoldMinutesBeforeTrail"] ?? 0);
+  const minHoldSeconds = Number.isFinite(minHoldMinutes) && minHoldMinutes > 0
+    ? minHoldMinutes * 60
+    : 0;
+  return Math.max(confirmationSeconds * 2, minHoldSeconds, 4 * 60 * 60);
+}
+
+function replayCandidateKey(symbol: string, engineName: string, direction: string): string {
+  return `${symbol}|${engineName}|${direction}`;
+}
+
+function evaluateReplayCandidateWindow(params: {
+  windows: Map<string, ReplayCandidateWindow>;
+  runtimeCalibration: LiveCalibrationProfile | null;
+  symbol: string;
+  engineName: string;
+  direction: "buy" | "sell";
+  nativeScore: number;
+  ts: number;
+}): { allowed: boolean; reason: string; key: string } {
+  const key = replayCandidateKey(params.symbol, params.engineName, params.direction);
+  const confirmationSeconds = runtimeCandidateWindowSeconds(params.runtimeCalibration);
+  if (!params.runtimeCalibration || confirmationSeconds <= 0) {
+    return { allowed: true, reason: "native", key };
+  }
+
+  const existing = params.windows.get(key);
+  if (existing && params.ts < existing.cooldownUntilTs) {
+    return { allowed: false, reason: "runtime_candidate_cooldown", key };
+  }
+
+  if (!existing || params.ts - existing.lastSeenTs > confirmationSeconds * 2) {
+    params.windows.set(key, {
+      firstSeenTs: params.ts,
+      lastSeenTs: params.ts,
+      scanCount: 1,
+      bestScore: params.nativeScore,
+      cooldownUntilTs: 0,
+    });
+    return { allowed: false, reason: "runtime_candidate_monitoring", key };
+  }
+
+  existing.lastSeenTs = params.ts;
+  existing.scanCount += 1;
+  existing.bestScore = Math.max(existing.bestScore, params.nativeScore);
+
+  if (params.ts - existing.firstSeenTs < confirmationSeconds || existing.scanCount < 2) {
+    return { allowed: false, reason: "runtime_candidate_monitoring", key };
+  }
+
+  if (params.nativeScore < existing.bestScore - 8) {
+    existing.firstSeenTs = params.ts;
+    existing.scanCount = 1;
+    existing.bestScore = params.nativeScore;
+    return { allowed: false, reason: "runtime_candidate_deteriorated", key };
+  }
+
+  return { allowed: true, reason: "runtime_candidate_tradeable", key };
+}
+
+function markReplayCandidateExecuted(
+  windows: Map<string, ReplayCandidateWindow>,
+  key: string,
+  ts: number,
+  runtimeCalibration: LiveCalibrationProfile | null,
+): void {
+  const existing = windows.get(key);
+  if (!existing) return;
+  existing.cooldownUntilTs = ts + runtimeCandidateCooldownSeconds(runtimeCalibration);
+  existing.firstSeenTs = ts;
+  existing.lastSeenTs = ts;
+  existing.scanCount = 0;
+}
+
 async function resolveBacktestTrailingConfig(
   symbol: string,
   mode: "paper" | "demo" | "real",
@@ -692,6 +794,7 @@ export async function runV3Backtest(
   let signalsBlocked = 0;
   const blockedByEngine: Record<string, number> = {};
   const scoringSourceCounts: Record<string, number> = {};
+  const candidateWindows = new Map<string, ReplayCandidateWindow>();
 
   // â”€â”€ Simulation PnL state â€” used to evaluate daily/weekly risk gates â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Tracks closed simulation trades with their close timestamp and $ PnL so
@@ -1093,6 +1196,35 @@ export async function runV3Backtest(
       continue;
     }
 
+    const candidateWindow = evaluateReplayCandidateWindow({
+      windows: candidateWindows,
+      runtimeCalibration,
+      symbol,
+      engineName: winner.engineName,
+      direction: winner.direction,
+      nativeScore,
+      ts: bar.closeTs,
+    });
+    if (!candidateWindow.allowed) {
+      signalsBlocked++;
+      blockedByEngine[winner.engineName] = (blockedByEngine[winner.engineName] ?? 0) + 1;
+      recordBehaviorEvent({
+        eventType: "blocked_by_gate",
+        symbol,
+        engineName: winner.engineName,
+        direction: winner.direction,
+        regimeAtEntry: regimeResult.regime,
+        nativeScore,
+        modeGate,
+        mode,
+        ts: bar.closeTs,
+        rejectionStage: 11,
+        rejectionReason: candidateWindow.reason,
+        isSignalQualityBlock: false,
+      });
+      continue;
+    }
+
     // â”€â”€ SR/Fib TP (exact live calculateSRFibTP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let tp = calculateSRFibTP({
       entryPrice: bar.close,
@@ -1201,6 +1333,7 @@ export async function runV3Backtest(
 
     // Register opening in shared ledger so concurrent symbols see this position
     if (sharedLedger) sharedLedger.open(symbol, instrumentFamily, bar.closeTs * 1000);
+    markReplayCandidateExecuted(candidateWindows, candidateWindow.key, bar.closeTs, runtimeCalibration);
   }
 
   const barsInRange = Math.max(0, candles.length - simStart);
@@ -1358,6 +1491,7 @@ export async function runV3BacktestMulti(
       signalsBlocked:         0,
       blockedByEngine:        {},
       scoringSourceCounts:     {},
+      candidateWindows:       new Map<string, ReplayCandidateWindow>(),
       runtimeCalibration:     null,
       runtimeCalibrationResolution: null,
       trailingActivationThresholdPct: undefined,
@@ -1623,6 +1757,29 @@ export async function runV3BacktestMulti(
         continue;
       }
 
+      const candidateWindow = evaluateReplayCandidateWindow({
+        windows: ctx.candidateWindows,
+        runtimeCalibration: ctx.runtimeCalibration,
+        symbol: ctx.sym,
+        engineName: winner.engineName,
+        direction: winner.direction,
+        nativeScore,
+        ts,
+      });
+      if (!candidateWindow.allowed) {
+        ctx.signalsBlocked++;
+        ctx.blockedByEngine[winner.engineName] = (ctx.blockedByEngine[winner.engineName] ?? 0) + 1;
+        recordBehaviorEvent({
+          eventType: "blocked_by_gate", symbol: ctx.sym, engineName: winner.engineName,
+          direction: winner.direction, regimeAtEntry: regimeResult.regime,
+          nativeScore, modeGate: ctx.modeGate, mode: _mode, ts: bar.closeTs,
+          rejectionStage: 11,
+          rejectionReason: candidateWindow.reason,
+          isSignalQualityBlock: false,
+        });
+        continue;
+      }
+
       // SR/Fib TP â€” same as single-symbol path
       let tp = calculateSRFibTP({
         entryPrice: bar.close, direction: winner.direction,
@@ -1690,6 +1847,7 @@ export async function runV3BacktestMulti(
         trailingMinHoldBars: ctx.trailingMinHoldBars,
       };
       ledger.open(ctx.sym, ctx.instrumentFamily, tsMs);
+      markReplayCandidateExecuted(ctx.candidateWindows, candidateWindow.key, ts, ctx.runtimeCalibration);
     }
   }
 

@@ -58,6 +58,32 @@ const POSITION_MGMT_INTERVAL_MS = 10_000;
 let schedulerHandle: ReturnType<typeof setInterval> | null = null;
 let positionMgmtHandle: ReturnType<typeof setInterval> | null = null;
 let watchCycleHandle: ReturnType<typeof setInterval> | null = null;
+
+function parseRuntimeWindowMs(raw: string | undefined, fallbackMs: number): number {
+  if (!raw) return fallbackMs;
+  const match = raw.trim().match(/^(\d+(?:\.\d+)?)\s*(m|min|mins|h|hr|hrs|hour|hours)?$/i);
+  if (!match) return fallbackMs;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return fallbackMs;
+  const unit = (match[2] ?? "m").toLowerCase();
+  const minutes = unit.startsWith("h") ? value * 60 : value;
+  return Math.max(30, Math.round(minutes)) * 60_000;
+}
+
+function runtimeCandidateAgeMs(runtimeCalibration: Awaited<ReturnType<typeof getLiveCalibrationProfile>>): number {
+  if (!runtimeCalibration) return 0;
+  return parseRuntimeWindowMs(runtimeCalibration.confirmationWindow, 2 * 60 * 60_000);
+}
+
+function runtimeCandidateCooldownMs(runtimeCalibration: Awaited<ReturnType<typeof getLiveCalibrationProfile>>): number {
+  if (!runtimeCalibration) return 2 * 60 * 60_000;
+  const confirmationMs = runtimeCandidateAgeMs(runtimeCalibration);
+  const minHoldMinutes = Number(runtimeCalibration.trailingModel?.["minHoldMinutesBeforeTrail"] ?? 0);
+  const minHoldMs = Number.isFinite(minHoldMinutes) && minHoldMinutes > 0
+    ? minHoldMinutes * 60_000
+    : 0;
+  return Math.max(confirmationMs * 2, minHoldMs, 4 * 60 * 60_000);
+}
 let currentIntervalMs = DEFAULT_SCAN_INTERVAL_MS;
 
 let staggeredScanActive = false;
@@ -205,6 +231,8 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
 
     // ── Allocator decision ───────────────────────────────────────────────────
     const modeCalibration = effectiveMode === "paper" ? runtimeCalibration : null;
+    const minCandidateAgeMs = runtimeCandidateAgeMs(modeCalibration);
+    const minCandidateScans = modeCalibration ? 2 : 1;
 
     const v3Decision = await allocateV3Signal(
       coordinatorOutput,
@@ -246,6 +274,8 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         rejectionReason: rejReason,
         regime: operationalRegime,
         regimeConfidence,
+        minTradeableAgeMs: minCandidateAgeMs,
+        minTradeableScans: minCandidateScans,
       });
 
       if (lcResult.shouldLog) {
@@ -281,7 +311,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     }
 
     // Allowed path — update lifecycle with allocatorAllowed=true
-    updateCandidate({
+    const allowedLifecycle = updateCandidate({
       symbol,
       engineName: winner.engineName,
       direction: coordinatorOutput.resolvedDirection,
@@ -292,7 +322,43 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       rejectionReason: null,
       regime: operationalRegime,
       regimeConfidence,
+      minTradeableAgeMs: minCandidateAgeMs,
+      minTradeableScans: minCandidateScans,
     });
+
+    if (modeCalibration && allowedLifecycle.candidate.status !== "tradeable") {
+      const readyAt = allowedLifecycle.candidate.tradeableAfterAt?.toISOString() ?? "next_confirmation";
+      console.log(`[V3Lifecycle] ${symbol} | ${winner.engineName} | ${coordinatorOutput.resolvedDirection} | MONITORING | status=${allowedLifecycle.candidate.status} | score=${candidateNativeScore} | tradeableAfter=${readyAt}`);
+
+      if (allowedLifecycle.shouldLog) {
+        try {
+          await db.insert(signalLogTable).values({
+            symbol,
+            strategyName: winner.engineName,
+            strategyFamily: "v3_engine",
+            direction: coordinatorOutput.resolvedDirection,
+            score: coordinatorOutput.coordinatorConfidence,
+            compositeScore: candidateNativeScore,
+            expectedValue: winner.projectedMovePct,
+            allowedFlag: false,
+            rejectionReason: `runtime_candidate_window:${allowedLifecycle.candidate.status}`,
+            mode: effectiveMode,
+            aiVerdict: "skipped",
+            aiReasoning: `lifecycle:${allowedLifecycle.logReason || "monitoring"} | lifecycle_state:${allowedLifecycle.candidate.status} | tradeable_after:${readyAt}`,
+            regime: operationalRegime,
+            regimeConfidence,
+            executionStatus: "blocked",
+            scoringDimensions: candidateScoringDims,
+          });
+          totalDecisionsLogged++;
+        } catch (logErr) {
+          console.error(`[V3Scan] Runtime candidate lifecycle log error:`, logErr instanceof Error ? logErr.message : logErr);
+        }
+      }
+
+      if (isIntelOnly) break;
+      continue;
+    }
 
     // ── Optional AI verification ─────────────────────────────────────────────
     let aiVerdict: string | undefined;
@@ -405,7 +471,12 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     });
 
     if (tradeId) {
-      markCandidateExecuted(symbol, winner.engineName, coordinatorOutput.resolvedDirection);
+      markCandidateExecuted(
+        symbol,
+        winner.engineName,
+        coordinatorOutput.resolvedDirection,
+        runtimeCandidateCooldownMs(modeCalibration),
+      );
       console.log(`[V3Exec] ${symbol} | ${effectiveMode} | ${coordinatorOutput.resolvedDirection} | engine=${winner.engineName} | alloc=$${v3Decision.capitalAmount.toFixed(2)} | tradeId=${tradeId} | EXECUTED`);
     }
 

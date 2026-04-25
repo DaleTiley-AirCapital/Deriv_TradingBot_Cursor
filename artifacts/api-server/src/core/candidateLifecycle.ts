@@ -35,6 +35,9 @@ export interface CandidateRecord {
   consecutiveDegrading: number;
   expiryReason: string | null;
   scanCount: number;
+  tradeableAfterAt: Date | null;
+  minTradeableScans: number;
+  cooldownUntilAt: Date | null;
 }
 
 export interface UpdateCandidateInput {
@@ -48,6 +51,8 @@ export interface UpdateCandidateInput {
   rejectionReason: string | null;
   regime: string;
   regimeConfidence: number;
+  minTradeableAgeMs?: number;
+  minTradeableScans?: number;
 }
 
 export interface UpdateCandidateResult {
@@ -96,8 +101,9 @@ function resolveStatus(
   score: number,
   engineGatePassed: boolean,
   allocatorAllowed: boolean,
+  matureTradeable: boolean,
 ): LifecycleStatus {
-  if (allocatorAllowed) return "tradeable";
+  if (allocatorAllowed) return matureTradeable ? "tradeable" : "qualified";
   if (score >= WATCH_SCORE_THRESHOLD) {
     return engineGatePassed ? "qualified" : "watch";
   }
@@ -108,12 +114,14 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
   const key = makeCandidateKey(input.symbol, input.engineName, input.direction);
   const now = new Date();
   const weakNow = extractWeakComponents(input.breakdown);
-  const newStatusRaw = resolveStatus(input.nativeScore, input.engineGatePassed, input.allocatorAllowed);
+  const minTradeableAgeMs = Math.max(0, input.minTradeableAgeMs ?? 0);
+  const minTradeableScans = Math.max(1, input.minTradeableScans ?? 1);
 
   const existing = candidates.get(key);
 
   if (!existing) {
-    const status = newStatusRaw;
+    const matureTradeable = input.allocatorAllowed && minTradeableAgeMs === 0 && minTradeableScans <= 1;
+    const status = resolveStatus(input.nativeScore, input.engineGatePassed, input.allocatorAllowed, matureTradeable);
     const rec: CandidateRecord = {
       key, symbol: input.symbol, engineName: input.engineName, direction: input.direction,
       status,
@@ -128,6 +136,9 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
       consecutiveImproving: 0, consecutiveDegrading: 0,
       expiryReason: null,
       scanCount: 1,
+      tradeableAfterAt: minTradeableAgeMs > 0 ? new Date(now.getTime() + minTradeableAgeMs) : now,
+      minTradeableScans,
+      cooldownUntilAt: null,
     };
     candidates.set(key, rec);
 
@@ -142,6 +153,12 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
   const prevStatus = existing.status;
   const prevScore = existing.lastScore;
   const prevWeakComponents = existing.weakComponents;
+  const nextScanCount = existing.scanCount + 1;
+  const ageMs = now.getTime() - existing.firstSeenAt.getTime();
+  const matureTradeable = input.allocatorAllowed &&
+    ageMs >= minTradeableAgeMs &&
+    nextScanCount >= minTradeableScans;
+  const newStatusRaw = resolveStatus(input.nativeScore, input.engineGatePassed, input.allocatorAllowed, matureTradeable);
   const scoreDelta = Math.abs(input.nativeScore - prevScore);
   const improving = input.nativeScore > prevScore;
   const degrading = input.nativeScore < prevScore;
@@ -153,7 +170,7 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
   let expiredNow = false;
   let expiryReason: string | null = existing.expiryReason;
 
-  if (prevStatus === "executed") {
+  if (prevStatus === "executed" && (!existing.cooldownUntilAt || now < existing.cooldownUntilAt)) {
     newStatus = "executed";
   } else if (prevStatus !== "idle" && prevStatus !== "expired") {
     const timeSinceSeen = now.getTime() - existing.lastSeenAt.getTime();
@@ -189,7 +206,11 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
   existing.consecutiveImproving = consecutiveImproving;
   existing.consecutiveDegrading = consecutiveDegrading;
   existing.expiryReason = expiryReason;
-  existing.scanCount++;
+  existing.scanCount = nextScanCount;
+  existing.tradeableAfterAt = minTradeableAgeMs > 0
+    ? new Date(existing.firstSeenAt.getTime() + minTradeableAgeMs)
+    : existing.firstSeenAt;
+  existing.minTradeableScans = minTradeableScans;
 
   let shouldLog = false;
   let logReason = "";
@@ -229,12 +250,18 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
   return { candidate: existing, shouldLog, logReason, stateChanged, watchTriggered, expiredNow };
 }
 
-export function markCandidateExecuted(symbol: string, engineName: string, direction: string): void {
+export function markCandidateExecuted(
+  symbol: string,
+  engineName: string,
+  direction: string,
+  cooldownMs = CLEANUP_AFTER_MS,
+): void {
   const key = makeCandidateKey(symbol, engineName, direction);
   const rec = candidates.get(key);
   if (rec) {
     rec.status = "executed";
     rec.lastSeenAt = new Date();
+    rec.cooldownUntilAt = new Date(rec.lastSeenAt.getTime() + Math.max(CLEANUP_AFTER_MS, cooldownMs));
   }
 }
 
@@ -258,7 +285,11 @@ export function cleanupStale(): void {
   const now = Date.now();
   for (const [key, rec] of candidates.entries()) {
     if (rec.status === "executed" || rec.status === "expired") {
-      if (now - rec.lastSeenAt.getTime() > CLEANUP_AFTER_MS) {
+      const cleanupAfter = Math.max(
+        rec.lastSeenAt.getTime() + CLEANUP_AFTER_MS,
+        rec.cooldownUntilAt?.getTime() ?? 0,
+      );
+      if (now > cleanupAfter) {
         candidates.delete(key);
       }
     }

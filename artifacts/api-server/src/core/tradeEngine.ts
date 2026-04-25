@@ -91,20 +91,22 @@ export function applyRuntimeCalibrationExitModel(params: {
     const targetPctRaw = Number(runtimeCalibration.tpModel?.["targetPct"] ?? 0);
     const targetPct = Number.isFinite(targetPctRaw) ? Math.max(0, targetPctRaw / 100) : 0;
     if (targetPct > 0) {
-      const currentTpPct = Math.abs(tp - spotPrice) / spotPrice;
-      const blendedTpPct = currentTpPct * 0.7 + targetPct * 0.3;
+      // The promoted research model owns paper calibration exits. Do not blend
+      // it back toward legacy SR/Fib targets or the backtest no longer tests it.
       tp = direction === "buy"
-        ? spotPrice * (1 + blendedTpPct)
-        : spotPrice * (1 - blendedTpPct);
+        ? spotPrice * (1 + targetPct)
+        : spotPrice * (1 - targetPct);
     }
 
     const maxInitialRiskPctRaw = Number(runtimeCalibration.slModel?.["maxInitialRiskPct"] ?? 0);
     const maxInitialRiskPct = Number.isFinite(maxInitialRiskPctRaw) ? Math.max(0, maxInitialRiskPctRaw / 100) : 0;
     if (maxInitialRiskPct > 0) {
-      const calibratedSl = direction === "buy"
+      // Use the calibrated structural risk budget directly for paper/replay.
+      // The previous clamp kept legacy 1:5 stops around 1%, which strangled
+      // CRASH300 moves before their calibrated 7h behavior window developed.
+      sl = direction === "buy"
         ? spotPrice * (1 - maxInitialRiskPct)
         : spotPrice * (1 + maxInitialRiskPct);
-      sl = direction === "buy" ? Math.max(sl, calibratedSl) : Math.min(sl, calibratedSl);
     }
 
     const trailingDistancePctRaw = Number(runtimeCalibration.trailingModel?.["trailingDistancePct"] ?? 0);
