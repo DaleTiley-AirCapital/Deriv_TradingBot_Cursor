@@ -84,6 +84,17 @@ type CrashWeightSet = {
   move: number;
 };
 
+type ComponentScore = { score: number; flags: string[] };
+
+type ComponentSet = {
+  c1: ComponentScore;
+  c2: ComponentScore;
+  c3: ComponentScore;
+  c4: ComponentScore;
+  c5: ComponentScore;
+  c6: ComponentScore;
+};
+
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" && !Array.isArray(v)
     ? (v as Record<string, unknown>)
@@ -130,6 +141,200 @@ function resolveCrashWeights(ctx: EngineContext, engineName: string): CrashWeigh
     recovery: recovery / sum,
     entry: entry / sum,
     move: move / sum,
+  };
+}
+
+function scoreThreshold(bands: Array<[boolean, number, string]>): ComponentScore {
+  const match = bands.find(([passed]) => passed) ?? bands[bands.length - 1];
+  return {
+    score: clamp(Math.round(match?.[1] ?? 0), 0, 100),
+    flags: [match?.[2] ?? "no_calibrated_band_match"],
+  };
+}
+
+function scoreVolatilityExpansionFit(f: EngineContext["features"]): ComponentScore {
+  const score = clamp(
+    Math.round(
+      (Math.min(1.4, Math.max(0, f.atrRank)) / 1.4) * 45 +
+      (Math.min(0.018, Math.max(0, f.bbWidth)) / 0.018) * 35 +
+      (f.bbWidthRoc > 0 ? 20 : f.atrAccel > 0 ? 12 : 4),
+    ),
+    0,
+    100,
+  );
+  return {
+    score,
+    flags: [
+      `atr_rank=${f.atrRank.toFixed(2)}`,
+      `bb_width=${(f.bbWidth * 100).toFixed(2)}pct`,
+      f.bbWidthRoc > 0 ? "bb_width_expanding" : "bb_width_not_expanding",
+    ],
+  };
+}
+
+function scoreBuyCalibratedSpikeRecoveryFit(f: EngineContext["features"]): ComponentScore {
+  const spikeScore = Math.max(
+    f.spikeCount4h >= 7 ? 100 : f.spikeCount4h >= 5 ? 90 : f.spikeCount4h >= 3 ? 78 : f.spikeCount4h >= 1 ? 55 : 25,
+    f.spikeCount24h >= 7 ? 95 : f.spikeCount24h >= 4 ? 82 : f.spikeCount24h >= 2 ? 60 : 25,
+  );
+  const exhaustionBonus = f.priceChange24hPct <= -0.04 ? 10 : f.priceChange24hPct <= -0.015 ? 5 : 0;
+  return {
+    score: clamp(spikeScore + exhaustionBonus, 0, 100),
+    flags: [
+      `spikes4h=${f.spikeCount4h}`,
+      `spikes24h=${f.spikeCount24h}`,
+      `change24h=${(f.priceChange24hPct * 100).toFixed(2)}pct`,
+    ],
+  };
+}
+
+function scoreBuyCalibratedRangePosition(f: EngineContext["features"]): ComponentScore {
+  return scoreThreshold([
+    [f.distFromRange30dLowPct <= 0.05, 96, "within_5pct_of_30d_low"],
+    [f.distFromRange30dLowPct <= 0.10, 86, "within_10pct_of_30d_low"],
+    [f.distFromRange30dLowPct <= 0.18, 72, "within_18pct_of_30d_low"],
+    [f.distFromRange30dLowPct <= 0.30, 58, "within_30pct_of_30d_low"],
+    [true, 32, "too_far_from_30d_low"],
+  ]);
+}
+
+function scoreBuyCalibratedDevelopmentFit(f: EngineContext["features"]): ComponentScore {
+  return scoreThreshold([
+    [f.priceChange24hPct <= -0.04 && f.priceChange7dPct <= -0.04, 96, "crash_cluster_decline_developed"],
+    [f.priceChange24hPct <= -0.015 || f.priceChange7dPct <= -0.05, 82, "controlled_decline_into_setup"],
+    [f.priceChange24hPct <= 0.008 && f.distFromRange30dLowPct <= 0.12, 68, "near_low_without_large_decline"],
+    [true, 38, "development_window_not_crash_like"],
+  ]);
+}
+
+function scoreBuyCalibratedTriggerFit(f: EngineContext["features"]): ComponentScore {
+  const reclaim = f.priceVsEma20 >= -0.01 ? 20 : 0;
+  const slope = f.emaSlope > 0.00015 ? 40 : f.emaSlope > -0.00015 ? 28 : 8;
+  const candle = f.latestClose > f.latestOpen ? 25 : 5;
+  const rsi = f.rsi14 >= 30 && f.rsi14 <= 72 ? 15 : 4;
+  return {
+    score: clamp(slope + reclaim + candle + rsi, 0, 100),
+    flags: [
+      `ema_slope=${f.emaSlope.toFixed(6)}`,
+      `price_vs_ema20=${(f.priceVsEma20 * 100).toFixed(2)}pct`,
+      f.latestClose > f.latestOpen ? "reversal_candle_up" : "no_reversal_candle",
+      `rsi=${f.rsi14.toFixed(1)}`,
+    ],
+  };
+}
+
+function scoreBuyCalibratedRunwayFit(f: EngineContext["features"]): ComponentScore {
+  const upsideRunway = Math.abs(f.distFromRange30dHighPct);
+  return scoreThreshold([
+    [upsideRunway >= 0.18, 96, "large_upside_runway_to_30d_high"],
+    [upsideRunway >= 0.10, 82, "healthy_upside_runway"],
+    [upsideRunway >= 0.05, 64, "limited_but_usable_upside_runway"],
+    [true, 35, "insufficient_upside_runway"],
+  ]);
+}
+
+function scoreSellCalibratedSpikeExhaustionFit(f: EngineContext["features"]): ComponentScore {
+  const spikeScore = f.spikeCount7d >= 18 ? 100 : f.spikeCount7d >= 10 ? 88 : f.spikeCount24h >= 4 ? 70 : 35;
+  const rallyBonus = f.priceChange7dPct >= 0.06 ? 10 : f.priceChange24hPct >= 0.02 ? 5 : 0;
+  return {
+    score: clamp(spikeScore + rallyBonus, 0, 100),
+    flags: [
+      `spikes7d=${f.spikeCount7d}`,
+      `spikes24h=${f.spikeCount24h}`,
+      `change7d=${(f.priceChange7dPct * 100).toFixed(2)}pct`,
+    ],
+  };
+}
+
+function scoreSellCalibratedRangePosition(f: EngineContext["features"]): ComponentScore {
+  const nearHigh = Math.abs(f.distFromRange30dHighPct);
+  return scoreThreshold([
+    [nearHigh <= 0.06, 94, "within_6pct_of_30d_high"],
+    [nearHigh <= 0.12, 82, "within_12pct_of_30d_high"],
+    [nearHigh <= 0.20, 66, "near_upper_range"],
+    [true, 35, "too_far_from_30d_high"],
+  ]);
+}
+
+function scoreSellCalibratedDevelopmentFit(f: EngineContext["features"]): ComponentScore {
+  return scoreThreshold([
+    [f.priceChange7dPct >= 0.06 && f.priceChange24hPct <= 0.005, 96, "seven_day_rally_24h_failure"],
+    [f.priceChange7dPct >= 0.06, 84, "seven_day_rally_exhaustion"],
+    [f.priceChange24hPct >= 0.02, 68, "short_term_rally_extension"],
+    [true, 36, "development_window_not_exhausted"],
+  ]);
+}
+
+function scoreSellCalibratedTriggerFit(f: EngineContext["features"]): ComponentScore {
+  const slope = f.emaSlope < -0.00015 ? 40 : f.emaSlope < 0.00015 ? 28 : 8;
+  const candle = f.latestClose < f.latestOpen ? 25 : 5;
+  const overEma = f.priceVsEma20 <= 0.015 ? 20 : 8;
+  const rsi = f.rsi14 >= 28 && f.rsi14 <= 72 ? 15 : 4;
+  return {
+    score: clamp(slope + candle + overEma + rsi, 0, 100),
+    flags: [
+      `ema_slope=${f.emaSlope.toFixed(6)}`,
+      `price_vs_ema20=${(f.priceVsEma20 * 100).toFixed(2)}pct`,
+      f.latestClose < f.latestOpen ? "cascade_candle_down" : "no_cascade_candle",
+      `rsi=${f.rsi14.toFixed(1)}`,
+    ],
+  };
+}
+
+function scoreSellCalibratedRunwayFit(f: EngineContext["features"]): ComponentScore {
+  return scoreThreshold([
+    [f.distFromRange30dLowPct >= 0.18, 96, "large_downside_runway_to_30d_low"],
+    [f.distFromRange30dLowPct >= 0.10, 82, "healthy_downside_runway"],
+    [f.distFromRange30dLowPct >= 0.05, 64, "limited_but_usable_downside_runway"],
+    [true, 35, "insufficient_downside_runway"],
+  ]);
+}
+
+function calibratedCrashScore(
+  ctx: EngineContext,
+  direction: "buy" | "sell",
+  legacyScore: number,
+): { nativeScore: number; components: ComponentSet; gate: number; setupFamily: string; setupLabel: string } | null {
+  const runtime = ctx.runtimeCalibration;
+  if (!runtime || runtime.source !== "promoted_symbol_model") return null;
+
+  const f = ctx.features;
+  const components: ComponentSet = direction === "buy"
+    ? {
+        c1: scoreBuyCalibratedSpikeRecoveryFit(f),
+        c2: scoreBuyCalibratedRangePosition(f),
+        c3: scoreBuyCalibratedDevelopmentFit(f),
+        c4: scoreBuyCalibratedTriggerFit(f),
+        c5: scoreVolatilityExpansionFit(f),
+        c6: scoreBuyCalibratedRunwayFit(f),
+      }
+    : {
+        c1: scoreSellCalibratedSpikeExhaustionFit(f),
+        c2: scoreSellCalibratedRangePosition(f),
+        c3: scoreSellCalibratedDevelopmentFit(f),
+        c4: scoreSellCalibratedTriggerFit(f),
+        c5: scoreVolatilityExpansionFit(f),
+        c6: scoreSellCalibratedRunwayFit(f),
+      };
+
+  const calibratedScore = Math.round(
+    components.c1.score * 0.18 +
+    components.c2.score * 0.20 +
+    components.c3.score * 0.22 +
+    components.c4.score * 0.22 +
+    components.c5.score * 0.10 +
+    components.c6.score * 0.08
+  );
+  const runtimeGate = runtime.recommendedScoreGates.paper;
+
+  return {
+    nativeScore: clamp(Math.round(legacyScore * 0.35 + calibratedScore * 0.65), 0, 100),
+    components,
+    gate: clamp(Math.round(Math.max(55, Math.min(80, runtimeGate || 60))), 40, 95),
+    setupFamily: "calibrated_crash_expansion_runtime",
+    setupLabel: direction === "buy"
+      ? "calibrated_buy_crash_expansion_recovery_window"
+      : "calibrated_sell_crash_expansion_exhaustion_window",
   };
 }
 
@@ -674,18 +879,15 @@ function evaluateCrash300Direction(
   const sellGateOverride = asFinite(engineOverride.sellGate ?? engineOverride.minSellGate ?? engineOverride.minGate);
   const resolvedBuyGate = clamp(Math.round(buyGateOverride ?? blendedBuyGate), 40, 95);
   const resolvedSellGate = clamp(Math.round(sellGateOverride ?? blendedSellGate), 40, 95);
+  const calibratedBuy = calibratedCrashScore(ctx, "buy", buyNativeScore);
+  const calibratedSell = calibratedCrashScore(ctx, "sell", sellNativeScore);
+  const effectiveBuyScore = calibratedBuy?.nativeScore ?? buyNativeScore;
+  const effectiveSellScore = calibratedSell?.nativeScore ?? sellNativeScore;
+  const effectiveBuyGate = calibratedBuy?.gate ?? resolvedBuyGate;
+  const effectiveSellGate = calibratedSell?.gate ?? resolvedSellGate;
 
-  const buyViable  = buyNativeScore  >= resolvedBuyGate  && !regimeBlocksBuy;
-  const sellViable = sellNativeScore >= resolvedSellGate && !regimeBlocksSell;
-
-  type ComponentSet = {
-    c1: { score: number; flags: string[] };
-    c2: { score: number; flags: string[] };
-    c3: { score: number; flags: string[] };
-    c4: { score: number; flags: string[] };
-    c5: { score: number; flags: string[] };
-    c6: { score: number; flags: string[] };
-  };
+  const buyViable  = effectiveBuyScore  >= effectiveBuyGate  && !regimeBlocksBuy;
+  const sellViable = effectiveSellScore >= effectiveSellGate && !regimeBlocksSell;
 
   let direction: "buy" | "sell";
   let nativeScore: number;
@@ -702,60 +904,63 @@ function evaluateCrash300Direction(
   if (forcedDirection === "buy") {
     if (!buyViable) return null;
     direction       = "buy";
-    nativeScore     = buyNativeScore;
-    minGate         = resolvedBuyGate;
-    components      = { c1: b1_cluster, c2: b2_disp, c3: b3_exhaust, c4: b4_recovery, c5: b5_entry, c6: b6_move };
+    nativeScore     = effectiveBuyScore;
+    minGate         = effectiveBuyGate;
+    components      = calibratedBuy?.components ?? { c1: b1_cluster, c2: b2_disp, c3: b3_exhaust, c4: b4_recovery, c5: b5_entry, c6: b6_move };
     projectedMovePct = CRASH300_BUY_PROJECTED_PCT;
     invalidation    = f.swingLow * 0.995;
     holdProfile     = CRASH300_BUY_HOLD_PROFILE;
     tpLogic         = CRASH300_BUY_TP_LOGIC;
     slLogic         = CRASH300_BUY_SL_LOGIC;
     trailLogic      = CRASH300_BUY_TRAIL;
-    setupLabel      = "buy_after_crash_spike_cluster_swing_low_reversal";
+    setupLabel      = calibratedBuy?.setupLabel ?? "buy_after_crash_spike_cluster_swing_low_reversal";
   } else if (forcedDirection === "sell") {
     if (!sellViable) return null;
     direction       = "sell";
-    nativeScore     = sellNativeScore;
-    minGate         = resolvedSellGate;
-    components      = { c1: s1_rally, c2: s2_stretch, c3: s3_exhaust, c4: s4_cascade, c5: s5_entry, c6: s6_move };
+    nativeScore     = effectiveSellScore;
+    minGate         = effectiveSellGate;
+    components      = calibratedSell?.components ?? { c1: s1_rally, c2: s2_stretch, c3: s3_exhaust, c4: s4_cascade, c5: s5_entry, c6: s6_move };
     projectedMovePct = CRASH300_SELL_PROJECTED_PCT;
     invalidation    = f.swingHigh * 1.005;
     holdProfile     = CRASH300_SELL_HOLD_PROFILE;
     tpLogic         = CRASH300_SELL_TP_LOGIC;
     slLogic         = CRASH300_SELL_SL_LOGIC;
     trailLogic      = CRASH300_SELL_TRAIL;
-    setupLabel      = "sell_after_extended_rally_exhaustion_cascade";
-  } else if (buyViable && (!sellViable || buyNativeScore >= sellNativeScore)) {
+    setupLabel      = calibratedSell?.setupLabel ?? "sell_after_extended_rally_exhaustion_cascade";
+  } else if (buyViable && (!sellViable || effectiveBuyScore >= effectiveSellScore)) {
     // Auto mode: BUY preferred when both viable (BUY = primary setup)
     direction       = "buy";
-    nativeScore     = buyNativeScore;
-    minGate         = resolvedBuyGate;
-    components      = { c1: b1_cluster, c2: b2_disp, c3: b3_exhaust, c4: b4_recovery, c5: b5_entry, c6: b6_move };
+    nativeScore     = effectiveBuyScore;
+    minGate         = effectiveBuyGate;
+    components      = calibratedBuy?.components ?? { c1: b1_cluster, c2: b2_disp, c3: b3_exhaust, c4: b4_recovery, c5: b5_entry, c6: b6_move };
     projectedMovePct = CRASH300_BUY_PROJECTED_PCT;
     invalidation    = f.swingLow * 0.995;
     holdProfile     = CRASH300_BUY_HOLD_PROFILE;
     tpLogic         = CRASH300_BUY_TP_LOGIC;
     slLogic         = CRASH300_BUY_SL_LOGIC;
     trailLogic      = CRASH300_BUY_TRAIL;
-    setupLabel      = "buy_after_crash_spike_cluster_swing_low_reversal";
+    setupLabel      = calibratedBuy?.setupLabel ?? "buy_after_crash_spike_cluster_swing_low_reversal";
   } else if (sellViable) {
     direction       = "sell";
-    nativeScore     = sellNativeScore;
-    minGate         = resolvedSellGate;
-    components      = { c1: s1_rally, c2: s2_stretch, c3: s3_exhaust, c4: s4_cascade, c5: s5_entry, c6: s6_move };
+    nativeScore     = effectiveSellScore;
+    minGate         = effectiveSellGate;
+    components      = calibratedSell?.components ?? { c1: s1_rally, c2: s2_stretch, c3: s3_exhaust, c4: s4_cascade, c5: s5_entry, c6: s6_move };
     projectedMovePct = CRASH300_SELL_PROJECTED_PCT;
     invalidation    = f.swingHigh * 1.005;
     holdProfile     = CRASH300_SELL_HOLD_PROFILE;
     tpLogic         = CRASH300_SELL_TP_LOGIC;
     slLogic         = CRASH300_SELL_SL_LOGIC;
     trailLogic      = CRASH300_SELL_TRAIL;
-    setupLabel      = "sell_after_extended_rally_exhaustion_cascade";
+    setupLabel      = calibratedSell?.setupLabel ?? "sell_after_extended_rally_exhaustion_cascade";
   } else {
     // Neither setup meets the CRASH300-native gate — no signal
     return null;
   }
 
   // ── CRASH300-native regime modifier ───────────────────────────────────────
+  const calibratedRuntimeApplied = direction === "buy" ? calibratedBuy : calibratedSell;
+  const legacyScore = direction === "buy" ? buyNativeScore : sellNativeScore;
+
   let regimeFit = 0.55; // neutral baseline
   if (direction === "buy") {
     if (operationalRegime === "crash_expansion" || operationalRegime === "spike_zone") regimeFit = 0.88;
@@ -775,7 +980,14 @@ function evaluateCrash300Direction(
 
   // ── Block reason analysis ─────────────────────────────────────────────────
   const blockReasons: string[] = [];
-  if (direction === "buy") {
+  if (calibratedRuntimeApplied) {
+    if (components.c1.score < 55) blockReasons.push(`weak_calibrated_spike_phase(${components.c1.score}/100)`);
+    if (components.c2.score < 55) blockReasons.push(`weak_calibrated_range_position(${components.c2.score}/100)`);
+    if (components.c3.score < 55) blockReasons.push(`weak_calibrated_development_window(${components.c3.score}/100)`);
+    if (components.c4.score < 55) blockReasons.push(`weak_calibrated_trigger_window(${components.c4.score}/100)`);
+    if (components.c5.score < 45) blockReasons.push(`weak_calibrated_volatility_expansion(${components.c5.score}/100)`);
+    if (components.c6.score < 45) blockReasons.push(`weak_calibrated_runway(${components.c6.score}/100)`);
+  } else if (direction === "buy") {
     if (b1_cluster.score  < 40) blockReasons.push(`insufficient_crash_spike_cluster(${b1_cluster.score}/100)`);
     if (b2_disp.score     < 40) blockReasons.push(`insufficient_downside_displacement(${b2_disp.score}/100)`);
     if (b3_exhaust.score  < 35) blockReasons.push(`insufficient_reversal_evidence(${b3_exhaust.score}/100)`);
@@ -804,7 +1016,7 @@ function evaluateCrash300Direction(
     engineScore: nativeScore,
     direction,
     setupDetected: setupLabel,
-    setupFamily: "crash300_swing_structure",
+    setupFamily: calibratedRuntimeApplied?.setupFamily ?? "crash300_swing_structure",
     componentScores: {
       crashSpikeClusterPressure:  components.c1.score,
       downsideDisplacement:       components.c2.score,
@@ -823,7 +1035,9 @@ function evaluateCrash300Direction(
     },
     gatePassed: true, // reached this point = passed engine-native gate
     gateThreshold: minGate,
-    gateReason: `native_score ${nativeScore} ≥ CRASH300_MIN_GATE ${minGate}`,
+    gateReason: calibratedRuntimeApplied
+      ? `calibrated_runtime_score ${nativeScore} >= promoted_model_gate ${minGate}`
+      : `native_score ${nativeScore} >= CRASH300_MIN_GATE ${minGate}`,
     blockReasons,
     expectedMovePct: projectedMovePct,
     expectedHoldProfile: holdProfile,
@@ -843,7 +1057,13 @@ function evaluateCrash300Direction(
     entryType: "expansion",
     projectedMovePct,
     invalidation,
-    reason: `CRASH300 ${direction} | native=${nativeScore}/100 | gate=${minGate} | ` +
+    reason: calibratedRuntimeApplied
+      ? `CRASH300 ${direction} | calibrated_runtime=${nativeScore}/100 | legacy_native=${legacyScore}/100 | gate=${minGate} | ` +
+      `spikePhase=${components.c1.score} range=${components.c2.score} development=${components.c3.score} ` +
+      `trigger=${components.c4.score} volatility=${components.c5.score} runway=${components.c6.score} | ` +
+      `regime=${operationalRegime}(fit=${regimeFit.toFixed(2)})` +
+      (blockReasons.length > 0 ? ` | weakComponents=[${blockReasons.join(", ")}]` : "")
+      : `CRASH300 ${direction} | native=${nativeScore}/100 | gate=${minGate} | ` +
       `cluster=${components.c1.score} disp=${components.c2.score} exhaust=${components.c3.score} ` +
       `recovery=${components.c4.score} entry=${components.c5.score} move=${components.c6.score} | ` +
       `regime=${operationalRegime}(fit=${regimeFit.toFixed(2)})` +
@@ -857,9 +1077,23 @@ function evaluateCrash300Direction(
       crash300BlockReasons: blockReasons,
       crash300RuntimeCalibrationApplied: Boolean(ctx.runtimeCalibration),
       crash300RuntimeCalibrationRunId: ctx.runtimeCalibration?.sourceRunId ?? null,
+      crash300ScoringSource: calibratedRuntimeApplied ? "promoted_calibrated_runtime_model" : "legacy_native_six_component",
+      crash300LegacyNativeScore: legacyScore,
+      crash300CalibratedRuntimeScore: calibratedRuntimeApplied ? nativeScore : null,
+      crash300CalibratedRuntimeGate: calibratedRuntimeApplied ? minGate : null,
       setupDetected: nativeBreakdown.setupDetected,
       setupFamily: nativeBreakdown.setupFamily,
       componentScores: nativeBreakdown.componentScores,
+      calibratedComponentScores: calibratedRuntimeApplied
+        ? {
+            spikePhaseFit: components.c1.score,
+            rangePositionFit: components.c2.score,
+            developmentWindowFit: components.c3.score,
+            triggerWindowFit: components.c4.score,
+            volatilityExpansionFit: components.c5.score,
+            runwayFit: components.c6.score,
+          }
+        : null,
       expectedHoldProfile: holdProfile,
       tpLogicSummary: tpLogic,
       slLogicSummary: slLogic,

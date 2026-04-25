@@ -147,7 +147,7 @@ export function extractNativeScore(
   const m = winner.metadata;
   if (!m) return Math.round(coordinatorConfidence * 100);
   const candidates: Array<unknown> = [
-    m["boom300NativeScore"], m["crash300NativeScore"],
+    m["boom300NativeScore"], m["crash300CalibratedRuntimeScore"], m["crash300NativeScore"],
     m["r75ReversalNativeScore"], m["r75ContinuationNativeScore"], m["r75BreakoutNativeScore"],
     m["r100ReversalNativeScore"], m["r100ContinuationNativeScore"], m["r100BreakoutNativeScore"],
   ];

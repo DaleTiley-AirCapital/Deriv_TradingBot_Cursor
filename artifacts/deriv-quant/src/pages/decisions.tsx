@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   useGetLatestSignals,
   useGetPendingSignals,
@@ -65,6 +66,13 @@ const ENGINE_COLORS: Record<string, string> = {
 };
 
 const PAGE_SIZE = 50;
+const BASE = import.meta.env.BASE_URL || "/";
+
+async function apiFetch<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}api/${path.replace(/^\//, "")}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<T>;
+}
 
 // ── State Classification ──────────────────────────────────────────────────────
 
@@ -111,6 +119,59 @@ const STATE_STYLES: Record<DecisionState, StateStyle> = {
 // ── Blocking Gate Parser ──────────────────────────────────────────────────────
 
 interface GateInfo { gate: string; detail: string; raw: string }
+
+interface LiveWindowCandidate {
+  key: string;
+  engineName: string;
+  direction: "buy" | "sell";
+  status: string;
+  watchDurationMins: number;
+  idleForMins: number;
+  scanCount: number;
+  lastScore: number;
+  bestScore: number;
+  scoreDeltaFromBest: number;
+  consecutiveImproving: number;
+  consecutiveDegrading: number;
+  weakComponents: string[];
+  engineGatePassed: boolean;
+  allocatorGatePassed: boolean;
+  componentDelta: Record<string, number>;
+}
+
+interface LiveWindowSymbol {
+  symbol: string;
+  generatedAt: string;
+  latestCandleCloseTs: string | null;
+  latestClose: number | null;
+  ageSeconds: number | null;
+  rollingWindows: {
+    spikeCount4h: number;
+    spikeCount24h: number;
+    spikeCount7d: number;
+    priceChange24hPct: number;
+    priceChange7dPct: number;
+    distFromRange30dHighPct: number;
+    distFromRange30dLowPct: number;
+    emaSlope: number;
+    priceVsEma20: number;
+    bbWidth: number;
+    atrRank: number;
+  } | null;
+  windowAnchors: {
+    fourHourStart: string;
+    twentyFourHourStart: string;
+    sevenDayStart: string;
+    thirtyDayStart: string;
+  } | null;
+  watchedCandidates: LiveWindowCandidate[];
+}
+
+interface LiveWindowsResponse {
+  generatedAt: string;
+  note: string;
+  symbols: LiveWindowSymbol[];
+}
 
 function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
   if (!reason) return null;
@@ -248,6 +309,22 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
 }
 
 // ── Micro Components ──────────────────────────────────────────────────────────
+
+function formatPctValue(value: number | null | undefined, digits = 2) {
+  if (value == null || !Number.isFinite(value)) return "-";
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+function formatSignedPct(value: number | null | undefined, digits = 2) {
+  if (value == null || !Number.isFinite(value)) return "-";
+  const pct = value * 100;
+  return `${pct >= 0 ? "+" : ""}${pct.toFixed(digits)}%`;
+}
+
+function compactDateTime(value: string | null | undefined) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
 
 function DirectionChip({ direction }: { direction: string | null | undefined }) {
   if (!direction) return <span className="text-muted-foreground/50 text-xs">—</span>;
@@ -835,6 +912,111 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
 
 // ── Pending Confirmations Block ───────────────────────────────────────────────
 
+function MetricTile({ label, value, tone }: { label: string; value: string | number; tone?: "up" | "down" | "warn" }) {
+  const toneClass = tone === "up" ? "text-emerald-400" : tone === "down" ? "text-red-400" : tone === "warn" ? "text-amber-400" : "text-foreground";
+  return (
+    <div className="rounded-lg border border-border/40 bg-background/40 px-2.5 py-2">
+      <p className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className={cn("text-sm font-semibold tabular-nums mt-0.5", toneClass)}>{value}</p>
+    </div>
+  );
+}
+
+function LiveWindowsBlock({ data }: { data: LiveWindowsResponse | undefined }) {
+  if (!data) return null;
+  return (
+    <div className="rounded-xl border border-primary/20 bg-primary/5">
+      <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-primary/15">
+        <div className="flex items-center gap-2">
+          <Activity className="w-3.5 h-3.5 text-primary" />
+          <span className="text-xs font-semibold text-primary">Live Rolling Windows</span>
+          <span className="text-[10px] text-muted-foreground">updates every 5s</span>
+        </div>
+        <span className="text-[10px] text-muted-foreground">Generated {compactDateTime(data.generatedAt)}</span>
+      </div>
+      <div className="p-3 grid grid-cols-1 xl:grid-cols-2 gap-3">
+        {data.symbols.map(row => {
+          const w = row.rollingWindows;
+          const watched = row.watchedCandidates;
+          return (
+            <div key={row.symbol} className="rounded-lg border border-border/50 bg-card p-3 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-bold text-foreground">{row.symbol}</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Last 1m candle {compactDateTime(row.latestCandleCloseTs)}
+                    {row.ageSeconds != null ? ` | age ${row.ageSeconds}s` : ""}
+                  </p>
+                </div>
+                <span className={cn(
+                  "text-[10px] px-2 py-1 rounded-full border",
+                  watched.length > 0
+                    ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                    : "border-border/40 text-muted-foreground",
+                )}>
+                  {watched.length > 0 ? `${watched.length} watch candidate${watched.length === 1 ? "" : "s"}` : "no active watch"}
+                </span>
+              </div>
+
+              {w ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                  <MetricTile label="4h spikes" value={w.spikeCount4h} tone={w.spikeCount4h > 0 ? "warn" : undefined} />
+                  <MetricTile label="24h move" value={formatSignedPct(w.priceChange24hPct)} tone={w.priceChange24hPct >= 0 ? "up" : "down"} />
+                  <MetricTile label="7d move" value={formatSignedPct(w.priceChange7dPct)} tone={w.priceChange7dPct >= 0 ? "up" : "down"} />
+                  <MetricTile label="24h spikes" value={w.spikeCount24h} tone={w.spikeCount24h > 0 ? "warn" : undefined} />
+                  <MetricTile label="7d spikes" value={w.spikeCount7d} tone={w.spikeCount7d > 0 ? "warn" : undefined} />
+                  <MetricTile label="From 30d low" value={formatPctValue(w.distFromRange30dLowPct)} tone="up" />
+                  <MetricTile label="From 30d high" value={formatPctValue(w.distFromRange30dHighPct)} tone="down" />
+                  <MetricTile label="EMA dist" value={formatSignedPct(w.priceVsEma20)} tone={w.priceVsEma20 >= 0 ? "up" : "down"} />
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">No feature window available yet.</p>
+              )}
+
+              {row.windowAnchors && (
+                <p className="text-[10px] text-muted-foreground">
+                  Rolling anchors: 4h from {compactDateTime(row.windowAnchors.fourHourStart)}, 24h from {compactDateTime(row.windowAnchors.twentyFourHourStart)}, 7d from {compactDateTime(row.windowAnchors.sevenDayStart)}, 30d from {compactDateTime(row.windowAnchors.thirtyDayStart)}.
+                </p>
+              )}
+
+              {watched.length > 0 && (
+                <div className="space-y-2">
+                  {watched.map(candidate => {
+                    const strongestDelta = Object.entries(candidate.componentDelta ?? {})
+                      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
+                    return (
+                      <div key={candidate.key} className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <DirectionChip direction={candidate.direction} />
+                            <span className="text-xs font-semibold truncate">{ENGINE_LABELS[candidate.engineName] ?? candidate.engineName}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/25 text-amber-300">{candidate.status}</span>
+                          </div>
+                          <span className="text-xs tabular-nums text-foreground">
+                            score {candidate.lastScore} / best {candidate.bestScore}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
+                          <span>watch {candidate.watchDurationMins.toFixed(1)}m</span>
+                          <span>scans {candidate.scanCount}</span>
+                          <span>improving {candidate.consecutiveImproving}</span>
+                          <span>degrading {candidate.consecutiveDegrading}</span>
+                          {strongestDelta && <span>largest component move {strongestDelta[0]} {strongestDelta[1] >= 0 ? "+" : ""}{strongestDelta[1].toFixed(0)}</span>}
+                          {candidate.weakComponents.length > 0 && <span>weak: {candidate.weakComponents.join(", ")}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function PendingBlock({ data }: { data: PendingSignalsResponse | undefined }) {
   if (!data || data.count === 0) return null;
   return (
@@ -904,6 +1086,11 @@ export default function Decisions() {
   });
   const { data: pendingData } = useGetPendingSignals<PendingSignalsResponse>({
     query: { queryKey: getGetPendingSignalsQueryKey(), refetchInterval: 5000 },
+  });
+  const { data: liveWindows } = useQuery<LiveWindowsResponse>({
+    queryKey: ["signals/live-windows"],
+    queryFn: () => apiFetch<LiveWindowsResponse>("signals/live-windows"),
+    refetchInterval: 5000,
   });
 
   const signals = data?.signals ?? [];
@@ -1001,6 +1188,9 @@ export default function Decisions() {
           <span className="text-xs text-muted-foreground self-center tabular-nums ml-auto">{total} total</span>
         </div>
       )}
+
+      {/* Live rolling feature windows */}
+      <LiveWindowsBlock data={liveWindows} />
 
       {/* Pending confirmations */}
       <PendingBlock data={pendingData} />

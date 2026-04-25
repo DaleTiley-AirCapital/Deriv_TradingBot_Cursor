@@ -1493,6 +1493,7 @@ export async function runV3BacktestMulti(
         const p = runEnginesAndCoordinate({
           symbol: ctx.sym, features,
           operationalRegime: regimeResult.regime, regimeConfidence: regimeResult.confidence,
+          runtimeCalibration: ctx.runtimeCalibration,
         });
         engineResults = p.engineResults;
         coordinatorOutput = p.coordinatorOutput;
