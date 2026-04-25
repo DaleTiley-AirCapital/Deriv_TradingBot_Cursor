@@ -2251,9 +2251,30 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
 
             {/* Domain C  Recommended Calibration (from stored profile, post AI passes) */}
             <DomainCard title="Recommended Calibration" icon={<Zap className="w-3.5 h-3.5 text-sky-400" />}>
-              {!calibProfile ? (
+              {!calibProfile && !researchProfile ? (
                 <p className="text-[11px] text-muted-foreground">No calibration profile yet. Detect moves then run the calibration pipeline to populate.</p>
-              ) : (
+              ) : !calibProfile && researchProfile ? (
+                <>
+                  <StatRow label="Status" value={researchProfile.researchStatus ?? "research_complete"} />
+                  <StatRow label="Move count" value={researchProfile.moveCount ?? ""} />
+                  <StatRow label="Entry model" value={researchProfile.recommendedEntryModel ?? ""} />
+                  <StatRow label="Est. trades / month" value={researchProfile.estimatedTradesPerMonth?.toFixed?.(1) ?? ""} />
+                  <StatRow label="Scan cadence" value={researchProfile.recommendedScanIntervalSeconds ? formatDurationCompact(researchProfile.recommendedScanIntervalSeconds) : ""} />
+                  <StatRow label="Engine recommendation" value={researchProfile.engineTypeRecommendation ?? ""} />
+                  {researchProfile.moveFamilyDistribution && Object.keys(researchProfile.moveFamilyDistribution).length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-border/20">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Move family distribution</p>
+                      <div className="flex flex-wrap gap-1">
+                        {Object.entries(researchProfile.moveFamilyDistribution).map(([family, count]) => (
+                          <span key={family} className="text-[10px] px-1.5 py-0.5 rounded border border-sky-500/20 bg-sky-500/10 text-sky-200">
+                            {family}: {count}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : ((calibProfile: CalibrationProfile) => (
                 <>
                   <StatRow label="Fit score" value={`${(calibProfile.fitScore * 100).toFixed(1)}%`} />
                   <StatRow label="Target / captured" value={`${calibProfile.capturedMoves} / ${calibProfile.targetMoves}`} />
@@ -2558,7 +2579,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     Built {new Date(calibProfile.generatedAt).toLocaleDateString()}  window {calibProfile.windowDays}d
                   </p>
                 </>
-              )}
+              ))(calibProfile as CalibrationProfile)}
             </DomainCard>
 
           </div>

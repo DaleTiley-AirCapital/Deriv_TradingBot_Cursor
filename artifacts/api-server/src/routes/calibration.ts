@@ -35,7 +35,7 @@ import {
   platformStateTable,
   strategyCalibrationProfilesTable,
 } from "@workspace/db";
-import { desc, eq } from "drizzle-orm";
+import { count, desc, eq } from "drizzle-orm";
 import { detectAndStoreMoves, getDetectedMoves, clearCalibrationArtifactsForSymbol } from "../core/calibration/moveDetector.js";
 import {
   startCalibrationPassesBackground,
@@ -807,6 +807,7 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
     res.status(400).json({ error: `Invalid export type. Valid: ${VALID_EXPORT_TYPES.join(", ")} (or omit for full export)` });
     return;
   }
+  const includeFeatureFrames = req.query.includeFeatureFrames === "true";
 
   const asDownload = req.query.download === "true";
   const ts = new Date().toISOString().slice(0, 10);
@@ -827,20 +828,24 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
 
     } else if (exportType === "passes") {
       // Return run headers + raw per-move pass records (precursor pass + behavior/trigger passes)
-      const [runs, profiles, precursorRaw, behaviorRaw, familyInferences, progressionArtifacts, featureFrames, moveWindowSummaries, familyBucketProfiles, featureRelevance, entryIdeals, exitRiskProfiles] = await Promise.all([
+      const [runs, profiles, precursorRaw, behaviorRaw, familyInferences, progressionArtifacts, featureFrameCountRows, moveWindowSummaries, familyBucketProfiles, featureRelevance, entryIdeals, exitRiskProfiles] = await Promise.all([
         getAllPassRuns(symbol),
         getAllCalibrationProfiles(symbol),
         db.select().from(movePrecursorPassesTable).where(eq(movePrecursorPassesTable.symbol, symbol)),
         db.select().from(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol)),
         db.select().from(moveFamilyInferencesTable).where(eq(moveFamilyInferencesTable.symbol, symbol)),
         db.select().from(moveProgressionArtifactsTable).where(eq(moveProgressionArtifactsTable.symbol, symbol)),
-        db.select().from(calibrationFeatureFramesTable).where(eq(calibrationFeatureFramesTable.symbol, symbol)),
+        db.select({ count: count() }).from(calibrationFeatureFramesTable).where(eq(calibrationFeatureFramesTable.symbol, symbol)),
         db.select().from(calibrationMoveWindowSummariesTable).where(eq(calibrationMoveWindowSummariesTable.symbol, symbol)),
         db.select().from(calibrationFamilyBucketProfilesTable).where(eq(calibrationFamilyBucketProfilesTable.symbol, symbol)),
         db.select().from(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol)),
         db.select().from(calibrationEntryIdealsTable).where(eq(calibrationEntryIdealsTable.symbol, symbol)),
         db.select().from(calibrationExitRiskProfilesTable).where(eq(calibrationExitRiskProfilesTable.symbol, symbol)),
       ]);
+      const featureFrames = includeFeatureFrames
+        ? await db.select().from(calibrationFeatureFramesTable).where(eq(calibrationFeatureFramesTable.symbol, symbol))
+        : null;
+      const featureFrameCount = Number(featureFrameCountRows[0]?.count ?? 0);
       response = {
         ...withSymbolDomain(symbol, symbolDomain, {}),
         exportType: "passes",
@@ -857,8 +862,12 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
           familyInferences,
           progressionArtifactCount: progressionArtifacts.length,
           progressionArtifacts,
-          featureFrameCount: featureFrames.length,
-          featureFrames,
+          featureFrameCount,
+          featureFramesIncluded: includeFeatureFrames,
+          featureFrames: featureFrames ?? undefined,
+          featureFrameExportNote: includeFeatureFrames
+            ? undefined
+            : "Feature frames are omitted from the default UI export because they are very large. Add includeFeatureFrames=true to this endpoint for the raw frame dataset.",
           moveWindowSummaryCount: moveWindowSummaries.length,
           moveWindowSummaries,
           familyBucketProfileCount: familyBucketProfiles.length,
@@ -879,12 +888,28 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
       filename = `calibration_passes_${symbol}_${ts}.json`;
 
     } else if (exportType === "profile") {
-      const profiles = await getAllCalibrationProfiles(symbol);
+      const [profiles, researchProfile, familyBucketProfiles, featureRelevance, entryIdeals, exitRiskProfiles] = await Promise.all([
+        getAllCalibrationProfiles(symbol),
+        getLatestSymbolResearchProfile(symbol),
+        db.select().from(calibrationFamilyBucketProfilesTable).where(eq(calibrationFamilyBucketProfilesTable.symbol, symbol)),
+        db.select().from(calibrationFeatureRelevanceTable).where(eq(calibrationFeatureRelevanceTable.symbol, symbol)),
+        db.select().from(calibrationEntryIdealsTable).where(eq(calibrationEntryIdealsTable.symbol, symbol)),
+        db.select().from(calibrationExitRiskProfilesTable).where(eq(calibrationExitRiskProfilesTable.symbol, symbol)),
+      ]);
       response = withSymbolDomain(symbol, symbolDomain, {
         exportType: "profile",
         exportedAt: new Date().toISOString(),
         profileCount: profiles.length,
         profiles,
+        researchProfile,
+        familyBucketProfileCount: familyBucketProfiles.length,
+        familyBucketProfiles,
+        featureRelevanceCount: featureRelevance.length,
+        featureRelevance,
+        entryIdealCount: entryIdeals.length,
+        entryIdeals,
+        exitRiskProfileCount: exitRiskProfiles.length,
+        exitRiskProfiles,
       });
       filename = `calibration_profile_${symbol}_${ts}.json`;
 
