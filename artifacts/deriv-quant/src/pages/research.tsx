@@ -426,6 +426,8 @@ interface V3Trade {
   exitReason: string;
   projectedMovePct: number;
   nativeScore: number;
+  scoringSource?: string;
+  runtimeModelRunId?: number | null;
   regimeAtEntry: string;
   holdBars: number;
   pnlPct: number;
@@ -456,6 +458,13 @@ interface V3Result {
   startTs: number;
   endTs: number;
   totalBars: number;
+  runtimeModel?: {
+    enabled?: boolean;
+    source?: string | null;
+    sourceRunId?: number | null;
+    entryModel?: string | null;
+    scoringSourceCounts?: Record<string, number>;
+  };
   trades: V3Trade[];
   summary: V3Summary;
 }
@@ -506,6 +515,8 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
   const trades = result.trades;
   const [showAll, setShowAll] = useState(false);
   const displayTrades = showAll ? trades : trades.slice(0, 30);
+  const runtime = result.runtimeModel;
+  const scoringCounts = runtime?.scoringSourceCounts ?? {};
 
   return (
     <div className="space-y-4">
@@ -519,6 +530,25 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
         <SummaryCard label="Max drawdown" value={pct(s.maxDrawdownPct)} />
         <SummaryCard label="Avg hold" value={holdLabel(s.avgHoldBars)} />
         <SummaryCard label="Leg1 hit rate" value={pct(s.leg1HitRate)} />
+      </div>
+
+      <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-xs">
+        <div className="flex flex-wrap gap-x-5 gap-y-1">
+          <span>
+            <span className="text-muted-foreground">Runtime model: </span>
+            <span className={runtime?.enabled ? "text-emerald-300 font-semibold" : "text-amber-300 font-semibold"}>
+              {runtime?.enabled ? runtime.source ?? "enabled" : "not applied"}
+            </span>
+          </span>
+          <span><span className="text-muted-foreground">Run: </span>{runtime?.sourceRunId ?? "none"}</span>
+          <span><span className="text-muted-foreground">Entry: </span>{runtime?.entryModel ?? "native"}</span>
+          <span>
+            <span className="text-muted-foreground">Scoring: </span>
+            {Object.keys(scoringCounts).length > 0
+              ? Object.entries(scoringCounts).map(([k, v]) => `${k}=${v}`).join(", ")
+              : "no signals"}
+          </span>
+        </div>
       </div>
 
       {/* By engine */}
@@ -579,6 +609,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
                 <tr className="border-b border-border/20 bg-muted/5 text-muted-foreground">
                   <th className="px-2 py-1.5 text-left font-medium">Dir</th>
                   <th className="px-2 py-1.5 text-left font-medium">Engine</th>
+                  <th className="px-2 py-1.5 text-left font-medium">Scoring</th>
                   <th className="px-2 py-1.5 text-left font-medium">Entry</th>
                   <th className="px-2 py-1.5 text-left font-medium">Exit</th>
                   <th className="px-2 py-1.5 text-right font-medium">Hold</th>
@@ -601,6 +632,9 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
                     </td>
                     <td className="px-2 py-1.5 text-muted-foreground max-w-[120px] truncate" title={t.engineName}>
                       {t.engineName.replace(/_engine$/, "").replace(/_/g, " ")}
+                    </td>
+                    <td className="px-2 py-1.5 text-muted-foreground max-w-[140px] truncate" title={t.scoringSource ?? "native_engine"}>
+                      {(t.scoringSource ?? "native_engine").replace(/_/g, " ")}
                     </td>
                     <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">{formatTs(t.entryTs)}</td>
                     <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">{formatTs(t.exitTs)}</td>
@@ -698,6 +732,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       symbols: Object.fromEntries(
         Object.entries(results).map(([sym, r]) => [sym, {
           totalBars: r.totalBars,
+          runtimeModel: r.runtimeModel ?? null,
           totalTrades: r.trades.length,
           wins: r.trades.filter(t => t.pnlPct > 0).length,
           losses: r.trades.filter(t => t.pnlPct <= 0).length,

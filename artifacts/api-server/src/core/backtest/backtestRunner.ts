@@ -98,6 +98,8 @@ export interface V3BacktestTrade {
   slPct: number;
   conflictResolution: string;
   modeGateApplied: number;
+  scoringSource?: string;
+  runtimeModelRunId?: number | null;
 }
 
 export interface V3BacktestResult {
@@ -110,6 +112,13 @@ export interface V3BacktestResult {
   signalsFired: number;
   signalsBlocked: number;
   blockedRate: number;
+  runtimeModel: {
+    enabled: boolean;
+    source: string | null;
+    sourceRunId: number | null;
+    entryModel: string | null;
+    scoringSourceCounts: Record<string, number>;
+  };
   trades: V3BacktestTrade[];
   /**
    * Allocator gates that could NOT be applied with full parity because they
@@ -214,6 +223,7 @@ interface SymCtx {
   signalsFired: number;
   signalsBlocked: number;
   blockedByEngine: Record<string, number>;
+  scoringSourceCounts: Record<string, number>;
   runtimeCalibration: LiveCalibrationProfile | null;
   trailingActivationThresholdPct?: number;
   trailingDistancePct?: number;
@@ -438,6 +448,8 @@ interface OpenTradeState {
   regimeConfidence: number;
   nativeScore: number;
   conflictResolution: string;
+  scoringSource?: string;
+  runtimeModelRunId?: number | null;
   tp: number;
   sl: number;
   originalSl: number;
@@ -488,6 +500,24 @@ function resolveTrailingConfigFromProfile(
         ? Math.max(1, Math.min(MAX_HOLD_MINS, Math.round(minHoldBarsRaw)))
         : undefined,
   };
+}
+
+function runtimeModelDiagnostics(
+  runtimeCalibration: LiveCalibrationProfile | null,
+  scoringSourceCounts: Record<string, number> = {},
+): V3BacktestResult["runtimeModel"] {
+  return {
+    enabled: Boolean(runtimeCalibration),
+    source: runtimeCalibration?.source ?? null,
+    sourceRunId: runtimeCalibration?.sourceRunId ?? null,
+    entryModel: runtimeCalibration?.entryModel ?? null,
+    scoringSourceCounts,
+  };
+}
+
+function scoringSourceFromWinner(winner: EngineResult): string {
+  const source = winner.metadata?.["crash300ScoringSource"];
+  return typeof source === "string" ? source : "native_engine";
 }
 
 async function resolveBacktestTrailingConfig(
@@ -600,6 +630,7 @@ export async function runV3Backtest(
       symbol, mode, startTs, endTs, totalBars: 0,
       modeScoreGate: MODE_SCORE_GATES[mode] ?? 60,
       signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
+      runtimeModel: runtimeModelDiagnostics(null),
       trades: [],
       simulationGaps: [],
       moveOverlap: {
@@ -644,6 +675,7 @@ export async function runV3Backtest(
   let signalsFired = 0;
   let signalsBlocked = 0;
   const blockedByEngine: Record<string, number> = {};
+  const scoringSourceCounts: Record<string, number> = {};
 
   // â”€â”€ Simulation PnL state â€” used to evaluate daily/weekly risk gates â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Tracks closed simulation trades with their close timestamp and $ PnL so
@@ -839,6 +871,8 @@ export async function runV3Backtest(
           slPct: openTrade.slOriginalPct,
           conflictResolution: openTrade.conflictResolution,
           modeGateApplied: modeGate,
+          scoringSource: openTrade.scoringSource,
+          runtimeModelRunId: openTrade.runtimeModelRunId,
         };
 
         trades.push(trade);
@@ -939,6 +973,8 @@ export async function runV3Backtest(
 
     const { winner, conflictResolution, coordinatorConfidence } = coordinatorOutput;
     const nativeScore = extractNativeScore(winner, coordinatorConfidence);
+    const scoringSource = scoringSourceFromWinner(winner);
+    scoringSourceCounts[scoringSource] = (scoringSourceCounts[scoringSource] ?? 0) + 1;
 
     // Record signal_fired event (all coordinator outputs, regardless of gate)
     signalsFired++;
@@ -1121,6 +1157,8 @@ export async function runV3Backtest(
       regimeConfidence: regimeResult.confidence,
       nativeScore,
       conflictResolution,
+      scoringSource,
+      runtimeModelRunId: runtimeCalibration?.sourceRunId ?? null,
       tp,
       sl,
       originalSl: sl,
@@ -1174,6 +1212,7 @@ export async function runV3Backtest(
     signalsFired,
     signalsBlocked,
     blockedRate,
+    runtimeModel: runtimeModelDiagnostics(runtimeCalibration, scoringSourceCounts),
     trades,
     simulationGaps: runSimulationGaps,
     moveOverlap,
@@ -1301,6 +1340,7 @@ export async function runV3BacktestMulti(
       signalsFired:           0,
       signalsBlocked:         0,
       blockedByEngine:        {},
+      scoringSourceCounts:     {},
       runtimeCalibration:     null,
       trailingActivationThresholdPct: undefined,
       trailingDistancePct: undefined,
@@ -1312,10 +1352,11 @@ export async function runV3BacktestMulti(
     const out: Record<string, V3BacktestResult> = {};
     for (const sym of symbols) {
       out[sym] = {
-        symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
-        totalBars: 0, modeScoreGate: sharedModeGate,
-        signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
-        trades: [],
+      symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
+      totalBars: 0, modeScoreGate: sharedModeGate,
+      signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
+      runtimeModel: runtimeModelDiagnostics(null),
+      trades: [],
         simulationGaps: [],
         moveOverlap: {
           movesInWindow: 0,
@@ -1436,6 +1477,8 @@ export async function runV3BacktestMulti(
           holdBars, barsToMfe, barsToBreakeven, pnlPct: finalPnl,
           mfePct: ot.mfePct, maePct: ot.maePct, tpPct: ot.tpPct, slPct: ot.slOriginalPct,
           conflictResolution: ot.conflictResolution, modeGateApplied: ctx.modeGate,
+          scoringSource: ot.scoringSource,
+          runtimeModelRunId: ot.runtimeModelRunId,
         });
         ctx.simClosedPnls.push({ closeTs: tsMs, pnlUsd: finalPnl * SYNTHETIC_SIZE });
         ctx.simEquity *= (1 + finalPnl);
@@ -1503,6 +1546,8 @@ export async function runV3BacktestMulti(
 
       const { winner, conflictResolution, coordinatorConfidence } = coordinatorOutput;
       const nativeScore = extractNativeScore(winner, coordinatorConfidence);
+      const scoringSource = scoringSourceFromWinner(winner);
+      ctx.scoringSourceCounts[scoringSource] = (ctx.scoringSourceCounts[scoringSource] ?? 0) + 1;
 
       ctx.signalsFired++;
       recordBehaviorEvent({
@@ -1611,6 +1656,8 @@ export async function runV3BacktestMulti(
         winner, entryBar: i, entryPrice: bar.close, entryTs: bar.closeTs,
         regimeAtEntry: regimeResult.regime, regimeConfidence: regimeResult.confidence,
         nativeScore, conflictResolution, tp, sl, originalSl: sl,
+        scoringSource,
+        runtimeModelRunId: ctx.runtimeCalibration?.sourceRunId ?? null,
         stage: 1, peakPrice: bar.close, mfePct: 0, maePct: 0, mfePeakBar: i,
         beTriggeredBar: 0, mfePctAtBreakeven: 0,
         atr14AtEntry: Math.max(features.atr14, 0.001),
@@ -1657,6 +1704,7 @@ export async function runV3BacktestMulti(
       symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
       totalBars: barsInRange, modeScoreGate: ctx.modeGate,
       signalsFired: ctx.signalsFired, signalsBlocked: ctx.signalsBlocked, blockedRate,
+      runtimeModel: runtimeModelDiagnostics(ctx.runtimeCalibration, ctx.scoringSourceCounts),
       trades: ctx.trades,
       simulationGaps: [],
       moveOverlap,
@@ -1671,6 +1719,7 @@ export async function runV3BacktestMulti(
         symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
         totalBars: 0, modeScoreGate: sharedModeGate,
         signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
+        runtimeModel: runtimeModelDiagnostics(null),
         trades: [],
         simulationGaps: [],
         moveOverlap: {
