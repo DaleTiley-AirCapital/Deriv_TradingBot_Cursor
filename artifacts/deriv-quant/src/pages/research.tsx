@@ -460,6 +460,10 @@ interface V3Result {
   totalBars: number;
   runtimeModel?: {
     enabled?: boolean;
+    applied?: boolean;
+    reason?: string;
+    useCalibratedRuntimeProfiles?: boolean;
+    mode?: string | null;
     source?: string | null;
     sourceRunId?: number | null;
     entryModel?: string | null;
@@ -517,6 +521,8 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
   const displayTrades = showAll ? trades : trades.slice(0, 30);
   const runtime = result.runtimeModel;
   const scoringCounts = runtime?.scoringSourceCounts ?? {};
+  const runtimeApplied = runtime?.applied ?? runtime?.enabled ?? false;
+  const runtimeReason = runtime?.reason ?? "unknown";
 
   return (
     <div className="space-y-4">
@@ -536,8 +542,15 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
         <div className="flex flex-wrap gap-x-5 gap-y-1">
           <span>
             <span className="text-muted-foreground">Runtime model: </span>
-            <span className={runtime?.enabled ? "text-emerald-300 font-semibold" : "text-amber-300 font-semibold"}>
-              {runtime?.enabled ? runtime.source ?? "enabled" : "not applied"}
+            <span className={runtimeApplied ? "text-emerald-300 font-semibold" : "text-red-300 font-semibold"}>
+              {runtimeApplied ? runtime?.source ?? "enabled" : "not applied"}
+            </span>
+          </span>
+          <span><span className="text-muted-foreground">Reason: </span>{runtimeReason.replace(/_/g, " ")}</span>
+          <span>
+            <span className="text-muted-foreground">Setting: </span>
+            <span className={runtime?.useCalibratedRuntimeProfiles ? "text-emerald-300" : "text-red-300"}>
+              use_calibrated_runtime_profiles={String(runtime?.useCalibratedRuntimeProfiles ?? false)}
             </span>
           </span>
           <span><span className="text-muted-foreground">Run: </span>{runtime?.sourceRunId ?? "none"}</span>
@@ -549,6 +562,11 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
               : "no signals"}
           </span>
         </div>
+        {!runtimeApplied && (
+          <div className="mt-2 rounded-md border border-red-500/25 bg-red-500/10 px-2 py-1.5 text-red-200">
+            This run is not testing the promoted calibration model. Results are legacy/native until the runtime reason is "applied".
+          </div>
+        )}
       </div>
 
       {/* By engine */}

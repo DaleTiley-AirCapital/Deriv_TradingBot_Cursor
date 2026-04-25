@@ -59,7 +59,12 @@ import {
   applyBarStateTransitions,
 } from "../tradeManagement.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "../../infrastructure/deriv.js";
-import { getLiveCalibrationProfile, type LiveCalibrationProfile } from "../calibration/liveCalibrationProfile.js";
+import {
+  getLiveCalibrationProfile,
+  resolveLiveCalibrationProfile,
+  type LiveCalibrationProfile,
+  type LiveCalibrationProfileResolution,
+} from "../calibration/liveCalibrationProfile.js";
 
 // â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -114,6 +119,10 @@ export interface V3BacktestResult {
   blockedRate: number;
   runtimeModel: {
     enabled: boolean;
+    applied: boolean;
+    reason: string;
+    useCalibratedRuntimeProfiles: boolean;
+    mode: string | null;
     source: string | null;
     sourceRunId: number | null;
     entryModel: string | null;
@@ -225,6 +234,7 @@ interface SymCtx {
   blockedByEngine: Record<string, number>;
   scoringSourceCounts: Record<string, number>;
   runtimeCalibration: LiveCalibrationProfile | null;
+  runtimeCalibrationResolution: LiveCalibrationProfileResolution | null;
   trailingActivationThresholdPct?: number;
   trailingDistancePct?: number;
   trailingMinHoldBars?: number;
@@ -503,11 +513,17 @@ function resolveTrailingConfigFromProfile(
 }
 
 function runtimeModelDiagnostics(
-  runtimeCalibration: LiveCalibrationProfile | null,
+  resolution: LiveCalibrationProfileResolution | null,
   scoringSourceCounts: Record<string, number> = {},
 ): V3BacktestResult["runtimeModel"] {
+  const runtimeCalibration = resolution?.profile ?? null;
+
   return {
     enabled: Boolean(runtimeCalibration),
+    applied: resolution?.applied ?? false,
+    reason: resolution?.reason ?? "not_resolved",
+    useCalibratedRuntimeProfiles: resolution?.useCalibratedRuntimeProfiles ?? false,
+    mode: resolution?.mode ?? null,
     source: runtimeCalibration?.source ?? null,
     sourceRunId: runtimeCalibration?.sourceRunId ?? null,
     entryModel: runtimeCalibration?.entryModel ?? null,
@@ -717,8 +733,9 @@ export async function runV3Backtest(
   const maxOpenTrades = parseInt(
     stateMap[`${modePrefix}_max_open_trades`] || stateMap["max_open_trades"] || "3"
   );
-  const runtimeCalibration =
-    await getLiveCalibrationProfile(symbol, mode as "paper" | "demo" | "real", stateMap).catch(() => null);
+  const runtimeCalibrationResolution =
+    await resolveLiveCalibrationProfile(symbol, mode as "paper" | "demo" | "real", stateMap).catch(() => null);
+  const runtimeCalibration = runtimeCalibrationResolution?.profile ?? null;
   const modeGate = resolveModeScoreGate(stateMap, modePrefix, mode, runtimeCalibration);
   const trailingCfg = runtimeCalibration
     ? resolveTrailingConfigFromProfile(runtimeCalibration.trailingModel ?? {})
@@ -1212,7 +1229,7 @@ export async function runV3Backtest(
     signalsFired,
     signalsBlocked,
     blockedRate,
-    runtimeModel: runtimeModelDiagnostics(runtimeCalibration, scoringSourceCounts),
+    runtimeModel: runtimeModelDiagnostics(runtimeCalibrationResolution, scoringSourceCounts),
     trades,
     simulationGaps: runSimulationGaps,
     moveOverlap,
@@ -1342,6 +1359,7 @@ export async function runV3BacktestMulti(
       blockedByEngine:        {},
       scoringSourceCounts:     {},
       runtimeCalibration:     null,
+      runtimeCalibrationResolution: null,
       trailingActivationThresholdPct: undefined,
       trailingDistancePct: undefined,
       trailingMinHoldBars: undefined,
@@ -1377,7 +1395,10 @@ export async function runV3BacktestMulti(
   // â”€â”€ Shared portfolio ledger â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const ledger = new SharedPortfolioLedger();
   for (const ctx of symCtxMap.values()) {
-    const runtimeCalibration = await getLiveCalibrationProfile(ctx.sym, _mode, stateMap).catch(() => null);
+    const runtimeCalibrationResolution =
+      await resolveLiveCalibrationProfile(ctx.sym, _mode, stateMap).catch(() => null);
+    const runtimeCalibration = runtimeCalibrationResolution?.profile ?? null;
+    ctx.runtimeCalibrationResolution = runtimeCalibrationResolution;
     ctx.runtimeCalibration = runtimeCalibration;
     ctx.modeGate = resolveModeScoreGate(stateMap, modePrefix, _mode, runtimeCalibration);
     const trailingCfg = runtimeCalibration
@@ -1704,7 +1725,7 @@ export async function runV3BacktestMulti(
       symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
       totalBars: barsInRange, modeScoreGate: ctx.modeGate,
       signalsFired: ctx.signalsFired, signalsBlocked: ctx.signalsBlocked, blockedRate,
-      runtimeModel: runtimeModelDiagnostics(ctx.runtimeCalibration, ctx.scoringSourceCounts),
+      runtimeModel: runtimeModelDiagnostics(ctx.runtimeCalibrationResolution, ctx.scoringSourceCounts),
       trades: ctx.trades,
       simulationGaps: [],
       moveOverlap,
