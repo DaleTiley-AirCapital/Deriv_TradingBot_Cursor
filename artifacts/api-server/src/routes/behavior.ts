@@ -17,7 +17,6 @@ import { db, platformStateTable } from "@workspace/db";
 import {
   runV3Backtest,
   runV3BacktestMulti,
-  type V3BacktestRequest,
 } from "../core/backtest/backtestRunner.js";
 import {
   getBehaviorEvents,
@@ -41,11 +40,11 @@ function validateMode(mode: unknown): mode is "paper" | "demo" | "real" | undefi
 
 /**
  * Run a backtest to populate behavior events, then derive the profile.
- * Body: { symbol?: string, startTs?: number, endTs?: number, minScore?: number, mode?: "paper"|"demo"|"real" }
+ * Body: { symbol?: string, startTs?: number, endTs?: number, mode?: "paper"|"demo"|"real" }
  * symbol defaults to "all" (derives profiles for all 4 active symbols).
  */
 router.post("/behavior/profile", async (req, res): Promise<void> => {
-  const { symbol = "all", startTs, endTs, minScore, mode } = req.body ?? {};
+  const { symbol = "all", startTs, endTs, mode } = req.body ?? {};
 
   const validSymbols = [...ACTIVE_SYMBOLS, "all"];
   if (!validSymbols.includes(symbol)) {
@@ -68,9 +67,9 @@ router.post("/behavior/profile", async (req, res): Promise<void> => {
     }
 
     if (symbol === "all") {
-      await runV3BacktestMulti(symbols, startTs, endTs, minScore, mode);
+      await runV3BacktestMulti(symbols, startTs, endTs, mode);
     } else {
-      await runV3Backtest({ symbol: symbol as string, startTs, endTs, minScore, mode });
+      await runV3Backtest({ symbol: symbol as string, startTs, endTs, mode });
     }
 
     const profiles = symbols
@@ -89,11 +88,11 @@ router.post("/behavior/profile", async (req, res): Promise<void> => {
 
 /**
  * Build or refresh the behavior profile for a specific symbol.
- * Body: { startTs?, endTs?, minScore?, mode? }
+ * Body: { startTs?, endTs?, mode? }
  */
 router.post("/behavior/profile/:symbol", async (req, res): Promise<void> => {
   const { symbol } = req.params;
-  const { startTs, endTs, minScore, mode } = req.body ?? {};
+  const { startTs, endTs, mode } = req.body ?? {};
 
   if (!ACTIVE_SYMBOLS.includes(symbol as typeof ACTIVE_SYMBOLS[number])) {
     res.status(400).json({ error: `Invalid symbol. Use one of: ${ACTIVE_SYMBOLS.join(", ")}` });
@@ -107,8 +106,7 @@ router.post("/behavior/profile/:symbol", async (req, res): Promise<void> => {
   try {
     clearBehaviorEvents(symbol);
     await reloadLiveBehaviorEventsForSymbol(symbol);
-    const req2: V3BacktestRequest = { symbol, startTs, endTs, minScore, mode };
-    await runV3Backtest(req2);
+    await runV3Backtest({ symbol, startTs, endTs, mode });
     const profile = deriveSymbolBehaviorProfile(symbol);
     if (!profile) {
       res.status(200).json({ ok: true, profileCount: 0, profiles: [], message: "No events captured — insufficient candle data?" });
@@ -130,7 +128,7 @@ router.post("/behavior/profile/:symbol", async (req, res): Promise<void> => {
  */
 router.post("/behavior/build/:symbol", async (req, res): Promise<void> => {
   const { symbol } = req.params;
-  const { startTs, endTs, minScore, mode } = req.body ?? {};
+  const { startTs, endTs, mode } = req.body ?? {};
 
   if (!ACTIVE_SYMBOLS.includes(symbol as typeof ACTIVE_SYMBOLS[number])) {
     res.status(400).json({ error: `Invalid symbol. Use one of: ${ACTIVE_SYMBOLS.join(", ")}` });
@@ -140,8 +138,7 @@ router.post("/behavior/build/:symbol", async (req, res): Promise<void> => {
   try {
     clearBehaviorEvents(symbol);
     await reloadLiveBehaviorEventsForSymbol(symbol);
-    const req2: V3BacktestRequest = { symbol, startTs, endTs, minScore, mode };
-    await runV3Backtest(req2);
+    await runV3Backtest({ symbol, startTs, endTs, mode });
     const profile = deriveSymbolBehaviorProfile(symbol);
     if (!profile) {
       res.status(200).json({ ok: true, profileCount: 0, profiles: [], message: "No events captured — insufficient candle data?" });
@@ -160,11 +157,11 @@ router.post("/behavior/build/:symbol", async (req, res): Promise<void> => {
 /**
  * Build or refresh the behavior profile for a specific symbol+engine pair.
  * Runs a full symbol backtest but returns only the requested engine's profile.
- * Body: { startTs?, endTs?, minScore?, mode? }
+ * Body: { startTs?, endTs?, mode? }
  */
 router.post("/behavior/profile/:symbol/:engine", async (req, res): Promise<void> => {
   const { symbol, engine } = req.params;
-  const { startTs, endTs, minScore, mode } = req.body ?? {};
+  const { startTs, endTs, mode } = req.body ?? {};
 
   if (!ACTIVE_SYMBOLS.includes(symbol as typeof ACTIVE_SYMBOLS[number])) {
     res.status(400).json({ error: `Invalid symbol. Use one of: ${ACTIVE_SYMBOLS.join(", ")}` });
@@ -181,8 +178,7 @@ router.post("/behavior/profile/:symbol/:engine", async (req, res): Promise<void>
     clearBehaviorEvents(symbol, engine);
     await reloadLiveBehaviorEventsForSymbol(symbol);
     // Must re-run full symbol backtest (engines for a symbol are evaluated together)
-    const req2: V3BacktestRequest = { symbol, startTs, endTs, minScore, mode };
-    await runV3Backtest(req2);
+    await runV3Backtest({ symbol, startTs, endTs, mode });
     const profile = deriveEngineProfile(symbol, engine);
     if (!profile) {
       res.status(404).json({ error: `No behavior data captured for ${symbol}/${engine}` });

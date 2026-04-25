@@ -400,8 +400,6 @@ router.post("/backtest/:id/analyse", async (req, res): Promise<void> => {
  *   symbol?   — one of CRASH300 | BOOM300 | R_75 | R_100 | "all" (default "all")
  *   startTs?  — unix seconds; default = 90 days ago
  *   endTs?    — unix seconds; default = now
- *   minScore? — override engine minimum gate (0-100); omit to use engine native gates
- *
  * Response:
  *   { results: Record<symbol, V3BacktestResult> }
  *   Each result contains trades[], summary{}, and metadata.
@@ -414,7 +412,6 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
     symbol = "all",
     startTs,
     endTs,
-    minScore,
   } = req.body ?? {};
 
   const validSymbols = [...ACTIVE_SYMBOLS, "all"];
@@ -422,11 +419,6 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
     res.status(400).json({
       error: `Invalid symbol. Use one of: ${validSymbols.join(", ")}`,
     });
-    return;
-  }
-
-  if (minScore !== undefined && (typeof minScore !== "number" || minScore < 0 || minScore > 100)) {
-    res.status(400).json({ error: "minScore must be a number between 0 and 100" });
     return;
   }
 
@@ -457,7 +449,6 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
         [...ACTIVE_SYMBOLS],
         parsedStart,
         parsedEnd,
-        minScore,
         mode,
       );
       results = multi as Record<string, unknown>;
@@ -466,7 +457,6 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
         symbol,
         startTs: parsedStart,
         endTs: parsedEnd,
-        minScore,
         mode,
       });
       results = { [symbol]: single };

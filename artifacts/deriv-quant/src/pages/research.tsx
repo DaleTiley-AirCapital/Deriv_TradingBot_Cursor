@@ -629,7 +629,6 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const backtestSymbols = domain === "active" ? BACKTEST_ACTIVE_SYMBOLS : BACKTEST_RESEARCH_SYMBOLS;
 
   const [symbol, setSymbol] = useState(backtestSymbols[0] ?? "all");
-  const [minScore, setMinScore] = useState("");
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [results, setResults] = useState<Record<string, V3Result> | null>(null);
@@ -660,9 +659,6 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     try {
       const { startTs, endTs } = getWindowRange(windowDays);
       const body: Record<string, unknown> = { symbol, startTs, endTs };
-      if (minScore !== "" && !isNaN(Number(minScore))) {
-        body.minScore = Number(minScore);
-      }
 
       const d = await apiFetch("backtest/v3/run", {
         method: "POST",
@@ -698,7 +694,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
     const summary = {
       exported_at: new Date().toISOString(),
-      params: { symbol, ...getWindowRange(windowDays), minScore: minScore || "engine-default" },
+      params: { symbol, ...getWindowRange(windowDays), scoreGate: "runtime-platform-state" },
       symbols: Object.fromEntries(
         Object.entries(results).map(([sym, r]) => [sym, {
           totalBars: r.totalBars,
@@ -734,7 +730,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     ).sort((a, b) => (a.entryTs ?? 0) - (b.entryTs ?? 0));
     downloadJson({
       exported_at: new Date().toISOString(),
-      params: { symbol, ...getWindowRange(windowDays), minScore: minScore || "engine-default" },
+      params: { symbol, ...getWindowRange(windowDays), scoreGate: "runtime-platform-state" },
       total_trades: allTrades.length,
       trades: allTrades,
     }, `bt-trades-${timestamp}.json`);
@@ -773,7 +769,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
           </p>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="space-y-1">
             <label className="text-[11px] text-muted-foreground">Symbol</label>
             <select
@@ -803,19 +799,6 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
             <div className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground font-mono">
               {getWindowRange(windowDays).startDateStr}  {getWindowRange(windowDays).endDateStr}
             </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">Min score override</label>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              placeholder="e.g. 55"
-              value={minScore}
-              onChange={e => setMinScore(e.target.value)}
-              className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50 placeholder:text-muted-foreground/50"
-            />
           </div>
         </div>
 
@@ -881,7 +864,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
               <p className="text-sm font-medium text-muted-foreground">0 trades returned</p>
               <p className="text-xs text-muted-foreground mt-1">
                 No signals passed engine gates in the selected range ({getWindowRange(windowDays).startDateStr}  {getWindowRange(windowDays).endDateStr}).
-                Try a wider date range or lower min score.
+                Check the runtime wiring, promoted model, and mode/symbol settings before changing engine logic.
               </p>
             </div>
           ) : (
@@ -1100,6 +1083,31 @@ function TierPill({ tier }: { tier: string }) {
   );
 }
 
+function nativeExpansionType(type?: string | null): boolean {
+  return type === "boom_expansion" || type === "crash_expansion";
+}
+
+function percentileAt(sortedAsc: number[], p: number): number {
+  if (sortedAsc.length === 0) return 0;
+  const idx = Math.max(0, Math.min(sortedAsc.length - 1, Math.floor((sortedAsc.length - 1) * p)));
+  return sortedAsc[idx] ?? 0;
+}
+
+function relativeNativeTier(score: number, sortedScoresAsc: number[]): "A" | "B" | "C" {
+  const aCutoff = percentileAt(sortedScoresAsc, 0.75);
+  const bCutoff = percentileAt(sortedScoresAsc, 0.35);
+  return score >= aCutoff ? "A" : score >= bCutoff ? "B" : "C";
+}
+
+function relativeNativePercentile(score: number, sortedScoresAsc: number[]): number {
+  if (sortedScoresAsc.length <= 1) return 100;
+  let countAtOrBelow = 0;
+  for (const candidate of sortedScoresAsc) {
+    if (candidate <= score) countAtOrBelow++;
+  }
+  return Math.round(((countAtOrBelow - 1) / (sortedScoresAsc.length - 1)) * 100);
+}
+
 function TypePill({ type }: { type: string }) {
   const label = formatMoveTypeLabel(type);
   return (
@@ -1289,7 +1297,6 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   const [moves, setMoves] = useState<DetectedMove[]>([]);
   const [movesLoading, setMovesLoading] = useState(false);
   const [moveTypeFilter, setMoveTypeFilter] = useState("all");
-  const [tierFilter, setTierFilter] = useState<string>("");
   const [movesExpanded, setMovesExpanded] = useState(false);
 
   const [scope, setScope] = useState<"detect" | "passes" | "full">("full");
@@ -1385,8 +1392,14 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           acc[t] = (acc[t] ?? 0) + 1;
           return acc;
         }, {});
+        const nativeScores = rawMoves.every(m => nativeExpansionType(m.moveType))
+          ? rawMoves.map(m => Number(m.qualityScore ?? 0)).filter(v => !isNaN(v)).sort((a, b) => a - b)
+          : [];
         const qualityDist = rawMoves.reduce<Record<string, number>>((acc, m) => {
-          const t = String(m.qualityTier ?? "?");
+          const score = Number(m.qualityScore ?? 0);
+          const t = nativeScores.length >= 10 && !isNaN(score)
+            ? relativeNativeTier(score, nativeScores)
+            : String(m.qualityTier ?? "?");
           acc[t] = (acc[t] ?? 0) + 1;
           return acc;
         }, {});
@@ -1417,12 +1430,11 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     }
   }, []);
 
-  const loadMoves = useCallback(async (sym: string, type?: string, tier?: string) => {
+  const loadMoves = useCallback(async (sym: string, type?: string) => {
     setMovesLoading(true);
     try {
       const params = new URLSearchParams();
       if (type && type !== "all") params.set("moveType", type);
-      if (tier) params.set("minTier", tier);
       const qs = params.toString();
       const d = await apiFetch(`calibration/moves/${sym}${qs ? "?" + qs : ""}`);
       setMoves(d.moves ?? []);
@@ -1457,7 +1469,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
 
   useEffect(() => {
     loadDomains(symbol, strategyFamily);
-    loadMoves(symbol, moveTypeFilter, tierFilter);
+    loadMoves(symbol, moveTypeFilter);
     loadRuns(symbol);
     loadPreflight(symbol);
   }, [symbol]);
@@ -1477,8 +1489,8 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   }, [symbol]);
 
   useEffect(() => {
-    loadMoves(symbol, moveTypeFilter, tierFilter);
-  }, [moveTypeFilter, tierFilter]);
+    loadMoves(symbol, moveTypeFilter);
+  }, [moveTypeFilter]);
 
   useEffect(() => {
     setMoveTypeFilter(strategyFamily);
@@ -1505,13 +1517,13 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     ) {
       void Promise.all([
         loadDomains(symbol, strategyFamily),
-        loadMoves(symbol, moveTypeFilter, tierFilter),
+        loadMoves(symbol, moveTypeFilter),
         loadRuns(symbol),
         loadPreflight(symbol),
       ]);
     }
     prevCalibStatusRef.current = st;
-  }, [calibRun.status?.status, calibRun.symbol, symbol, strategyFamily, moveTypeFilter, tierFilter, loadDomains, loadMoves, loadRuns, loadPreflight]);
+  }, [calibRun.status?.status, calibRun.symbol, symbol, strategyFamily, moveTypeFilter, loadDomains, loadMoves, loadRuns, loadPreflight]);
 
   const resetCalibration = async (): Promise<void> => {
     if (
@@ -1530,7 +1542,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       setDetectResult(null);
       await Promise.all([
         loadDomains(symbol, strategyFamily),
-        loadMoves(symbol, moveTypeFilter, tierFilter),
+        loadMoves(symbol, moveTypeFilter),
         loadRuns(symbol),
         loadPreflight(symbol),
       ]);
@@ -1554,7 +1566,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       setDetectResult(d);
       await Promise.all([
         loadDomains(symbol, strategyFamily),
-        loadMoves(symbol, moveTypeFilter, tierFilter),
+        loadMoves(symbol, moveTypeFilter),
         loadPreflight(symbol),
       ]);
       return true;
@@ -1747,7 +1759,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       setImportMessage(notes.length > 0 ? notes.join(" | ") : "No files imported.");
       await Promise.all([
         loadDomains(symbol, strategyFamily),
-        loadMoves(symbol, moveTypeFilter, tierFilter),
+        loadMoves(symbol, moveTypeFilter),
         loadRuns(symbol),
         loadPreflight(symbol),
       ]);
@@ -1758,8 +1770,6 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       if (importInputRef.current) importInputRef.current.value = "";
     }
   };
-
-  const displayedMoves = movesExpanded ? moves : moves.slice(0, 20);
 
   const movesMagnitudeSummary = (() => {
     if (moves.length === 0) return null;
@@ -1797,8 +1807,23 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           avgMovePct: aggregate.overall.avgMovePct,
           avgCaptureablePct: aggregate.overall.avgCaptureablePct,
           avgHoldabilityScore: aggregate.overall.avgHoldabilityScore,
-        }
+      }
       : null;
+
+  const nativeMoveScores = moves.every((m) => nativeExpansionType(m.moveType))
+    ? moves.map((m) => Number(m.qualityScore ?? 0)).filter((v) => !isNaN(v)).sort((a, b) => a - b)
+    : [];
+  const moveRows = moves.map((m) => {
+    const score = Number(m.qualityScore ?? 0);
+    const relativeTier = nativeMoveScores.length >= 10 && !isNaN(score)
+      ? relativeNativeTier(score, nativeMoveScores)
+      : m.qualityTier;
+    const qualityPercentile = nativeMoveScores.length >= 10 && !isNaN(score)
+      ? relativeNativePercentile(score, nativeMoveScores)
+      : null;
+    return { ...m, relativeTier, qualityPercentile };
+  });
+  const displayedMoves = movesExpanded ? moveRows : moveRows.slice(0, 20);
 
   return (
     <div className="space-y-5">
@@ -1961,7 +1986,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           </button>
 
           <button
-            onClick={() => { loadDomains(symbol, strategyFamily); loadMoves(symbol, moveTypeFilter, tierFilter); loadRuns(symbol); loadPreflight(symbol); }}
+            onClick={() => { loadDomains(symbol, strategyFamily); loadMoves(symbol, moveTypeFilter); loadRuns(symbol); loadPreflight(symbol); }}
             disabled={aggLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border self-end"
           >
@@ -2907,7 +2932,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           <div className="flex items-center gap-2">
             <FileText className="w-3.5 h-3.5 text-muted-foreground" />
             <span className="text-xs font-semibold text-foreground">Detected Moves</span>
-            <span className="text-[11px] text-muted-foreground">({moves.length} shown)</span>
+            <span className="text-[11px] text-muted-foreground">({moveRows.length} shown)</span>
           </div>
           <div className="flex items-center gap-2">
             <select
@@ -2918,14 +2943,6 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               {moveTypesFilterForSymbol(symbol).map(t => (
                 <option key={t} value={t}>{t === "all" ? "All types" : formatMoveTypeLabel(t)}</option>
               ))}
-            </select>
-            <select
-              value={tierFilter}
-              onChange={e => setTierFilter(e.target.value)}
-              className="text-[11px] bg-background border border-border/50 rounded px-1.5 py-1 text-foreground focus:outline-none"
-            >
-              <option value="">All tiers</option>
-              {TIERS.map(t => <option key={t} value={t}>Tier {t}+</option>)}
             </select>
           </div>
         </div>
@@ -2968,7 +2985,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                     <th className="text-left px-3 py-2 font-medium">Dir</th>
                     <th className="text-left px-3 py-2 font-medium">Move %</th>
                     <th className="text-left px-3 py-2 font-medium">Hold (h)</th>
-                    <th className="text-left px-3 py-2 font-medium">Quality</th>
+                    <th className="text-left px-3 py-2 font-medium">Quality %</th>
                     <th className="text-left px-3 py-2 font-medium">Lead-in</th>
                     <th className="text-left px-3 py-2 font-medium">Start</th>
                   </tr>
@@ -2977,7 +2994,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                   {displayedMoves.map((m) => (
                     <tr key={m.id} className="border-b border-border/20 hover:bg-muted/20 transition-colors">
                       <td className="px-4 py-1.5"><TypePill type={m.moveType} /></td>
-                      <td className="px-3 py-1.5"><TierPill tier={m.qualityTier} /></td>
+                      <td className="px-3 py-1.5"><TierPill tier={m.relativeTier} /></td>
                       <td className="px-3 py-1.5">
                         {m.direction === "up"
                           ? <TrendingUp   className="w-3.5 h-3.5 text-emerald-400" />
@@ -2990,7 +3007,9 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                         {m.holdingMinutes != null ? (m.holdingMinutes / 60).toFixed(1) : ""}
                       </td>
                       <td className="px-3 py-1.5 font-mono text-foreground">
-                        {m.qualityScore != null ? m.qualityScore.toFixed(0) : ""}
+                        {m.qualityPercentile != null
+                          ? `${m.qualityPercentile}%`
+                          : m.qualityScore != null ? m.qualityScore.toFixed(0) : ""}
                       </td>
                       <td className="px-3 py-1.5 text-muted-foreground">{m.leadInShape ?? ""}</td>
                       <td className="px-3 py-1.5 text-muted-foreground">
@@ -3001,14 +3020,14 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                 </tbody>
               </table>
             </div>
-            {moves.length > 10 && (
+            {moveRows.length > 10 && (
               <button
                 onClick={() => setMovesExpanded(p => !p)}
                 className="w-full flex items-center justify-center gap-1.5 py-2 text-[11px] text-muted-foreground hover:text-foreground border-t border-border/30 transition-colors"
               >
                 {movesExpanded
                   ? <><ChevronUp className="w-3.5 h-3.5" />Show less</>
-                  : <><ChevronDown className="w-3.5 h-3.5" />Show all {moves.length} moves</>}
+                  : <><ChevronDown className="w-3.5 h-3.5" />Show all {moveRows.length} moves</>}
               </button>
             )}
           </>

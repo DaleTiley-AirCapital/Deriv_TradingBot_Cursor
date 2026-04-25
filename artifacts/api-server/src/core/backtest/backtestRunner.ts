@@ -38,6 +38,7 @@ import { classifyRegimeFromSamples } from "../regimeEngine.js";
 import {
   calculateSRFibTP,
   calculateSRFibSL,
+  applyRuntimeCalibrationExitModel,
 } from "../tradeEngine.js";
 import { getSymbolIndicatorTimeframeMins } from "../features.js";
 import type { EngineResult } from "../engineTypes.js";
@@ -162,7 +163,6 @@ export interface V3BacktestRequest {
   symbol: string;
   startTs?: number;
   endTs?: number;
-  minScore?: number;
   mode?: "paper" | "demo" | "real";
 }
 
@@ -396,6 +396,37 @@ function getInstrumentFamily(symbol: string): "crash" | "boom" | "volatility" {
   return "volatility";
 }
 
+function getModePrefix(mode: "paper" | "demo" | "real"): "paper" | "demo" | "real" {
+  return mode === "real" ? "real" : mode === "demo" ? "demo" : "paper";
+}
+
+function isModeEnabledFromState(stateMap: Record<string, string>, prefix: string): boolean {
+  return (
+    stateMap[`${prefix}_mode_active`] === "true" ||
+    stateMap[`${prefix}_mode`] === "active" ||
+    stateMap[`${prefix}_enabled`] === "true"
+  );
+}
+
+function isSymbolEnabledFromState(stateMap: Record<string, string>, prefix: string, symbol: string): boolean {
+  const modeSymbolsRaw = stateMap[`${prefix}_enabled_symbols`] || stateMap["enabled_symbols"] || "";
+  const modeSymbols = modeSymbolsRaw ? modeSymbolsRaw.split(",").map((s) => s.trim()).filter(Boolean) : null;
+  return !modeSymbols || modeSymbols.includes(symbol);
+}
+
+function resolveModeScoreGate(
+  stateMap: Record<string, string>,
+  prefix: string,
+  mode: "paper" | "demo" | "real",
+  runtimeCalibration: LiveCalibrationProfile | null,
+): number {
+  const modeDefaultGate = MODE_SCORE_GATES[mode] ?? 60;
+  const calibratedGate = runtimeCalibration?.recommendedScoreGates?.[mode];
+  if (calibratedGate != null) return calibratedGate;
+  const gateFromState = stateMap[`${prefix}_min_composite_score`] || stateMap["min_composite_score"];
+  return gateFromState ? parseFloat(gateFromState) : modeDefaultGate;
+}
+
 // â”€â”€ Open trade state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface OpenTradeState {
@@ -567,7 +598,7 @@ export async function runV3Backtest(
   if (rawCandles.length < 60) {
     return {
       symbol, mode, startTs, endTs, totalBars: 0,
-      modeScoreGate: req.minScore ?? MODE_SCORE_GATES[mode] ?? 60,
+      modeScoreGate: MODE_SCORE_GATES[mode] ?? 60,
       signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
       trades: [],
       simulationGaps: [],
@@ -598,23 +629,10 @@ export async function runV3Backtest(
   const stateMap: Record<string, string> = {};
   for (const r of platformRows) stateMap[r.key] = r.value;
 
-  // â”€â”€ Backtest isolation behavior â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // Backtest should replay entry/exit quality logic without being blocked by
-  // live runtime toggles (kill switch/mode active/symbol enabled), otherwise
-  // it can return 0 trades simply because runtime mode is OFF.
-  const modePrefix = { paper: "paper", demo: "demo", real: "real" }[mode] ?? "paper";
-
-  // â”€â”€ Min score gate â€” identical precedence to allocateV3Signal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // Live allocator reads: stateMap[`${prefix}_min_composite_score`] ??
-  //                       stateMap["min_composite_score"] ?? MODE_SCORE_GATES[mode]
-  // req.minScore acts as a caller override (used by tests/UI when specified).
-  const modeDefaultGate = MODE_SCORE_GATES[mode] ?? 60;
-  const gateFomState    = stateMap[`${modePrefix}_min_composite_score`] || stateMap["min_composite_score"];
-  const modeGate        = req.minScore ?? (gateFomState ? parseFloat(gateFomState) : modeDefaultGate);
-
-  const killSwitchActive = false;
-  const modeEnabled = true;
-  const symbolEnabled = true;
+  const modePrefix = getModePrefix(mode);
+  const killSwitchActive = stateMap["kill_switch"] === "true";
+  const modeEnabled = isModeEnabledFromState(stateMap, modePrefix);
+  const symbolEnabled = isSymbolEnabledFromState(stateMap, modePrefix, symbol);
 
   const instrumentFamily = getInstrumentFamily(symbol);
   const htfMins = getSymbolIndicatorTimeframeMins(symbol);
@@ -669,6 +687,7 @@ export async function runV3Backtest(
   );
   const runtimeCalibration =
     await getLiveCalibrationProfile(symbol, mode as "paper" | "demo" | "real", stateMap).catch(() => null);
+  const modeGate = resolveModeScoreGate(stateMap, modePrefix, mode, runtimeCalibration);
   const trailingCfg = runtimeCalibration
     ? resolveTrailingConfigFromProfile(runtimeCalibration.trailingModel ?? {})
     : {};
@@ -1022,7 +1041,7 @@ export async function runV3Backtest(
     }
 
     // â”€â”€ SR/Fib TP (exact live calculateSRFibTP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    const tp = calculateSRFibTP({
+    let tp = calculateSRFibTP({
       entryPrice: bar.close,
       direction: winner.direction,
       swingHigh: features.swingHigh,
@@ -1049,7 +1068,7 @@ export async function runV3Backtest(
     if (winner.direction === "sell" && tp >= bar.close) continue;
 
     // â”€â”€ SR/Fib SL at 1:5 RR (exact live calculateSRFibSL) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    const sl = calculateSRFibSL({
+    let sl = calculateSRFibSL({
       entryPrice: bar.close,
       direction: winner.direction,
       tp,
@@ -1057,6 +1076,21 @@ export async function runV3Backtest(
       equity: SYNTHETIC_EQUITY,
     });
 
+    if (!isFinite(sl) || sl <= 0) continue;
+
+    ({ tp, sl } = applyRuntimeCalibrationExitModel({
+      spotPrice: bar.close,
+      direction: winner.direction,
+      tp,
+      sl,
+      trailingStopPct: trailingCfg.trailingDistancePct ?? 0,
+      mode,
+      runtimeCalibration,
+    }));
+
+    if (!isFinite(tp) || tp <= 0) continue;
+    if (winner.direction === "buy" && tp <= bar.close) continue;
+    if (winner.direction === "sell" && tp >= bar.close) continue;
     if (!isFinite(sl) || sl <= 0) continue;
 
     const tpPct = Math.abs(tp - bar.close) / bar.close;
@@ -1171,11 +1205,10 @@ export async function runV3BacktestMulti(
   symbols: string[],
   startTs?: number,
   endTs?: number,
-  minScore?: number,
   mode?: "paper" | "demo" | "real",
 ): Promise<Record<string, V3BacktestResult>> {
   if (symbols.length <= 1) {
-    const result = await runV3Backtest({ symbol: symbols[0] ?? "", startTs, endTs, minScore, mode });
+    const result = await runV3Backtest({ symbol: symbols[0] ?? "", startTs, endTs, mode });
     return symbols[0] ? { [symbols[0]]: result } : {};
   }
 
@@ -1184,17 +1217,15 @@ export async function runV3BacktestMulti(
   const _startTs = startTs ?? (now - 90 * 86400);
   const _endTs   = endTs   ?? now;
   const _mode    = mode    ?? "paper";
-  const modePrefix = { paper: "paper", demo: "demo", real: "real" }[_mode] ?? "paper";
+  const modePrefix = getModePrefix(_mode);
 
   const platformRows = await db.select().from(platformStateTable);
   const stateMap: Record<string, string> = {};
   for (const r of platformRows) stateMap[r.key] = r.value;
 
-  const gateFomState   = stateMap[`${modePrefix}_min_composite_score`] || stateMap["min_composite_score"];
-  const sharedModeGate = minScore ?? (gateFomState ? parseFloat(gateFomState) : (MODE_SCORE_GATES[_mode] ?? 60));
-
-  const sharedKillSwitch  = false;
-  const sharedModeEnabled = true;
+  const sharedModeGate = resolveModeScoreGate(stateMap, modePrefix, _mode, null);
+  const sharedKillSwitch  = stateMap["kill_switch"] === "true";
+  const sharedModeEnabled = isModeEnabledFromState(stateMap, modePrefix);
 
   const sharedMaxOpenTrades = parseInt(
     stateMap[`${modePrefix}_max_open_trades`] || stateMap["max_open_trades"] || "3", 10,
@@ -1255,7 +1286,7 @@ export async function runV3BacktestMulti(
       modeGate:               sharedModeGate,
       killSwitchActive:       sharedKillSwitch,
       modeEnabled:            sharedModeEnabled,
-      symbolEnabled:          true,
+      symbolEnabled:          isSymbolEnabledFromState(stateMap, modePrefix, sym),
       maxOpenTrades:          sharedMaxOpenTrades,
       totalCapital:           sharedCapital,
       maxDailyLossPct:        sharedMaxDailyLoss,
@@ -1305,7 +1336,12 @@ export async function runV3BacktestMulti(
   // â”€â”€ Shared portfolio ledger â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const ledger = new SharedPortfolioLedger();
   for (const ctx of symCtxMap.values()) {
-    const trailingCfg = await resolveBacktestTrailingConfig(ctx.sym, _mode, stateMap);
+    const runtimeCalibration = await getLiveCalibrationProfile(ctx.sym, _mode, stateMap).catch(() => null);
+    ctx.runtimeCalibration = runtimeCalibration;
+    ctx.modeGate = resolveModeScoreGate(stateMap, modePrefix, _mode, runtimeCalibration);
+    const trailingCfg = runtimeCalibration
+      ? resolveTrailingConfigFromProfile(runtimeCalibration.trailingModel ?? {})
+      : {};
     ctx.trailingActivationThresholdPct = trailingCfg.trailingActivationThresholdPct;
     ctx.trailingDistancePct = trailingCfg.trailingDistancePct;
     ctx.trailingMinHoldBars = trailingCfg.trailingMinHoldBars;
@@ -1521,7 +1557,7 @@ export async function runV3BacktestMulti(
       }
 
       // SR/Fib TP â€” same as single-symbol path
-      const tp = calculateSRFibTP({
+      let tp = calculateSRFibTP({
         entryPrice: bar.close, direction: winner.direction,
         swingHigh: features.swingHigh, swingLow: features.swingLow,
         majorSwingHigh: features.majorSwingHigh, majorSwingLow: features.majorSwingLow,
@@ -1538,10 +1574,25 @@ export async function runV3BacktestMulti(
       if (winner.direction === "buy"  && tp <= bar.close) continue;
       if (winner.direction === "sell" && tp >= bar.close) continue;
 
-      const sl = calculateSRFibSL({
+      let sl = calculateSRFibSL({
         entryPrice: bar.close, direction: winner.direction, tp,
         positionSize: SYNTHETIC_SIZE, equity: SYNTHETIC_EQUITY,
       });
+      if (!isFinite(sl) || sl <= 0) continue;
+
+      ({ tp, sl } = applyRuntimeCalibrationExitModel({
+        spotPrice: bar.close,
+        direction: winner.direction,
+        tp,
+        sl,
+        trailingStopPct: ctx.trailingDistancePct ?? 0,
+        mode: _mode,
+        runtimeCalibration: ctx.runtimeCalibration,
+      }));
+
+      if (!isFinite(tp) || tp <= 0) continue;
+      if (winner.direction === "buy"  && tp <= bar.close) continue;
+      if (winner.direction === "sell" && tp >= bar.close) continue;
       if (!isFinite(sl) || sl <= 0) continue;
 
       const tpPct        = Math.abs(tp - bar.close) / bar.close;

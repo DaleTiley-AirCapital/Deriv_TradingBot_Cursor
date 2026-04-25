@@ -7,6 +7,7 @@ import { checkAndAutoExtract } from "./extractionEngine.js";
 import { recordBehaviorEvent } from "./backtest/behaviorCapture.js";
 import { evaluateBarExits, MAX_HOLD_MINS, applyBarStateTransitions } from "./tradeManagement.js";
 import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
+import type { SpikeMagnitudeStats } from "./features.js";
 
 const MAX_OPEN_TRADES = 6;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
@@ -72,7 +73,48 @@ export function calculatePositionSize(
   return { size, allowed: true, reason: "ok" };
 }
 
-import type { SpikeMagnitudeStats } from "./features.js";
+export function applyRuntimeCalibrationExitModel(params: {
+  spotPrice: number;
+  direction: "buy" | "sell";
+  tp: number;
+  sl: number;
+  trailingStopPct: number;
+  mode: TradingMode;
+  runtimeCalibration?: LiveCalibrationProfile | null;
+}): { tp: number; sl: number; trailingStopPct: number } {
+  const { spotPrice, direction, mode, runtimeCalibration } = params;
+  let tp = params.tp;
+  let sl = params.sl;
+  let trailingStopPct = params.trailingStopPct;
+
+  if (runtimeCalibration && mode === "paper") {
+    const targetPctRaw = Number(runtimeCalibration.tpModel?.["targetPct"] ?? 0);
+    const targetPct = Number.isFinite(targetPctRaw) ? Math.max(0, targetPctRaw / 100) : 0;
+    if (targetPct > 0) {
+      const currentTpPct = Math.abs(tp - spotPrice) / spotPrice;
+      const blendedTpPct = currentTpPct * 0.7 + targetPct * 0.3;
+      tp = direction === "buy"
+        ? spotPrice * (1 + blendedTpPct)
+        : spotPrice * (1 - blendedTpPct);
+    }
+
+    const maxInitialRiskPctRaw = Number(runtimeCalibration.slModel?.["maxInitialRiskPct"] ?? 0);
+    const maxInitialRiskPct = Number.isFinite(maxInitialRiskPctRaw) ? Math.max(0, maxInitialRiskPctRaw / 100) : 0;
+    if (maxInitialRiskPct > 0) {
+      const calibratedSl = direction === "buy"
+        ? spotPrice * (1 - maxInitialRiskPct)
+        : spotPrice * (1 + maxInitialRiskPct);
+      sl = direction === "buy" ? Math.max(sl, calibratedSl) : Math.min(sl, calibratedSl);
+    }
+
+    const trailingDistancePctRaw = Number(runtimeCalibration.trailingModel?.["trailingDistancePct"] ?? 0);
+    if (Number.isFinite(trailingDistancePctRaw) && trailingDistancePctRaw > 0) {
+      trailingStopPct = Math.max(0.02, Math.min(0.8, trailingDistancePctRaw / 100));
+    }
+  }
+
+  return { tp, sl, trailingStopPct };
+}
 
 export function calculateSRFibTP(params: {
   entryPrice: number;
@@ -688,34 +730,15 @@ export async function openPositionV3(params: {
   let sl = calculateSRFibSL({ entryPrice: spotPrice, direction, tp, positionSize: capitalAmount, equity });
   let trailingStopPct = PROFIT_TRAILING_DRAWDOWN_PCT;
 
-  if (runtimeCalibration && mode === "paper") {
-    const targetPctRaw = Number(runtimeCalibration.tpModel?.["targetPct"] ?? 0);
-    const targetPct = Number.isFinite(targetPctRaw) ? Math.max(0, targetPctRaw / 100) : 0;
-    if (targetPct > 0) {
-      const currentTpPct = Math.abs(tp - spotPrice) / spotPrice;
-      const blendedTpPct = currentTpPct * 0.7 + targetPct * 0.3;
-      tp = direction === "buy"
-        ? spotPrice * (1 + blendedTpPct)
-        : spotPrice * (1 - blendedTpPct);
-    }
-    const maxInitialRiskPctRaw = Number(runtimeCalibration.slModel?.["maxInitialRiskPct"] ?? 0);
-    const maxInitialRiskPct = Number.isFinite(maxInitialRiskPctRaw) ? Math.max(0, maxInitialRiskPctRaw / 100) : 0;
-    if (maxInitialRiskPct > 0) {
-      const calibratedSl = direction === "buy"
-        ? spotPrice * (1 - maxInitialRiskPct)
-        : spotPrice * (1 + maxInitialRiskPct);
-      const currentSlDist = Math.abs(sl - spotPrice);
-      const calibratedDist = Math.abs(calibratedSl - spotPrice);
-      if (calibratedDist < currentSlDist) {
-        sl = calibratedSl;
-      }
-    }
-
-    const trailingDistancePctRaw = Number(runtimeCalibration.trailingModel?.["trailingDistancePct"] ?? 0);
-    if (Number.isFinite(trailingDistancePctRaw) && trailingDistancePctRaw > 0) {
-      trailingStopPct = Math.max(0.02, Math.min(0.8, trailingDistancePctRaw / 100));
-    }
-  }
+  ({ tp, sl, trailingStopPct } = applyRuntimeCalibrationExitModel({
+    spotPrice,
+    direction,
+    tp,
+    sl,
+    trailingStopPct,
+    mode,
+    runtimeCalibration,
+  }));
 
   const notes = `V3 HybridStaged | engine=${engineName} | conf=${confidence.toFixed(3)}` +
     (runtimeCalibration ? ` | calib_run=${runtimeCalibration.sourceRunId}` : "");
