@@ -1034,6 +1034,7 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
           await db.insert(calibrationFeatureRelevanceTable).values({
             symbol,
             strategyFamily: txt(row.strategyFamily, "unknown"),
+            movePctBucket: txt(row.movePctBucket, "all"),
             featureName: txt(row.featureName, "unknown"),
             relevanceScore: num(row.relevanceScore, 0),
             precursorUsefulness: num(row.precursorUsefulness, 0),
@@ -1045,6 +1046,7 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
             target: [
               calibrationFeatureRelevanceTable.symbol,
               calibrationFeatureRelevanceTable.strategyFamily,
+              calibrationFeatureRelevanceTable.movePctBucket,
               calibrationFeatureRelevanceTable.featureName,
             ],
             set: {
@@ -1064,6 +1066,7 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
           await db.insert(calibrationEntryIdealsTable).values({
             symbol,
             strategyFamily: txt(row.strategyFamily, "unknown"),
+            movePctBucket: txt(row.movePctBucket, "all"),
             idealPrecursorProfile: row.idealPrecursorProfile as never,
             idealTriggerProfile: row.idealTriggerProfile as never,
             featureBands: row.featureBands as never,
@@ -1071,7 +1074,11 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
             progressionSummary: row.progressionSummary as never,
             sourceRunId: Number.isFinite(num(row.sourceRunId, NaN)) ? Math.round(num(row.sourceRunId, 0)) : null,
           }).onConflictDoUpdate({
-            target: [calibrationEntryIdealsTable.symbol, calibrationEntryIdealsTable.strategyFamily],
+            target: [
+              calibrationEntryIdealsTable.symbol,
+              calibrationEntryIdealsTable.strategyFamily,
+              calibrationEntryIdealsTable.movePctBucket,
+            ],
             set: {
               idealPrecursorProfile: row.idealPrecursorProfile as never,
               idealTriggerProfile: row.idealTriggerProfile as never,
@@ -1089,13 +1096,18 @@ router.post("/calibration/import/:symbol", async (req, res): Promise<void> => {
           await db.insert(calibrationExitRiskProfilesTable).values({
             symbol,
             strategyFamily: txt(row.strategyFamily, "unknown"),
+            movePctBucket: txt(row.movePctBucket, "all"),
             regressionFingerprints: row.regressionFingerprints as never,
             moveBreakWarningPatterns: row.moveBreakWarningPatterns as never,
             closureSignals: row.closureSignals as never,
             trailingInterpretationNotes: txt(row.trailingInterpretationNotes, ""),
             sourceRunId: Number.isFinite(num(row.sourceRunId, NaN)) ? Math.round(num(row.sourceRunId, 0)) : null,
           }).onConflictDoUpdate({
-            target: [calibrationExitRiskProfilesTable.symbol, calibrationExitRiskProfilesTable.strategyFamily],
+            target: [
+              calibrationExitRiskProfilesTable.symbol,
+              calibrationExitRiskProfilesTable.strategyFamily,
+              calibrationExitRiskProfilesTable.movePctBucket,
+            ],
             set: {
               regressionFingerprints: row.regressionFingerprints as never,
               moveBreakWarningPatterns: row.moveBreakWarningPatterns as never,
