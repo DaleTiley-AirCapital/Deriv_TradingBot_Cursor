@@ -40,6 +40,7 @@ const SETTING_DEFAULTS: Record<string, string> = {
   scan_interval_seconds: "30",
   scan_stagger_seconds: "10",
   ai_verification_enabled: "false",
+  use_calibrated_runtime_profiles: "false",
   enabled_symbols: ACTIVE_TRADING_SYMBOLS_DEFAULT,
   min_composite_score: "80",
   min_ev_threshold: "0.001",
@@ -181,7 +182,17 @@ router.post("/settings", async (req, res): Promise<void> => {
 
     if (!ALL_SETTING_KEYS.includes(key)) continue;
 
-    const BOOLEAN_KEYS = ["kill_switch", "ai_verification_enabled", "paper_mode_active", "demo_mode_active", "real_mode_active", "paper_auto_extraction", "demo_auto_extraction", "real_auto_extraction"];
+    const BOOLEAN_KEYS = [
+      "kill_switch",
+      "ai_verification_enabled",
+      "use_calibrated_runtime_profiles",
+      "paper_mode_active",
+      "demo_mode_active",
+      "real_mode_active",
+      "paper_auto_extraction",
+      "demo_auto_extraction",
+      "real_auto_extraction",
+    ];
     const ALLOCATION_KEYS = ["allocation_mode", "paper_allocation_mode", "demo_allocation_mode", "real_allocation_mode"];
     const STRING_LIST_KEYS = [
       "enabled_symbols", "paper_enabled_symbols", "demo_enabled_symbols", "real_enabled_symbols",

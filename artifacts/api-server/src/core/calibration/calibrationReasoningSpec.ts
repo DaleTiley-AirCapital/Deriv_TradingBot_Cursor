@@ -7,6 +7,33 @@ export const ALLOWED_CALIBRATION_FAMILIES = [
   "other_structural_family",
 ] as const;
 
+export type CalibrationFamily = typeof ALLOWED_CALIBRATION_FAMILIES[number];
+
+export function getAllowedCalibrationFamiliesForSymbol(symbol: string): CalibrationFamily[] {
+  const upper = symbol.toUpperCase();
+  if (upper.startsWith("CRASH")) return ["crash_expansion"];
+  if (upper.startsWith("BOOM")) return ["boom_expansion"];
+  if (upper.startsWith("R_") || upper.startsWith("RDBULL") || upper.startsWith("RDBEAR")) {
+    return ["breakout", "continuation", "reversal"];
+  }
+  return ["breakout", "continuation", "reversal", "other_structural_family"];
+}
+
+export function normalizeCalibrationFamilyForSymbol(
+  symbol: string,
+  family: string | null | undefined,
+  fallbackFamily?: string | null,
+): CalibrationFamily {
+  const allowed = getAllowedCalibrationFamiliesForSymbol(symbol);
+  const requested = family as CalibrationFamily;
+  if (allowed.includes(requested)) return requested;
+
+  const fallback = fallbackFamily as CalibrationFamily;
+  if (allowed.includes(fallback)) return fallback;
+
+  return allowed[0] ?? "other_structural_family";
+}
+
 export const FAMILY_INFERENCE_SYSTEM_PROMPT = `You are a calibration analyst for a deterministic trading-research pipeline.
 
 Hard rules:
@@ -14,7 +41,7 @@ Hard rules:
 - Do not compute indicators from scratch.
 - Do not reference existing engines, score gates, or runtime strategy logic.
 - Classify the move from the data only.
-- Use one of the allowed families unless the move clearly fits none of them, then use other_structural_family.
+- Use only one of the symbol-compatible allowed family labels supplied in the user prompt.
 - Output findings only. Do not recommend runtime code changes.
 `;
 

@@ -44,6 +44,7 @@ export interface SymbolResearchProfile {
 
 function normalizedMoveFamily(moveType: string): string {
   const v = (moveType || "").toLowerCase();
+  if (v === "boom_expansion" || v === "crash_expansion") return v;
   if (v === "breakout" || v === "continuation" || v === "reversal") return v;
   if (v.includes("spike") && v.includes("recover")) return "spike_cluster_recovery";
   if (v.includes("exhaust")) return "exhaustion";
@@ -327,13 +328,40 @@ export async function getLatestSymbolResearchProfile(
   symbol: string,
 ): Promise<SymbolResearchProfile | null> {
   try {
-    const rows = await db
-      .select()
-      .from(symbolResearchProfilesTable)
-      .where(eq(symbolResearchProfilesTable.symbol, symbol))
-      .orderBy(desc(symbolResearchProfilesTable.generatedAt))
-      .limit(1);
+    const [rows, latestProfileRows] = await Promise.all([
+      db
+        .select()
+        .from(symbolResearchProfilesTable)
+        .where(eq(symbolResearchProfilesTable.symbol, symbol))
+        .orderBy(desc(symbolResearchProfilesTable.generatedAt))
+        .limit(1),
+      db
+        .select({
+          lastRunId: strategyCalibrationProfilesTable.lastRunId,
+          generatedAt: strategyCalibrationProfilesTable.generatedAt,
+        })
+        .from(strategyCalibrationProfilesTable)
+        .where(and(
+          eq(strategyCalibrationProfilesTable.symbol, symbol),
+          eq(strategyCalibrationProfilesTable.moveType, "all"),
+        ))
+        .orderBy(desc(strategyCalibrationProfilesTable.generatedAt))
+        .limit(1),
+    ]);
     const row = rows[0];
+    const latestProfile = latestProfileRows[0];
+    const latestRunId = latestProfile?.lastRunId ?? null;
+    const shouldRefreshFromCalibration =
+      latestRunId !== null &&
+      (!row ||
+        row.lastRunId !== latestRunId ||
+        (row.generatedAt && latestProfile.generatedAt && row.generatedAt < latestProfile.generatedAt));
+
+    if (shouldRefreshFromCalibration) {
+      const refreshed = await upsertSymbolResearchProfile(symbol, latestRunId);
+      if (refreshed.profile) return refreshed.profile;
+    }
+
     if (!row) return null;
     const raw = asRecord(row.rawJson);
     return {

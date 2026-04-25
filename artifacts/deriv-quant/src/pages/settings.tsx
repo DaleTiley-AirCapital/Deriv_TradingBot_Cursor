@@ -32,6 +32,21 @@ interface SymbolWiringRow {
   hasResearchProfile: boolean;
   runtimeCalibrationReady: boolean;
   latestRunStatus: string;
+  runtimeSource: string;
+  latestResearchRunId: number | null;
+  promotedRunId: number | null;
+  driftPendingPromotion: boolean;
+}
+
+interface RuntimeModelStatus {
+  lifecycle?: {
+    hasPromotedModel?: boolean;
+    runtimeSource?: string;
+    latestRunId?: number | null;
+    latestResearchRunId?: number | null;
+    promotedRunId?: number | null;
+    driftPendingPromotion?: boolean;
+  };
 }
 
 function useSettings() {
@@ -53,17 +68,28 @@ function useSymbolWiring() {
     queryFn: async () => {
       const rows = await Promise.all(
         ALL_28_SYMBOLS.map(async (symbol): Promise<SymbolWiringRow> => {
-          const [rp, aggregate, run] = await Promise.all([
+          const [rp, aggregate, run, runtime] = await Promise.all([
             fetch(`${BASE}api/calibration/research-profile/${symbol}`).then(async r => r.ok ? r.json() : null).catch(() => null),
             fetch(`${BASE}api/calibration/aggregate/${symbol}`).then(async r => r.ok ? r.json() : null).catch(() => null),
             fetch(`${BASE}api/calibration/latest-run/${symbol}`).then(async r => r.ok ? r.json() : null).catch(() => null),
+            fetch(`${BASE}api/calibration/runtime-model/${symbol}`).then(async r => r.ok ? r.json() as Promise<RuntimeModelStatus> : null).catch(() => null),
           ]);
 
           const moveCount =
             Number(aggregate?.overall?.targetMoves ?? aggregate?.totalMoves ?? rp?.moveCount ?? 0) || 0;
           const hasResearchProfile = Boolean(rp && !rp.error);
           const latestRunStatus = String(run?.status ?? "none");
-          const runtimeCalibrationReady = hasResearchProfile && moveCount > 0;
+          const lifecycle = runtime?.lifecycle;
+          const runtimeSource = String(lifecycle?.runtimeSource ?? "none");
+          const latestResearchRunId = Number(lifecycle?.latestResearchRunId ?? lifecycle?.latestRunId ?? 0) || null;
+          const promotedRunId = Number(lifecycle?.promotedRunId ?? 0) || null;
+          const driftPendingPromotion = Boolean(lifecycle?.driftPendingPromotion);
+          const runtimeCalibrationReady = Boolean(
+            lifecycle?.hasPromotedModel &&
+            runtimeSource === "promoted_symbol_model" &&
+            promotedRunId != null &&
+            !driftPendingPromotion,
+          );
           const status: SymbolWiringRow["status"] =
             runtimeCalibrationReady ? "complete"
             : (moveCount > 0 || latestRunStatus === "running") ? "partial"
@@ -77,6 +103,10 @@ function useSymbolWiring() {
             hasResearchProfile,
             runtimeCalibrationReady,
             latestRunStatus,
+            runtimeSource,
+            latestResearchRunId,
+            promotedRunId,
+            driftPendingPromotion,
           };
         }),
       );
@@ -257,6 +287,7 @@ export default function Settings() {
 
   const killSwitch      = bool(data?.["kill_switch"]);
   const aiVerification  = bool(data?.["ai_verification_enabled"]);
+  const calibratedRuntimeProfiles = bool(data?.["use_calibrated_runtime_profiles"]);
   const withdrawalAlert = bool(data?.["suggest_withdrawal"]);
 
   return (
@@ -320,6 +351,16 @@ export default function Settings() {
                 value={aiVerification}
                 onUpdate={onUpdate}
                 variant="default"
+              />
+              <div className="h-px bg-border/20" />
+              <ToggleRow
+                label="Use promoted calibration runtime profiles"
+                field="use_calibrated_runtime_profiles"
+                value={calibratedRuntimeProfiles}
+                onUpdate={onUpdate}
+                onLabel="ON — promoted model feeds paper runtime"
+                offLabel="OFF — native engine defaults only"
+                variant="success"
               />
               <div className="h-px bg-border/20" />
               <div className="flex items-center justify-between gap-4 py-0.5">
@@ -415,6 +456,8 @@ export default function Settings() {
                         <th className="text-right py-2 pr-3">Moves</th>
                         <th className="text-center py-2 pr-3">Research profile</th>
                         <th className="text-center py-2 pr-3">Runtime ready</th>
+                        <th className="text-center py-2 pr-3">Runtime run</th>
+                        <th className="text-center py-2 pr-3">Runtime source</th>
                         <th className="text-center py-2 pr-3">Latest run</th>
                         <th className="text-center py-2">Wiring</th>
                       </tr>
@@ -427,6 +470,11 @@ export default function Settings() {
                           <td className="py-2 pr-3 text-right font-mono">{r.moveCount.toLocaleString()}</td>
                           <td className="py-2 pr-3 text-center">{r.hasResearchProfile ? "yes" : "no"}</td>
                           <td className="py-2 pr-3 text-center">{r.runtimeCalibrationReady ? "yes" : "no"}</td>
+                          <td className="py-2 pr-3 text-center font-mono">
+                            {r.promotedRunId ?? "none"} / {r.latestResearchRunId ?? "none"}
+                            {r.driftPendingPromotion && <span className="ml-1 text-amber-400">drift</span>}
+                          </td>
+                          <td className="py-2 pr-3 text-center font-mono">{r.runtimeSource}</td>
                           <td className="py-2 pr-3 text-center">{r.latestRunStatus}</td>
                           <td className="py-2 text-center">
                             <span className={cn(

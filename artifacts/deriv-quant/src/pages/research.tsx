@@ -988,6 +988,7 @@ interface PassRun {
 }
 
 interface SymbolResearchProfileUi {
+  lastRunId?: number;
   moveCount?: number;
   moveFamilyDistribution?: Record<string, number>;
   estimatedTradesPerMonth?: number;
@@ -1000,6 +1001,31 @@ interface SymbolResearchProfileUi {
   estimatedFitAdjustedMonthlyReturnPct?: number;
   engineTypeRecommendation?: string;
   researchStatus?: string;
+}
+
+interface RuntimeSymbolModelUi {
+  sourceRunId?: number;
+  entryModel?: string;
+  recommendedScoreGates?: Record<string, number>;
+  expectedTradesPerMonth?: number;
+  recommendedScanIntervalSeconds?: number;
+  promotedAt?: string;
+}
+
+interface RuntimeModelStateUi {
+  researchProfile?: SymbolResearchProfileUi | null;
+  stagedModel?: RuntimeSymbolModelUi | null;
+  promotedModel?: RuntimeSymbolModelUi | null;
+  lifecycle?: {
+    hasResearchProfile?: boolean;
+    hasStagedModel?: boolean;
+    hasPromotedModel?: boolean;
+    latestRunId?: number | null;
+    stagedRunId?: number | null;
+    promotedRunId?: number | null;
+    runtimeSource?: string;
+    driftPendingPromotion?: boolean;
+  };
 }
 
 //  Move Calibration Tab 
@@ -1252,6 +1278,9 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   const [buildingProfile, setBuildingProfile] = useState(false);
   const [calibProfile, setCalibProfile] = useState<CalibrationProfile | null>(null);
   const [researchProfile, setResearchProfile] = useState<SymbolResearchProfileUi | null>(null);
+  const [runtimeModel, setRuntimeModel] = useState<RuntimeModelStateUi | null>(null);
+  const [runtimeBusy, setRuntimeBusy] = useState<"stage" | "promote" | null>(null);
+  const [runtimeErr, setRuntimeErr] = useState<string | null>(null);
   const [domainLoading, setDomainLoading] = useState(false);
 
   const [engines, setEngines] = useState<EngineRow[]>([]);
@@ -1320,19 +1349,21 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     setEngineLoading(true);
     const profilePath = (family && family !== "all") ? family : "all";
     try {
-      const [agg, eng, beh, calib, rawMovesResp, rp] = await Promise.all([
+      const [agg, eng, beh, calib, rawMovesResp, rp, runtime] = await Promise.all([
         apiFetch(`calibration/aggregate/${sym}`).catch(() => null),
         apiFetch(`calibration/engine/${sym}`).catch(() => null),
         apiFetch(`behavior/profile/${sym}`).catch(() => null),
         apiFetch(`calibration/profile/${sym}/${profilePath}`).catch(() => null),
         apiFetch(`calibration/moves/${sym}`).catch(() => null),
         apiFetch(`calibration/research-profile/${sym}`).catch(() => null),
+        apiFetch(`calibration/runtime-model/${sym}`).catch(() => null),
       ]);
       setAggregate(agg);
       setEngines(eng?.engines ?? []);
       setBehaviorProfile(beh ?? null);
       setCalibProfile(calib ?? null);
       setResearchProfile(rp ?? null);
+      setRuntimeModel(runtime ?? null);
 
       // Compute Target Moves stats directly from the moves endpoint (constraint #9  source: /api/calibration/moves/:symbol)
       const rawMoves: Array<{ movePct?: number | string | null; moveType?: string | null; qualityTier?: string | null; qualityScore?: number | string | null }> =
@@ -1657,6 +1688,20 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     }
   };
 
+  const updateRuntimeModel = async (action: "stage" | "promote") => {
+    setRuntimeBusy(action);
+    setRuntimeErr(null);
+    try {
+      await apiFetch(`calibration/runtime-model/${symbol}/${action}`, { method: "POST" });
+      const runtime = await apiFetch(`calibration/runtime-model/${symbol}`).catch(() => null);
+      setRuntimeModel(runtime ?? null);
+    } catch (e: unknown) {
+      setRuntimeErr(e instanceof Error ? e.message : `Runtime ${action} failed`);
+    } finally {
+      setRuntimeBusy(null);
+    }
+  };
+
   const inferImportType = (filename: string, payload: Record<string, unknown>): "moves" | "passes" | "profile" | "comparison" | null => {
     const lower = filename.toLowerCase();
     if (lower.includes("calibration_moves_")) return "moves";
@@ -1730,6 +1775,30 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       count: sorted.length,
     };
   })();
+
+  const calibrationCoverage = calibProfile
+    ? {
+        source: "Synthesized calibration profile",
+        targetMoves: calibProfile.targetMoves,
+        capturedMoves: calibProfile.capturedMoves,
+        missedMoves: calibProfile.missedMoves,
+        fitScore: calibProfile.fitScore,
+        avgMovePct: calibProfile.avgMovePct,
+        avgCaptureablePct: calibProfile.avgCaptureablePct,
+        avgHoldabilityScore: calibProfile.avgHoldabilityScore,
+      }
+    : aggregate?.overall
+      ? {
+          source: "Current engine replay aggregate",
+          targetMoves: aggregate.overall.targetMoves,
+          capturedMoves: aggregate.overall.capturedMoves,
+          missedMoves: aggregate.overall.missedMoves,
+          fitScore: aggregate.overall.fitScore,
+          avgMovePct: aggregate.overall.avgMovePct,
+          avgCaptureablePct: aggregate.overall.avgCaptureablePct,
+          avgHoldabilityScore: aggregate.overall.avgHoldabilityScore,
+        }
+      : null;
 
   return (
     <div className="space-y-5">
@@ -2202,7 +2271,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                       : ""}
                   />
                   <StatRow
-                    label="Median quality score"
+                    label="Median raw quality score"
                     value={targetMovesStats.medianQualityScore != null
                       ? targetMovesStats.medianQualityScore.toFixed(1)
                       : ""}
@@ -2587,7 +2656,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       </div>
 
       {/*  Honest Fit & Profitability  */}
-      {(aggregate?.overall?.capturedMoves !== undefined || calibProfile?.profitabilitySummary) && (
+      {(calibrationCoverage || calibProfile?.profitabilitySummary) && (
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
             <Target className="w-3.5 h-3.5 text-primary" />
@@ -2597,19 +2666,25 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             {/* Fit stats */}
             <div className="space-y-0.5">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Move Coverage</p>
-              {aggregate?.overall && (
+              {calibrationCoverage && (
                 <>
-                  <StatRow label="Target moves" value={aggregate.overall.targetMoves} />
-                  <StatRow label="Captured moves" value={aggregate.overall.capturedMoves} />
-                  <StatRow label="Missed moves" value={aggregate.overall.missedMoves} />
-                  <StatRow label="Fit score" value={`${(aggregate.overall.fitScore * 100).toFixed(1)}%`} />
-                  <StatRow label="Avg move %" value={`${aggregate.overall.avgMovePct.toFixed(2)}%`} />
-                  <StatRow label="Avg capturable %" value={`${(aggregate.overall.avgCaptureablePct * 100).toFixed(1)}%`} />
+                  <StatRow label="Source" value={calibrationCoverage.source} />
+                  <StatRow label="Target moves" value={calibrationCoverage.targetMoves} />
+                  <StatRow label="Captured moves" value={calibrationCoverage.capturedMoves} />
+                  <StatRow label="Missed moves" value={calibrationCoverage.missedMoves} />
+                  <StatRow label="Fit score" value={`${(calibrationCoverage.fitScore * 100).toFixed(1)}%`} />
+                  <StatRow label="Avg move %" value={`${calibrationCoverage.avgMovePct.toFixed(2)}%`} />
+                  <StatRow label="Avg capturable %" value={`${(calibrationCoverage.avgCaptureablePct * 100).toFixed(1)}%`} />
                   <StatRow
                     label="Avg extracted (est.)"
-                    value={`${(aggregate.overall.avgMovePct * aggregate.overall.avgCaptureablePct).toFixed(2)}%`}
+                    value={`${(calibrationCoverage.avgMovePct * calibrationCoverage.avgCaptureablePct).toFixed(2)}%`}
                   />
-                  <StatRow label="Holdability score" value={aggregate.overall.avgHoldabilityScore.toFixed(2)} />
+                  <StatRow label="Holdability score" value={calibrationCoverage.avgHoldabilityScore.toFixed(2)} />
+                  {calibProfile && aggregate?.overall && aggregate.overall.capturedMoves !== calibProfile.capturedMoves && (
+                    <p className="text-[10px] text-amber-300/90 pt-1">
+                      Current engine replay is {aggregate.overall.capturedMoves}/{aggregate.overall.targetMoves}; synthesized calibration is shown above.
+                    </p>
+                  )}
                   {behaviorProfile && (
                     <StatRow label="Engine win rate" value={`${(behaviorProfile.overallWinRate * 100).toFixed(1)}%`} />
                   )}
@@ -2754,6 +2829,77 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           )}
         </div>
       )}
+
+      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
+            <Zap className="w-3.5 h-3.5 text-sky-400" />
+            Runtime Feeddown
+          </h3>
+          <span
+            className={cn(
+              "text-[11px] px-2 py-0.5 rounded border font-medium",
+              runtimeModel?.lifecycle?.hasPromotedModel
+                ? runtimeModel.lifecycle.driftPendingPromotion
+                  ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                  : "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+                : "text-slate-300 border-border/40 bg-muted/20"
+            )}
+          >
+            {runtimeModel?.lifecycle?.hasPromotedModel
+              ? runtimeModel.lifecycle.driftPendingPromotion
+                ? "Promotion stale"
+                : "Runtime promoted"
+              : "Research only"}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Latest Research</p>
+            <StatRow label="Run" value={runtimeModel?.lifecycle?.latestRunId ?? researchProfile?.lastRunId ?? "n/a"} />
+            <StatRow label="Entry model" value={runtimeModel?.researchProfile?.recommendedEntryModel ?? researchProfile?.recommendedEntryModel ?? "n/a"} />
+          </div>
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Staged Model</p>
+            <StatRow label="Run" value={runtimeModel?.lifecycle?.stagedRunId ?? "none"} />
+            <StatRow label="Entry model" value={runtimeModel?.stagedModel?.entryModel ?? "n/a"} />
+          </div>
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Promoted Runtime</p>
+            <StatRow label="Run" value={runtimeModel?.lifecycle?.promotedRunId ?? "none"} />
+            <StatRow label="Source" value={runtimeModel?.lifecycle?.runtimeSource ?? "none"} />
+          </div>
+        </div>
+
+        {runtimeErr && <ErrorBox msg={runtimeErr} />}
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => updateRuntimeModel("stage")}
+            disabled={runtimeBusy !== null || !researchProfile}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-sky-500/30 text-xs text-sky-200 bg-sky-500/10 hover:bg-sky-500/15 disabled:opacity-50"
+            title="Compile the latest research profile into a staged runtime model without changing live runtime ownership"
+          >
+            {runtimeBusy === "stage" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+            Stage Research Model
+          </button>
+          <button
+            type="button"
+            onClick={() => updateRuntimeModel("promote")}
+            disabled={runtimeBusy !== null || !researchProfile}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
+            title="Promote the latest research profile into the runtime model store used as the active feeddown source"
+          >
+            {runtimeBusy === "promote" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            Promote To Runtime
+          </button>
+          <p className="text-[11px] text-muted-foreground self-center">
+            Promotion is the explicit handoff from research into the model layer above the V3 engine.
+          </p>
+        </div>
+      </div>
 
       {/*  Detected Moves List  */}
       <div className="rounded-xl border border-border/50 bg-card">

@@ -7,16 +7,18 @@ import {
   detectedMovesTable,
   strategyCalibrationProfilesTable,
 } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import { chatCompleteJsonPrefer } from "../../../infrastructure/openai.js";
 import { CALIBRATION_REASONING_MODEL } from "../../ai/aiConfig.js";
 import {
   BUCKET_MODEL_RESPONSE_SHAPE,
   BUCKET_MODEL_SYSTEM_PROMPT,
+  getAllowedCalibrationFamiliesForSymbol,
 } from "../calibrationReasoningSpec.js";
 import { rebuildFamilyBucketProfiles } from "../familyBucketAggregation.js";
 import { parseAiJsonObject } from "../parseAiJson.js";
 import { repairCalibrationJson } from "../jsonRepairAssistant.js";
+import { upsertSymbolResearchProfile } from "../symbolResearchProfile.js";
 
 type BucketModelPayload = {
   featureSetToKeep?: string[];
@@ -59,7 +61,30 @@ export async function runModelSynthesisPass(
   runId: number,
   windowDays = 90,
 ): Promise<void> {
+  const allowedFamilies = getAllowedCalibrationFamiliesForSymbol(symbol);
+
   await rebuildFamilyBucketProfiles(symbol, runId);
+
+  await Promise.all([
+    db
+      .delete(calibrationFeatureRelevanceTable)
+      .where(and(
+        eq(calibrationFeatureRelevanceTable.symbol, symbol),
+        notInArray(calibrationFeatureRelevanceTable.strategyFamily, allowedFamilies),
+      )),
+    db
+      .delete(calibrationEntryIdealsTable)
+      .where(and(
+        eq(calibrationEntryIdealsTable.symbol, symbol),
+        notInArray(calibrationEntryIdealsTable.strategyFamily, allowedFamilies),
+      )),
+    db
+      .delete(calibrationExitRiskProfilesTable)
+      .where(and(
+        eq(calibrationExitRiskProfilesTable.symbol, symbol),
+        notInArray(calibrationExitRiskProfilesTable.strategyFamily, allowedFamilies),
+      )),
+  ]);
 
   const bucketProfiles = await db
     .select()
@@ -294,4 +319,6 @@ ${JSON.stringify(BUCKET_MODEL_RESPONSE_SHAPE)}`;
         generatedAt: new Date(),
       },
     });
+
+  await upsertSymbolResearchProfile(symbol, runId);
 }

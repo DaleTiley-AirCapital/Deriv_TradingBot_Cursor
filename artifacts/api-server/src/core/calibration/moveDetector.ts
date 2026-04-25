@@ -318,6 +318,28 @@ function scoreAndTier(move: {
   return { qualityScore: score, qualityTier };
 }
 
+function percentile(sortedAsc: number[], p: number): number {
+  if (sortedAsc.length === 0) return 0;
+  const idx = Math.max(0, Math.min(sortedAsc.length - 1, Math.floor((sortedAsc.length - 1) * p)));
+  return sortedAsc[idx] ?? 0;
+}
+
+function retierNativeExpansionMoves(moves: DetectedMove[]): void {
+  if (moves.length < 10) return;
+  const nativeExpansionOnly = moves.every((m) => m.moveType === "boom_expansion" || m.moveType === "crash_expansion");
+  if (!nativeExpansionOnly) return;
+
+  const scores = moves.map((m) => m.qualityScore).sort((a, b) => a - b);
+  const aCutoff = percentile(scores, 0.75);
+  const bCutoff = percentile(scores, 0.35);
+
+  for (const move of moves) {
+    move.qualityTier =
+      move.qualityScore >= aCutoff ? "A" :
+      move.qualityScore >= bCutoff ? "B" : "C";
+  }
+}
+
 // ── Trigger zone snapshot ─────────────────────────────────────────────────────
 //
 // Deterministically captures candle-level characteristics at the first bar of
@@ -608,6 +630,7 @@ export async function detectAndStoreMoves(
 
   const candles = rawCandles as CandleSlim[];
   const moves = extractStructuralMoves(candles, symbol, minMovePct);
+  retierNativeExpansionMoves(moves);
 
   if (clearExisting) {
     await clearCalibrationArtifactsForSymbol(symbol);

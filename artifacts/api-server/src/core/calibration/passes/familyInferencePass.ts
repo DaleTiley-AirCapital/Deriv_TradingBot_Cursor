@@ -8,9 +8,10 @@ import { and, eq } from "drizzle-orm";
 import { chatCompleteJsonPrefer } from "../../../infrastructure/openai.js";
 import { CALIBRATION_MODEL } from "../../ai/aiConfig.js";
 import {
-  ALLOWED_CALIBRATION_FAMILIES,
   FAMILY_INFERENCE_RESPONSE_SHAPE,
   FAMILY_INFERENCE_SYSTEM_PROMPT,
+  getAllowedCalibrationFamiliesForSymbol,
+  normalizeCalibrationFamilyForSymbol,
 } from "../calibrationReasoningSpec.js";
 import { parseAiJsonObject } from "../parseAiJson.js";
 import { repairCalibrationJson } from "../jsonRepairAssistant.js";
@@ -42,6 +43,7 @@ async function parseWithRepair(raw: string, label: string): Promise<FamilyInfere
 }
 
 export async function runFamilyInferencePass(move: DetectedMoveRow, runId: number): Promise<void> {
+  const allowedFamilies = getAllowedCalibrationFamiliesForSymbol(move.symbol);
   const existing = await db
     .select()
     .from(moveFamilyInferencesTable)
@@ -78,7 +80,7 @@ Deterministic move window summaries:
 ${JSON.stringify(windowSummaryPayload)}
 
 Allowed family labels:
-${JSON.stringify(ALLOWED_CALIBRATION_FAMILIES)}
+${JSON.stringify(allowedFamilies)}
 
 Return JSON matching this shape:
 ${JSON.stringify(FAMILY_INFERENCE_RESPONSE_SHAPE)}`;
@@ -97,9 +99,11 @@ ${JSON.stringify(FAMILY_INFERENCE_RESPONSE_SHAPE)}`;
 
   const raw = response.choices[0]?.message?.content?.trim() ?? "";
   const parsed = await parseWithRepair(raw, `familyInference move=${move.id}`);
-  const strategyFamily = ALLOWED_CALIBRATION_FAMILIES.includes((parsed.strategyFamily ?? "") as typeof ALLOWED_CALIBRATION_FAMILIES[number])
-    ? parsed.strategyFamily!
-    : "other_structural_family";
+  const strategyFamily = normalizeCalibrationFamilyForSymbol(
+    move.symbol,
+    parsed.strategyFamily,
+    move.strategyFamilyCandidate ?? move.moveType,
+  );
 
   await db
     .insert(moveFamilyInferencesTable)

@@ -5,6 +5,7 @@ import {
   moveFamilyInferencesTable,
 } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
+import { normalizeCalibrationFamilyForSymbol } from "./calibrationReasoningSpec.js";
 
 function mean(values: number[]): number {
   if (values.length === 0) return 0;
@@ -18,6 +19,10 @@ function asObject(value: unknown): Record<string, unknown> {
 }
 
 export async function rebuildFamilyBucketProfiles(symbol: string, runId: number): Promise<void> {
+  await db
+    .delete(calibrationFamilyBucketProfilesTable)
+    .where(eq(calibrationFamilyBucketProfilesTable.symbol, symbol));
+
   const [familyRows, summaryRows] = await Promise.all([
     db.select().from(moveFamilyInferencesTable).where(eq(moveFamilyInferencesTable.symbol, symbol)),
     db.select().from(calibrationMoveWindowSummariesTable).where(eq(calibrationMoveWindowSummariesTable.symbol, symbol)),
@@ -34,7 +39,8 @@ export async function rebuildFamilyBucketProfiles(symbol: string, runId: number)
   for (const inference of familyRows) {
     const summaries = summaryByMove.get(inference.moveId) ?? [];
     const movePctBucket = summaries[0]?.movePctBucket ?? "all";
-    const key = `${inference.strategyFamily}__${movePctBucket}`;
+    const strategyFamily = normalizeCalibrationFamilyForSymbol(symbol, inference.strategyFamily);
+    const key = `${strategyFamily}__${movePctBucket}`;
     const list = grouped.get(key) ?? [];
     list.push({ inference, summaries });
     grouped.set(key, list);
