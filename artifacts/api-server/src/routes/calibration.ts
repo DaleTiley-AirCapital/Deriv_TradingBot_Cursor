@@ -35,7 +35,7 @@ import {
   platformStateTable,
   strategyCalibrationProfilesTable,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { detectAndStoreMoves, getDetectedMoves, clearCalibrationArtifactsForSymbol } from "../core/calibration/moveDetector.js";
 import {
   startCalibrationPassesBackground,
@@ -82,6 +82,16 @@ const MAX_BASE_1M_GAPS_FOR_HEALTHY = 0;
 const MIN_BASE_1M_COVERAGE_PCT = 70;
 const MIN_BASE_1M_CANDLES = 1_000;
 
+type FullCalibrationResumePlan = {
+  shouldResume: boolean;
+  passName: PassName;
+  reason: string;
+  latestFailedRunId?: number;
+  existingMoveCount: number;
+  missingEnrichmentMoves: number;
+  missingFamilyInferenceMoves: number;
+};
+
 function withSymbolDomain<T extends object>(
   symbol: string,
   symbolDomain: SymbolDomain,
@@ -91,6 +101,93 @@ function withSymbolDomain<T extends object>(
     symbol,
     symbolDomain,
     ...payload,
+  };
+}
+
+async function getLatestFailedPassRunForSymbol(symbol: string): Promise<typeof calibrationPassRunsTable.$inferSelect | null> {
+  const [row] = await db
+    .select()
+    .from(calibrationPassRunsTable)
+    .where(eq(calibrationPassRunsTable.symbol, symbol))
+    .orderBy(desc(calibrationPassRunsTable.startedAt))
+    .limit(1);
+
+  return row?.status === "failed" ? row : null;
+}
+
+async function getFullCalibrationResumePlan(
+  symbol: string,
+  windowDays: number,
+  moveType: string | undefined,
+  minTier: "A" | "B" | "C" | "D" | undefined,
+  maxMoves: number | undefined,
+): Promise<FullCalibrationResumePlan> {
+  const latestFailed = await getLatestFailedPassRunForSymbol(symbol);
+  if (!latestFailed || latestFailed.windowDays !== windowDays) {
+    return {
+      shouldResume: false,
+      passName: "all",
+      reason: latestFailed ? "Latest failed run used a different research window" : "No failed run to resume",
+      existingMoveCount: 0,
+      missingEnrichmentMoves: 0,
+      missingFamilyInferenceMoves: 0,
+    };
+  }
+
+  const moves = (await getDetectedMoves(symbol, moveType, minTier)).slice(0, maxMoves ?? undefined);
+  if (moves.length === 0) {
+    return {
+      shouldResume: false,
+      passName: "all",
+      reason: "No detected moves exist to resume",
+      latestFailedRunId: latestFailed.id,
+      existingMoveCount: 0,
+      missingEnrichmentMoves: 0,
+      missingFamilyInferenceMoves: 0,
+    };
+  }
+
+  const moveIds = new Set(moves.map((move) => move.id));
+  const [summaryRows, inferenceRows] = await Promise.all([
+    db
+      .select({ moveId: calibrationMoveWindowSummariesTable.moveId })
+      .from(calibrationMoveWindowSummariesTable)
+      .where(eq(calibrationMoveWindowSummariesTable.symbol, symbol)),
+    db
+      .select({ moveId: moveFamilyInferencesTable.moveId })
+      .from(moveFamilyInferencesTable)
+      .where(eq(moveFamilyInferencesTable.symbol, symbol)),
+  ]);
+
+  const summaryCounts = new Map<number, number>();
+  for (const row of summaryRows) {
+    if (!moveIds.has(row.moveId)) continue;
+    summaryCounts.set(row.moveId, (summaryCounts.get(row.moveId) ?? 0) + 1);
+  }
+
+  const inferredMoveIds = new Set(
+    inferenceRows
+      .filter((row) => moveIds.has(row.moveId))
+      .map((row) => row.moveId),
+  );
+
+  const missingEnrichmentMoves = moves.filter((move) => (summaryCounts.get(move.id) ?? 0) < 4).length;
+  const missingFamilyInferenceMoves = moves.filter((move) => !inferredMoveIds.has(move.id)).length;
+  const passName: PassName =
+    missingEnrichmentMoves === 0 && missingFamilyInferenceMoves === 0
+      ? "model_synthesis"
+      : "all";
+
+  return {
+    shouldResume: true,
+    passName,
+    reason: passName === "model_synthesis"
+      ? "Previous full calibration failed after per-move artifacts were persisted"
+      : "Previous full calibration failed before all per-move artifacts were persisted",
+    latestFailedRunId: latestFailed.id,
+    existingMoveCount: moves.length,
+    missingEnrichmentMoves,
+    missingFamilyInferenceMoves,
   };
 }
 
@@ -286,15 +383,27 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
       return;
     }
 
-    const detected = await detectAndStoreMoves(symbol, Number(windowDays), Number(minMovePct), true);
+    const typedMinTier = minTier ? (String(minTier) as "A" | "B" | "C" | "D") : undefined;
+    const typedMaxMoves = maxMoves ? Number(maxMoves) : undefined;
+    const resumePlan = await getFullCalibrationResumePlan(
+      symbol,
+      Number(windowDays),
+      normalizedMoveType,
+      typedMinTier,
+      typedMaxMoves,
+    );
+    const detected = resumePlan.shouldResume
+      ? null
+      : await detectAndStoreMoves(symbol, Number(windowDays), Number(minMovePct), true);
+
     const { runId, totalMoves } = await startCalibrationPassesBackground({
       symbol,
       windowDays: Number(windowDays),
-      passName: "all",
-      minTier: minTier ? (String(minTier) as "A" | "B" | "C" | "D") : undefined,
+      passName: resumePlan.shouldResume ? resumePlan.passName : "all",
+      minTier: typedMinTier,
       moveType: normalizedMoveType,
-      maxMoves: maxMoves ? Number(maxMoves) : undefined,
-      force: Boolean(force),
+      maxMoves: typedMaxMoves,
+      force: resumePlan.shouldResume ? false : Boolean(force),
       continueOnMoveErrors: false,
     });
     const [runRow] = await db
@@ -318,6 +427,7 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
           },
           integritySummary: integrity,
           detectSummary: detected,
+          resumePlan,
         } as never,
       })
       .where(eq(calibrationPassRunsTable.id, runId));
@@ -337,6 +447,7 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
       ],
       integritySummary: integrity,
       detectSummary: detected,
+      resumePlan,
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Full calibration failed";

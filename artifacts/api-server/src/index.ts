@@ -188,6 +188,16 @@ async function initDb(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_signals_ts ON signal_log (ts DESC);
 
+    CREATE TABLE IF NOT EXISTS ai_context_embeddings (
+      id SERIAL PRIMARY KEY,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL UNIQUE,
+      content_text TEXT NOT NULL,
+      embedding_vector JSONB NOT NULL,
+      metadata_json JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS platform_state (
       id         SERIAL PRIMARY KEY,
       key        TEXT NOT NULL UNIQUE,
