@@ -1507,10 +1507,19 @@ router.post("/calibration/runtime-model/:symbol/promote", async (req, res): Prom
       return;
     }
 
+    await db
+      .insert(platformStateTable)
+      .values({ key: "use_calibrated_runtime_profiles", value: "true" })
+      .onConflictDoUpdate({
+        target: platformStateTable.key,
+        set: { value: "true", updatedAt: new Date() },
+      });
+
     res.json(withSymbolDomain(symbol, symbolDomain, {
       ok: true,
       promoted: true,
       runtimeChanged: true,
+      runtimeProfilesEnabled: true,
       model,
     }));
   } catch (err) {
