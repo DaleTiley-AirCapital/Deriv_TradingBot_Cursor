@@ -78,6 +78,36 @@ const router: IRouter = Router();
 const VALID_PASS_NAMES: PassName[] = ["enrichment", "family_inference", "model_synthesis", "all"];
 const VALID_TIERS = ["A", "B", "C", "D"];
 const VALID_MOVE_TYPES = ["breakout", "continuation", "reversal", "unknown", "boom_expansion", "crash_expansion", "all"];
+
+function asRouteRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function runtimeModelDiagnostics(model: { tpModel?: Record<string, unknown>; promotedAt?: string } | null) {
+  if (!model) {
+    return {
+      tpBucketCount: 0,
+      dynamicTpEnabled: false,
+      promotedAt: null,
+    };
+  }
+  const tpModel = asRouteRecord(model.tpModel);
+  const buckets = asRouteRecord(tpModel.buckets);
+  return {
+    tpBucketCount: Object.keys(buckets).length,
+    dynamicTpEnabled: tpModel.dynamicByQualityLeadIn === true && Object.keys(buckets).length > 0,
+    promotedAt: model.promotedAt ?? null,
+  };
+}
+
+async function refreshResearchProfileFromLatestCalibration(symbol: string): Promise<void> {
+  const latestAllProfile = await getCalibrationProfile(symbol, "all");
+  if (latestAllProfile?.lastRunId) {
+    await upsertSymbolResearchProfile(symbol, latestAllProfile.lastRunId);
+  }
+}
 const MAX_BASE_1M_GAPS_FOR_HEALTHY = 0;
 const MIN_BASE_1M_COVERAGE_PCT = 70;
 const MIN_BASE_1M_CANDLES = 1_000;
@@ -1420,6 +1450,8 @@ router.get("/calibration/runtime-model/:symbol", async (req, res): Promise<void>
     const latestRunId = researchProfile?.lastRunId ?? null;
     const promotedRunId = promotedModel?.sourceRunId ?? null;
     const stagedRunId = stagedModel?.sourceRunId ?? null;
+    const stagedDiagnostics = runtimeModelDiagnostics(stagedModel);
+    const promotedDiagnostics = runtimeModelDiagnostics(promotedModel);
 
     res.json(withSymbolDomain(symbol, symbolDomain, {
       ok: true,
@@ -1434,6 +1466,12 @@ router.get("/calibration/runtime-model/:symbol", async (req, res): Promise<void>
         stagedRunId,
         promotedRunId,
         runtimeSource: promotedModel ? "promoted_symbol_model" : "none",
+        stagedAt: stagedModel?.promotedAt ?? null,
+        promotedAt: promotedModel?.promotedAt ?? null,
+        stagedTpBucketCount: stagedDiagnostics.tpBucketCount,
+        promotedTpBucketCount: promotedDiagnostics.tpBucketCount,
+        stagedDynamicTpEnabled: stagedDiagnostics.dynamicTpEnabled,
+        promotedDynamicTpEnabled: promotedDiagnostics.dynamicTpEnabled,
         driftPendingPromotion: Boolean(
           latestRunId &&
             ((promotedRunId !== null && latestRunId !== promotedRunId) ||
@@ -1463,6 +1501,7 @@ router.post("/calibration/runtime-model/:symbol/stage", async (req, res): Promis
     const stateMap: Record<string, string> = {};
     for (const row of stateRows) stateMap[row.key] = row.value;
 
+    await refreshResearchProfileFromLatestCalibration(symbol);
     const model = await stageLatestSymbolResearchProfile(symbol, stateMap);
     if (!model) {
       res.status(404).json(withSymbolDomain(symbol, symbolDomain, {
@@ -1499,6 +1538,7 @@ router.post("/calibration/runtime-model/:symbol/promote", async (req, res): Prom
     const stateMap: Record<string, string> = {};
     for (const row of stateRows) stateMap[row.key] = row.value;
 
+    await refreshResearchProfileFromLatestCalibration(symbol);
     const model = await promoteLatestSymbolResearchProfile(symbol, stateMap);
     if (!model) {
       res.status(404).json(withSymbolDomain(symbol, symbolDomain, {

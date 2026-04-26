@@ -40,6 +40,10 @@ import {
   calculateSRFibSL,
   applyRuntimeCalibrationExitModel,
 } from "../tradeEngine.js";
+import {
+  evaluateRuntimeEntryEvidence,
+  type RuntimeQualityBand,
+} from "../calibration/runtimeProfileUtils.js";
 import { getSymbolIndicatorTimeframeMins } from "../features.js";
 import type { EngineResult } from "../engineTypes.js";
 import type { FeatureVector } from "../features.js";
@@ -110,6 +114,7 @@ export interface V3BacktestTrade {
 export interface V3BacktestResult {
   symbol: string;
   mode: string;
+  tierMode: BacktestTierMode;
   startTs: number;
   endTs: number;
   totalBars: number;
@@ -126,6 +131,8 @@ export interface V3BacktestResult {
     source: string | null;
     sourceRunId: number | null;
     entryModel: string | null;
+    tpBucketCount: number;
+    dynamicTpEnabled: boolean;
     scoringSourceCounts: Record<string, number>;
   };
   trades: V3BacktestTrade[];
@@ -182,7 +189,10 @@ export interface V3BacktestRequest {
   startTs?: number;
   endTs?: number;
   mode?: "paper" | "demo" | "real";
+  tierMode?: BacktestTierMode;
 }
+
+export type BacktestTierMode = "A" | "AB" | "ABC" | "ALL";
 
 // â”€â”€ HTF regime averaging (local, isolated from live module cache) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -205,6 +215,25 @@ interface ReplayCandidateWindow {
   scanCount: number;
   bestScore: number;
   cooldownUntilTs: number;
+}
+
+function normalizeBacktestTierMode(value?: string | null): BacktestTierMode {
+  const raw = String(value ?? "ALL").toUpperCase();
+  return raw === "A" || raw === "AB" || raw === "ABC" ? raw : "ALL";
+}
+
+function allowedRuntimeQualityBands(mode: BacktestTierMode): RuntimeQualityBand[] | null {
+  if (mode === "A") return ["A"];
+  if (mode === "AB") return ["A", "B"];
+  if (mode === "ABC") return ["A", "B", "C"];
+  return null;
+}
+
+function allowedDetectedMoveTiers(mode: BacktestTierMode): Array<"A" | "B" | "C" | "D"> | null {
+  if (mode === "A") return ["A"];
+  if (mode === "AB") return ["A", "B"];
+  if (mode === "ABC") return ["A", "B", "C"];
+  return null;
 }
 
 // â”€â”€ Per-symbol context for synchronized multi-symbol replay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -527,6 +556,10 @@ function runtimeModelDiagnostics(
   scoringSourceCounts: Record<string, number> = {},
 ): V3BacktestResult["runtimeModel"] {
   const runtimeCalibration = resolution?.profile ?? null;
+  const tpBuckets = runtimeCalibration?.tpModel?.["buckets"];
+  const tpBucketCount = tpBuckets && typeof tpBuckets === "object" && !Array.isArray(tpBuckets)
+    ? Object.keys(tpBuckets).length
+    : 0;
 
   return {
     enabled: Boolean(runtimeCalibration),
@@ -537,6 +570,8 @@ function runtimeModelDiagnostics(
     source: runtimeCalibration?.source ?? null,
     sourceRunId: runtimeCalibration?.sourceRunId ?? null,
     entryModel: runtimeCalibration?.entryModel ?? null,
+    tpBucketCount,
+    dynamicTpEnabled: runtimeCalibration?.tpModel?.["dynamicByQualityLeadIn"] === true && tpBucketCount > 0,
     scoringSourceCounts,
   };
 }
@@ -572,8 +607,8 @@ function runtimeCandidateCooldownSeconds(runtimeCalibration: LiveCalibrationProf
   return Math.max(confirmationSeconds * 2, minHoldSeconds, 4 * 60 * 60);
 }
 
-function replayCandidateKey(symbol: string, engineName: string, direction: string): string {
-  return `${symbol}|${engineName}|${direction}`;
+function replayCandidateKey(symbol: string, engineName: string, direction: string, setupSignature: string | null): string {
+  return `${symbol}|${engineName}|${direction}|${setupSignature ?? "native"}`;
 }
 
 function evaluateReplayCandidateWindow(params: {
@@ -583,9 +618,10 @@ function evaluateReplayCandidateWindow(params: {
   engineName: string;
   direction: "buy" | "sell";
   nativeScore: number;
+  setupSignature?: string | null;
   ts: number;
 }): { allowed: boolean; reason: string; key: string } {
-  const key = replayCandidateKey(params.symbol, params.engineName, params.direction);
+  const key = replayCandidateKey(params.symbol, params.engineName, params.direction, params.setupSignature ?? null);
   const confirmationSeconds = runtimeCandidateWindowSeconds(params.runtimeCalibration);
   if (!params.runtimeCalibration || confirmationSeconds <= 0) {
     return { allowed: true, reason: "native", key };
@@ -723,6 +759,9 @@ export async function runV3Backtest(
   const endTs = req.endTs ?? now;
   const symbol = req.symbol;
   const mode = req.mode ?? "paper";
+  const tierMode = normalizeBacktestTierMode(req.tierMode);
+  const runtimeQualityBands = allowedRuntimeQualityBands(tierMode);
+  const detectedMoveTiers = allowedDetectedMoveTiers(tierMode);
 
   const bufferStartTs = startTs - STRUCTURAL_LOOKBACK * 60;
 
@@ -746,7 +785,7 @@ export async function runV3Backtest(
 
   if (rawCandles.length < 60) {
     return {
-      symbol, mode, startTs, endTs, totalBars: 0,
+      symbol, mode, tierMode, startTs, endTs, totalBars: 0,
       modeScoreGate: MODE_SCORE_GATES[mode] ?? 60,
       signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
       runtimeModel: runtimeModelDiagnostics(null),
@@ -1200,6 +1239,39 @@ export async function runV3Backtest(
       continue;
     }
 
+    const setupEvidence = evaluateRuntimeEntryEvidence({
+      symbol,
+      direction: winner.direction,
+      nativeScore,
+      winner,
+      features,
+      runtimeCalibration,
+      allowedQualityBands: runtimeQualityBands,
+    });
+    const setupSignature = setupEvidence.matchedBucketKey
+      ? setupEvidence.matchedBucketKey
+      : `${setupEvidence.leadInShape}|${setupEvidence.qualityBand}`;
+
+    if (!setupEvidence.allowed) {
+      signalsBlocked++;
+      blockedByEngine[winner.engineName] = (blockedByEngine[winner.engineName] ?? 0) + 1;
+      recordBehaviorEvent({
+        eventType: "blocked_by_gate",
+        symbol,
+        engineName: winner.engineName,
+        direction: winner.direction,
+        regimeAtEntry: regimeResult.regime,
+        nativeScore,
+        modeGate,
+        mode,
+        ts: bar.closeTs,
+        rejectionStage: 12,
+        rejectionReason: `runtime_setup_evidence:${setupEvidence.reason}`,
+        isSignalQualityBlock: false,
+      });
+      continue;
+    }
+
     const candidateWindow = evaluateReplayCandidateWindow({
       windows: candidateWindows,
       runtimeCalibration,
@@ -1207,6 +1279,7 @@ export async function runV3Backtest(
       engineName: winner.engineName,
       direction: winner.direction,
       nativeScore,
+      setupSignature,
       ts: bar.closeTs,
     });
     if (!candidateWindow.allowed) {
@@ -1351,6 +1424,7 @@ export async function runV3Backtest(
       startTs: detectedMovesTable.startTs,
       endTs: detectedMovesTable.endTs,
       direction: detectedMovesTable.direction,
+      qualityTier: detectedMovesTable.qualityTier,
     })
     .from(detectedMovesTable)
     .where(and(
@@ -1358,11 +1432,15 @@ export async function runV3Backtest(
       gte(detectedMovesTable.endTs, startTs),
       lte(detectedMovesTable.startTs, endTs),
     ));
-  const moveOverlap = calcMoveOverlapDiagnostics({ moves: detectedMovesInWindow, trades });
+  const targetMovesInWindow = detectedMoveTiers
+    ? detectedMovesInWindow.filter((move) => detectedMoveTiers.includes(move.qualityTier as "A" | "B" | "C" | "D"))
+    : detectedMovesInWindow;
+  const moveOverlap = calcMoveOverlapDiagnostics({ moves: targetMovesInWindow, trades });
 
   return {
     symbol,
     mode,
+    tierMode,
     startTs,
     endTs,
     totalBars: barsInRange,
@@ -1403,9 +1481,13 @@ export async function runV3BacktestMulti(
   startTs?: number,
   endTs?: number,
   mode?: "paper" | "demo" | "real",
+  tierModeRaw?: BacktestTierMode,
 ): Promise<Record<string, V3BacktestResult>> {
+  const tierMode = normalizeBacktestTierMode(tierModeRaw);
+  const runtimeQualityBands = allowedRuntimeQualityBands(tierMode);
+  const detectedMoveTiers = allowedDetectedMoveTiers(tierMode);
   if (symbols.length <= 1) {
-    const result = await runV3Backtest({ symbol: symbols[0] ?? "", startTs, endTs, mode });
+    const result = await runV3Backtest({ symbol: symbols[0] ?? "", startTs, endTs, mode, tierMode });
     return symbols[0] ? { [symbols[0]]: result } : {};
   }
 
@@ -1512,7 +1594,7 @@ export async function runV3BacktestMulti(
     const out: Record<string, V3BacktestResult> = {};
     for (const sym of symbols) {
       out[sym] = {
-      symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
+      symbol: sym, mode: _mode, tierMode, startTs: _startTs, endTs: _endTs,
       totalBars: 0, modeScoreGate: sharedModeGate,
       signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
       runtimeModel: runtimeModelDiagnostics(null),
@@ -1768,6 +1850,33 @@ export async function runV3BacktestMulti(
         continue;
       }
 
+      const setupEvidence = evaluateRuntimeEntryEvidence({
+        symbol: ctx.sym,
+        direction: winner.direction,
+        nativeScore,
+        winner,
+        features,
+        runtimeCalibration: ctx.runtimeCalibration,
+        allowedQualityBands: runtimeQualityBands,
+      });
+      const setupSignature = setupEvidence.matchedBucketKey
+        ? setupEvidence.matchedBucketKey
+        : `${setupEvidence.leadInShape}|${setupEvidence.qualityBand}`;
+
+      if (!setupEvidence.allowed) {
+        ctx.signalsBlocked++;
+        ctx.blockedByEngine[winner.engineName] = (ctx.blockedByEngine[winner.engineName] ?? 0) + 1;
+        recordBehaviorEvent({
+          eventType: "blocked_by_gate", symbol: ctx.sym, engineName: winner.engineName,
+          direction: winner.direction, regimeAtEntry: regimeResult.regime,
+          nativeScore, modeGate: ctx.modeGate, mode: _mode, ts: bar.closeTs,
+          rejectionStage: 12,
+          rejectionReason: `runtime_setup_evidence:${setupEvidence.reason}`,
+          isSignalQualityBlock: false,
+        });
+        continue;
+      }
+
       const candidateWindow = evaluateReplayCandidateWindow({
         windows: ctx.candidateWindows,
         runtimeCalibration: ctx.runtimeCalibration,
@@ -1775,6 +1884,7 @@ export async function runV3BacktestMulti(
         engineName: winner.engineName,
         direction: winner.direction,
         nativeScore,
+        setupSignature,
         ts,
       });
       if (!candidateWindow.allowed) {
@@ -1875,6 +1985,7 @@ export async function runV3BacktestMulti(
       startTs: detectedMovesTable.startTs,
       endTs: detectedMovesTable.endTs,
       direction: detectedMovesTable.direction,
+      qualityTier: detectedMovesTable.qualityTier,
     })
     .from(detectedMovesTable)
     .where(and(
@@ -1884,7 +1995,9 @@ export async function runV3BacktestMulti(
     ));
   for (const row of movesRows) {
     const list = detectedMovesBySymbol.get(row.symbol) ?? [];
-    list.push({ startTs: row.startTs, endTs: row.endTs, direction: row.direction });
+    if (!detectedMoveTiers || detectedMoveTiers.includes(row.qualityTier as "A" | "B" | "C" | "D")) {
+      list.push({ startTs: row.startTs, endTs: row.endTs, direction: row.direction });
+    }
     detectedMovesBySymbol.set(row.symbol, list);
   }
   for (const [sym, ctx] of symCtxMap.entries()) {
@@ -1895,7 +2008,7 @@ export async function runV3BacktestMulti(
       trades: ctx.trades,
     });
     out[sym] = {
-      symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
+      symbol: sym, mode: _mode, tierMode, startTs: _startTs, endTs: _endTs,
       totalBars: barsInRange, modeScoreGate: ctx.modeGate,
       signalsFired: ctx.signalsFired, signalsBlocked: ctx.signalsBlocked, blockedRate,
       runtimeModel: runtimeModelDiagnostics(ctx.runtimeCalibrationResolution, ctx.scoringSourceCounts),
@@ -1910,7 +2023,7 @@ export async function runV3BacktestMulti(
   for (const sym of symbols) {
     if (!out[sym]) {
       out[sym] = {
-        symbol: sym, mode: _mode, startTs: _startTs, endTs: _endTs,
+        symbol: sym, mode: _mode, tierMode, startTs: _startTs, endTs: _endTs,
         totalBars: 0, modeScoreGate: sharedModeGate,
         signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
         runtimeModel: runtimeModelDiagnostics(null),

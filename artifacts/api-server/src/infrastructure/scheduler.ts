@@ -16,6 +16,7 @@ import {
   getWatchedCandidates,
   cleanupStale,
 } from "../core/candidateLifecycle.js";
+import { evaluateRuntimeEntryEvidence } from "../core/calibration/runtimeProfileUtils.js";
 import type { BehaviorProfileSummary } from "../core/backtest/behaviorProfiler.js";
 import { isSymbolStreamingDisabled } from "./symbolValidator.js";
 
@@ -254,6 +255,18 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       : winner.metadata?.["r100ContinuationNativeScore"] != null ? (winner.metadata["r100ContinuationNativeScore"] as number)
       : Math.round(coordinatorOutput.coordinatorConfidence * 100);
 
+    const setupEvidence = evaluateRuntimeEntryEvidence({
+      symbol,
+      direction: coordinatorOutput.resolvedDirection,
+      nativeScore: candidateNativeScore,
+      winner,
+      features,
+      runtimeCalibration: modeCalibration,
+    });
+    const setupSignature = setupEvidence.matchedBucketKey
+      ? `${setupEvidence.matchedBucketKey}`
+      : `${setupEvidence.leadInShape}|${setupEvidence.qualityBand}`;
+
     // Engine gate passed = the rejection is NOT score-based (score cleared engine gate but something else blocked)
     const rejReason = v3Decision.rejectionReason ?? "";
     const isScoreRejection = rejReason.includes("_score_below_mode_threshold") || rejReason.includes("confidence_below_threshold");
@@ -276,6 +289,10 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         regimeConfidence,
         minTradeableAgeMs: minCandidateAgeMs,
         minTradeableScans: minCandidateScans,
+        setupSignature,
+        setupEvidenceAllowed: setupEvidence.allowed,
+        setupEvidenceReason: setupEvidence.reason,
+        setupEvidenceScore: setupEvidence.evidenceScore,
       });
 
       if (lcResult.shouldLog) {
@@ -310,6 +327,59 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       continue;
     }
 
+    if (!setupEvidence.allowed) {
+      const setupRejectReason = `runtime_setup_evidence:${setupEvidence.reason}`;
+      console.log(`[V3Scan] ${symbol} | ${effectiveMode} | engine=${winner.engineName} | MONITORING | ${setupRejectReason}`);
+
+      const lcResult = updateCandidate({
+        symbol,
+        engineName: winner.engineName,
+        direction: coordinatorOutput.resolvedDirection,
+        nativeScore: candidateNativeScore,
+        breakdown: candidateScoringDims,
+        engineGatePassed: true,
+        allocatorAllowed: false,
+        rejectionReason: setupRejectReason,
+        regime: operationalRegime,
+        regimeConfidence,
+        minTradeableAgeMs: minCandidateAgeMs,
+        minTradeableScans: minCandidateScans,
+        setupSignature,
+        setupEvidenceAllowed: false,
+        setupEvidenceReason: setupEvidence.reason,
+        setupEvidenceScore: setupEvidence.evidenceScore,
+      });
+
+      if (lcResult.shouldLog) {
+        try {
+          await db.insert(signalLogTable).values({
+            symbol,
+            strategyName: winner.engineName,
+            strategyFamily: "v3_engine",
+            direction: coordinatorOutput.resolvedDirection,
+            score: coordinatorOutput.coordinatorConfidence,
+            compositeScore: candidateNativeScore,
+            expectedValue: winner.projectedMovePct,
+            allowedFlag: false,
+            rejectionReason: setupRejectReason,
+            mode: effectiveMode,
+            aiVerdict: "skipped",
+            aiReasoning: `lifecycle:${lcResult.logReason || "setup_evidence"} | lifecycle_state:${lcResult.candidate.status} | setup:${setupSignature}`,
+            regime: operationalRegime,
+            regimeConfidence,
+            executionStatus: "blocked",
+            scoringDimensions: candidateScoringDims,
+          });
+          totalDecisionsLogged++;
+        } catch (logErr) {
+          console.error(`[V3Scan] Runtime setup evidence log error:`, logErr instanceof Error ? logErr.message : logErr);
+        }
+      }
+
+      if (isIntelOnly) break;
+      continue;
+    }
+
     // Allowed path — update lifecycle with allocatorAllowed=true
     const allowedLifecycle = updateCandidate({
       symbol,
@@ -324,6 +394,10 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       regimeConfidence,
       minTradeableAgeMs: minCandidateAgeMs,
       minTradeableScans: minCandidateScans,
+      setupSignature,
+      setupEvidenceAllowed: true,
+      setupEvidenceReason: setupEvidence.reason,
+      setupEvidenceScore: setupEvidence.evidenceScore,
     });
 
     if (modeCalibration && allowedLifecycle.candidate.status !== "tradeable") {
@@ -475,6 +549,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         symbol,
         winner.engineName,
         coordinatorOutput.resolvedDirection,
+        setupSignature,
         runtimeCandidateCooldownMs(modeCalibration),
       );
       console.log(`[V3Exec] ${symbol} | ${effectiveMode} | ${coordinatorOutput.resolvedDirection} | engine=${winner.engineName} | alloc=$${v3Decision.capitalAmount.toFixed(2)} | tradeId=${tradeId} | EXECUTED`);

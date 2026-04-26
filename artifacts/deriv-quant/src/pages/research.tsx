@@ -453,8 +453,18 @@ interface V3Summary {
   byExitReason: Record<string, number>;
 }
 
+type BacktestTierMode = "A" | "AB" | "ABC" | "ALL";
+
+const BACKTEST_TIER_MODES: Array<{ value: BacktestTierMode; label: string }> = [
+  { value: "A", label: "A only" },
+  { value: "AB", label: "A+B" },
+  { value: "ABC", label: "A+B+C" },
+  { value: "ALL", label: "All tiers" },
+];
+
 interface V3Result {
   symbol: string;
+  tierMode?: BacktestTierMode;
   startTs: number;
   endTs: number;
   totalBars: number;
@@ -467,9 +477,19 @@ interface V3Result {
     source?: string | null;
     sourceRunId?: number | null;
     entryModel?: string | null;
+    tpBucketCount?: number;
+    dynamicTpEnabled?: boolean;
     scoringSourceCounts?: Record<string, number>;
   };
   trades: V3Trade[];
+  moveOverlap?: {
+    movesInWindow: number;
+    capturedMoves: number;
+    missedMoves: number;
+    captureRate: number;
+    ghostTrades: number;
+    ghostTradeRate: number;
+  };
   summary: V3Summary;
 }
 
@@ -532,6 +552,54 @@ function SummaryCard({ label, value, sub }: { label: string; value: string; sub?
   );
 }
 
+function summarizeBacktestGroup(results: Record<string, V3Result>) {
+  const rows = Object.values(results);
+  const totals = rows.reduce((acc, result) => {
+    const s = result.summary;
+    acc.trades += s.tradeCount;
+    acc.wins += s.winCount;
+    acc.losses += s.lossCount;
+    acc.totalPnlPct += s.totalPnlPct;
+    acc.maxDrawdownPct = Math.max(acc.maxDrawdownPct, s.maxDrawdownPct);
+    if (Number.isFinite(s.profitFactor)) {
+      acc.profitFactorSum += s.profitFactor;
+      acc.profitFactorCount += 1;
+    }
+    for (const [reason, count] of Object.entries(s.byExitReason ?? {})) {
+      acc.exits[reason] = (acc.exits[reason] ?? 0) + count;
+    }
+    const overlap = result.moveOverlap;
+    if (overlap) {
+      acc.movesInWindow += overlap.movesInWindow;
+      acc.capturedMoves += overlap.capturedMoves;
+      acc.missedMoves += overlap.missedMoves;
+      acc.ghostTrades += overlap.ghostTrades;
+    }
+    return acc;
+  }, {
+    trades: 0,
+    wins: 0,
+    losses: 0,
+    totalPnlPct: 0,
+    maxDrawdownPct: 0,
+    profitFactorSum: 0,
+    profitFactorCount: 0,
+    exits: {} as Record<string, number>,
+    movesInWindow: 0,
+    capturedMoves: 0,
+    missedMoves: 0,
+    ghostTrades: 0,
+  });
+
+  return {
+    ...totals,
+    winRate: totals.trades > 0 ? totals.wins / totals.trades : 0,
+    profitFactor: totals.profitFactorCount > 0 ? totals.profitFactorSum / totals.profitFactorCount : 0,
+    captureRate: totals.movesInWindow > 0 ? totals.capturedMoves / totals.movesInWindow : 0,
+    ghostTradeRate: totals.trades > 0 ? totals.ghostTrades / totals.trades : 0,
+  };
+}
+
 function SymbolBacktestSection({ result }: { result: V3Result }) {
   const s = result.summary;
   const trades = result.trades;
@@ -541,6 +609,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
   const scoringCounts = runtime?.scoringSourceCounts ?? {};
   const runtimeApplied = runtime?.applied ?? runtime?.enabled ?? false;
   const runtimeReason = runtime?.reason ?? "unknown";
+  const overlap = result.moveOverlap;
 
   return (
     <div className="space-y-4">
@@ -573,6 +642,13 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
           </span>
           <span><span className="text-muted-foreground">Run: </span>{runtime?.sourceRunId ?? "none"}</span>
           <span><span className="text-muted-foreground">Entry: </span>{runtime?.entryModel ?? "native"}</span>
+          <span><span className="text-muted-foreground">Tier mode: </span>{result.tierMode ?? "ALL"}</span>
+          <span>
+            <span className="text-muted-foreground">TP buckets: </span>
+            <span className={runtime?.dynamicTpEnabled ? "text-emerald-300" : "text-amber-300"}>
+              {runtime?.tpBucketCount ?? 0}
+            </span>
+          </span>
           <span>
             <span className="text-muted-foreground">Scoring: </span>
             {Object.keys(scoringCounts).length > 0
@@ -586,6 +662,26 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
           </div>
         )}
       </div>
+
+      {overlap && (
+        <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-xs">
+          <div className="flex flex-wrap gap-x-5 gap-y-1">
+            <span>
+              <span className="text-muted-foreground">Move capture: </span>
+              <span className={overlap.captureRate >= 0.8 ? "text-emerald-300 font-semibold" : "text-amber-300 font-semibold"}>
+                {overlap.capturedMoves}/{overlap.movesInWindow} ({pct(overlap.captureRate)})
+              </span>
+            </span>
+            <span><span className="text-muted-foreground">Missed moves: </span>{overlap.missedMoves}</span>
+            <span>
+              <span className="text-muted-foreground">Outside calibrated moves: </span>
+              <span className={overlap.ghostTradeRate <= 0.2 ? "text-emerald-300" : "text-red-300"}>
+                {overlap.ghostTrades} ({pct(overlap.ghostTradeRate)})
+              </span>
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* By engine */}
       {Object.keys(s.byEngine).length > 0 && (
@@ -701,9 +797,12 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const backtestSymbols = domain === "active" ? BACKTEST_ACTIVE_SYMBOLS : BACKTEST_RESEARCH_SYMBOLS;
 
   const [symbol, setSymbol] = useState(backtestSymbols[0] ?? "all");
+  const [tierMode, setTierMode] = useState<BacktestTierMode>("ALL");
   const [running, setRunning] = useState(false);
+  const [sweeping, setSweeping] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [results, setResults] = useState<Record<string, V3Result> | null>(null);
+  const [tierSweep, setTierSweep] = useState<Record<BacktestTierMode, Record<string, V3Result>> | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -721,6 +820,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     setRunning(true);
     setErr(null);
     setResults(null);
+    setTierSweep(null);
     setElapsed(0);
 
     const startTime = Date.now();
@@ -730,7 +830,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
 
     try {
       const { startTs, endTs } = getWindowRange(windowDays);
-      const body: Record<string, unknown> = { symbol, startTs, endTs };
+      const body: Record<string, unknown> = { symbol, startTs, endTs, tierMode };
 
       const d = await apiFetch("backtest/v3/run", {
         method: "POST",
@@ -743,6 +843,41 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       setErr(e.message);
     } finally {
       setRunning(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  };
+
+  const runTierSweep = async () => {
+    setSweeping(true);
+    setErr(null);
+    setResults(null);
+    setTierSweep(null);
+    setElapsed(0);
+
+    const startTime = Date.now();
+    timerRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    try {
+      const { startTs, endTs } = getWindowRange(windowDays);
+      const sweep = {} as Record<BacktestTierMode, Record<string, V3Result>>;
+
+      for (const mode of BACKTEST_TIER_MODES.map(item => item.value)) {
+        const d = await apiFetch("backtest/v3/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, startTs, endTs, tierMode: mode }),
+        });
+        sweep[mode] = d.results as Record<string, V3Result>;
+      }
+
+      setTierSweep(sweep);
+      setResults(sweep[tierMode] ?? sweep.ALL);
+    } catch (e: any) {
+      setErr(e.message);
+    } finally {
+      setSweeping(false);
       if (timerRef.current) clearInterval(timerRef.current);
     }
   };
@@ -766,7 +901,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
     const summary = {
       exported_at: new Date().toISOString(),
-      params: { symbol, ...getWindowRange(windowDays), scoreGate: "runtime-platform-state" },
+      params: { symbol, tierMode, ...getWindowRange(windowDays), scoreGate: "runtime-platform-state" },
       symbols: Object.fromEntries(
         Object.entries(results).map(([sym, r]) => [sym, {
           totalBars: r.totalBars,
@@ -803,7 +938,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     ).sort((a, b) => (a.entryTs ?? 0) - (b.entryTs ?? 0));
     downloadJson({
       exported_at: new Date().toISOString(),
-      params: { symbol, ...getWindowRange(windowDays), scoreGate: "runtime-platform-state" },
+      params: { symbol, tierMode, ...getWindowRange(windowDays), scoreGate: "runtime-platform-state" },
       total_trades: allTrades.length,
       trades: allTrades,
     }, `bt-trades-${timestamp}.json`);
@@ -842,7 +977,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <div className="space-y-1">
             <label className="text-[11px] text-muted-foreground">Symbol</label>
             <select
@@ -873,18 +1008,42 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
               {getWindowRange(windowDays).startDateStr}  {getWindowRange(windowDays).endDateStr}
             </div>
           </div>
+
+          <div className="space-y-1">
+            <label className="text-[11px] text-muted-foreground">Tier mode</label>
+            <select
+              value={tierMode}
+              onChange={e => setTierMode(e.target.value as BacktestTierMode)}
+              className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+            >
+              {BACKTEST_TIER_MODES.map(mode => (
+                <option key={mode.value} value={mode.value}>{mode.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={run}
-            disabled={running}
+            disabled={running || sweeping}
             className="flex items-center gap-1.5 px-4 py-2 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {running
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
               : <BarChart2 className="w-3.5 h-3.5" />}
             {running ? `Running ${formatDurationCompact(elapsed)}` : "Run Backtest"}
+          </button>
+
+          <button
+            onClick={runTierSweep}
+            disabled={running || sweeping}
+            className="flex items-center gap-1.5 px-4 py-2 rounded border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 text-xs font-medium hover:bg-cyan-500/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {sweeping
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <BarChart2 className="w-3.5 h-3.5" />}
+            {sweeping ? `Sweeping ${formatDurationCompact(elapsed)}` : "Run Tier Sweep"}
           </button>
 
           {results !== null && totalTrades !== null && totalTrades > 0 && (
@@ -918,7 +1077,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
             </button>
           )}
 
-          {running && (
+          {(running || sweeping) && (
             <p className="text-xs text-muted-foreground">
               Loading candles and replaying bars  this may take up to 2 minutes for all symbols.
             </p>
@@ -931,6 +1090,56 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       {/* Results */}
       {results !== null && (
         <div className="space-y-5">
+          {tierSweep && (
+            <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-4 overflow-x-auto">
+              <h3 className="text-sm font-semibold text-cyan-100 mb-3">Tier Sweep Comparison</h3>
+              <table className="w-full text-[11px] font-mono">
+                <thead>
+                  <tr className="text-muted-foreground border-b border-cyan-500/20">
+                    <th className="text-left py-2 pr-3 font-medium">Mode</th>
+                    <th className="text-right py-2 px-3 font-medium">Trades</th>
+                    <th className="text-right py-2 px-3 font-medium">Win rate</th>
+                    <th className="text-right py-2 px-3 font-medium">Total P&L</th>
+                    <th className="text-right py-2 px-3 font-medium">Drawdown</th>
+                    <th className="text-right py-2 px-3 font-medium">PF</th>
+                    <th className="text-right py-2 px-3 font-medium">Captured</th>
+                    <th className="text-right py-2 px-3 font-medium">Ghost</th>
+                    <th className="text-left py-2 pl-3 font-medium">Exits</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-cyan-500/10">
+                  {BACKTEST_TIER_MODES.map(mode => {
+                    const summary = summarizeBacktestGroup(tierSweep[mode.value] ?? {});
+                    return (
+                      <tr key={mode.value} className={mode.value === tierMode ? "bg-cyan-500/10" : ""}>
+                        <td className="py-2 pr-3 font-semibold text-cyan-100">{mode.label}</td>
+                        <td className="py-2 px-3 text-right">{summary.trades}</td>
+                        <td className="py-2 px-3 text-right">{pct(summary.winRate)}</td>
+                        <td className={cn("py-2 px-3 text-right font-semibold", summary.totalPnlPct >= 0 ? "text-green-400" : "text-red-400")}>
+                          {summary.totalPnlPct >= 0 ? "+" : ""}{pct(summary.totalPnlPct)}
+                        </td>
+                        <td className="py-2 px-3 text-right">{pct(summary.maxDrawdownPct)}</td>
+                        <td className="py-2 px-3 text-right">{summary.profitFactor.toFixed(2)}</td>
+                        <td className="py-2 px-3 text-right">
+                          {summary.capturedMoves}/{summary.movesInWindow} ({pct(summary.captureRate)})
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {summary.ghostTrades} ({pct(summary.ghostTradeRate)})
+                        </td>
+                        <td className="py-2 pl-3">
+                          {Object.entries(summary.exits)
+                            .sort(([a], [b]) => exitReasonSortValue(a) - exitReasonSortValue(b))
+                            .map(([reason, count]) => `${reason}:${count}`)
+                            .join("  ")}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {totalTrades === 0 ? (
             <div className="rounded-xl border border-border/30 bg-card p-6 text-center">
               <BarChart2 className="w-8 h-8 mx-auto mb-2 text-muted-foreground/40" />
@@ -1062,10 +1271,12 @@ interface SymbolResearchProfileUi {
 interface RuntimeSymbolModelUi {
   sourceRunId?: number;
   entryModel?: string;
+  tpModel?: Record<string, unknown>;
   recommendedScoreGates?: Record<string, number>;
   expectedTradesPerMonth?: number;
   recommendedScanIntervalSeconds?: number;
   promotedAt?: string;
+  suggestedAt?: string;
 }
 
 interface RuntimeModelStateUi {
@@ -1080,6 +1291,12 @@ interface RuntimeModelStateUi {
     stagedRunId?: number | null;
     promotedRunId?: number | null;
     runtimeSource?: string;
+    stagedAt?: string | null;
+    promotedAt?: string | null;
+    stagedTpBucketCount?: number;
+    promotedTpBucketCount?: number;
+    stagedDynamicTpEnabled?: boolean;
+    promotedDynamicTpEnabled?: boolean;
     driftPendingPromotion?: boolean;
   };
 }
@@ -1154,6 +1371,13 @@ function TierPill({ tier }: { tier: string }) {
       {tier}
     </span>
   );
+}
+
+function formatRuntimeDate(value?: string | null): string {
+  if (!value) return "n/a";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "n/a";
+  return date.toLocaleString();
 }
 
 function nativeExpansionType(type?: string | null): boolean {
@@ -1362,6 +1586,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   const [runtimeModel, setRuntimeModel] = useState<RuntimeModelStateUi | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState<"stage" | "promote" | null>(null);
   const [runtimeErr, setRuntimeErr] = useState<string | null>(null);
+  const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
   const [domainLoading, setDomainLoading] = useState(false);
 
   const [engines, setEngines] = useState<EngineRow[]>([]);
@@ -1776,10 +2001,23 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   const updateRuntimeModel = async (action: "stage" | "promote") => {
     setRuntimeBusy(action);
     setRuntimeErr(null);
+    setRuntimeNotice(null);
     try {
-      await apiFetch(`calibration/runtime-model/${symbol}/${action}`, { method: "POST" });
-      const runtime = await apiFetch(`calibration/runtime-model/${symbol}`).catch(() => null);
+      const result = await apiFetch(`calibration/runtime-model/${symbol}/${action}`, { method: "POST" }) as {
+        model?: RuntimeSymbolModelUi;
+      };
+      const runtime = await apiFetch(`calibration/runtime-model/${symbol}`).catch(() => null) as RuntimeModelStateUi | null;
       setRuntimeModel(runtime ?? null);
+      const model = result?.model;
+      const runId = model?.sourceRunId ?? runtime?.lifecycle?.[action === "stage" ? "stagedRunId" : "promotedRunId"] ?? "n/a";
+      const actionTime = model?.promotedAt ?? runtime?.lifecycle?.[action === "stage" ? "stagedAt" : "promotedAt"] ?? null;
+      const bucketCount = action === "stage"
+        ? runtime?.lifecycle?.stagedTpBucketCount
+        : runtime?.lifecycle?.promotedTpBucketCount;
+      setRuntimeNotice(
+        `${action === "stage" ? "Staged" : "Promoted"} ${symbol} runtime model from run ${runId} at ${formatRuntimeDate(actionTime)}. ` +
+        `Dynamic TP buckets: ${bucketCount ?? 0}.`,
+      );
     } catch (e: unknown) {
       setRuntimeErr(e instanceof Error ? e.message : `Runtime ${action} failed`);
     } finally {
@@ -2962,15 +3200,20 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Staged Model</p>
             <StatRow label="Run" value={runtimeModel?.lifecycle?.stagedRunId ?? "none"} />
             <StatRow label="Entry model" value={runtimeModel?.stagedModel?.entryModel ?? "n/a"} />
+            <StatRow label="Staged at" value={formatRuntimeDate(runtimeModel?.lifecycle?.stagedAt ?? runtimeModel?.stagedModel?.promotedAt)} />
+            <StatRow label="TP buckets" value={runtimeModel?.lifecycle?.stagedTpBucketCount ?? 0} />
           </div>
           <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Promoted Runtime</p>
             <StatRow label="Run" value={runtimeModel?.lifecycle?.promotedRunId ?? "none"} />
             <StatRow label="Source" value={runtimeModel?.lifecycle?.runtimeSource ?? "none"} />
+            <StatRow label="Promoted at" value={formatRuntimeDate(runtimeModel?.lifecycle?.promotedAt ?? runtimeModel?.promotedModel?.promotedAt)} />
+            <StatRow label="TP buckets" value={runtimeModel?.lifecycle?.promotedTpBucketCount ?? 0} />
           </div>
         </div>
 
         {runtimeErr && <ErrorBox msg={runtimeErr} />}
+        {runtimeNotice && <SuccessBox msg={runtimeNotice} />}
 
         <div className="flex flex-wrap gap-2">
           <button

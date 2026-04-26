@@ -412,6 +412,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
     symbol = "all",
     startTs,
     endTs,
+    tierMode = "ALL",
   } = req.body ?? {};
 
   const validSymbols = [...ACTIVE_SYMBOLS, "all"];
@@ -443,6 +444,11 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
       res.status(400).json({ error: "mode must be one of: paper, demo, real" });
       return;
     }
+    const normalizedTierMode = String(tierMode).toUpperCase();
+    if (!["A", "AB", "ABC", "ALL"].includes(normalizedTierMode)) {
+      res.status(400).json({ error: "tierMode must be one of: A, AB, ABC, ALL" });
+      return;
+    }
 
     if (symbol === "all") {
       const multi = await runV3BacktestMulti(
@@ -450,6 +456,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
         parsedStart,
         parsedEnd,
         mode,
+        normalizedTierMode as "A" | "AB" | "ABC" | "ALL",
       );
       results = multi as Record<string, unknown>;
     } else {
@@ -458,6 +465,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
         startTs: parsedStart,
         endTs: parsedEnd,
         mode,
+        tierMode: normalizedTierMode as "A" | "AB" | "ABC" | "ALL",
       });
       results = { [symbol]: single };
     }

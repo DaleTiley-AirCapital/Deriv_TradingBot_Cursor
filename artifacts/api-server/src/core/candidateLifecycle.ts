@@ -7,7 +7,7 @@
  *
  * Lifecycle states: idle → watch → qualified → tradeable → executed | expired
  *
- * Keyed by: `${symbol}|${engineName}|${direction}`
+ * Keyed by: `${symbol}|${engineName}|${direction}|${setupSignature}`
  */
 
 export type LifecycleStatus = "idle" | "watch" | "qualified" | "tradeable" | "executed" | "expired";
@@ -38,6 +38,10 @@ export interface CandidateRecord {
   tradeableAfterAt: Date | null;
   minTradeableScans: number;
   cooldownUntilAt: Date | null;
+  setupSignature: string | null;
+  setupEvidenceAllowed: boolean;
+  setupEvidenceReason: string | null;
+  setupEvidenceScore: number | null;
 }
 
 export interface UpdateCandidateInput {
@@ -53,6 +57,10 @@ export interface UpdateCandidateInput {
   regimeConfidence: number;
   minTradeableAgeMs?: number;
   minTradeableScans?: number;
+  setupSignature?: string | null;
+  setupEvidenceAllowed?: boolean;
+  setupEvidenceReason?: string | null;
+  setupEvidenceScore?: number | null;
 }
 
 export interface UpdateCandidateResult {
@@ -72,8 +80,13 @@ const CLEANUP_AFTER_MS = 2 * 60 * 60 * 1000;
 
 const candidates = new Map<string, CandidateRecord>();
 
-export function makeCandidateKey(symbol: string, engineName: string, direction: string): string {
-  return `${symbol}|${engineName}|${direction}`;
+export function makeCandidateKey(
+  symbol: string,
+  engineName: string,
+  direction: string,
+  setupSignature: string | null = null,
+): string {
+  return `${symbol}|${engineName}|${direction}|${setupSignature ?? "native"}`;
 }
 
 function extractWeakComponents(breakdown: Record<string, number> | null): string[] {
@@ -102,7 +115,9 @@ function resolveStatus(
   engineGatePassed: boolean,
   allocatorAllowed: boolean,
   matureTradeable: boolean,
+  setupEvidenceAllowed: boolean,
 ): LifecycleStatus {
+  if (!setupEvidenceAllowed) return score >= WATCH_SCORE_THRESHOLD ? "watch" : "idle";
   if (allocatorAllowed) return matureTradeable ? "tradeable" : "qualified";
   if (score >= WATCH_SCORE_THRESHOLD) {
     return engineGatePassed ? "qualified" : "watch";
@@ -111,7 +126,11 @@ function resolveStatus(
 }
 
 export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateResult {
-  const key = makeCandidateKey(input.symbol, input.engineName, input.direction);
+  const setupSignature = input.setupSignature ?? null;
+  const setupEvidenceAllowed = input.setupEvidenceAllowed ?? true;
+  const setupEvidenceReason = input.setupEvidenceReason ?? null;
+  const setupEvidenceScore = input.setupEvidenceScore ?? null;
+  const key = makeCandidateKey(input.symbol, input.engineName, input.direction, setupSignature);
   const now = new Date();
   const weakNow = extractWeakComponents(input.breakdown);
   const minTradeableAgeMs = Math.max(0, input.minTradeableAgeMs ?? 0);
@@ -120,8 +139,8 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
   const existing = candidates.get(key);
 
   if (!existing) {
-    const matureTradeable = input.allocatorAllowed && minTradeableAgeMs === 0 && minTradeableScans <= 1;
-    const status = resolveStatus(input.nativeScore, input.engineGatePassed, input.allocatorAllowed, matureTradeable);
+    const matureTradeable = input.allocatorAllowed && setupEvidenceAllowed && minTradeableAgeMs === 0 && minTradeableScans <= 1;
+    const status = resolveStatus(input.nativeScore, input.engineGatePassed, input.allocatorAllowed, matureTradeable, setupEvidenceAllowed);
     const rec: CandidateRecord = {
       key, symbol: input.symbol, engineName: input.engineName, direction: input.direction,
       status,
@@ -139,6 +158,10 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
       tradeableAfterAt: minTradeableAgeMs > 0 ? new Date(now.getTime() + minTradeableAgeMs) : now,
       minTradeableScans,
       cooldownUntilAt: null,
+      setupSignature,
+      setupEvidenceAllowed,
+      setupEvidenceReason,
+      setupEvidenceScore,
     };
     candidates.set(key, rec);
 
@@ -156,9 +179,10 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
   const nextScanCount = existing.scanCount + 1;
   const ageMs = now.getTime() - existing.firstSeenAt.getTime();
   const matureTradeable = input.allocatorAllowed &&
+    setupEvidenceAllowed &&
     ageMs >= minTradeableAgeMs &&
     nextScanCount >= minTradeableScans;
-  const newStatusRaw = resolveStatus(input.nativeScore, input.engineGatePassed, input.allocatorAllowed, matureTradeable);
+  const newStatusRaw = resolveStatus(input.nativeScore, input.engineGatePassed, input.allocatorAllowed, matureTradeable, setupEvidenceAllowed);
   const scoreDelta = Math.abs(input.nativeScore - prevScore);
   const improving = input.nativeScore > prevScore;
   const degrading = input.nativeScore < prevScore;
@@ -190,6 +214,8 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
   const rejectionClassChanged = rejectionClass(input.rejectionReason) !== rejectionClass(existing.lastRejectionReason);
   const allocatorStatusChanged = input.allocatorAllowed !== existing.allocatorGatePassed;
   const engineGateChanged = input.engineGatePassed !== existing.engineGatePassed;
+  const setupEvidenceChanged = setupEvidenceReason !== existing.setupEvidenceReason ||
+    setupEvidenceAllowed !== existing.setupEvidenceAllowed;
 
   existing.status = newStatus;
   existing.lastSeenAt = now;
@@ -211,6 +237,10 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
     ? new Date(existing.firstSeenAt.getTime() + minTradeableAgeMs)
     : existing.firstSeenAt;
   existing.minTradeableScans = minTradeableScans;
+  existing.setupSignature = setupSignature;
+  existing.setupEvidenceAllowed = setupEvidenceAllowed;
+  existing.setupEvidenceReason = setupEvidenceReason;
+  existing.setupEvidenceScore = setupEvidenceScore;
 
   let shouldLog = false;
   let logReason = "";
@@ -234,6 +264,9 @@ export function updateCandidate(input: UpdateCandidateInput): UpdateCandidateRes
   } else if (engineGateChanged) {
     shouldLog = true;
     logReason = "engine_gate_changed";
+  } else if (setupEvidenceChanged) {
+    shouldLog = true;
+    logReason = "setup_evidence_changed";
   } else if (rejectionClassChanged) {
     shouldLog = true;
     logReason = "rejection_class_changed";
@@ -254,14 +287,17 @@ export function markCandidateExecuted(
   symbol: string,
   engineName: string,
   direction: string,
+  setupSignatureOrCooldownMs: string | null | number = null,
   cooldownMs = CLEANUP_AFTER_MS,
 ): void {
-  const key = makeCandidateKey(symbol, engineName, direction);
+  const setupSignature = typeof setupSignatureOrCooldownMs === "number" ? null : setupSignatureOrCooldownMs;
+  const effectiveCooldownMs = typeof setupSignatureOrCooldownMs === "number" ? setupSignatureOrCooldownMs : cooldownMs;
+  const key = makeCandidateKey(symbol, engineName, direction, setupSignature);
   const rec = candidates.get(key);
   if (rec) {
     rec.status = "executed";
     rec.lastSeenAt = new Date();
-    rec.cooldownUntilAt = new Date(rec.lastSeenAt.getTime() + Math.max(CLEANUP_AFTER_MS, cooldownMs));
+    rec.cooldownUntilAt = new Date(rec.lastSeenAt.getTime() + Math.max(CLEANUP_AFTER_MS, effectiveCooldownMs));
   }
 }
 

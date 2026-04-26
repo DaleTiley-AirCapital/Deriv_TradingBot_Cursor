@@ -8,6 +8,7 @@ import { recordBehaviorEvent } from "./backtest/behaviorCapture.js";
 import { evaluateBarExits, MAX_HOLD_MINS, applyBarStateTransitions } from "./tradeManagement.js";
 import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
 import type { FeatureVector, SpikeMagnitudeStats } from "./features.js";
+import { selectRuntimeTpTargetPct } from "./calibration/runtimeProfileUtils.js";
 
 const MAX_OPEN_TRADES = 6;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
@@ -31,89 +32,6 @@ function classifyInstrumentFamily(symbol: string): "crash" | "boom" | "volatilit
 function getDefaultAtr14Pct(symbol: string): number {
   if (symbol.startsWith("BOOM") || symbol.startsWith("CRASH")) return 0.008;
   return 0.005;
-}
-
-function asPlainRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function asFiniteNumber(value: unknown): number | null {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function inferRuntimeLeadInShape(features?: FeatureVector | null): "expanding" | "compressing" | "ranging" | "trending" | "all" {
-  if (!features) return "all";
-  const emaSlope = Math.abs(features.emaSlope ?? 0);
-  const priceChange7dPct = Math.abs(features.priceChange7dPct ?? 0);
-  const bbWidthRoc = features.bbWidthRoc ?? 0;
-  const atrAccel = features.atrAccel ?? 0;
-  const atrRank = features.atrRank ?? 0.5;
-  const bbWidth = features.bbWidth ?? 0;
-
-  if (emaSlope >= 0.00035 || priceChange7dPct >= 0.08) return "trending";
-  if (bbWidthRoc > 0 || atrAccel > 0 || atrRank >= 0.75) return "expanding";
-  if (bbWidth > 0 && (bbWidth <= 0.006 || atrRank <= 0.35)) return "compressing";
-  return "ranging";
-}
-
-function scoreToRuntimeQualityBand(score?: number | null): "A" | "B" | "C" {
-  const s = Number(score ?? NaN);
-  if (Number.isFinite(s) && s >= 70) return "A";
-  if (Number.isFinite(s) && s >= 50) return "B";
-  return "C";
-}
-
-function normalizeRuntimeLeadInShape(value: unknown, features?: FeatureVector | null) {
-  const v = String(value ?? "").toLowerCase();
-  if (v === "expanding" || v === "compressing" || v === "ranging" || v === "trending") return v;
-  return inferRuntimeLeadInShape(features);
-}
-
-function selectRuntimeTpTargetPct(params: {
-  runtimeCalibration: LiveCalibrationProfile;
-  direction: "buy" | "sell";
-  fallbackTargetPct: number;
-  nativeScore?: number | null;
-  leadInShape?: string | null;
-  features?: FeatureVector | null;
-}): number {
-  const tpModel = asPlainRecord(params.runtimeCalibration.tpModel);
-  const buckets = asPlainRecord(tpModel.buckets);
-  const fallbackFromModel = asFiniteNumber(tpModel.fallbackTargetPct);
-  const baseTargetPct = params.fallbackTargetPct > 0
-    ? params.fallbackTargetPct
-    : Math.max(0, fallbackFromModel ?? 0);
-  if (Object.keys(buckets).length === 0) return baseTargetPct;
-
-  const directionKey = params.direction === "buy" ? "up" : "down";
-  const leadIn = normalizeRuntimeLeadInShape(params.leadInShape, params.features);
-  const quality = scoreToRuntimeQualityBand(params.nativeScore);
-  const candidateKeys = [
-    `${directionKey}|${leadIn}|${quality}`,
-    `${directionKey}|${leadIn}|all`,
-    `${directionKey}|all|${quality}`,
-    `${directionKey}|all|all`,
-    `all|${leadIn}|${quality}`,
-    `all|${leadIn}|all`,
-    `all|all|${quality}`,
-    "all|all|all",
-  ];
-
-  for (const key of candidateKeys) {
-    const bucket = asPlainRecord(buckets[key]);
-    const bucketTargetPct = asFiniteNumber(bucket.targetPct);
-    if (bucketTargetPct && bucketTargetPct > 0) {
-      if (baseTargetPct <= 0) return Math.max(1, Math.min(30, bucketTargetPct));
-      const minPct = Math.max(1, baseTargetPct * 0.75);
-      const maxPct = Math.min(30, baseTargetPct * 1.75);
-      return Math.max(minPct, Math.min(maxPct, bucketTargetPct));
-    }
-  }
-
-  return baseTargetPct;
 }
 
 interface PositionSizing {
