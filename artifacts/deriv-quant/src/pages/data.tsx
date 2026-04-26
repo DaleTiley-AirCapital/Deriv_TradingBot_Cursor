@@ -560,16 +560,21 @@ function CleanCanonicalTab() {
 }
 
 function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatus }) {
-  const [symbol, setSymbol] = useState("BOOM1000");
+  const [symbol, setSymbol] = useState("R_100");
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [tracker, setTracker] = useState<DataTopUpTracker | null>(null);
 
-  const noDataSymbols = useMemo(() => {
-    const map = new Map((statusData?.symbols ?? []).map(s => [s.symbol, s.totalCandles]));
-    return ALL_28_SYMBOLS.filter(s => (map.get(s) ?? 0) === 0);
+  const statusBySymbol = useMemo(() => {
+    return new Map((statusData?.symbols ?? []).map(s => [s.symbol, s]));
   }, [statusData]);
+
+  const noDataSymbols = useMemo(() => {
+    return ALL_28_SYMBOLS.filter(s => (statusBySymbol.get(s)?.totalCandles ?? 0) === 0);
+  }, [statusBySymbol]);
+
+  const selectedStatus = statusBySymbol.get(symbol);
 
   useEffect(() => {
     let cancelled = false;
@@ -589,12 +594,6 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
       clearInterval(id);
     };
   }, [symbol]);
-
-  useEffect(() => {
-    if (noDataSymbols.length > 0 && !noDataSymbols.includes(symbol)) {
-      setSymbol(noDataSymbols[0]);
-    }
-  }, [noDataSymbols, symbol]);
 
   const startDownload = async () => {
     setRunning(true);
@@ -624,7 +623,7 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
         <div>
           <h3 className="text-sm font-semibold">Download Historical Data (Per Symbol)</h3>
           <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed max-w-xl">
-            Backfills missing history for any symbol, including research-only symbols. Use this to bootstrap symbols that currently show no data.
+            Backfills missing or incomplete history for any symbol, including active symbols like R_100 and research-only symbols with no data.
           </p>
         </div>
       </div>
@@ -642,6 +641,12 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
         <span className="text-[11px] text-muted-foreground">
           No-data symbols: <span className="font-semibold text-foreground">{noDataSymbols.length}</span>
         </span>
+        {selectedStatus && (
+          <span className="text-[11px] text-muted-foreground">
+            Selected M1: <span className="font-semibold text-foreground">{selectedStatus.count1m.toLocaleString()}</span>
+            {selectedStatus.newestDate ? ` · latest ${formatAge(selectedStatus.newestDate)}` : ""}
+          </span>
+        )}
       </div>
       {err && <ErrorBox msg={err} />}
       {ok && <SuccessBox msg={ok} />}

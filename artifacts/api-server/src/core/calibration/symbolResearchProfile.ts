@@ -42,6 +42,17 @@ export interface SymbolResearchProfile {
   lastRunId: number;
 }
 
+type RuntimeQualityBand = "A" | "B" | "C";
+
+interface MoveForDynamicTp {
+  direction: string | null;
+  movePct: number | null;
+  holdingMinutes: number | null;
+  leadInShape: string | null;
+  qualityTier: string | null;
+  qualityScore: number | null;
+}
+
 function normalizedMoveFamily(moveType: string): string {
   const v = (moveType || "").toLowerCase();
   if (v === "boom_expansion" || v === "crash_expansion") return v;
@@ -83,6 +94,94 @@ function percentile(values: number[], p: number): number {
   return sorted[idx] ?? 0;
 }
 
+function normalizeDirection(value: unknown): "up" | "down" | "all" {
+  const v = String(value ?? "").toLowerCase();
+  if (v === "up" || v === "buy" || v === "long") return "up";
+  if (v === "down" || v === "sell" || v === "short") return "down";
+  return "all";
+}
+
+function normalizeLeadInShape(value: unknown): "expanding" | "compressing" | "ranging" | "trending" | "all" {
+  const v = String(value ?? "").toLowerCase();
+  if (v === "expanding" || v === "compressing" || v === "ranging" || v === "trending") return v;
+  return "all";
+}
+
+function scoreToRuntimeQualityBand(score: number): RuntimeQualityBand {
+  if (score >= 70) return "A";
+  if (score >= 50) return "B";
+  return "C";
+}
+
+function normalizeQualityBand(score: unknown, tier: unknown): RuntimeQualityBand {
+  const numericScore = Number(score);
+  if (Number.isFinite(numericScore)) return scoreToRuntimeQualityBand(numericScore);
+  const normalizedTier = String(tier ?? "").toUpperCase();
+  if (normalizedTier === "A") return "A";
+  if (normalizedTier === "B") return "B";
+  return "C";
+}
+
+function summarizeTpBucket(moves: MoveForDynamicTp[]): Record<string, unknown> | null {
+  const movePcts = moves
+    .map((m) => Number(m.movePct ?? NaN) * 100)
+    .filter((v) => Number.isFinite(v) && v > 0)
+    .sort((a, b) => a - b);
+  if (movePcts.length === 0) return null;
+
+  const holdHours = moves
+    .map((m) => Number(m.holdingMinutes ?? NaN) / 60)
+    .filter((v) => Number.isFinite(v) && v > 0)
+    .sort((a, b) => a - b);
+  const p75MovePct = percentile(movePcts, 0.75);
+
+  return {
+    count: movePcts.length,
+    targetPct: Number(Math.max(3, Math.min(30, p75MovePct)).toFixed(2)),
+    medianMovePct: Number(percentile(movePcts, 0.50).toFixed(2)),
+    p75MovePct: Number(p75MovePct.toFixed(2)),
+    p90MovePct: Number(percentile(movePcts, 0.90).toFixed(2)),
+    avgHoldHours: Number((holdHours.reduce((sum, v) => sum + v, 0) / Math.max(1, holdHours.length)).toFixed(2)),
+  };
+}
+
+function buildDynamicTpBuckets(moves: MoveForDynamicTp[]): Record<string, unknown> {
+  const bucketMoves = new Map<string, MoveForDynamicTp[]>();
+  const addBucket = (key: string, move: MoveForDynamicTp) => {
+    const list = bucketMoves.get(key) ?? [];
+    list.push(move);
+    bucketMoves.set(key, list);
+  };
+
+  for (const move of moves) {
+    const movePct = Number(move.movePct ?? NaN);
+    if (!Number.isFinite(movePct) || movePct <= 0) continue;
+
+    const direction = normalizeDirection(move.direction);
+    const leadIn = normalizeLeadInShape(move.leadInShape);
+    const quality = normalizeQualityBand(move.qualityScore, move.qualityTier);
+    const keys = [
+      `${direction}|${leadIn}|${quality}`,
+      `${direction}|${leadIn}|all`,
+      `${direction}|all|${quality}`,
+      `${direction}|all|all`,
+      `all|${leadIn}|${quality}`,
+      `all|${leadIn}|all`,
+      `all|all|${quality}`,
+      "all|all|all",
+    ];
+
+    for (const key of keys) addBucket(key, move);
+  }
+
+  const summaries: Record<string, unknown> = {};
+  for (const [key, bucket] of bucketMoves.entries()) {
+    const summary = summarizeTpBucket(bucket);
+    if (summary) summaries[key] = summary;
+  }
+  return summaries;
+}
+
 function isMissingRelationError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { code?: string; message?: string };
@@ -110,6 +209,11 @@ export async function buildSymbolResearchProfile(
     db
       .select({
         moveType: detectedMovesTable.moveType,
+        direction: detectedMovesTable.direction,
+        movePct: detectedMovesTable.movePct,
+        holdingMinutes: detectedMovesTable.holdingMinutes,
+        leadInShape: detectedMovesTable.leadInShape,
+        qualityTier: detectedMovesTable.qualityTier,
         qualityScore: detectedMovesTable.qualityScore,
       })
       .from(detectedMovesTable)
@@ -177,6 +281,7 @@ export async function buildSymbolResearchProfile(
     .filter((v) => Number.isFinite(v) && v > 0);
 
   const tpTargetPct = percentile(behaviorMfe, 0.50) || Number(Math.max(0, profile.avgMovePct ?? 0).toFixed(2));
+  const dynamicTpBuckets = buildDynamicTpBuckets(moves);
   const slRiskPct = percentile(behaviorMae, 0.75) || Number(Math.max(0.5, (profile.avgMovePct ?? 0) * 0.35).toFixed(2));
   const captureableP50 = percentile(behaviorCaptureable, 0.50);
   const minHoldMinutesBeforeTrail = Number(
@@ -229,6 +334,11 @@ export async function buildSymbolResearchProfile(
     recommendedTpModel: {
       targetPct: Number(tpTargetPct.toFixed(2)),
       rationale: "Derived from behavior-pass MFE median (symbol-specific)",
+      dynamicByQualityLeadIn: true,
+      bucketSource: "detected_moves_quality_lead_in_direction",
+      bucketSelection: "direction_lead_in_quality_then_fallback",
+      fallbackTargetPct: Number(tpTargetPct.toFixed(2)),
+      buckets: dynamicTpBuckets,
     },
     recommendedSlModel: {
       structural: true,

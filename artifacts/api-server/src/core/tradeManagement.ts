@@ -24,6 +24,8 @@ export interface BarExitInput {
   sl: number;
 }
 
+export type ManagedExitReason = "tp_hit" | "sl_hit" | "trailing_stop" | "max_duration";
+
 export interface BarExitOutput {
   exitReason: "tp_hit" | "sl_hit" | null;
   exitPrice: number;
@@ -86,22 +88,22 @@ export function calculateAdaptiveTrailingStop(params: {
   trailingDistancePct?: number;
 }): { newSl: number; updated: boolean; reason?: string } {
   const {
-    entryPrice, currentPrice, peakPrice, direction, currentSl, tpPrice,
+    entryPrice, peakPrice, direction, currentSl, tpPrice,
     atr14Pct, instrumentFamily, adverseCandleCount, emaSlope, spikeCountAdverse4h,
     trailingActivationThresholdPct, trailingDistancePct,
   } = params;
-
-  const currentPnlPct = direction === "buy"
-    ? (currentPrice - entryPrice) / entryPrice
-    : (entryPrice - currentPrice) / entryPrice;
-  if (currentPnlPct <= 0) return { newSl: currentSl, updated: false };
 
   const tpPct = direction === "buy"
     ? (tpPrice - entryPrice) / entryPrice
     : (entryPrice - tpPrice) / entryPrice;
   if (tpPct <= 0) return { newSl: currentSl, updated: false };
 
-  const progress = currentPnlPct / tpPct;
+  const peakPnlPct = direction === "buy"
+    ? (peakPrice - entryPrice) / entryPrice
+    : (entryPrice - peakPrice) / entryPrice;
+  if (peakPnlPct <= 0) return { newSl: currentSl, updated: false };
+
+  const progress = peakPnlPct / tpPct;
   const effectiveTrailingActivationThreshold =
     Number.isFinite(trailingActivationThresholdPct) && (trailingActivationThresholdPct ?? 0) > 0
       ? Math.max(0.05, Math.min(0.90, trailingActivationThresholdPct as number))
@@ -131,11 +133,6 @@ export function calculateAdaptiveTrailingStop(params: {
 
   const minMultiplier = 2.0;
   multiplier = Math.max(multiplier, minMultiplier);
-
-  const peakPnlPct = direction === "buy"
-    ? (peakPrice - entryPrice) / entryPrice
-    : (entryPrice - peakPrice) / entryPrice;
-  if (peakPnlPct <= 0) return { newSl: currentSl, updated: false };
 
   const atr = Math.max(atr14Pct, 0.001);
   const atrTrailPct = peakPnlPct - (atr * multiplier);
@@ -242,7 +239,7 @@ export function applyBarStateTransitions(input: OpenTradeBarInput): OpenTradeBar
   let mfePctAtPromotion = 0;
 
   if (stage === 1) {
-    const tpProgress = calcTpProgress({ direction, entryPrice, currentPrice: barClose, tpPrice: tp });
+    const tpProgress = calcTpProgress({ direction, entryPrice, currentPrice: peakPrice, tpPrice: tp });
     if (tpProgress >= BREAKEVEN_THRESHOLD_PCT) {
       const buffer = entryPrice * 0.0005;
       const beSlPrice = direction === "buy" ? entryPrice + buffer : entryPrice - buffer;
@@ -262,7 +259,8 @@ export function applyBarStateTransitions(input: OpenTradeBarInput): OpenTradeBar
   let tpProgressAtTrailing = 0;
 
   if (stage >= 2) {
-    const progress = calcTpProgress({ direction, entryPrice, currentPrice: barClose, tpPrice: tp });
+    const currentProgress = calcTpProgress({ direction, entryPrice, currentPrice: barClose, tpPrice: tp });
+    const peakProgress = calcTpProgress({ direction, entryPrice, currentPrice: peakPrice, tpPrice: tp });
     const effectiveTrailingActivationThreshold =
       Number.isFinite(trailingActivationThresholdPct) && (trailingActivationThresholdPct ?? 0) > 0
         ? Math.max(0.05, Math.min(0.90, trailingActivationThresholdPct as number))
@@ -271,11 +269,11 @@ export function applyBarStateTransitions(input: OpenTradeBarInput): OpenTradeBar
       Number.isFinite(trailingMinHoldBars) && (trailingMinHoldBars ?? 0) > 0
         ? Math.max(1, Math.min(MAX_HOLD_MINS, Math.round(trailingMinHoldBars as number)))
         : 1;
-    if (progress >= effectiveTrailingActivationThreshold && holdBars >= effectiveTrailingMinHoldBars) {
+    if (peakProgress >= effectiveTrailingActivationThreshold && holdBars >= effectiveTrailingMinHoldBars) {
       if (stage === 2) {
         stage = 3;
         trailingActivated = true;
-        tpProgressAtTrailing = progress;
+        tpProgressAtTrailing = Math.max(currentProgress, peakProgress);
       }
       const { newSl, updated } = calculateAdaptiveTrailingStop({
         entryPrice,

@@ -495,13 +495,31 @@ function ExitReasonBadge({ reason }: { reason: string }) {
     leg1_tp: "bg-green-500/15 text-green-400 border-green-500/25",
     hard_sl: "bg-red-500/15 text-red-400 border-red-500/25",
     mfe_reversal: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
+    trailing_stop: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
+    tp_hit: "bg-green-500/15 text-green-400 border-green-500/25",
+    sl_hit: "bg-red-500/15 text-red-400 border-red-500/25",
     max_duration: "bg-blue-500/15 text-blue-400 border-blue-500/25",
+  };
+  const labels: Record<string, string> = {
+    tp_hit: "TP Hit",
+    sl_hit: "SL Hit",
+    trailing_stop: "Trailing Stop",
+    max_duration: "Max Duration",
+    leg1_tp: "Leg 1 TP",
+    hard_sl: "Hard SL",
+    mfe_reversal: "MFE Reversal",
   };
   return (
     <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-medium border", colors[reason] ?? "bg-muted/30 text-muted-foreground border-border/30")}>
-      {reason.replace(/_/g, " ")}
+      {labels[reason] ?? reason.replace(/_/g, " ")}
     </span>
   );
+}
+
+function exitReasonSortValue(reason: string): number {
+  const order = ["tp_hit", "trailing_stop", "sl_hit", "max_duration"];
+  const idx = order.indexOf(reason);
+  return idx >= 0 ? idx : order.length;
 }
 
 function SummaryCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -596,7 +614,9 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
       {Object.keys(s.byExitReason).length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[11px] text-muted-foreground">Exits:</span>
-          {Object.entries(s.byExitReason).map(([reason, count]) => (
+          {Object.entries(s.byExitReason)
+            .sort(([a], [b]) => exitReasonSortValue(a) - exitReasonSortValue(b))
+            .map(([reason, count]) => (
             <span key={reason} className="flex items-center gap-1">
               <ExitReasonBadge reason={reason} />
               <span className="text-[10px] text-muted-foreground">{count}</span>

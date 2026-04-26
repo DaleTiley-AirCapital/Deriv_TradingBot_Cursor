@@ -10,7 +10,7 @@
  *   "entered"           — trade was opened (passed gate + one-per-symbol check)
  *   "breakeven_promoted"— SL moved to breakeven (stage 1→2)
  *   "trailing_activated"— adaptive trailing stop activated (stage 2→3)
- *   "closed"            — trade exited (tp_hit | sl_hit | max_duration)
+ *   "closed"            — trade exited (tp_hit | sl_hit | trailing_stop | max_duration)
  *
  * The profiler reads these to derive:
  *   - Signal frequency and blocked rate
@@ -107,7 +107,7 @@ export interface ClosedEvent {
   mfePctAtBreakeven: number;   // MFE when breakeven was triggered (0 if never triggered)
   barsToMfe: number;           // bars from entry to MFE peak
   barsToBreakeven: number;     // bars from entry to breakeven promotion (0 if never)
-  exitReason: "tp_hit" | "sl_hit" | "max_duration";
+  exitReason: "tp_hit" | "sl_hit" | "trailing_stop" | "max_duration";
   slStage: 1 | 2 | 3;
   conflictResolution: string;
   source: "backtest" | "live";

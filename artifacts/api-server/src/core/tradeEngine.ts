@@ -7,7 +7,7 @@ import { checkAndAutoExtract } from "./extractionEngine.js";
 import { recordBehaviorEvent } from "./backtest/behaviorCapture.js";
 import { evaluateBarExits, MAX_HOLD_MINS, applyBarStateTransitions } from "./tradeManagement.js";
 import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
-import type { SpikeMagnitudeStats } from "./features.js";
+import type { FeatureVector, SpikeMagnitudeStats } from "./features.js";
 
 const MAX_OPEN_TRADES = 6;
 const MAX_EQUITY_DEPLOYED_PCT = 0.80;
@@ -33,6 +33,88 @@ function getDefaultAtr14Pct(symbol: string): number {
   return 0.005;
 }
 
+function asPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function inferRuntimeLeadInShape(features?: FeatureVector | null): "expanding" | "compressing" | "ranging" | "trending" | "all" {
+  if (!features) return "all";
+  const emaSlope = Math.abs(features.emaSlope ?? 0);
+  const priceChange7dPct = Math.abs(features.priceChange7dPct ?? 0);
+  const bbWidthRoc = features.bbWidthRoc ?? 0;
+  const atrAccel = features.atrAccel ?? 0;
+  const atrRank = features.atrRank ?? 0.5;
+  const bbWidth = features.bbWidth ?? 0;
+
+  if (emaSlope >= 0.00035 || priceChange7dPct >= 0.08) return "trending";
+  if (bbWidthRoc > 0 || atrAccel > 0 || atrRank >= 0.75) return "expanding";
+  if (bbWidth > 0 && (bbWidth <= 0.006 || atrRank <= 0.35)) return "compressing";
+  return "ranging";
+}
+
+function scoreToRuntimeQualityBand(score?: number | null): "A" | "B" | "C" {
+  const s = Number(score ?? NaN);
+  if (Number.isFinite(s) && s >= 70) return "A";
+  if (Number.isFinite(s) && s >= 50) return "B";
+  return "C";
+}
+
+function normalizeRuntimeLeadInShape(value: unknown, features?: FeatureVector | null) {
+  const v = String(value ?? "").toLowerCase();
+  if (v === "expanding" || v === "compressing" || v === "ranging" || v === "trending") return v;
+  return inferRuntimeLeadInShape(features);
+}
+
+function selectRuntimeTpTargetPct(params: {
+  runtimeCalibration: LiveCalibrationProfile;
+  direction: "buy" | "sell";
+  fallbackTargetPct: number;
+  nativeScore?: number | null;
+  leadInShape?: string | null;
+  features?: FeatureVector | null;
+}): number {
+  const tpModel = asPlainRecord(params.runtimeCalibration.tpModel);
+  const buckets = asPlainRecord(tpModel.buckets);
+  const fallbackFromModel = asFiniteNumber(tpModel.fallbackTargetPct);
+  const baseTargetPct = params.fallbackTargetPct > 0
+    ? params.fallbackTargetPct
+    : Math.max(0, fallbackFromModel ?? 0);
+  if (Object.keys(buckets).length === 0) return baseTargetPct;
+
+  const directionKey = params.direction === "buy" ? "up" : "down";
+  const leadIn = normalizeRuntimeLeadInShape(params.leadInShape, params.features);
+  const quality = scoreToRuntimeQualityBand(params.nativeScore);
+  const candidateKeys = [
+    `${directionKey}|${leadIn}|${quality}`,
+    `${directionKey}|${leadIn}|all`,
+    `${directionKey}|all|${quality}`,
+    `${directionKey}|all|all`,
+    `all|${leadIn}|${quality}`,
+    `all|${leadIn}|all`,
+    `all|all|${quality}`,
+    "all|all|all",
+  ];
+
+  for (const key of candidateKeys) {
+    const bucket = asPlainRecord(buckets[key]);
+    const bucketTargetPct = asFiniteNumber(bucket.targetPct);
+    if (bucketTargetPct && bucketTargetPct > 0) {
+      if (baseTargetPct <= 0) return Math.max(1, Math.min(30, bucketTargetPct));
+      const minPct = Math.max(1, baseTargetPct * 0.75);
+      const maxPct = Math.min(30, baseTargetPct * 1.75);
+      return Math.max(minPct, Math.min(maxPct, bucketTargetPct));
+    }
+  }
+
+  return baseTargetPct;
+}
 
 interface PositionSizing {
   size: number;
@@ -81,6 +163,9 @@ export function applyRuntimeCalibrationExitModel(params: {
   trailingStopPct: number;
   mode: TradingMode;
   runtimeCalibration?: LiveCalibrationProfile | null;
+  nativeScore?: number | null;
+  leadInShape?: string | null;
+  features?: FeatureVector | null;
 }): { tp: number; sl: number; trailingStopPct: number } {
   const { spotPrice, direction, mode, runtimeCalibration } = params;
   let tp = params.tp;
@@ -89,7 +174,17 @@ export function applyRuntimeCalibrationExitModel(params: {
 
   if (runtimeCalibration && mode === "paper") {
     const targetPctRaw = Number(runtimeCalibration.tpModel?.["targetPct"] ?? 0);
-    const targetPct = Number.isFinite(targetPctRaw) ? Math.max(0, targetPctRaw / 100) : 0;
+    const selectedTargetPct = Number.isFinite(targetPctRaw)
+      ? selectRuntimeTpTargetPct({
+          runtimeCalibration,
+          direction,
+          fallbackTargetPct: Math.max(0, targetPctRaw),
+          nativeScore: params.nativeScore,
+          leadInShape: params.leadInShape,
+          features: params.features,
+        })
+      : 0;
+    const targetPct = Math.max(0, selectedTargetPct / 100);
     if (targetPct > 0) {
       // The promoted research model owns paper calibration exits. Do not blend
       // it back toward legacy SR/Fib targets or the backtest no longer tests it.
@@ -111,7 +206,7 @@ export function applyRuntimeCalibrationExitModel(params: {
 
     const trailingDistancePctRaw = Number(runtimeCalibration.trailingModel?.["trailingDistancePct"] ?? 0);
     if (Number.isFinite(trailingDistancePctRaw) && trailingDistancePctRaw > 0) {
-      trailingStopPct = Math.max(0.02, Math.min(0.8, trailingDistancePctRaw / 100));
+      trailingStopPct = Math.max(0.002, Math.min(0.8, trailingDistancePctRaw / 100));
     }
   }
 
@@ -629,7 +724,11 @@ export async function manageOpenPositions(): Promise<void> {
       });
 
       if (tickExit.exitReason === "sl_hit") {
-        await closePosition(trade.id, tickExit.exitPrice, "stop_loss_hit");
+        await closePosition(
+          trade.id,
+          tickExit.exitPrice,
+          barState.stage === 3 ? "trailing_stop" : "stop_loss_hit",
+        );
         continue;
       }
 
@@ -740,6 +839,8 @@ export async function openPositionV3(params: {
     trailingStopPct,
     mode,
     runtimeCalibration,
+    nativeScore: confidence * 100,
+    features,
   }));
 
   const notes = `V3 HybridStaged | engine=${engineName} | conf=${confidence.toFixed(3)}` +
@@ -862,9 +963,10 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
     const mfePctLive = direction === "buy"
       ? Math.max(0, ((trade.peakPrice ?? trade.entryPrice) - trade.entryPrice) / trade.entryPrice)
       : Math.max(0, (trade.entryPrice - (trade.peakPrice ?? trade.entryPrice)) / trade.entryPrice);
-    const exitReasonNorm: "tp_hit" | "sl_hit" | "max_duration" =
+    const exitReasonNorm: "tp_hit" | "sl_hit" | "trailing_stop" | "max_duration" =
       exitReason === "take_profit_hit" ? "tp_hit"
       : exitReason === "stop_loss_hit" ? "sl_hit"
+      : exitReason === "trailing_stop" ? "trailing_stop"
       : "max_duration";
 
     const entryTsMs = trade.entryTs
@@ -903,7 +1005,7 @@ async function closePosition(tradeId: number, exitPrice: number, exitReason: str
       barsToMfe: holdBarsLive,
       barsToBreakeven: 0,
       exitReason: exitReasonNorm,
-      slStage: 1 as const,
+      slStage: (trade.tradeStage ?? 1) as 1 | 2 | 3,
       conflictResolution: "live",
       source: "live" as const,
     };

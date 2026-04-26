@@ -53,7 +53,7 @@ export interface EngineProfile {
   trailingActivationRate: number;
   extensionProbability: number;
   // Exit distribution
-  byExitReason: Record<"tp_hit" | "sl_hit" | "max_duration", number>;
+  byExitReason: Record<"tp_hit" | "sl_hit" | "trailing_stop" | "max_duration", number>;
   bySlStage: Record<"stage_1" | "stage_2" | "stage_3", number>;
   // Signal quality
   signalsFired: number;
@@ -154,8 +154,8 @@ export function deriveEngineProfile(
   const bePromotionRate = entered.length > 0 ? bePromoted.length / entered.length : 0;
   const trailingActivationRate = entered.length > 0 ? trailingActivated.length / entered.length : 0;
 
-  const byExitReason: Record<"tp_hit" | "sl_hit" | "max_duration", number> = {
-    tp_hit: 0, sl_hit: 0, max_duration: 0,
+  const byExitReason: Record<"tp_hit" | "sl_hit" | "trailing_stop" | "max_duration", number> = {
+    tp_hit: 0, sl_hit: 0, trailing_stop: 0, max_duration: 0,
   };
   const bySlStage: Record<"stage_1" | "stage_2" | "stage_3", number> = {
     stage_1: 0, stage_2: 0, stage_3: 0,

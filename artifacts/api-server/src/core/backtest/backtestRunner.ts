@@ -87,7 +87,7 @@ export interface V3BacktestTrade {
   entryType: string;
   entryPrice: number;
   exitPrice: number;
-  exitReason: "tp_hit" | "sl_hit" | "max_duration";
+  exitReason: "tp_hit" | "sl_hit" | "trailing_stop" | "max_duration";
   slStage: 1 | 2 | 3;
   projectedMovePct: number;
   nativeScore: number;
@@ -469,6 +469,7 @@ interface OpenTradeState {
   conflictResolution: string;
   scoringSource?: string;
   runtimeModelRunId?: number | null;
+  runtimeProjectedMovePct?: number;
   tp: number;
   sl: number;
   originalSl: number;
@@ -944,7 +945,10 @@ export async function runV3Backtest(
         sl: openTrade.sl,
       });
 
-      let exitReason: V3BacktestTrade["exitReason"] | null = barExit.exitReason;
+      let exitReason: V3BacktestTrade["exitReason"] | null =
+        barExit.exitReason === "sl_hit" && openTrade.stage === 3
+          ? "trailing_stop"
+          : barExit.exitReason;
       let exitPrice = barExit.exitPrice;
 
       // Max duration â€” shared MAX_HOLD_MINS from tradeManagement.ts
@@ -977,7 +981,7 @@ export async function runV3Backtest(
           exitPrice,
           exitReason,
           slStage: openTrade.stage,
-          projectedMovePct: openTrade.winner.projectedMovePct,
+          projectedMovePct: openTrade.runtimeProjectedMovePct ?? openTrade.winner.projectedMovePct,
           nativeScore: openTrade.nativeScore,
           regimeAtEntry: openTrade.regimeAtEntry,
           regimeConfidence: openTrade.regimeConfidence,
@@ -1018,7 +1022,7 @@ export async function runV3Backtest(
           regimeAtEntry: openTrade.regimeAtEntry,
           regimeConfidence: openTrade.regimeConfidence,
           nativeScore: openTrade.nativeScore,
-          projectedMovePct: openTrade.winner.projectedMovePct,
+          projectedMovePct: openTrade.runtimeProjectedMovePct ?? openTrade.winner.projectedMovePct,
           entryTs: openTrade.entryTs,
           exitTs: bar.closeTs,
           holdBars,
@@ -1271,6 +1275,8 @@ export async function runV3Backtest(
       trailingStopPct: trailingCfg.trailingDistancePct ?? 0,
       mode,
       runtimeCalibration,
+      nativeScore,
+      features,
     }));
 
     if (!isFinite(tp) || tp <= 0) continue;
@@ -1280,6 +1286,7 @@ export async function runV3Backtest(
 
     const tpPct = Math.abs(tp - bar.close) / bar.close;
     const slOriginalPct = Math.abs(sl - bar.close) / bar.close;
+    const runtimeProjectedMovePct = tpPct;
 
     // Record entry event
     recordBehaviorEvent({
@@ -1291,7 +1298,7 @@ export async function runV3Backtest(
       regimeAtEntry: regimeResult.regime,
       regimeConfidence: regimeResult.confidence,
       nativeScore,
-      projectedMovePct: winner.projectedMovePct,
+      projectedMovePct: runtimeProjectedMovePct,
       entryTs: bar.closeTs,
       tpPct,
       slPct: slOriginalPct,
@@ -1308,6 +1315,7 @@ export async function runV3Backtest(
       conflictResolution,
       scoringSource,
       runtimeModelRunId: runtimeCalibration?.sourceRunId ?? null,
+      runtimeProjectedMovePct,
       tp,
       sl,
       originalSl: sl,
@@ -1611,7 +1619,10 @@ export async function runV3BacktestMulti(
         direction: dir, barHigh: bar.high, barLow: bar.low, barClose: bar.close,
         tp: ot.tp, sl: ot.sl,
       });
-      let exitReason: V3BacktestTrade["exitReason"] | null = barExit.exitReason;
+      let exitReason: V3BacktestTrade["exitReason"] | null =
+        barExit.exitReason === "sl_hit" && ot.stage === 3
+          ? "trailing_stop"
+          : barExit.exitReason;
       let exitPrice = barExit.exitPrice;
       if (!exitReason && holdBars >= MAX_HOLD_MINS) {
         exitReason = "max_duration";
@@ -1627,7 +1638,7 @@ export async function runV3BacktestMulti(
           entryTs: ot.entryTs, exitTs: bar.closeTs, symbol: ctx.sym,
           direction: dir, engineName: ot.winner.engineName, entryType: ot.winner.entryType,
           entryPrice: ep, exitPrice, exitReason, slStage: ot.stage,
-          projectedMovePct: ot.winner.projectedMovePct, nativeScore: ot.nativeScore,
+          projectedMovePct: ot.runtimeProjectedMovePct ?? ot.winner.projectedMovePct, nativeScore: ot.nativeScore,
           regimeAtEntry: ot.regimeAtEntry, regimeConfidence: ot.regimeConfidence,
           holdBars, barsToMfe, barsToBreakeven, pnlPct: finalPnl,
           mfePct: ot.mfePct, maePct: ot.maePct, tpPct: ot.tpPct, slPct: ot.slOriginalPct,
@@ -1643,7 +1654,7 @@ export async function runV3BacktestMulti(
           eventType: "closed", symbol: ctx.sym, engineName: ot.winner.engineName,
           entryType: ot.winner.entryType, direction: dir,
           regimeAtEntry: ot.regimeAtEntry, regimeConfidence: ot.regimeConfidence,
-          nativeScore: ot.nativeScore, projectedMovePct: ot.winner.projectedMovePct,
+          nativeScore: ot.nativeScore, projectedMovePct: ot.runtimeProjectedMovePct ?? ot.winner.projectedMovePct,
           entryTs: ot.entryTs, exitTs: bar.closeTs, holdBars,
           pnlPct: finalPnl, mfePct: ot.mfePct, maePct: ot.maePct,
           mfePctAtBreakeven: ot.mfePctAtBreakeven,
@@ -1812,6 +1823,8 @@ export async function runV3BacktestMulti(
         trailingStopPct: ctx.trailingDistancePct ?? 0,
         mode: _mode,
         runtimeCalibration: ctx.runtimeCalibration,
+        nativeScore,
+        features,
       }));
 
       if (!isFinite(tp) || tp <= 0) continue;
@@ -1821,12 +1834,13 @@ export async function runV3BacktestMulti(
 
       const tpPct        = Math.abs(tp - bar.close) / bar.close;
       const slOriginalPct = Math.abs(sl - bar.close) / bar.close;
+      const runtimeProjectedMovePct = tpPct;
 
       recordBehaviorEvent({
         eventType: "entered", symbol: ctx.sym, engineName: winner.engineName,
         entryType: winner.entryType, direction: winner.direction,
         regimeAtEntry: regimeResult.regime, regimeConfidence: regimeResult.confidence,
-        nativeScore, projectedMovePct: winner.projectedMovePct,
+        nativeScore, projectedMovePct: runtimeProjectedMovePct,
         entryTs: bar.closeTs, tpPct, slPct: slOriginalPct,
       });
 
@@ -1836,6 +1850,7 @@ export async function runV3BacktestMulti(
         nativeScore, conflictResolution, tp, sl, originalSl: sl,
         scoringSource,
         runtimeModelRunId: ctx.runtimeCalibration?.sourceRunId ?? null,
+        runtimeProjectedMovePct,
         stage: 1, peakPrice: bar.close, mfePct: 0, maePct: 0, mfePeakBar: i,
         beTriggeredBar: 0, mfePctAtBreakeven: 0,
         atr14AtEntry: Math.max(features.atr14, 0.001),
