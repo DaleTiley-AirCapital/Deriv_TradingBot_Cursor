@@ -19,6 +19,7 @@ import {
 import { buildSymbolTradeCandidate } from "../core/symbolModels/candidateBuilder.js";
 import type { BehaviorProfileSummary } from "../core/backtest/behaviorProfiler.js";
 import { isSymbolStreamingDisabled } from "./symbolValidator.js";
+import { getEnabledRegisteredSymbols } from "../symbol-services/shared/SymbolServiceRegistry.js";
 
 const DEFAULT_SYMBOLS = ACTIVE_TRADING_SYMBOLS;
 const DEFAULT_SCAN_INTERVAL_MS = 300_000;
@@ -96,6 +97,15 @@ let lastScanSymbol: string | null = null;
 let totalScansRun = 0;
 let totalDecisionsLogged = 0;
 const calibratedLastScanMs: Record<string, number> = {};
+
+function resolveSchedulerSymbols(stateMap: Record<string, string>): string[] {
+  const registryEnabled = getEnabledRegisteredSymbols(stateMap);
+  if (registryEnabled.length > 0) return registryEnabled;
+
+  const enabledSymbolsRaw = stateMap["enabled_symbols"] || "";
+  if (!enabledSymbolsRaw) return DEFAULT_SYMBOLS;
+  return enabledSymbolsRaw.split(",").map((s: string) => s.trim()).filter(Boolean);
+}
 
 export function getSchedulerStatus() {
   return {
@@ -624,10 +634,7 @@ async function scanCycle(): Promise<void> {
       return;
     }
 
-    const enabledSymbolsRaw = stateMap["enabled_symbols"] || "";
-    const symbolsRaw = enabledSymbolsRaw
-      ? enabledSymbolsRaw.split(",").map((s: string) => s.trim()).filter(Boolean)
-      : DEFAULT_SYMBOLS;
+    const symbolsRaw = resolveSchedulerSymbols(stateMap);
     const symbols = symbolsRaw.filter((s) => !isSymbolStreamingDisabled(s));
     if (symbols.length === 0) {
       if (staggeredScanActive) {

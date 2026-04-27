@@ -53,3 +53,48 @@ export function getSymbolService(symbol: string): SymbolServiceContract | undefi
 export function isSymbolEnabled(symbol: string, config: SymbolRegistryConfig): boolean {
   return config.enabledSymbols.includes(symbol.toUpperCase());
 }
+
+function parseCsvSymbols(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return uniqueUpper(raw.split(",").map((v) => v.trim()).filter(Boolean));
+}
+
+export function resolveRegistryConfigFromStateMap(
+  stateMap: Record<string, string>,
+): SymbolRegistryConfig {
+  const modeRaw = (stateMap["symbol_service_mode"] ?? "solo").toLowerCase();
+  const mode: SymbolRegistryMode = modeRaw === "multi" ? "multi" : "solo";
+
+  const configuredSymbols = parseCsvSymbols(
+    stateMap["symbol_services_enabled"] ??
+      stateMap["enabled_symbol_services"] ??
+      stateMap["enabled_symbols"],
+  );
+
+  const serviceExplicitFlags = ALL_SERVICES
+    .map((svc) => ({
+      symbol: svc.symbol.toUpperCase(),
+      enabled:
+        (stateMap[`symbol_service_enabled_${svc.symbol.toUpperCase()}`] ?? "").toLowerCase() === "true",
+    }))
+    .filter((row) => row.enabled)
+    .map((row) => row.symbol);
+
+  const mergedEnabled = uniqueUpper([...configuredSymbols, ...serviceExplicitFlags]);
+  const baseline = resolveRegistryConfig(mode, mergedEnabled.length > 0 ? mergedEnabled : DEFAULT_SOLO_CONFIG.enabledSymbols);
+
+  const available = new Set(getRegisteredSymbolServices().map((s) => s.symbol.toUpperCase()));
+  return {
+    mode: baseline.mode,
+    enabledSymbols: baseline.enabledSymbols.filter((s) => available.has(s)),
+  };
+}
+
+export function getEnabledRegisteredSymbols(
+  stateMap: Record<string, string>,
+): string[] {
+  const cfg = resolveRegistryConfigFromStateMap(stateMap);
+  return getRegisteredSymbolServices()
+    .map((svc) => svc.symbol.toUpperCase())
+    .filter((sym) => isSymbolEnabled(sym, cfg));
+}

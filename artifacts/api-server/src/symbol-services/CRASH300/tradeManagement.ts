@@ -1,3 +1,12 @@
-export function notImplementedCRASH300(): never {
-  throw new Error("CRASH300 Milestone 1 scaffold only: implementation deferred to later milestone.");
+export function manageCrash300OpenPosition(
+  position: Record<string, unknown>,
+  marketState: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    symbol: "CRASH300",
+    managedBy: "shared_trade_management_state_machine",
+    action: "pass_through",
+    position,
+    marketState,
+  };
 }
