@@ -24,3 +24,4 @@ export * from "./calibrationFamilyBucketProfiles";
 export * from "./calibrationFeatureRelevance";
 export * from "./calibrationEntryIdeals";
 export * from "./calibrationExitRiskProfiles";
+export * from "./symbolModelOptimisation";

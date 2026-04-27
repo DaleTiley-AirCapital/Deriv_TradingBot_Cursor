@@ -16,7 +16,7 @@ import {
   getWatchedCandidates,
   cleanupStale,
 } from "../core/candidateLifecycle.js";
-import { evaluateRuntimeEntryEvidence } from "../core/calibration/runtimeProfileUtils.js";
+import { buildSymbolTradeCandidate } from "../core/symbolModels/candidateBuilder.js";
 import type { BehaviorProfileSummary } from "../core/backtest/behaviorProfiler.js";
 import { isSymbolStreamingDisabled } from "./symbolValidator.js";
 
@@ -255,17 +255,21 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       : winner.metadata?.["r100ContinuationNativeScore"] != null ? (winner.metadata["r100ContinuationNativeScore"] as number)
       : Math.round(coordinatorOutput.coordinatorConfidence * 100);
 
-    const setupEvidence = evaluateRuntimeEntryEvidence({
+    const builtCandidate = buildSymbolTradeCandidate({
       symbol,
-      direction: coordinatorOutput.resolvedDirection,
-      nativeScore: candidateNativeScore,
+      mode: effectiveMode,
+      coordinatorOutput,
       winner,
       features,
+      spotPrice: features.latestClose,
       runtimeCalibration: modeCalibration,
     });
-    const setupSignature = setupEvidence.matchedBucketKey
-      ? `${setupEvidence.matchedBucketKey}`
-      : `${setupEvidence.leadInShape}|${setupEvidence.qualityBand}`;
+    if (!builtCandidate) {
+      if (isIntelOnly) break;
+      continue;
+    }
+    const setupEvidence = builtCandidate.candidate.runtimeSetup;
+    const setupSignature = builtCandidate.setupSignature;
 
     // Engine gate passed = the rejection is NOT score-based (score cleared engine gate but something else blocked)
     const rejReason = v3Decision.rejectionReason ?? "";
@@ -542,6 +546,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       features,
       mode: effectiveMode,
       runtimeCalibration: modeCalibration,
+      exitPolicy: builtCandidate.candidate.exitPolicy,
     });
 
     if (tradeId) {

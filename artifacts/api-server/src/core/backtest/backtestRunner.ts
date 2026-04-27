@@ -62,6 +62,7 @@ import {
   MAX_HOLD_MINS,
   applyBarStateTransitions,
 } from "../tradeManagement.js";
+import { buildSymbolTradeCandidate } from "../symbolModels/candidateBuilder.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "../../infrastructure/deriv.js";
 import {
   getLiveCalibrationProfile,
@@ -190,6 +191,7 @@ export interface V3BacktestRequest {
   endTs?: number;
   mode?: "paper" | "demo" | "real";
   tierMode?: BacktestTierMode;
+  runtimeCalibrationOverride?: LiveCalibrationProfile | null;
 }
 
 export type BacktestTierMode = "A" | "AB" | "ABC" | "ALL";
@@ -876,8 +878,16 @@ export async function runV3Backtest(
   const maxOpenTrades = parseInt(
     stateMap[`${modePrefix}_max_open_trades`] || stateMap["max_open_trades"] || "3"
   );
-  const runtimeCalibrationResolution =
-    await resolveLiveCalibrationProfile(symbol, mode as "paper" | "demo" | "real", stateMap).catch(() => null);
+  const runtimeCalibrationResolution = req.runtimeCalibrationOverride
+    ? {
+        profile: req.runtimeCalibrationOverride,
+        applied: true,
+        reason: "applied" as const,
+        symbol,
+        mode: mode as "paper" | "demo" | "real",
+        useCalibratedRuntimeProfiles: true,
+      }
+    : await resolveLiveCalibrationProfile(symbol, mode as "paper" | "demo" | "real", stateMap).catch(() => null);
   const runtimeCalibration = runtimeCalibrationResolution?.profile ?? null;
   const modeGate = resolveModeScoreGate(stateMap, modePrefix, mode, runtimeCalibration);
   const trailingCfg = runtimeCalibration
@@ -1239,18 +1249,21 @@ export async function runV3Backtest(
       continue;
     }
 
-    const setupEvidence = evaluateRuntimeEntryEvidence({
+    const builtCandidate = buildSymbolTradeCandidate({
       symbol,
-      direction: winner.direction,
-      nativeScore,
+      mode,
+      coordinatorOutput,
       winner,
       features,
+      spotPrice: bar.close,
       runtimeCalibration,
       allowedQualityBands: runtimeQualityBands,
+      positionSize: SYNTHETIC_SIZE,
+      equity: SYNTHETIC_EQUITY,
     });
-    const setupSignature = setupEvidence.matchedBucketKey
-      ? setupEvidence.matchedBucketKey
-      : `${setupEvidence.leadInShape}|${setupEvidence.qualityBand}`;
+    if (!builtCandidate) continue;
+    const setupEvidence = builtCandidate.candidate.runtimeSetup;
+    const setupSignature = builtCandidate.setupSignature;
 
     if (!setupEvidence.allowed) {
       signalsBlocked++;

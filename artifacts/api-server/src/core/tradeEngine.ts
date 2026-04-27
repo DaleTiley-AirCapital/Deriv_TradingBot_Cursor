@@ -693,6 +693,11 @@ export async function openPositionV3(params: {
   features: import("./features.js").FeatureVector;
   mode: TradingMode;
   runtimeCalibration?: LiveCalibrationProfile | null;
+  exitPolicy?: {
+    takeProfitPrice?: number;
+    stopLossPrice?: number;
+    trailingDistancePct?: number;
+  } | null;
 }): Promise<number | null> {
   const { symbol, engineName, direction, confidence, capitalAmount, features, mode, runtimeCalibration } = params;
 
@@ -760,6 +765,16 @@ export async function openPositionV3(params: {
     nativeScore: confidence * 100,
     features,
   }));
+
+  if (params.exitPolicy?.takeProfitPrice && params.exitPolicy.takeProfitPrice > 0) {
+    tp = params.exitPolicy.takeProfitPrice;
+  }
+  if (params.exitPolicy?.stopLossPrice && params.exitPolicy.stopLossPrice > 0) {
+    sl = params.exitPolicy.stopLossPrice;
+  }
+  if (params.exitPolicy?.trailingDistancePct && params.exitPolicy.trailingDistancePct > 0) {
+    trailingStopPct = params.exitPolicy.trailingDistancePct;
+  }
 
   const notes = `V3 HybridStaged | engine=${engineName} | conf=${confidence.toFixed(3)}` +
     (runtimeCalibration ? ` | calib_run=${runtimeCalibration.sourceRunId}` : "");

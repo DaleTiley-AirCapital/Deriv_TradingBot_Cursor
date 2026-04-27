@@ -28,6 +28,9 @@ export interface PromotedSymbolRuntimeModel {
   confirmationWindow: string;
   buildPriority: "high" | "medium" | "low";
   researchStatus: string;
+  optimisationRunId?: number | null;
+  optimisationCandidateId?: number | null;
+  optimisationParams?: Record<string, unknown> | null;
 }
 
 type SymbolModelStage = "staged" | "promoted";
@@ -177,6 +180,12 @@ async function readSymbolRuntimeModel(
         ? record.buildPriority
         : "low") as "high" | "medium" | "low",
       researchStatus: String(record.researchStatus ?? "research_complete"),
+      optimisationRunId: record.optimisationRunId == null ? null : asNumber(record.optimisationRunId, 0),
+      optimisationCandidateId: record.optimisationCandidateId == null ? null : asNumber(record.optimisationCandidateId, 0),
+      optimisationParams: (() => {
+        const params = asRecord(record.optimisationParams);
+        return Object.keys(params).length > 0 ? params : null;
+      })(),
     };
   } catch {
     return null;
@@ -202,6 +211,13 @@ export async function stageLatestSymbolResearchProfile(
   const profile = await getLatestSymbolResearchProfile(symbol);
   if (!profile) return null;
   const model = compileRuntimeModelFromResearchProfile(profile, stateMap, new Date().toISOString());
+  await writeSymbolRuntimeModel("staged", model);
+  return model;
+}
+
+export async function stageSymbolRuntimeModel(
+  model: PromotedSymbolRuntimeModel,
+): Promise<PromotedSymbolRuntimeModel> {
   await writeSymbolRuntimeModel("staged", model);
   return model;
 }

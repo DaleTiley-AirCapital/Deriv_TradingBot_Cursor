@@ -1587,6 +1587,10 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   const [runtimeBusy, setRuntimeBusy] = useState<"stage" | "promote" | null>(null);
   const [runtimeErr, setRuntimeErr] = useState<string | null>(null);
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
+  const [optimiserBusy, setOptimiserBusy] = useState<"run" | "stage" | "refresh" | null>(null);
+  const [optimiserRunId, setOptimiserRunId] = useState<number | null>(null);
+  const [optimiserStatus, setOptimiserStatus] = useState<Record<string, unknown> | null>(null);
+  const [optimiserErr, setOptimiserErr] = useState<string | null>(null);
   const [domainLoading, setDomainLoading] = useState(false);
 
   const [engines, setEngines] = useState<EngineRow[]>([]);
@@ -2025,6 +2029,61 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     }
   };
 
+  const refreshOptimiserStatus = async (runId = optimiserRunId) => {
+    if (!runId) return;
+    setOptimiserBusy("refresh");
+    setOptimiserErr(null);
+    try {
+      const status = await apiFetch(`calibration/runtime-model/${symbol}/optimise-backtest/${runId}`) as Record<string, unknown>;
+      setOptimiserStatus(status);
+    } catch (e: unknown) {
+      setOptimiserErr(e instanceof Error ? e.message : "Optimiser status failed");
+    } finally {
+      setOptimiserBusy(null);
+    }
+  };
+
+  const runBacktestOptimiser = async () => {
+    setOptimiserBusy("run");
+    setOptimiserErr(null);
+    setRuntimeNotice(null);
+    try {
+      const started = await apiFetch(`calibration/runtime-model/${symbol}/optimise-backtest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ windowDays, maxIterations: 5 }),
+      }) as { runId?: number };
+      const runId = Number(started.runId);
+      setOptimiserRunId(runId);
+      setOptimiserStatus(started as unknown as Record<string, unknown>);
+      setRuntimeNotice(`Backtest optimiser started for ${symbol}. Winner will be staged only, not promoted.`);
+      window.setTimeout(() => void refreshOptimiserStatus(runId), 2500);
+    } catch (e: unknown) {
+      setOptimiserErr(e instanceof Error ? e.message : "Optimiser start failed");
+    } finally {
+      setOptimiserBusy(null);
+    }
+  };
+
+  const stageOptimiserWinner = async () => {
+    if (!optimiserRunId) return;
+    setOptimiserBusy("stage");
+    setOptimiserErr(null);
+    try {
+      const staged = await apiFetch(`calibration/runtime-model/${symbol}/optimise-backtest/${optimiserRunId}/stage-winner`, {
+        method: "POST",
+      }) as Record<string, unknown>;
+      setOptimiserStatus(staged);
+      const runtime = await apiFetch(`calibration/runtime-model/${symbol}`).catch(() => null) as RuntimeModelStateUi | null;
+      setRuntimeModel(runtime ?? null);
+      setRuntimeNotice("Optimised winner staged. Runtime is not promoted until you click Promote To Runtime.");
+    } catch (e: unknown) {
+      setOptimiserErr(e instanceof Error ? e.message : "Stage optimiser winner failed");
+    } finally {
+      setOptimiserBusy(null);
+    }
+  };
+
   const inferImportType = (filename: string, payload: Record<string, unknown>): "moves" | "passes" | "profile" | "comparison" | null => {
     const lower = filename.toLowerCase();
     if (lower.includes("calibration_moves_")) return "moves";
@@ -2135,6 +2194,12 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     return { ...m, relativeTier, qualityPercentile };
   });
   const displayedMoves = movesExpanded ? moveRows : moveRows.slice(0, 20);
+  const optimiserRun = (optimiserStatus?.run ?? null) as Record<string, unknown> | null;
+  const optimiserWinner = (optimiserRun?.winnerMetrics ?? null) as Record<string, unknown> | null;
+  const optimiserWinnerMetrics = (optimiserWinner?.metrics ?? null) as Record<string, unknown> | null;
+  const optimiserBaseline = (optimiserRun?.baselineMetrics ?? null) as Record<string, unknown> | null;
+  const optimiserCandidates = (optimiserStatus?.candidates ?? []) as Array<Record<string, unknown>>;
+  const optimiserSelected = optimiserCandidates.find(c => c.selected === true);
 
   return (
     <div className="space-y-5">
@@ -3239,6 +3304,72 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           <p className="text-[11px] text-muted-foreground self-center">
             Promotion is the explicit handoff from research into the model layer above the V3 engine.
           </p>
+        </div>
+
+        <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <p className="text-xs font-semibold text-cyan-200">Backtest Calibration Optimiser</p>
+              <p className="text-[11px] text-muted-foreground">
+                Runs V3 backtest candidates against calibrated moves. Winners are staged only, never auto-promoted.
+              </p>
+            </div>
+            <span className="text-[11px] px-2 py-0.5 rounded border border-cyan-500/25 text-cyan-200 bg-cyan-500/10">
+              {String(optimiserRun?.status ?? optimiserStatus?.status ?? "not run")}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={runBacktestOptimiser}
+              disabled={optimiserBusy !== null || !runtimeModel?.lifecycle?.hasPromotedModel}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
+            >
+              {optimiserBusy === "run" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart2 className="w-3.5 h-3.5" />}
+              Run Optimiser
+            </button>
+            <button
+              type="button"
+              onClick={() => void refreshOptimiserStatus()}
+              disabled={optimiserBusy !== null || !optimiserRunId}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/40 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              {optimiserBusy === "refresh" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              Refresh Optimiser
+            </button>
+            <button
+              type="button"
+              onClick={stageOptimiserWinner}
+              disabled={optimiserBusy !== null || !optimiserRunId || !optimiserSelected}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
+            >
+              {optimiserBusy === "stage" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+              Stage Optimised Winner
+            </button>
+          </div>
+
+          {optimiserErr && <ErrorBox msg={optimiserErr} />}
+
+          {(optimiserBaseline || optimiserWinnerMetrics) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="rounded-lg border border-border/30 bg-background/30 p-3 space-y-1">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Baseline</p>
+                <StatRow label="Profit factor" value={Number(optimiserBaseline?.profitFactor ?? 0).toFixed(2)} />
+                <StatRow label="Total P&L" value={`${(Number(optimiserBaseline?.totalPnlPct ?? 0) * 100).toFixed(2)}%`} />
+                <StatRow label="Win rate" value={`${(Number(optimiserBaseline?.winRate ?? 0) * 100).toFixed(1)}%`} />
+                <StatRow label="Drawdown" value={`${(Number(optimiserBaseline?.maxDrawdownPct ?? 0) * 100).toFixed(1)}%`} />
+              </div>
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Selected Winner</p>
+                <StatRow label="Candidate" value={String(optimiserWinner?.params ? (optimiserWinner.params as Record<string, unknown>).key ?? "winner" : "winner")} />
+                <StatRow label="Profit factor" value={Number(optimiserWinnerMetrics?.profitFactor ?? 0).toFixed(2)} />
+                <StatRow label="Total P&L" value={`${(Number(optimiserWinnerMetrics?.totalPnlPct ?? 0) * 100).toFixed(2)}%`} />
+                <StatRow label="Win rate" value={`${(Number(optimiserWinnerMetrics?.winRate ?? 0) * 100).toFixed(1)}%`} />
+                <StatRow label="Drawdown" value={`${(Number(optimiserWinnerMetrics?.maxDrawdownPct ?? 0) * 100).toFixed(1)}%`} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

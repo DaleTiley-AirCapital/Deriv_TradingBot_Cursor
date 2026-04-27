@@ -72,6 +72,11 @@ import {
   promoteLatestSymbolResearchProfile,
   stageLatestSymbolResearchProfile,
 } from "../core/calibration/promotedSymbolModel.js";
+import {
+  getBacktestOptimisationStatus,
+  stageBacktestOptimisationWinner,
+  startBacktestOptimisation,
+} from "../core/calibration/backtestOptimiser.js";
 
 const router: IRouter = Router();
 
@@ -1569,6 +1574,91 @@ router.post("/calibration/runtime-model/:symbol/promote", async (req, res): Prom
 });
 
 // ── GET /api/calibration/latest-run/:symbol ───────────────────────────────────
+
+router.post("/calibration/runtime-model/:symbol/optimise-backtest", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+
+  try {
+    const windowDays = Math.max(30, Math.min(730, Number(req.body?.windowDays ?? 365)));
+    const maxIterations = Math.max(1, Math.min(5, Number(req.body?.maxIterations ?? 5)));
+    const runId = await startBacktestOptimisation({ symbol, windowDays, maxIterations });
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      runId,
+      status: "running",
+      promoted: false,
+      message: "Backtest optimiser started. Results are stored as candidates and do not change runtime.",
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Backtest optimiser failed to start";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/calibration/runtime-model/:symbol/optimise-backtest/:runId", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+
+  try {
+    const runId = Number(req.params.runId);
+    if (!Number.isInteger(runId) || runId <= 0) {
+      res.status(400).json({ error: "Invalid optimiser run id" });
+      return;
+    }
+    const status = await getBacktestOptimisationStatus(runId);
+    if (!status || status.run.symbol !== symbol) {
+      res.status(404).json({ error: "Optimiser run not found for symbol" });
+      return;
+    }
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, { ok: true, ...status }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Backtest optimiser status failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/calibration/runtime-model/:symbol/optimise-backtest/:runId/stage-winner", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+
+  try {
+    const runId = Number(req.params.runId);
+    if (!Number.isInteger(runId) || runId <= 0) {
+      res.status(400).json({ error: "Invalid optimiser run id" });
+      return;
+    }
+    const staged = await stageBacktestOptimisationWinner(runId);
+    if (staged.model.symbol !== symbol) {
+      res.status(409).json({ error: "Optimiser run symbol mismatch" });
+      return;
+    }
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      staged: true,
+      promoted: false,
+      runtimeChanged: false,
+      model: staged.model,
+      selected: staged.selected,
+      message: "Optimised winner staged only. Runtime remains unchanged until explicit promotion.",
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Backtest optimiser stage failed";
+    res.status(500).json({ error: message });
+  }
+});
 
 router.get("/calibration/latest-run/:symbol", async (req, res): Promise<void> => {
   const { symbol } = req.params;

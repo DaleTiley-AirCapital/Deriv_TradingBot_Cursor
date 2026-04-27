@@ -8,6 +8,8 @@ export type TradeDirection = "buy" | "sell";
 
 export interface SymbolExitPolicy {
   source: "promoted_runtime_model" | "native_symbol_engine";
+  takeProfitPrice?: number;
+  stopLossPrice?: number;
   takeProfitPct: number;
   stopLossPct: number;
   trailingArmPct: number;
@@ -25,6 +27,7 @@ export interface SymbolTradeCandidate {
   confidenceScore: number;
   qualityBand: RuntimeQualityBand;
   leadInShape: RuntimeLeadInShape;
+  setupSignature: string;
   runtimeSetup: RuntimeEntryEvidenceResult;
   exitPolicy: SymbolExitPolicy;
   features: FeatureVector;
