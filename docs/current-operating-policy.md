@@ -1,13 +1,13 @@
 # Current Operating Policy
 
-This document is the canonical snapshot of the **current runtime operating policy**.
+This document is the canonical snapshot of the current runtime operating policy.
 It separates live operating values from historical and calibration-analysis values.
 
 ## Product Intent
 
 - High-conviction swing trading, not scalping.
 - TP-first trade management targeting large moves.
-- Live path uses V3 symbol-native engines only.
+- Live path currently uses V3 symbol-native engines.
 - Active symbols only: `CRASH300`, `BOOM300`, `R_75`, `R_100`.
 
 ## Current Live Operating Gates
@@ -30,12 +30,13 @@ Several documents contain historical or analysis-era threshold values that are n
 
 These must be interpreted as historical policy or calibration discussion unless explicitly re-adopted in runtime configuration.
 
-## Live Architecture Guardrail
+## Architecture Transition Snapshot
 
-Live signal flow is V3-native:
-
-- `engineRouterV3.ts` -> `symbolCoordinator.ts` -> `portfolioAllocatorV3.ts`
-- backtest-only modules (`strategies.ts`, `signalRouter.ts`, `scoring.ts`) must not be reintroduced into the live path
+- Milestone 1 adds symbol-service contracts and folder scaffolding at:
+  - `artifacts/api-server/src/symbol-services/*`
+- Milestone 1 does not change runtime behavior.
+- Active trading path remains unchanged until explicit cutover milestones:
+  - `engineRouterV3.ts` -> `symbolCoordinator.ts` -> `portfolioAllocatorV3.ts`
 
 ## Runtime Model Promotion Guardrail
 
@@ -55,6 +56,8 @@ Live signal flow is V3-native:
 
 - `README.md`
 - `docs/source-of-truth.md`
+- `docs/symbol-service-architecture.md`
+- `docs/runtime-feeddown-contract.md`
 - `docs/api-parity-checklist.md`
 - `docs/operator-runbook.md`
 - `docs/docs-guardrails.md`

@@ -8,6 +8,10 @@ Use this map to avoid doc and implementation drift.
   - `docs/current-operating-policy.md`
 - Runtime model lifecycle and promotion policy:
   - `docs/runtime-model-lifecycle.md`
+- Symbol-service architecture and ownership boundaries:
+  - `docs/symbol-service-architecture.md`
+- Runtime feeddown contract and validation:
+  - `docs/runtime-feeddown-contract.md`
 - Deep strategy doctrine:
   - `.agents/skills/deriv-trading-strategy/SKILL.md`
 - Contextual project state summary:
@@ -19,6 +23,8 @@ Use this map to avoid doc and implementation drift.
   - `.agents/skills/deriv-trading-repo-guardian/SKILL.md`
 - Verification guardrails:
   - `artifacts/api-server/docs/guardrails.md`
+- Codex implementation guardrails for this repo:
+  - `docs/codex-agent-instructions.md`
 
 ## API Contract
 
@@ -47,10 +53,12 @@ Use this map to avoid doc and implementation drift.
 
 - Suggested research outputs:
   - `symbol_research_profiles`
+- Staged runtime owner:
+  - `platform_state` staged symbol model entries
 - Promoted runtime owner for trading behavior:
   - `platform_state` promoted symbol model entries
 - Rule:
-  - latest research output is not allowed to change runtime behavior until explicitly promoted
+  - latest research output is not allowed to change runtime behavior until explicitly staged and promoted
 
 ## Change Ownership Rule
 
@@ -60,3 +68,8 @@ When changing behavior:
 2. Update relevant source-of-truth doc.
 3. Update parity/runbook docs if externally visible behavior changed.
 4. Do not leave conflicting threshold statements unresolved.
+
+## Milestone 1 Note
+
+Milestone 1 introduces symbol-service scaffolding and contracts only.
+No scheduler, allocator, trade, or live/backtest behavior cutover is performed in this milestone.
