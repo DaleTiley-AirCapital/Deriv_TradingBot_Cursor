@@ -35,6 +35,14 @@ function expectedCandidateDirection(direction: "up" | "down" | "unknown"): "buy"
   return null;
 }
 
+function hasReason(
+  reasons: string[],
+  needle: string,
+): boolean {
+  const n = needle.toLowerCase();
+  return reasons.some((reason) => reason.toLowerCase().includes(n));
+}
+
 function familyMatches(moveFamily: string | null, selectedFamily: string | null): boolean {
   if (!moveFamily || !selectedFamily) return false;
   const left = moveFamily.toLowerCase();
@@ -204,6 +212,18 @@ export async function runCrash300CalibrationParity(params: {
 
   const totals = initAggregateReport();
   const verdicts: ParityMoveVerdict[] = [];
+  const failureReasonCounts: Record<string, number> = {};
+  const selectedRuntimeFamilyCounts: Record<string, number> = {};
+  const selectedBucketCounts: Record<string, number> = {};
+  const directionMatrixCounts: Record<string, number> = {};
+  const gateComponentFailures: Record<string, number> = {
+    spikePhaseFit: 0,
+    developmentWindowFit: 0,
+    runwayFit: 0,
+    triggerWindowFit: 0,
+  };
+  let noCoordinatorOutput = 0;
+  let runtimeCalibratedSetupWeak = 0;
 
   for (const move of moves) {
     totals.totalMoves += 1;
@@ -247,7 +267,13 @@ export async function runCrash300CalibrationParity(params: {
 
       const decision = await evaluateCrash300Runtime(context);
       let candidateProduced = false;
-      if (decision.valid && decision.direction) {
+      const builtCandidateEvidence = (
+        (decision.evidence as Record<string, unknown> | null)?.__builtCandidate ??
+        null
+      );
+      if (decision.direction && (decision.valid || Boolean(builtCandidateEvidence))) {
+        candidateProduced = true;
+      } else if (decision.valid && decision.direction) {
         try {
           createCrash300TradeCandidate(decision);
           candidateProduced = true;
@@ -257,7 +283,7 @@ export async function runCrash300CalibrationParity(params: {
       }
 
       const expectedDirection = expectedCandidateDirection(normalizeMoveDirection(move.direction));
-      const directionMatched = !expectedDirection || decision.direction === expectedDirection;
+      const directionMatched = !expectedDirection || (candidateProduced && decision.direction === expectedDirection);
       const familyMatched = familyMatches(move.moveType, decision.setupFamily);
       const bucketMatched = bucketLooksMatched(decision.moveBucket);
       const setupEvidenceFailed = isSetupEvidenceFailure(decision.setupMatch, decision.failReasons);
@@ -288,10 +314,33 @@ export async function runCrash300CalibrationParity(params: {
       };
       verdicts.push(verdict);
 
+      const firstFailureReason = verdict.firstFailureReason ?? "none";
+      failureReasonCounts[firstFailureReason] = (failureReasonCounts[firstFailureReason] ?? 0) + 1;
+      const runtimeFamilyKey = verdict.selectedRuntimeFamily ?? "none";
+      selectedRuntimeFamilyCounts[runtimeFamilyKey] = (selectedRuntimeFamilyCounts[runtimeFamilyKey] ?? 0) + 1;
+      const bucketKey = verdict.selectedBucket ?? "none";
+      selectedBucketCounts[bucketKey] = (selectedBucketCounts[bucketKey] ?? 0) + 1;
+      const expectedLabel = expectedDirection ?? "unknown";
+      const candidateLabel = verdict.candidateDirection ?? "none";
+      const matrixKey = `${expectedLabel}->${candidateLabel}`;
+      directionMatrixCounts[matrixKey] = (directionMatrixCounts[matrixKey] ?? 0) + 1;
+
+      if (hasReason(verdict.allFailureReasons, "no_coordinator_output")) {
+        noCoordinatorOutput += 1;
+      }
+      if (hasReason(verdict.allFailureReasons, "runtime_calibrated_setup_weak")) {
+        runtimeCalibratedSetupWeak += 1;
+      }
+      for (const component of Object.keys(gateComponentFailures)) {
+        if (hasReason(verdict.allFailureReasons, component)) {
+          gateComponentFailures[component] += 1;
+        }
+      }
+
       if (!candidateProduced) totals.noCandidate += 1;
-      if (!familyMatched) totals.familyMismatch += 1;
-      if (!directionMatched) totals.directionMismatch += 1;
-      if (!bucketMatched) totals.bucketMismatch += 1;
+      if (candidateProduced && !familyMatched) totals.familyMismatch += 1;
+      if (candidateProduced && !directionMatched) totals.directionMismatch += 1;
+      if (candidateProduced && !bucketMatched) totals.bucketMismatch += 1;
       if (setupEvidenceFailed) totals.setupEvidenceFailed += 1;
       if (
         candidateProduced &&
@@ -306,6 +355,16 @@ export async function runCrash300CalibrationParity(params: {
       const message = error instanceof Error ? error.message : String(error);
       const verdict = buildFailureVerdict(move, message);
       verdicts.push(verdict);
+      failureReasonCounts[verdict.firstFailureReason ?? "none"] =
+        (failureReasonCounts[verdict.firstFailureReason ?? "none"] ?? 0) + 1;
+      selectedRuntimeFamilyCounts.none = (selectedRuntimeFamilyCounts.none ?? 0) + 1;
+      selectedBucketCounts.none = (selectedBucketCounts.none ?? 0) + 1;
+      const expectedDirection = expectedCandidateDirection(normalizeMoveDirection(move.direction)) ?? "unknown";
+      const matrixKey = `${expectedDirection}->none`;
+      directionMatrixCounts[matrixKey] = (directionMatrixCounts[matrixKey] ?? 0) + 1;
+      if ((verdict.firstFailureReason ?? "").toLowerCase().includes("no_coordinator_output")) {
+        noCoordinatorOutput += 1;
+      }
       totals.noCandidate += 1;
       if (isRuntimeMissingError(message)) totals.runtimeModelMissing += 1;
       if (isInvalidRuntimeError(message)) totals.invalidRuntimeModel += 1;
@@ -322,5 +381,14 @@ export async function runCrash300CalibrationParity(params: {
     },
     totals,
     verdicts,
+    diagnostics: {
+      failureReasonCounts,
+      selectedRuntimeFamilyCounts,
+      selectedBucketCounts,
+      directionMatrixCounts,
+      noCoordinatorOutput,
+      runtimeCalibratedSetupWeak,
+      gateComponentFailures,
+    },
   };
 }

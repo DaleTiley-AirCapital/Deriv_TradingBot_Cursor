@@ -173,6 +173,25 @@ interface LiveWindowsResponse {
   symbols: LiveWindowSymbol[];
 }
 
+interface RuntimeLifecycleView {
+  promotedRunId?: number | null;
+  promotedAt?: string | null;
+}
+
+interface RuntimeModelView {
+  lifecycle?: RuntimeLifecycleView | null;
+}
+
+interface RuntimeEvidenceView {
+  promotedModelRunId: number | null;
+  selectedRuntimeFamily: string | null;
+  selectedBucket: string | null;
+  setupMatch: number | null;
+  failReasons: string[];
+  candidateProduced: boolean | null;
+  candidateDirection: string | null;
+}
+
 function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
   if (!reason) return null;
   const r = reason;
@@ -306,6 +325,54 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     if (m) return { gate: p.gate, detail: p.detail(m), raw: r };
   }
   return { gate: "Gate", detail: r.slice(0, 160), raw: r };
+}
+
+function extractRuntimeEvidence(sig: SignalLog, crashPromotedRunId?: number | null): RuntimeEvidenceView {
+  const dims = (sig.scoringDimensions && typeof sig.scoringDimensions === "object")
+    ? (sig.scoringDimensions as unknown as Record<string, unknown>)
+    : {};
+  const promotedModelRunId = Number(
+    dims.promotedModelRunId ??
+    dims.runtimeModelRunId ??
+    dims.modelRunId ??
+    crashPromotedRunId ??
+    NaN,
+  );
+  const failRaw = dims.failReasons ?? dims.failureReasons ?? dims.reasons ?? null;
+  const failReasons = Array.isArray(failRaw)
+    ? failRaw.map(v => String(v)).filter(Boolean)
+    : typeof failRaw === "string" && failRaw.length > 0
+      ? [failRaw]
+      : [];
+  const setupRaw = Number(dims.setupMatch ?? dims.setup_match ?? dims.runtimeSetupMatch ?? NaN);
+  const candidateRaw = dims.candidateProduced ?? dims.candidate_produced ?? null;
+  const candidateProduced = typeof candidateRaw === "boolean"
+    ? candidateRaw
+    : candidateRaw == null
+      ? null
+      : String(candidateRaw).toLowerCase() === "true";
+  const directionRaw = dims.candidateDirection ?? dims.candidate_direction ?? sig.direction ?? null;
+  return {
+    promotedModelRunId: Number.isFinite(promotedModelRunId) ? promotedModelRunId : null,
+    selectedRuntimeFamily: typeof (dims.selectedRuntimeFamily ?? dims.runtimeFamily) === "string"
+      ? String(dims.selectedRuntimeFamily ?? dims.runtimeFamily)
+      : null,
+    selectedBucket: typeof (dims.selectedBucket ?? dims.bucket) === "string"
+      ? String(dims.selectedBucket ?? dims.bucket)
+      : null,
+    setupMatch: Number.isFinite(setupRaw) ? setupRaw : null,
+    failReasons,
+    candidateProduced,
+    candidateDirection: directionRaw ? String(directionRaw) : null,
+  };
+}
+
+function isCrashDecisionStale(sig: SignalLog, promotedAt: string | null | undefined): boolean {
+  if (sig.symbol !== "CRASH300" || !promotedAt) return false;
+  const decisionTs = new Date(sig.ts).getTime();
+  const promotedTs = new Date(promotedAt).getTime();
+  if (!Number.isFinite(decisionTs) || !Number.isFinite(promotedTs)) return false;
+  return decisionTs < promotedTs;
 }
 
 // ── Micro Components ──────────────────────────────────────────────────────────
@@ -637,11 +704,24 @@ function DR({ label, value, highlight }: { label: string; value: string; highlig
   );
 }
 
-function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionState }) {
+function DecisionDetailPanel({
+  sig,
+  state,
+  crashPromotedRunId,
+  crashPromotedAt,
+}: {
+  sig: SignalLog;
+  state: DecisionState;
+  crashPromotedRunId?: number | null;
+  crashPromotedAt?: string | null;
+}) {
   const tp = sig.suggestedTp != null ? Math.abs(sig.suggestedTp) : null;
   const sl = sig.suggestedSl != null ? Math.abs(sig.suggestedSl) : null;
   const rr = sl && sl > 0 && tp ? (tp / sl) : null;
   const gate = parseBlockingGate(sig.rejectionReason);
+  const isCrash = sig.symbol === "CRASH300";
+  const runtimeEvidence = extractRuntimeEvidence(sig, crashPromotedRunId);
+  const isStaleCrashRuntime = isCrashDecisionStale(sig, crashPromotedAt);
 
   return (
     <motion.div
@@ -655,7 +735,8 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
       <div className="space-y-3">
         <h4 className="text-xs font-semibold flex items-center gap-1.5">
           <BarChart3 className="w-3.5 h-3.5 text-primary" />
-          {isCrash300Breakdown(sig.scoringDimensions) ? "CRASH300 Native Score"
+          {isCrash ? "CRASH300 Runtime Model Evidence"
+            : isCrash300Breakdown(sig.scoringDimensions) ? "CRASH300 Legacy Diagnostic"
             : isBoom300Breakdown(sig.scoringDimensions) ? "BOOM300 Native Score"
             : isR75ReversalBreakdown(sig.scoringDimensions) ? "R75 Reversal Score"
             : isR75ContinuationBreakdown(sig.scoringDimensions) ? "R75 Continuation Score"
@@ -665,10 +746,24 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
             : isR100ContinuationBreakdown(sig.scoringDimensions) ? "R100 Continuation Score"
             : "Score Breakdown"}
         </h4>
+        {isCrash && (
+          <div className="rounded-md border border-sky-500/20 bg-sky-500/5 p-2.5 space-y-1.5">
+            <DR label="Promoted model run" value={String(runtimeEvidence.promotedModelRunId ?? crashPromotedRunId ?? "—")} />
+            <DR label="Selected runtime family" value={runtimeEvidence.selectedRuntimeFamily ?? "—"} />
+            <DR label="Selected bucket" value={runtimeEvidence.selectedBucket ?? "—"} />
+            <DR label="Setup match" value={runtimeEvidence.setupMatch != null ? `${Math.round(runtimeEvidence.setupMatch * 100)}%` : "—"} />
+            <DR label="Candidate produced" value={runtimeEvidence.candidateProduced == null ? "—" : runtimeEvidence.candidateProduced ? "true" : "false"} />
+            <DR label="Candidate direction" value={runtimeEvidence.candidateDirection ?? "—"} />
+            <DR label="Fail reasons" value={runtimeEvidence.failReasons.length > 0 ? runtimeEvidence.failReasons.join(", ") : "—"} />
+            <DR label="Runtime source status" value={isStaleCrashRuntime ? "stale decision vs promoted runtime" : "current runtime epoch"} />
+          </div>
+        )}
         {sig.scoringDimensions ? (
           isCrash300Breakdown(sig.scoringDimensions) ? (
             <div className="space-y-1.5">
-              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score</p>
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">
+                {isCrash ? "Legacy diagnostic only · 6-component score" : "6-Component Engine Score"}
+              </p>
               {CRASH300_DIMENSION_ORDER.map(key => {
                 const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
@@ -792,6 +887,7 @@ function DecisionDetailPanel({ sig, state }: { sig: SignalLog; state: DecisionSt
         )}
         <div className="pt-2 border-t border-border/20 space-y-1">
           <DR label={
+            isCrash ? "Legacy Diagnostic Score" :
             isCrash300Breakdown(sig.scoringDimensions) || isBoom300Breakdown(sig.scoringDimensions) ||
             isR75ReversalBreakdown(sig.scoringDimensions) || isR75ContinuationBreakdown(sig.scoringDimensions) || isR75BreakoutBreakdown(sig.scoringDimensions) ||
             isR100ReversalBreakdown(sig.scoringDimensions) || isR100BreakoutBreakdown(sig.scoringDimensions) || isR100ContinuationBreakdown(sig.scoringDimensions)
@@ -1092,6 +1188,13 @@ export default function Decisions() {
     queryFn: () => apiFetch<LiveWindowsResponse>("signals/live-windows"),
     refetchInterval: 5000,
   });
+  const { data: crashRuntimeModel } = useQuery<RuntimeModelView>({
+    queryKey: ["calibration/runtime-model", "CRASH300"],
+    queryFn: () => apiFetch<RuntimeModelView>("calibration/runtime-model/CRASH300"),
+    refetchInterval: 5000,
+  });
+  const crashPromotedRunId = crashRuntimeModel?.lifecycle?.promotedRunId ?? null;
+  const crashPromotedAt = crashRuntimeModel?.lifecycle?.promotedAt ?? null;
 
   const signals = data?.signals ?? [];
   const total = data?.total ?? 0;
@@ -1140,6 +1243,9 @@ export default function Decisions() {
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <Zap className="w-6 h-6 text-primary" /> Engine Decisions
           </h1>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            CRASH300 runtime evidence source: promoted model run {crashPromotedRunId ?? "none"} at {compactDateTime(crashPromotedAt)}.
+          </p>
           <p className="text-sm text-muted-foreground mt-0.5">
             Every signal decision — why it passed, why it failed, what the AI said
           </p>
@@ -1266,6 +1372,7 @@ export default function Decisions() {
                 const ts = new Date(sig.ts).toLocaleString(undefined, {
                   month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
                 });
+                const staleCrashRuntime = isCrashDecisionStale(sig, crashPromotedAt);
 
                 return (
                   <React.Fragment key={sig.id}>
@@ -1307,6 +1414,14 @@ export default function Decisions() {
                       {/* Time */}
                       <div className="w-36 text-right text-[11px] text-muted-foreground tabular-nums">
                         {ts}
+                        {sig.symbol === "CRASH300" && (
+                          <div className={cn(
+                            "text-[10px] mt-0.5",
+                            staleCrashRuntime ? "text-amber-300" : "text-emerald-300",
+                          )}>
+                            {staleCrashRuntime ? "stale runtime epoch" : "current runtime epoch"}
+                          </div>
+                        )}
                       </div>
 
                       {/* Expand toggle */}
@@ -1319,7 +1434,12 @@ export default function Decisions() {
 
                     <AnimatePresence>
                       {isExpanded && (
-                        <DecisionDetailPanel sig={sig} state={state} />
+                        <DecisionDetailPanel
+                          sig={sig}
+                          state={state}
+                          crashPromotedRunId={crashPromotedRunId}
+                          crashPromotedAt={crashPromotedAt}
+                        />
                       )}
                     </AnimatePresence>
                   </React.Fragment>

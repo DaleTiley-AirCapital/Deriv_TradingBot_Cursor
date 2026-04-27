@@ -505,6 +505,18 @@ interface PersistedV3BacktestHistoryRun {
   createdAt: string;
 }
 
+function isValidV3ResultShape(value: unknown): value is V3Result {
+  if (!value || typeof value !== "object") return false;
+  const r = value as Partial<V3Result>;
+  return (
+    typeof r.symbol === "string" &&
+    Array.isArray(r.trades) &&
+    typeof r.summary === "object" &&
+    r.summary != null &&
+    typeof r.totalBars === "number"
+  );
+}
+
 function pct(v: number) {
   return (v * 100).toFixed(2) + "%";
 }
@@ -819,6 +831,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const [historyRuns, setHistoryRuns] = useState<PersistedV3BacktestHistoryRun[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedHistoryRunId, setSelectedHistoryRunId] = useState<number | null>(null);
+  const [historyRunLoadError, setHistoryRunLoadError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -849,12 +862,13 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
 
   const loadBacktestHistoryRun = async (runId: number) => {
     setErr(null);
+    setHistoryRunLoadError(null);
     setSelectedHistoryRunId(runId);
     try {
       const d = await apiFetch(`backtest/v3/history/${runId}`) as { run?: { symbol?: string; result?: V3Result } };
       const run = d.run;
-      if (!run?.result || !run?.symbol) {
-        throw new Error(`Backtest run ${runId} has no persisted result payload`);
+      if (!run?.symbol || !isValidV3ResultShape(run.result)) {
+        throw new Error(`Run ${runId} has malformed or empty persisted result data.`);
       }
       const selectedSymbol = String(run.symbol);
       setSymbol(selectedSymbol);
@@ -862,7 +876,11 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       setResults({ [selectedSymbol]: run.result });
       setTierSweep(null);
     } catch (e: any) {
-      setErr(e?.message ?? "Failed to load selected backtest run");
+      const msg = e?.message ?? "Failed to load selected backtest run";
+      setHistoryRunLoadError(msg);
+      setErr(msg);
+      setResults(null);
+      setTierSweep(null);
     }
   };
 
@@ -873,6 +891,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const run = async () => {
     setRunning(true);
     setErr(null);
+    setHistoryRunLoadError(null);
     setResults(null);
     setTierSweep(null);
     setElapsed(0);
@@ -905,6 +924,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const runTierSweep = async () => {
     setSweeping(true);
     setErr(null);
+    setHistoryRunLoadError(null);
     setResults(null);
     setTierSweep(null);
     setElapsed(0);
@@ -1186,6 +1206,17 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
         </div>
 
         {err && <ErrorBox msg={err} />}
+        {historyRunLoadError && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+            <p className="text-xs font-semibold text-amber-200">Backtest run could not be loaded</p>
+            <p className="text-[11px] text-amber-100/90 mt-1">
+              {historyRunLoadError}
+            </p>
+            <p className="text-[11px] text-amber-100/80 mt-1">
+              Select another run or execute a fresh backtest to regenerate valid artifacts.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Results */}
@@ -1405,6 +1436,35 @@ interface RuntimeModelStateUi {
     promotedDynamicTpEnabled?: boolean;
     driftPendingPromotion?: boolean;
   };
+}
+
+interface ParityDiagnosticsUi {
+  failureReasonCounts?: Record<string, number>;
+  selectedRuntimeFamilyCounts?: Record<string, number>;
+  selectedBucketCounts?: Record<string, number>;
+  directionMatrixCounts?: Record<string, number>;
+  noCoordinatorOutput?: number;
+  runtimeCalibratedSetupWeak?: number;
+  gateComponentFailures?: Record<string, number>;
+}
+
+interface ParityReportUi {
+  generatedAt?: string;
+  promotedModelRunId?: number | null;
+  stagedModelRunId?: number | null;
+  totals?: {
+    totalMoves?: number;
+    matchedMoves?: number;
+    noCandidate?: number;
+    familyMismatch?: number;
+    directionMismatch?: number;
+    bucketMismatch?: number;
+    setupEvidenceFailed?: number;
+    runtimeModelMissing?: number;
+    invalidRuntimeModel?: number;
+  };
+  diagnostics?: ParityDiagnosticsUi;
+  verdicts?: Array<Record<string, unknown>>;
 }
 
 //  Move Calibration Tab 
@@ -1693,6 +1753,9 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   const [runtimeBusy, setRuntimeBusy] = useState<"stage" | "promote" | null>(null);
   const [runtimeErr, setRuntimeErr] = useState<string | null>(null);
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
+  const [parityBusy, setParityBusy] = useState(false);
+  const [parityErr, setParityErr] = useState<string | null>(null);
+  const [parityReport, setParityReport] = useState<ParityReportUi | null>(null);
   const [optimiserBusy, setOptimiserBusy] = useState<"run" | "stage" | "refresh" | "cancel" | null>(null);
   const [optimiserRunId, setOptimiserRunId] = useState<number | null>(null);
   const [optimiserStatus, setOptimiserStatus] = useState<Record<string, unknown> | null>(null);
@@ -1879,6 +1942,8 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     setOptimiserRunId(null);
     setOptimiserStatus(null);
     setOptimiserErr(null);
+    setParityReport(null);
+    setParityErr(null);
   }, [symbol]);
 
   useEffect(() => {
@@ -2141,6 +2206,19 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     }
   };
 
+  const runParityReport = async () => {
+    setParityBusy(true);
+    setParityErr(null);
+    try {
+      const report = await apiFetch(`calibration/runtime-model/${symbol}/parity-report?windowDays=${windowDays}`) as ParityReportUi;
+      setParityReport(report);
+    } catch (e: unknown) {
+      setParityErr(e instanceof Error ? e.message : "Parity report failed");
+    } finally {
+      setParityBusy(false);
+    }
+  };
+
   const refreshOptimiserStatus = async (runId = optimiserRunId, silent = false) => {
     if (!runId) return;
     if (!silent) {
@@ -2158,6 +2236,10 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   };
 
   const runBacktestOptimiser = async () => {
+    if (optimiserLockedByParity) {
+      setOptimiserErr("Optimiser disabled: CRASH300 runtime does not recognise calibrated moves yet.");
+      return;
+    }
     setOptimiserBusy("run");
     setOptimiserErr(null);
     setRuntimeNotice(null);
@@ -2345,6 +2427,17 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     optimiserStatus?.failureStack ??
     ((optimiserRun?.errorSummary as Record<string, unknown> | undefined)?.stack ?? ""),
   ).trim();
+  const parityTotals = parityReport?.totals ?? null;
+  const parityMatchedMoves = Number(parityTotals?.matchedMoves ?? 0);
+  const parityHasAnyMatches = parityMatchedMoves > 0;
+  const optimiserHasExistingRun = optimiserRunId != null || optimiserRun != null;
+  const optimiserLockedByParity = !parityHasAnyMatches;
+  const parityDiagnostics = parityReport?.diagnostics ?? null;
+  const parityFailureRows = Object.entries(parityDiagnostics?.failureReasonCounts ?? {}).sort((a, b) => b[1] - a[1]);
+  const parityFamilyRows = Object.entries(parityDiagnostics?.selectedRuntimeFamilyCounts ?? {}).sort((a, b) => b[1] - a[1]);
+  const parityBucketRows = Object.entries(parityDiagnostics?.selectedBucketCounts ?? {}).sort((a, b) => b[1] - a[1]);
+  const parityDirectionRows = Object.entries(parityDiagnostics?.directionMatrixCounts ?? {}).sort((a, b) => b[1] - a[1]);
+  const parityGateRows = Object.entries(parityDiagnostics?.gateComponentFailures ?? {}).sort((a, b) => b[1] - a[1]);
 
   useEffect(() => {
     if (!optimiserRunId || !optimiserIsRunning) return;
@@ -3457,10 +3550,82 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             {runtimeBusy === "promote" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
             Promote To Runtime
           </button>
+          <button
+            type="button"
+            onClick={() => void runParityReport()}
+            disabled={parityBusy || runtimeBusy !== null || !runtimeModel?.lifecycle?.hasPromotedModel}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-500/30 text-xs text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/15 disabled:opacity-50"
+            title="Run CRASH300 parity report with one verdict per calibrated move"
+          >
+            {parityBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+            Run Parity
+          </button>
           <p className="text-[11px] text-muted-foreground self-center">
             Promotion is the explicit handoff from research into the model layer above the V3 engine.
           </p>
         </div>
+
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3">
+          <p className="text-[11px] font-semibold text-foreground mb-2">CRASH300 workflow</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-1 text-[11px] text-muted-foreground">
+            <span>1. Run Full Calibration</span>
+            <span>2. Stage Research Model</span>
+            <span>3. Promote Staged Runtime Model</span>
+            <span>4. Run Parity</span>
+            <span>5. Run Backtest</span>
+            <span>6. Run Paper</span>
+          </div>
+          <p className="text-[11px] text-muted-foreground mt-2">
+            Optimiser is optional and stays locked until parity reports at least one matched move.
+          </p>
+        </div>
+
+        {parityErr && <ErrorBox msg={parityErr} />}
+        {parityReport && (
+          <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-xs font-semibold text-indigo-200">CRASH300 Parity Diagnostics</p>
+              <span className={cn(
+                "text-[11px] px-2 py-0.5 rounded border",
+                parityHasAnyMatches
+                  ? "text-emerald-200 border-emerald-500/30 bg-emerald-500/10"
+                  : "text-amber-200 border-amber-500/30 bg-amber-500/10",
+              )}>
+                matched {parityMatchedMoves}/{Number(parityTotals?.totalMoves ?? 0)}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-[11px]">
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5"><span className="text-muted-foreground">No candidate</span><p className="font-mono">{Number(parityTotals?.noCandidate ?? 0)}</p></div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5"><span className="text-muted-foreground">Family mismatch</span><p className="font-mono">{Number(parityTotals?.familyMismatch ?? 0)}</p></div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5"><span className="text-muted-foreground">Direction mismatch</span><p className="font-mono">{Number(parityTotals?.directionMismatch ?? 0)}</p></div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5"><span className="text-muted-foreground">Bucket mismatch</span><p className="font-mono">{Number(parityTotals?.bucketMismatch ?? 0)}</p></div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5"><span className="text-muted-foreground">Setup evidence failed</span><p className="font-mono">{Number(parityTotals?.setupEvidenceFailed ?? 0)}</p></div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5">
+                <p className="text-muted-foreground mb-1">Top failure reasons</p>
+                {parityFailureRows.length === 0 ? <p className="font-mono text-muted-foreground">n/a</p> : parityFailureRows.slice(0, 6).map(([k, v]) => <p key={k} className="font-mono">{k}: {v}</p>)}
+              </div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5">
+                <p className="text-muted-foreground mb-1">Direction matrix</p>
+                {parityDirectionRows.length === 0 ? <p className="font-mono text-muted-foreground">n/a</p> : parityDirectionRows.slice(0, 6).map(([k, v]) => <p key={k} className="font-mono">{k}: {v}</p>)}
+              </div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5">
+                <p className="text-muted-foreground mb-1">Selected runtime family</p>
+                {parityFamilyRows.length === 0 ? <p className="font-mono text-muted-foreground">n/a</p> : parityFamilyRows.slice(0, 6).map(([k, v]) => <p key={k} className="font-mono">{k}: {v}</p>)}
+              </div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5">
+                <p className="text-muted-foreground mb-1">Selected bucket</p>
+                {parityBucketRows.length === 0 ? <p className="font-mono text-muted-foreground">n/a</p> : parityBucketRows.slice(0, 6).map(([k, v]) => <p key={k} className="font-mono">{k}: {v}</p>)}
+              </div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5 md:col-span-2">
+                <p className="text-muted-foreground mb-1">Top failing gate components</p>
+                <p className="font-mono">no_coordinator_output: {Number(parityDiagnostics?.noCoordinatorOutput ?? 0)} | runtime_calibrated_setup_weak: {Number(parityDiagnostics?.runtimeCalibratedSetupWeak ?? 0)}</p>
+                {parityGateRows.length === 0 ? <p className="font-mono text-muted-foreground mt-1">n/a</p> : parityGateRows.map(([k, v]) => <p key={k} className="font-mono">{k}: {v}</p>)}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
@@ -3479,40 +3644,52 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             <button
               type="button"
               onClick={runBacktestOptimiser}
-              disabled={optimiserBusy !== null || !runtimeModel?.lifecycle?.hasPromotedModel}
+              disabled={optimiserBusy !== null || !runtimeModel?.lifecycle?.hasPromotedModel || optimiserLockedByParity}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
             >
               {optimiserBusy === "run" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart2 className="w-3.5 h-3.5" />}
               Run Optimiser
             </button>
-            <button
-              type="button"
-              onClick={cancelOptimiser}
-              disabled={optimiserBusy !== null || !optimiserRunId || !optimiserIsRunning}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/30 text-xs text-red-300 bg-red-500/10 hover:bg-red-500/15 disabled:opacity-50"
-            >
-              {optimiserBusy === "cancel" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
-              Cancel Optimiser
-            </button>
-            <button
-              type="button"
-              onClick={() => void refreshOptimiserStatus()}
-              disabled={optimiserBusy !== null || !optimiserRunId}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/40 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-            >
-              {optimiserBusy === "refresh" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              Refresh Optimiser
-            </button>
-            <button
-              type="button"
-              onClick={stageOptimiserWinner}
-              disabled={optimiserBusy !== null || !optimiserRunId || !optimiserSelected}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
-            >
-              {optimiserBusy === "stage" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-              Stage Optimised Winner
-            </button>
+            {optimiserHasExistingRun && (
+              <>
+                <button
+                  type="button"
+                  onClick={cancelOptimiser}
+                  disabled={optimiserBusy !== null || !optimiserRunId || !optimiserIsRunning}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/30 text-xs text-red-300 bg-red-500/10 hover:bg-red-500/15 disabled:opacity-50"
+                >
+                  {optimiserBusy === "cancel" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
+                  Cancel Optimiser
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void refreshOptimiserStatus()}
+                  disabled={optimiserBusy !== null || !optimiserRunId}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/40 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                >
+                  {optimiserBusy === "refresh" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  Refresh Optimiser
+                </button>
+                <button
+                  type="button"
+                  onClick={stageOptimiserWinner}
+                  disabled={optimiserBusy !== null || !optimiserRunId || !optimiserSelected}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
+                >
+                  {optimiserBusy === "stage" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                  Stage Optimised Winner
+                </button>
+              </>
+            )}
           </div>
+          {optimiserLockedByParity && (
+            <ErrorBox msg="Optimiser disabled: CRASH300 runtime does not recognise calibrated moves yet." />
+          )}
+          {!optimiserHasExistingRun && (
+            <p className="text-[11px] text-muted-foreground">
+              Optimiser run controls (refresh/cancel/stage) will appear after a valid optimiser run exists.
+            </p>
+          )}
 
           {optimiserErr && <ErrorBox msg={optimiserErr} />}
           {optimiserRun && (

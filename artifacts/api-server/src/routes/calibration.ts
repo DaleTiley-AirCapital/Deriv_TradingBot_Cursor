@@ -1026,6 +1026,7 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
         stagedModelRunId: runtimeModel?.stagedModelRunId ?? null,
         totals: parityRecord.totals ?? {},
         verdicts: Array.isArray(parityRecord.verdicts) ? parityRecord.verdicts : [],
+        diagnostics: parityRecord.diagnostics ?? {},
         report: parityRecord,
       });
       filename = `calibration_parity_${symbol}_${ts}.json`;
@@ -1743,6 +1744,7 @@ router.get("/calibration/runtime-model/:symbol/parity-report", async (req, res):
       stagedModelRunId: runtimeModel?.stagedModelRunId ?? null,
       totals: parityRecord.totals ?? {},
       verdicts: Array.isArray(parityRecord.verdicts) ? parityRecord.verdicts : [],
+      diagnostics: parityRecord.diagnostics ?? {},
       report: parityRecord,
     }));
   } catch (err) {
