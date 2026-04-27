@@ -67,12 +67,13 @@ import {
   upsertSymbolResearchProfile,
 } from "../core/calibration/symbolResearchProfile.js";
 import {
+  promoteStagedSymbolRuntimeModel,
   getPromotedSymbolRuntimeModel,
   getStagedSymbolRuntimeModel,
-  promoteLatestSymbolResearchProfile,
   stageLatestSymbolResearchProfile,
 } from "../core/calibration/promotedSymbolModel.js";
 import {
+  cancelBacktestOptimisationRun,
   getBacktestOptimisationStatus,
   stageBacktestOptimisationWinner,
   startBacktestOptimisation,
@@ -105,6 +106,13 @@ function runtimeModelDiagnostics(model: { tpModel?: Record<string, unknown>; pro
     dynamicTpEnabled: tpModel.dynamicByQualityLeadIn === true && Object.keys(buckets).length > 0,
     promotedAt: model.promotedAt ?? null,
   };
+}
+
+function normaliseRuntimeModelForCompare(model: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!model) return null;
+  const copy = { ...model };
+  delete copy.promotedAt;
+  return copy;
 }
 
 async function refreshResearchProfileFromLatestCalibration(symbol: string): Promise<void> {
@@ -1457,6 +1465,14 @@ router.get("/calibration/runtime-model/:symbol", async (req, res): Promise<void>
     const stagedRunId = stagedModel?.sourceRunId ?? null;
     const stagedDiagnostics = runtimeModelDiagnostics(stagedModel);
     const promotedDiagnostics = runtimeModelDiagnostics(promotedModel);
+    const stagedOptimisationRunId = stagedModel?.optimisationRunId ?? null;
+    const promotedOptimisationRunId = promotedModel?.optimisationRunId ?? null;
+    const stagedOptimisationCandidateId = stagedModel?.optimisationCandidateId ?? null;
+    const promotedOptimisationCandidateId = promotedModel?.optimisationCandidateId ?? null;
+    const promotedMatchesStaged =
+      Boolean(stagedModel && promotedModel) &&
+      JSON.stringify(normaliseRuntimeModelForCompare(stagedModel as unknown as Record<string, unknown>)) ===
+        JSON.stringify(normaliseRuntimeModelForCompare(promotedModel as unknown as Record<string, unknown>));
 
     res.json(withSymbolDomain(symbol, symbolDomain, {
       ok: true,
@@ -1473,6 +1489,11 @@ router.get("/calibration/runtime-model/:symbol", async (req, res): Promise<void>
         runtimeSource: promotedModel ? "promoted_symbol_model" : "none",
         stagedAt: stagedModel?.promotedAt ?? null,
         promotedAt: promotedModel?.promotedAt ?? null,
+        stagedOptimisationRunId,
+        promotedOptimisationRunId,
+        stagedOptimisationCandidateId,
+        promotedOptimisationCandidateId,
+        promotedMatchesStaged,
         stagedTpBucketCount: stagedDiagnostics.tpBucketCount,
         promotedTpBucketCount: promotedDiagnostics.tpBucketCount,
         stagedDynamicTpEnabled: stagedDiagnostics.dynamicTpEnabled,
@@ -1528,7 +1549,7 @@ router.post("/calibration/runtime-model/:symbol/stage", async (req, res): Promis
 });
 
 // —— POST /api/calibration/runtime-model/:symbol/promote —————————————————————————————————
-// Explicitly promotes the latest research profile into the runtime owner store.
+// Explicitly promotes the currently staged runtime model into runtime ownership.
 router.post("/calibration/runtime-model/:symbol/promote", async (req, res): Promise<void> => {
   const { symbol } = req.params;
   const checked = assertCalibrationSymbol(symbol);
@@ -1539,15 +1560,10 @@ router.post("/calibration/runtime-model/:symbol/promote", async (req, res): Prom
   const { symbolDomain } = checked;
 
   try {
-    const stateRows = await db.select().from(platformStateTable);
-    const stateMap: Record<string, string> = {};
-    for (const row of stateRows) stateMap[row.key] = row.value;
-
-    await refreshResearchProfileFromLatestCalibration(symbol);
-    const model = await promoteLatestSymbolResearchProfile(symbol, stateMap);
+    const model = await promoteStagedSymbolRuntimeModel(symbol);
     if (!model) {
       res.status(404).json(withSymbolDomain(symbol, symbolDomain, {
-        error: `No symbol research profile for ${symbol}. Run full calibration first.`,
+        error: `No staged runtime model found for ${symbol}. Click Stage Research Model (or Stage Optimised Winner) first.`,
       }));
       return;
     }
@@ -1586,7 +1602,13 @@ router.post("/calibration/runtime-model/:symbol/optimise-backtest", async (req, 
   try {
     const windowDays = Math.max(30, Math.min(730, Number(req.body?.windowDays ?? 365)));
     const maxIterations = Math.max(1, Math.min(5, Number(req.body?.maxIterations ?? 5)));
-    const runId = await startBacktestOptimisation({ symbol, windowDays, maxIterations });
+    const enableAiReview = req.body?.enableAiReview === true;
+    const runId = await startBacktestOptimisation({
+      symbol,
+      windowDays,
+      maxIterations,
+      enableAiReview,
+    });
     res.json(withSymbolDomain(symbol, checked.symbolDomain, {
       ok: true,
       runId,
@@ -1596,6 +1618,36 @@ router.post("/calibration/runtime-model/:symbol/optimise-backtest", async (req, 
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Backtest optimiser failed to start";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/calibration/runtime-model/:symbol/optimise-backtest/:runId/cancel", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+
+  try {
+    const runId = Number(req.params.runId);
+    if (!Number.isInteger(runId) || runId <= 0) {
+      res.status(400).json({ error: "Invalid optimiser run id" });
+      return;
+    }
+    const reason = typeof req.body?.reason === "string" ? req.body.reason : "cancelled_by_user";
+    const cancelled = await cancelBacktestOptimisationRun(runId, symbol, reason);
+    if (!cancelled) {
+      res.status(404).json({ error: "Optimiser run not found for symbol" });
+      return;
+    }
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      ...cancelled,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Backtest optimiser cancel failed";
     res.status(500).json({ error: message });
   }
 });

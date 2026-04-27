@@ -1,7 +1,14 @@
-import { db } from "@workspace/db";
-import { desc, eq, sql } from "drizzle-orm";
-import { boolean, integer, jsonb, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
-import { runV3Backtest, type BacktestTierMode, type V3BacktestResult } from "../backtest/backtestRunner.js";
+import {
+  db,
+  symbolModelOptimisationCandidatesTable,
+  symbolModelOptimisationRunsTable,
+} from "@workspace/db";
+import { and, desc, eq, sql } from "drizzle-orm";
+import {
+  runV3Backtest,
+  type BacktestTierMode,
+  type V3BacktestResult,
+} from "../backtest/backtestRunner.js";
 import {
   getPromotedSymbolRuntimeModel,
   stageSymbolRuntimeModel,
@@ -9,47 +16,33 @@ import {
 } from "./promotedSymbolModel.js";
 import { chatCompleteJsonPrefer } from "../../infrastructure/openai.js";
 
-type OptimiserStatus = "running" | "completed" | "failed" | "staged";
+type OptimiserStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "staged"
+  | "cancelled"
+  | "stale";
+type OptimiserPhase =
+  | "queued"
+  | "starting"
+  | "running_candidate"
+  | "scoring"
+  | "ai_review"
+  | "completed"
+  | "failed"
+  | "staged"
+  | "cancel_requested"
+  | "cancelled"
+  | "stale";
 
-const symbolModelOptimisationRunsTable = pgTable("symbol_model_optimisation_runs", {
-  id: serial("id").primaryKey(),
-  symbol: text("symbol").notNull(),
-  sourceRuntimeRunId: integer("source_runtime_run_id"),
-  calibrationRunId: integer("calibration_run_id"),
-  status: text("status").notNull().default("running"),
-  objective: text("objective").notNull().default("profit_factor_total_pnl_guarded_drawdown"),
-  windowDays: integer("window_days").notNull().default(365),
-  maxIterations: integer("max_iterations").notNull().default(5),
-  baselineMetrics: jsonb("baseline_metrics"),
-  winnerMetrics: jsonb("winner_metrics"),
-  aiReview: jsonb("ai_review"),
-  errorSummary: jsonb("error_summary"),
-  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
-  completedAt: timestamp("completed_at", { withTimezone: true }),
-  stagedAt: timestamp("staged_at", { withTimezone: true }),
-});
-
-const symbolModelOptimisationCandidatesTable = pgTable("symbol_model_optimisation_candidates", {
-  id: serial("id").primaryKey(),
-  runId: integer("run_id").notNull(),
-  symbol: text("symbol").notNull(),
-  iteration: integer("iteration").notNull(),
-  candidateKey: text("candidate_key").notNull(),
-  parentCandidateKey: text("parent_candidate_key"),
-  params: jsonb("params"),
-  backtestMetrics: jsonb("backtest_metrics"),
-  moveOverlapMetrics: jsonb("move_overlap_metrics"),
-  exitBreakdown: jsonb("exit_breakdown"),
-  tierPerformance: jsonb("tier_performance"),
-  aiRationale: jsonb("ai_rationale"),
-  selected: boolean("selected").notNull().default(false),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+const MAX_STALE_HEARTBEAT_MS = 15 * 60 * 1000;
 
 export interface OptimiserParams {
   symbol: string;
   windowDays?: number;
   maxIterations?: number;
+  enableAiReview?: boolean;
 }
 
 interface CandidateParams {
@@ -81,9 +74,17 @@ export async function ensureSymbolModelOptimisationTables(): Promise<void> {
       source_runtime_run_id integer,
       calibration_run_id integer,
       status text NOT NULL DEFAULT 'running',
+      phase text NOT NULL DEFAULT 'queued',
       objective text NOT NULL DEFAULT 'profit_factor_total_pnl_guarded_drawdown',
       window_days integer NOT NULL DEFAULT 365,
       max_iterations integer NOT NULL DEFAULT 5,
+      current_iteration integer,
+      current_candidate text,
+      candidate_count integer NOT NULL DEFAULT 0,
+      last_heartbeat_at timestamptz,
+      cancel_requested_at timestamptz,
+      cancel_reason text,
+      stale_reason text,
       baseline_metrics jsonb,
       winner_metrics jsonb,
       ai_review jsonb,
@@ -111,15 +112,47 @@ export async function ensureSymbolModelOptimisationTables(): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now()
     )
   `);
-  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_symbol_model_opt_runs_symbol_status ON symbol_model_optimisation_runs(symbol, status)`);
-  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_symbol_model_opt_candidates_run ON symbol_model_optimisation_candidates(run_id)`);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS idx_symbol_model_opt_runs_symbol_status ON symbol_model_optimisation_runs(symbol, status)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS idx_symbol_model_opt_candidates_run ON symbol_model_optimisation_candidates(run_id)`,
+  );
+
+  await db.execute(
+    sql`ALTER TABLE symbol_model_optimisation_runs ADD COLUMN IF NOT EXISTS phase text NOT NULL DEFAULT 'queued'`,
+  );
+  await db.execute(
+    sql`ALTER TABLE symbol_model_optimisation_runs ADD COLUMN IF NOT EXISTS current_iteration integer`,
+  );
+  await db.execute(
+    sql`ALTER TABLE symbol_model_optimisation_runs ADD COLUMN IF NOT EXISTS current_candidate text`,
+  );
+  await db.execute(
+    sql`ALTER TABLE symbol_model_optimisation_runs ADD COLUMN IF NOT EXISTS candidate_count integer NOT NULL DEFAULT 0`,
+  );
+  await db.execute(
+    sql`ALTER TABLE symbol_model_optimisation_runs ADD COLUMN IF NOT EXISTS last_heartbeat_at timestamptz`,
+  );
+  await db.execute(
+    sql`ALTER TABLE symbol_model_optimisation_runs ADD COLUMN IF NOT EXISTS cancel_requested_at timestamptz`,
+  );
+  await db.execute(
+    sql`ALTER TABLE symbol_model_optimisation_runs ADD COLUMN IF NOT EXISTS cancel_reason text`,
+  );
+  await db.execute(
+    sql`ALTER TABLE symbol_model_optimisation_runs ADD COLUMN IF NOT EXISTS stale_reason text`,
+  );
 }
 
 function cloneModel(model: PromotedSymbolRuntimeModel): PromotedSymbolRuntimeModel {
   return JSON.parse(JSON.stringify(model)) as PromotedSymbolRuntimeModel;
 }
 
-function applyCandidateParams(model: PromotedSymbolRuntimeModel, params: CandidateParams): PromotedSymbolRuntimeModel {
+function applyCandidateParams(
+  model: PromotedSymbolRuntimeModel,
+  params: CandidateParams,
+): PromotedSymbolRuntimeModel {
   const next = cloneModel(model);
   const tpModel = asRecord(next.tpModel);
   const slModel = asRecord(next.slModel);
@@ -133,7 +166,9 @@ function applyCandidateParams(model: PromotedSymbolRuntimeModel, params: Candida
   const targetPct = finite(tpModel.targetPct, 0);
   if (targetPct > 0) tpModel.targetPct = Math.max(1, Math.min(30, targetPct * tpScale));
   const fallbackTargetPct = finite(tpModel.fallbackTargetPct, 0);
-  if (fallbackTargetPct > 0) tpModel.fallbackTargetPct = Math.max(1, Math.min(30, fallbackTargetPct * tpScale));
+  if (fallbackTargetPct > 0) {
+    tpModel.fallbackTargetPct = Math.max(1, Math.min(30, fallbackTargetPct * tpScale));
+  }
 
   const buckets = asRecord(tpModel.buckets);
   for (const bucket of Object.values(buckets)) {
@@ -146,9 +181,13 @@ function applyCandidateParams(model: PromotedSymbolRuntimeModel, params: Candida
   if (riskPct > 0) slModel.maxInitialRiskPct = Math.max(0.4, Math.min(8, riskPct * slScale));
 
   const activation = finite(trailingModel.activationProfitPct, 0);
-  if (activation > 0) trailingModel.activationProfitPct = Math.max(0.5, Math.min(12, activation * trailActivationScale));
+  if (activation > 0) {
+    trailingModel.activationProfitPct = Math.max(0.5, Math.min(12, activation * trailActivationScale));
+  }
   const distance = finite(trailingModel.trailingDistancePct, 0);
-  if (distance > 0) trailingModel.trailingDistancePct = Math.max(0.2, Math.min(8, distance * trailDistanceScale));
+  if (distance > 0) {
+    trailingModel.trailingDistancePct = Math.max(0.2, Math.min(8, distance * trailDistanceScale));
+  }
 
   if (params.scoreGateDelta) {
     next.recommendedScoreGates = {
@@ -181,33 +220,62 @@ function compactMetrics(result: V3BacktestResult) {
   };
 }
 
-function objective(metrics: ReturnType<typeof compactMetrics>, baseline: ReturnType<typeof compactMetrics>): number {
+function objective(
+  metrics: ReturnType<typeof compactMetrics>,
+  baseline: ReturnType<typeof compactMetrics>,
+): number {
   const ddPenalty = Math.max(0, metrics.maxDrawdownPct - baseline.maxDrawdownPct) * 80;
-  return (metrics.profitFactor * 40) + (metrics.totalPnlPct * 100) + (metrics.winRate * 25) - ddPenalty;
+  return metrics.profitFactor * 40 + metrics.totalPnlPct * 100 + metrics.winRate * 25 - ddPenalty;
 }
 
-function passesGuardrail(metrics: ReturnType<typeof compactMetrics>, baseline: ReturnType<typeof compactMetrics>): boolean {
+function passesGuardrail(
+  metrics: ReturnType<typeof compactMetrics>,
+  baseline: ReturnType<typeof compactMetrics>,
+): boolean {
   if (metrics.maxDrawdownPct <= baseline.maxDrawdownPct) return true;
-  return metrics.winRate >= baseline.winRate + 0.05 && metrics.profitFactor >= baseline.profitFactor + 0.10;
+  return metrics.winRate >= baseline.winRate + 0.05 && metrics.profitFactor >= baseline.profitFactor + 0.1;
 }
 
 function candidatePlan(maxIterations: number): CandidateParams[] {
   const plans: CandidateParams[] = [
     { key: "baseline", tierMode: "ALL" },
     { key: "tier-ab", tierMode: "AB" },
-    { key: "earlier-trail", tierMode: "ALL", trailActivationScale: 0.75, trailDistanceScale: 0.85 },
+    {
+      key: "earlier-trail",
+      tierMode: "ALL",
+      trailActivationScale: 0.75,
+      trailDistanceScale: 0.85,
+    },
     { key: "wider-structure-risk", tierMode: "ALL", slScale: 1.15, trailActivationScale: 0.85 },
-    { key: "quality-tp-ab", tierMode: "AB", tpScale: 1.10, trailActivationScale: 0.85 },
-    { key: "balanced-tight", tierMode: "ABC", scoreGateDelta: 4, trailActivationScale: 0.85, trailDistanceScale: 0.9 },
+    { key: "quality-tp-ab", tierMode: "AB", tpScale: 1.1, trailActivationScale: 0.85 },
+    {
+      key: "balanced-tight",
+      tierMode: "ABC",
+      scoreGateDelta: 4,
+      trailActivationScale: 0.85,
+      trailDistanceScale: 0.9,
+    },
   ];
   return plans.slice(0, Math.max(1, maxIterations + 1));
 }
 
-async function runTierPerformance(symbol: string, startTs: number, endTs: number, model: PromotedSymbolRuntimeModel) {
+async function runTierPerformance(
+  symbol: string,
+  startTs: number,
+  endTs: number,
+  model: PromotedSymbolRuntimeModel,
+) {
   const modes: BacktestTierMode[] = ["A", "AB", "ABC", "ALL"];
   const out: Record<string, unknown> = {};
   for (const tierMode of modes) {
-    const result = await runV3Backtest({ symbol, startTs, endTs, mode: "paper", tierMode, runtimeCalibrationOverride: model });
+    const result = await runV3Backtest({
+      symbol,
+      startTs,
+      endTs,
+      mode: "paper",
+      tierMode,
+      runtimeCalibrationOverride: model,
+    });
     out[tierMode] = {
       ...compactMetrics(result),
       moveOverlap: result.moveOverlap,
@@ -225,19 +293,123 @@ async function aiReview(params: {
   try {
     const response = await chatCompleteJsonPrefer({
       logLabel: "backtestOptimiserReview",
-      messages: [{
-        role: "user",
-        content: `Review these symbol-model optimisation results for ${params.symbol}. Return compact JSON with verdict, risk, rationale, and nextBoundedSuggestion. AI is advisory only and cannot promote runtime.\n${JSON.stringify(params).slice(0, 18_000)}`,
-      }],
+      messages: [
+        {
+          role: "user",
+          content: `Review these symbol-model optimisation results for ${params.symbol}. Return compact JSON with verdict, risk, rationale, and nextBoundedSuggestion. AI is advisory only and cannot promote runtime.\n${JSON.stringify(params).slice(0, 18_000)}`,
+        },
+      ],
       max_completion_tokens: 800,
       temperature: 0.2,
     });
     const text = response.choices[0]?.message?.content ?? "{}";
     const match = text.match(/\{[\s\S]*\}/);
-    return match ? JSON.parse(match[0]) as Record<string, unknown> : { verdict: "no_json", raw: text };
+    return match ? (JSON.parse(match[0]) as Record<string, unknown>) : { verdict: "no_json", raw: text };
   } catch (err) {
     return { verdict: "skipped", error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+async function heartbeat(
+  runId: number,
+  patch: Partial<{
+    status: OptimiserStatus;
+    phase: OptimiserPhase;
+    currentIteration: number | null;
+    currentCandidate: string | null;
+    candidateCount: number;
+    baselineMetrics: Record<string, unknown>;
+    winnerMetrics: Record<string, unknown>;
+    aiReview: Record<string, unknown>;
+    errorSummary: Record<string, unknown>;
+    completedAt: Date | null;
+    staleReason: string | null;
+  }> = {},
+): Promise<void> {
+  await db
+    .update(symbolModelOptimisationRunsTable)
+    .set({
+      status: patch.status,
+      baselineMetrics: patch.baselineMetrics,
+      winnerMetrics: patch.winnerMetrics,
+      aiReview: patch.aiReview,
+      errorSummary: patch.errorSummary,
+      completedAt: patch.completedAt,
+    })
+    .where(eq(symbolModelOptimisationRunsTable.id, runId));
+
+  await db.execute(sql`
+    UPDATE symbol_model_optimisation_runs
+    SET
+      last_heartbeat_at = now(),
+      phase = COALESCE(${patch.phase ?? null}, phase),
+      current_iteration = COALESCE(${patch.currentIteration ?? null}, current_iteration),
+      current_candidate = COALESCE(${patch.currentCandidate ?? null}, current_candidate),
+      candidate_count = COALESCE(${patch.candidateCount ?? null}, candidate_count),
+      stale_reason = COALESCE(${patch.staleReason ?? null}, stale_reason)
+    WHERE id = ${runId}
+  `);
+}
+
+async function getRunById(runId: number) {
+  const result = await db.execute(sql`
+    SELECT
+      id,
+      symbol,
+      status,
+      objective,
+      window_days AS "windowDays",
+      max_iterations AS "maxIterations",
+      source_runtime_run_id AS "sourceRuntimeRunId",
+      calibration_run_id AS "calibrationRunId",
+      baseline_metrics AS "baselineMetrics",
+      winner_metrics AS "winnerMetrics",
+      ai_review AS "aiReview",
+      error_summary AS "errorSummary",
+      started_at AS "startedAt",
+      completed_at AS "completedAt",
+      staged_at AS "stagedAt",
+      phase,
+      current_iteration AS "currentIteration",
+      current_candidate AS "currentCandidate",
+      candidate_count AS "candidateCount",
+      last_heartbeat_at AS "lastHeartbeatAt",
+      cancel_requested_at AS "cancelRequestedAt",
+      cancel_reason AS "cancelReason",
+      stale_reason AS "staleReason"
+    FROM symbol_model_optimisation_runs
+    WHERE id = ${runId}
+    LIMIT 1
+  `);
+  return (result.rows[0] as Record<string, unknown> | undefined) ?? null;
+}
+
+async function isCancelRequested(runId: number): Promise<boolean> {
+  const row = await getRunById(runId);
+  if (!row) return true;
+  return row.cancelRequestedAt != null;
+}
+
+async function recoverStaleRun(runId: number): Promise<void> {
+  const row = await getRunById(runId);
+  if (!row || String(row.status) !== "running") return;
+  if (!row.lastHeartbeatAt) return;
+  const elapsed = Date.now() - new Date(String(row.lastHeartbeatAt)).getTime();
+  if (elapsed <= MAX_STALE_HEARTBEAT_MS) return;
+  await db
+    .update(symbolModelOptimisationRunsTable)
+    .set({
+      status: "stale",
+      completedAt: new Date(),
+    })
+    .where(eq(symbolModelOptimisationRunsTable.id, runId));
+  await db.execute(sql`
+    UPDATE symbol_model_optimisation_runs
+    SET
+      phase = 'stale',
+      stale_reason = ${`heartbeat_timeout_${Math.round(elapsed / 1000)}s`}
+    WHERE id = ${runId}
+  `);
 }
 
 async function executeOptimisation(runId: number, params: OptimiserParams): Promise<void> {
@@ -247,16 +419,48 @@ async function executeOptimisation(runId: number, params: OptimiserParams): Prom
   const endTs = Math.floor(Date.now() / 1000);
   const startTs = endTs - windowDays * 86400;
   const promoted = await getPromotedSymbolRuntimeModel(symbol);
-  if (!promoted) throw new Error(`No promoted runtime model found for ${symbol}. Stage and promote research first.`);
+  if (!promoted) {
+    throw new Error(`No promoted runtime model found for ${symbol}. Stage and promote research first.`);
+  }
 
   const plans = candidatePlan(maxIterations);
+  await heartbeat(runId, {
+    phase: "starting",
+    currentIteration: null,
+    currentCandidate: null,
+    candidateCount: plans.length,
+  });
+
   let baselineMetrics: ReturnType<typeof compactMetrics> | null = null;
-  let winner: { candidateId: number; params: CandidateParams; metrics: ReturnType<typeof compactMetrics>; score: number; model: PromotedSymbolRuntimeModel } | null = null;
+  let winner:
+    | {
+        candidateId: number;
+        params: CandidateParams;
+        metrics: ReturnType<typeof compactMetrics>;
+        score: number;
+      }
+    | null = null;
   let noImprove = 0;
   const candidateSummaries: unknown[] = [];
 
   for (let iteration = 0; iteration < plans.length; iteration++) {
+    if (await isCancelRequested(runId)) {
+      await heartbeat(runId, {
+        status: "cancelled",
+        phase: "cancelled",
+        currentIteration: iteration,
+        completedAt: new Date(),
+      });
+      return;
+    }
+
     const candidateParams = plans[iteration]!;
+    await heartbeat(runId, {
+      phase: "running_candidate",
+      currentIteration: iteration,
+      currentCandidate: candidateParams.key,
+    });
+
     const model = iteration === 0 ? cloneModel(promoted) : applyCandidateParams(promoted, candidateParams);
     const result = await runV3Backtest({
       symbol,
@@ -267,23 +471,31 @@ async function executeOptimisation(runId: number, params: OptimiserParams): Prom
       runtimeCalibrationOverride: model,
     });
     const metrics = compactMetrics(result);
-    if (!baselineMetrics) baselineMetrics = metrics;
+    if (!baselineMetrics) {
+      baselineMetrics = metrics;
+      await heartbeat(runId, { baselineMetrics: baselineMetrics as unknown as Record<string, unknown> });
+    }
     const score = objective(metrics, baselineMetrics);
     const guardrailPassed = passesGuardrail(metrics, baselineMetrics);
-    const tierPerformance = iteration === 0 ? await runTierPerformance(symbol, startTs, endTs, model) : null;
-    const [row] = await db.insert(symbolModelOptimisationCandidatesTable).values({
-      runId,
-      symbol,
-      iteration,
-      candidateKey: candidateParams.key,
-      params: candidateParams,
-      backtestMetrics: { ...metrics, objectiveScore: score, guardrailPassed },
-      moveOverlapMetrics: result.moveOverlap,
-      exitBreakdown: result.summary.byExitReason,
-      tierPerformance,
-      aiRationale: null,
-      selected: false,
-    }).returning();
+    const tierPerformance =
+      iteration === 0 ? await runTierPerformance(symbol, startTs, endTs, model) : null;
+
+    const [row] = await db
+      .insert(symbolModelOptimisationCandidatesTable)
+      .values({
+        runId,
+        symbol,
+        iteration,
+        candidateKey: candidateParams.key,
+        params: candidateParams,
+        backtestMetrics: { ...metrics, objectiveScore: score, guardrailPassed },
+        moveOverlapMetrics: result.moveOverlap,
+        exitBreakdown: result.summary.byExitReason,
+        tierPerformance,
+        aiRationale: null,
+        selected: false,
+      })
+      .returning();
 
     candidateSummaries.push({
       id: row.id,
@@ -297,57 +509,131 @@ async function executeOptimisation(runId: number, params: OptimiserParams): Prom
 
     const improved = guardrailPassed && (!winner || score > winner.score);
     if (improved) {
-      winner = { candidateId: row.id, params: candidateParams, metrics, score, model };
+      winner = { candidateId: row.id, params: candidateParams, metrics, score };
       noImprove = 0;
     } else if (iteration > 0) {
       noImprove++;
     }
 
+    await heartbeat(runId, {
+      phase: "scoring",
+      currentIteration: iteration,
+      currentCandidate: candidateParams.key,
+    });
     if (iteration > 0 && noImprove >= 2) break;
   }
 
   if (!baselineMetrics || !winner) throw new Error("Optimisation produced no candidate results");
-  const review = await aiReview({ symbol, baseline: baselineMetrics, winner, candidates: candidateSummaries });
-  await db.update(symbolModelOptimisationCandidatesTable)
+
+  await heartbeat(runId, { phase: "ai_review" });
+  const review = params.enableAiReview
+    ? await aiReview({
+        symbol,
+        baseline: baselineMetrics,
+        winner,
+        candidates: candidateSummaries,
+      })
+    : { verdict: "skipped_disabled", reason: "enableAiReview=false" };
+
+  await db
+    .update(symbolModelOptimisationCandidatesTable)
     .set({ selected: true, aiRationale: review })
     .where(eq(symbolModelOptimisationCandidatesTable.id, winner.candidateId));
-  await db.update(symbolModelOptimisationRunsTable)
-    .set({
-      status: "completed" satisfies OptimiserStatus,
-      baselineMetrics,
-      winnerMetrics: { candidateId: winner.candidateId, params: winner.params, metrics: winner.metrics, objectiveScore: winner.score },
-      aiReview: review,
-      completedAt: new Date(),
-    })
-    .where(eq(symbolModelOptimisationRunsTable.id, runId));
+
+  await heartbeat(runId, {
+    status: "completed",
+    phase: "completed",
+    winnerMetrics: {
+      candidateId: winner.candidateId,
+      params: winner.params,
+      metrics: winner.metrics,
+      objectiveScore: winner.score,
+    },
+    aiReview: review,
+    completedAt: new Date(),
+  });
 }
 
 export async function startBacktestOptimisation(params: OptimiserParams): Promise<number> {
   await ensureSymbolModelOptimisationTables();
+
+  const [activeRun] = await db
+    .select()
+    .from(symbolModelOptimisationRunsTable)
+    .where(
+      and(
+        eq(symbolModelOptimisationRunsTable.symbol, params.symbol),
+        eq(symbolModelOptimisationRunsTable.status, "running"),
+      ),
+    )
+    .orderBy(desc(symbolModelOptimisationRunsTable.id))
+    .limit(1);
+  if (activeRun) {
+    throw new Error(
+      `Optimiser already running for ${params.symbol} (runId=${activeRun.id}). Cancel or wait for completion.`,
+    );
+  }
+
   const promoted = await getPromotedSymbolRuntimeModel(params.symbol);
-  const [run] = await db.insert(symbolModelOptimisationRunsTable).values({
-    symbol: params.symbol,
-    sourceRuntimeRunId: promoted?.sourceRunId ?? null,
-    calibrationRunId: promoted?.sourceRunId ?? null,
-    status: "running",
-    windowDays: params.windowDays ?? 365,
-    maxIterations: Math.max(1, Math.min(5, params.maxIterations ?? 5)),
-  }).returning();
+  const [run] = await db
+    .insert(symbolModelOptimisationRunsTable)
+    .values({
+      symbol: params.symbol,
+      sourceRuntimeRunId: promoted?.sourceRunId ?? null,
+      calibrationRunId: promoted?.sourceRunId ?? null,
+      status: "running",
+      windowDays: params.windowDays ?? 365,
+      maxIterations: Math.max(1, Math.min(5, params.maxIterations ?? 5)),
+    })
+    .returning();
+  await db.execute(sql`
+    UPDATE symbol_model_optimisation_runs
+    SET phase = 'queued', candidate_count = 0, last_heartbeat_at = now()
+    WHERE id = ${run.id}
+  `);
+
   void executeOptimisation(run.id, params).catch(async (err) => {
-    await db.update(symbolModelOptimisationRunsTable)
-      .set({
-        status: "failed",
-        errorSummary: { error: err instanceof Error ? err.message : String(err) },
-        completedAt: new Date(),
-      })
-      .where(eq(symbolModelOptimisationRunsTable.id, run.id));
+    await heartbeat(run.id, {
+      status: "failed",
+      phase: "failed",
+      errorSummary: { error: err instanceof Error ? err.message : String(err) },
+      completedAt: new Date(),
+    });
   });
+
   return run.id;
+}
+
+export async function cancelBacktestOptimisationRun(
+  runId: number,
+  symbol: string,
+  reason = "cancelled_by_user",
+) {
+  await ensureSymbolModelOptimisationTables();
+  const run = await getRunById(runId);
+  if (!run || String(run.symbol) !== symbol) return null;
+  if (String(run.status) !== "running") {
+    return { run, cancelled: false, reason: `run_not_running:${run.status}` };
+  }
+
+  await db.execute(sql`
+    UPDATE symbol_model_optimisation_runs
+    SET
+      phase = 'cancel_requested',
+      cancel_requested_at = now(),
+      cancel_reason = ${reason},
+      last_heartbeat_at = now()
+    WHERE id = ${runId}
+  `);
+  const updated = await getRunById(runId);
+  return { run: updated, cancelled: true, reason };
 }
 
 export async function getBacktestOptimisationStatus(runId: number) {
   await ensureSymbolModelOptimisationTables();
-  const [run] = await db.select().from(symbolModelOptimisationRunsTable).where(eq(symbolModelOptimisationRunsTable.id, runId));
+  await recoverStaleRun(runId);
+
+  const run = await getRunById(runId);
   if (!run) return null;
   const candidates = await db
     .select()
@@ -361,17 +647,32 @@ export async function stageBacktestOptimisationWinner(runId: number) {
   await ensureSymbolModelOptimisationTables();
   const status = await getBacktestOptimisationStatus(runId);
   if (!status) throw new Error("Optimisation run not found");
-  const selected = status.candidates.find(c => c.selected);
+  if (!["completed", "staged"].includes(String(status.run.status))) {
+    throw new Error(`Run ${runId} is not complete. Current status: ${status.run.status}`);
+  }
+
+  const selected = status.candidates.find((c) => c.selected);
   if (!selected) throw new Error("No selected optimisation winner yet");
-  const promoted = await getPromotedSymbolRuntimeModel(status.run.symbol);
-  if (!promoted) throw new Error(`No promoted runtime model found for ${status.run.symbol}`);
-  const model = applyCandidateParams(promoted, asRecord(selected.params) as unknown as CandidateParams);
+  const runSymbol = String(status.run.symbol);
+  const promoted = await getPromotedSymbolRuntimeModel(runSymbol);
+  if (!promoted) throw new Error(`No promoted runtime model found for ${runSymbol}`);
+
+  const model = applyCandidateParams(
+    promoted,
+    asRecord(selected.params) as unknown as CandidateParams,
+  );
   model.promotedAt = new Date().toISOString();
   model.optimisationRunId = runId;
   model.optimisationCandidateId = selected.id;
   await stageSymbolRuntimeModel(model);
-  await db.update(symbolModelOptimisationRunsTable)
-    .set({ status: "staged" satisfies OptimiserStatus, stagedAt: new Date() })
+  await heartbeat(runId, {
+    status: "staged",
+    phase: "staged",
+    completedAt: new Date(),
+  });
+  await db
+    .update(symbolModelOptimisationRunsTable)
+    .set({ stagedAt: new Date() })
     .where(eq(symbolModelOptimisationRunsTable.id, runId));
   return { model, selected };
 }

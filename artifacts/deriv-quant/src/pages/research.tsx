@@ -1293,6 +1293,11 @@ interface RuntimeModelStateUi {
     runtimeSource?: string;
     stagedAt?: string | null;
     promotedAt?: string | null;
+    stagedOptimisationRunId?: number | null;
+    promotedOptimisationRunId?: number | null;
+    stagedOptimisationCandidateId?: number | null;
+    promotedOptimisationCandidateId?: number | null;
+    promotedMatchesStaged?: boolean;
     stagedTpBucketCount?: number;
     promotedTpBucketCount?: number;
     stagedDynamicTpEnabled?: boolean;
@@ -1587,7 +1592,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   const [runtimeBusy, setRuntimeBusy] = useState<"stage" | "promote" | null>(null);
   const [runtimeErr, setRuntimeErr] = useState<string | null>(null);
   const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
-  const [optimiserBusy, setOptimiserBusy] = useState<"run" | "stage" | "refresh" | null>(null);
+  const [optimiserBusy, setOptimiserBusy] = useState<"run" | "stage" | "refresh" | "cancel" | null>(null);
   const [optimiserRunId, setOptimiserRunId] = useState<number | null>(null);
   const [optimiserStatus, setOptimiserStatus] = useState<Record<string, unknown> | null>(null);
   const [optimiserErr, setOptimiserErr] = useState<string | null>(null);
@@ -1768,6 +1773,12 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       setMoveTypeFilter("all");
     }
   }, [domain, calibrationSymbols, symbol]);
+
+  useEffect(() => {
+    setOptimiserRunId(null);
+    setOptimiserStatus(null);
+    setOptimiserErr(null);
+  }, [symbol]);
 
   useEffect(() => {
     loadDomains(symbol, strategyFamily);
@@ -2029,17 +2040,19 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     }
   };
 
-  const refreshOptimiserStatus = async (runId = optimiserRunId) => {
+  const refreshOptimiserStatus = async (runId = optimiserRunId, silent = false) => {
     if (!runId) return;
-    setOptimiserBusy("refresh");
-    setOptimiserErr(null);
+    if (!silent) {
+      setOptimiserBusy("refresh");
+      setOptimiserErr(null);
+    }
     try {
       const status = await apiFetch(`calibration/runtime-model/${symbol}/optimise-backtest/${runId}`) as Record<string, unknown>;
       setOptimiserStatus(status);
     } catch (e: unknown) {
       setOptimiserErr(e instanceof Error ? e.message : "Optimiser status failed");
     } finally {
-      setOptimiserBusy(null);
+      if (!silent) setOptimiserBusy(null);
     }
   };
 
@@ -2051,7 +2064,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       const started = await apiFetch(`calibration/runtime-model/${symbol}/optimise-backtest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ windowDays, maxIterations: 5 }),
+        body: JSON.stringify({ windowDays, maxIterations: 5, enableAiReview: false }),
       }) as { runId?: number };
       const runId = Number(started.runId);
       setOptimiserRunId(runId);
@@ -2060,6 +2073,25 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       window.setTimeout(() => void refreshOptimiserStatus(runId), 2500);
     } catch (e: unknown) {
       setOptimiserErr(e instanceof Error ? e.message : "Optimiser start failed");
+    } finally {
+      setOptimiserBusy(null);
+    }
+  };
+
+  const cancelOptimiser = async () => {
+    if (!optimiserRunId) return;
+    setOptimiserBusy("cancel");
+    setOptimiserErr(null);
+    try {
+      await apiFetch(`calibration/runtime-model/${symbol}/optimise-backtest/${optimiserRunId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "cancelled_from_research_ui" }),
+      });
+      await refreshOptimiserStatus(optimiserRunId);
+      setRuntimeNotice(`Backtest optimiser cancellation requested for ${symbol} (run ${optimiserRunId}).`);
+    } catch (e: unknown) {
+      setOptimiserErr(e instanceof Error ? e.message : "Optimiser cancel failed");
     } finally {
       setOptimiserBusy(null);
     }
@@ -2195,11 +2227,23 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   });
   const displayedMoves = movesExpanded ? moveRows : moveRows.slice(0, 20);
   const optimiserRun = (optimiserStatus?.run ?? null) as Record<string, unknown> | null;
+  const optimiserPhase = String(optimiserRun?.phase ?? "n/a");
+  const optimiserHeartbeatRaw = optimiserRun?.lastHeartbeatAt;
+  const optimiserHeartbeat = typeof optimiserHeartbeatRaw === "string" ? formatRuntimeDate(optimiserHeartbeatRaw) : "n/a";
+  const optimiserIsRunning = String(optimiserRun?.status ?? "").toLowerCase() === "running";
   const optimiserWinner = (optimiserRun?.winnerMetrics ?? null) as Record<string, unknown> | null;
   const optimiserWinnerMetrics = (optimiserWinner?.metrics ?? null) as Record<string, unknown> | null;
   const optimiserBaseline = (optimiserRun?.baselineMetrics ?? null) as Record<string, unknown> | null;
   const optimiserCandidates = (optimiserStatus?.candidates ?? []) as Array<Record<string, unknown>>;
   const optimiserSelected = optimiserCandidates.find(c => c.selected === true);
+
+  useEffect(() => {
+    if (!optimiserRunId || !optimiserIsRunning) return;
+    const id = window.setInterval(() => {
+      void refreshOptimiserStatus(optimiserRunId, true);
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [optimiserRunId, optimiserIsRunning]);
 
   return (
     <div className="space-y-5">
@@ -3279,6 +3323,9 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
 
         {runtimeErr && <ErrorBox msg={runtimeErr} />}
         {runtimeNotice && <SuccessBox msg={runtimeNotice} />}
+        {runtimeModel?.lifecycle?.hasStagedModel && runtimeModel?.lifecycle?.hasPromotedModel && runtimeModel.lifecycle.promotedMatchesStaged === false && (
+          <ErrorBox msg="Staged model is newer than promoted runtime. Backtest/live is not using the staged model until you click Promote To Runtime." />
+        )}
 
         <div className="flex flex-wrap gap-2">
           <button
@@ -3296,7 +3343,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             onClick={() => updateRuntimeModel("promote")}
             disabled={runtimeBusy !== null || !researchProfile}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
-            title="Promote the latest research profile into the runtime model store used as the active feeddown source"
+            title="Promote the currently staged runtime model into the runtime store used by backtest/live"
           >
             {runtimeBusy === "promote" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
             Promote To Runtime
@@ -3331,6 +3378,15 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             </button>
             <button
               type="button"
+              onClick={cancelOptimiser}
+              disabled={optimiserBusy !== null || !optimiserRunId || !optimiserIsRunning}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/30 text-xs text-red-300 bg-red-500/10 hover:bg-red-500/15 disabled:opacity-50"
+            >
+              {optimiserBusy === "cancel" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
+              Cancel Optimiser
+            </button>
+            <button
+              type="button"
               onClick={() => void refreshOptimiserStatus()}
               disabled={optimiserBusy !== null || !optimiserRunId}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/40 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
@@ -3350,6 +3406,26 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           </div>
 
           {optimiserErr && <ErrorBox msg={optimiserErr} />}
+          {optimiserRun && (
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 text-[11px]">
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5">
+                <span className="text-muted-foreground">Phase</span>
+                <p className="font-mono text-foreground">{optimiserPhase}</p>
+              </div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5">
+                <span className="text-muted-foreground">Iteration</span>
+                <p className="font-mono text-foreground">{String(optimiserRun?.currentIteration ?? "n/a")}</p>
+              </div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5">
+                <span className="text-muted-foreground">Candidate</span>
+                <p className="font-mono text-foreground">{String(optimiserRun?.currentCandidate ?? "n/a")}</p>
+              </div>
+              <div className="rounded border border-border/30 bg-background/30 px-2 py-1.5">
+                <span className="text-muted-foreground">Heartbeat</span>
+                <p className="font-mono text-foreground">{optimiserHeartbeat}</p>
+              </div>
+            </div>
+          )}
 
           {(optimiserBaseline || optimiserWinnerMetrics) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

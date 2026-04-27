@@ -233,6 +233,19 @@ export async function promoteLatestSymbolResearchProfile(
   return model;
 }
 
+export async function promoteStagedSymbolRuntimeModel(
+  symbol: string,
+): Promise<PromotedSymbolRuntimeModel | null> {
+  const staged = await getStagedSymbolRuntimeModel(symbol);
+  if (!staged) return null;
+  const promoted: PromotedSymbolRuntimeModel = {
+    ...staged,
+    promotedAt: new Date().toISOString(),
+  };
+  await writeSymbolRuntimeModel("promoted", promoted);
+  return promoted;
+}
+
 export async function promoteSymbolResearchProfile(
   profile: SymbolResearchProfile,
   stateMap: Record<string, string> = {},
