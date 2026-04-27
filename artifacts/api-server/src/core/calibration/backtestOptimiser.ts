@@ -593,10 +593,20 @@ export async function startBacktestOptimisation(params: OptimiserParams): Promis
   `);
 
   void executeOptimisation(run.id, params).catch(async (err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack ?? null : null;
+    console.error(
+      `[BacktestOptimiser] run=${run.id} symbol=${params.symbol} phase=failed error=${message}`,
+    );
     await heartbeat(run.id, {
       status: "failed",
       phase: "failed",
-      errorSummary: { error: err instanceof Error ? err.message : String(err) },
+      errorSummary: {
+        error: message,
+        phase: "failed",
+        stack,
+        at: new Date().toISOString(),
+      },
       completedAt: new Date(),
     });
   });
@@ -640,7 +650,14 @@ export async function getBacktestOptimisationStatus(runId: number) {
     .from(symbolModelOptimisationCandidatesTable)
     .where(eq(symbolModelOptimisationCandidatesTable.runId, runId))
     .orderBy(desc(symbolModelOptimisationCandidatesTable.iteration));
-  return { run, candidates };
+  const errorSummary = asRecord(run.errorSummary);
+  return {
+    run,
+    candidates,
+    failureReason: typeof errorSummary.error === "string" ? errorSummary.error : null,
+    failurePhase: typeof errorSummary.phase === "string" ? errorSummary.phase : null,
+    failureStack: typeof errorSummary.stack === "string" ? errorSummary.stack : null,
+  };
 }
 
 export async function stageBacktestOptimisationWinner(runId: number) {

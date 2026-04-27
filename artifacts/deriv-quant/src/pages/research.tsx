@@ -493,6 +493,18 @@ interface V3Result {
   summary: V3Summary;
 }
 
+interface PersistedV3BacktestHistoryRun {
+  id: number;
+  symbol: string;
+  startTs: number;
+  endTs: number;
+  mode: string;
+  tierMode: BacktestTierMode;
+  runtimeModelRunId: number | null;
+  summary: V3Summary;
+  createdAt: string;
+}
+
 function pct(v: number) {
   return (v * 100).toFixed(2) + "%";
 }
@@ -804,6 +816,9 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const [results, setResults] = useState<Record<string, V3Result> | null>(null);
   const [tierSweep, setTierSweep] = useState<Record<BacktestTierMode, Record<string, V3Result>> | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [historyRuns, setHistoryRuns] = useState<PersistedV3BacktestHistoryRun[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedHistoryRunId, setSelectedHistoryRunId] = useState<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -815,6 +830,45 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       setSymbol(backtestSymbols[0] ?? "all");
     }
   }, [domain, backtestSymbols, symbol]);
+
+  const loadBacktestHistory = async (sym = symbol, silent = false) => {
+    if (!sym || sym === "all") {
+      setHistoryRuns([]);
+      return;
+    }
+    if (!silent) setHistoryLoading(true);
+    try {
+      const d = await apiFetch(`backtest/v3/history?symbol=${encodeURIComponent(sym)}&limit=30`) as { runs?: PersistedV3BacktestHistoryRun[] };
+      setHistoryRuns(Array.isArray(d.runs) ? d.runs : []);
+    } catch {
+      if (!silent) setHistoryRuns([]);
+    } finally {
+      if (!silent) setHistoryLoading(false);
+    }
+  };
+
+  const loadBacktestHistoryRun = async (runId: number) => {
+    setErr(null);
+    setSelectedHistoryRunId(runId);
+    try {
+      const d = await apiFetch(`backtest/v3/history/${runId}`) as { run?: { symbol?: string; result?: V3Result } };
+      const run = d.run;
+      if (!run?.result || !run?.symbol) {
+        throw new Error(`Backtest run ${runId} has no persisted result payload`);
+      }
+      const selectedSymbol = String(run.symbol);
+      setSymbol(selectedSymbol);
+      setTierMode(run.result.tierMode ?? "ALL");
+      setResults({ [selectedSymbol]: run.result });
+      setTierSweep(null);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to load selected backtest run");
+    }
+  };
+
+  useEffect(() => {
+    void loadBacktestHistory(symbol);
+  }, [symbol]);
 
   const run = async () => {
     setRunning(true);
@@ -839,6 +893,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       });
 
       setResults(d.results as Record<string, V3Result>);
+      await loadBacktestHistory(symbol, true);
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -874,6 +929,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
 
       setTierSweep(sweep);
       setResults(sweep[tierMode] ?? sweep.ALL);
+      await loadBacktestHistory(symbol, true);
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -1020,6 +1076,51 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
                 <option key={mode.value} value={mode.value}>{mode.label}</option>
               ))}
             </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="text-[11px] text-muted-foreground">Backtest Runs</label>
+            <select
+              value={selectedHistoryRunId ? String(selectedHistoryRunId) : ""}
+              onChange={e => {
+                const next = Number(e.target.value);
+                if (Number.isInteger(next) && next > 0) {
+                  void loadBacktestHistoryRun(next);
+                } else {
+                  setSelectedHistoryRunId(null);
+                }
+              }}
+              disabled={symbol === "all" || historyLoading || historyRuns.length === 0}
+              className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
+            >
+              <option value="">
+                {symbol === "all"
+                  ? "Select a symbol to view run history"
+                  : historyLoading
+                    ? "Loading run history..."
+                    : historyRuns.length === 0
+                      ? "No persisted runs yet"
+                      : "Choose a previous run"}
+              </option>
+              {historyRuns.map(run => (
+                <option key={run.id} value={String(run.id)}>
+                  #{run.id}  {new Date(run.createdAt).toLocaleString()}  {pct(Number(run.summary?.winRate ?? 0))} WR  PF {Number(run.summary?.profitFactor ?? 0).toFixed(2)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-[11px] text-muted-foreground">History Refresh</label>
+            <button
+              onClick={() => void loadBacktestHistory(symbol)}
+              disabled={historyLoading || symbol === "all"}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded border border-border/50 text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors disabled:opacity-50"
+            >
+              {historyLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              Refresh Backtest Runs
+            </button>
           </div>
         </div>
 
@@ -2236,6 +2337,14 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   const optimiserBaseline = (optimiserRun?.baselineMetrics ?? null) as Record<string, unknown> | null;
   const optimiserCandidates = (optimiserStatus?.candidates ?? []) as Array<Record<string, unknown>>;
   const optimiserSelected = optimiserCandidates.find(c => c.selected === true);
+  const optimiserFailureReason = String(
+    optimiserStatus?.failureReason ??
+    ((optimiserRun?.errorSummary as Record<string, unknown> | undefined)?.error ?? ""),
+  ).trim();
+  const optimiserFailureStack = String(
+    optimiserStatus?.failureStack ??
+    ((optimiserRun?.errorSummary as Record<string, unknown> | undefined)?.stack ?? ""),
+  ).trim();
 
   useEffect(() => {
     if (!optimiserRunId || !optimiserIsRunning) return;
@@ -3426,6 +3535,17 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               </div>
             </div>
           )}
+          {optimiserFailureReason && (
+            <ErrorBox msg={`Optimiser failed: ${optimiserFailureReason}`} />
+          )}
+          {optimiserFailureStack && (
+            <details className="rounded border border-border/30 bg-background/30 p-2">
+              <summary className="text-[11px] text-muted-foreground cursor-pointer">Failure stack trace</summary>
+              <pre className="mt-2 text-[10px] overflow-x-auto whitespace-pre-wrap text-red-300 font-mono">
+                {optimiserFailureStack}
+              </pre>
+            </details>
+          )}
 
           {(optimiserBaseline || optimiserWinnerMetrics) && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -3599,6 +3719,16 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           >
             {exportBusy["comparison"] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
             Export Comparison Summary
+          </button>
+
+          <button
+            onClick={() => doExport("parity", `calibration/runtime-model/${symbol}/parity-report?windowDays=${windowDays}`, `calibration_parity_${symbol}_${new Date().toISOString().slice(0,10)}.json`)}
+            disabled={!!exportBusy["parity"]}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
+            title="Export per-move CRASH300 parity verdicts using the symbol-service runtime flow"
+          >
+            {exportBusy["parity"] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+            Export Parity Report
           </button>
         </div>
         <p className="text-[11px] text-muted-foreground">

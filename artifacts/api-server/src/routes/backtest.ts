@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { desc, eq, asc, count } from "drizzle-orm";
+import { desc, eq, asc, count, sql } from "drizzle-orm";
 import { db, backtestRunsTable, backtestTradesTable, candlesTable } from "@workspace/db";
 import { analyseBacktest, isOpenAIConfigured } from "../infrastructure/openai.js";
 import {
@@ -73,6 +73,43 @@ function buildMetricsJson(result: BacktestResult) {
       overfittingRatio: result.walkForward.overfittingRatio,
     } : undefined,
   };
+}
+
+type PersistedV3RunRow = {
+  id: number;
+  symbol: string;
+  startTs: number;
+  endTs: number;
+  mode: string;
+  tierMode: string;
+  runtimeModelRunId: number | null;
+  summary: Record<string, unknown>;
+  result: Record<string, unknown>;
+  createdAt: string;
+};
+
+async function ensureV3BacktestRunsTable(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS v3_backtest_runs (
+      id serial PRIMARY KEY,
+      symbol text NOT NULL,
+      start_ts integer NOT NULL,
+      end_ts integer NOT NULL,
+      mode text NOT NULL,
+      tier_mode text NOT NULL DEFAULT 'ALL',
+      runtime_model_run_id integer,
+      summary jsonb NOT NULL,
+      result jsonb NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v3_backtest_runs_symbol_created ON v3_backtest_runs(symbol, created_at DESC)`);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 router.post("/backtest/run", async (req, res): Promise<void> => {
@@ -436,6 +473,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
   }
 
   try {
+    await ensureV3BacktestRunsTable();
     let results: Record<string, unknown>;
 
     const mode = req.body?.mode;
@@ -474,15 +512,139 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
       (sum: number, r) => sum + ((r as { trades: unknown[] }).trades?.length ?? 0), 0
     );
 
+    const persistedRunIds: Record<string, number> = {};
+    for (const [sym, raw] of Object.entries(results)) {
+      const result = asRecord(raw);
+      const runtimeModel = asRecord(result.runtimeModel);
+      const summary = asRecord(result.summary);
+      const tierModeResult = String(result.tierMode ?? normalizedTierMode ?? "ALL").toUpperCase();
+      const modeResult = String(result.mode ?? mode ?? "paper");
+      const startTsResult = Number(result.startTs ?? parsedStart ?? 0);
+      const endTsResult = Number(result.endTs ?? parsedEnd ?? Math.floor(Date.now() / 1000));
+      const runtimeModelRunIdRaw = runtimeModel.sourceRunId;
+      const runtimeModelRunId = Number.isFinite(Number(runtimeModelRunIdRaw))
+        ? Number(runtimeModelRunIdRaw)
+        : null;
+
+      const insertResult = await db.execute(sql`
+        INSERT INTO v3_backtest_runs (
+          symbol, start_ts, end_ts, mode, tier_mode, runtime_model_run_id, summary, result
+        ) VALUES (
+          ${sym},
+          ${startTsResult},
+          ${endTsResult},
+          ${modeResult},
+          ${tierModeResult},
+          ${runtimeModelRunId},
+          ${JSON.stringify(summary)}::jsonb,
+          ${JSON.stringify(result)}::jsonb
+        )
+        RETURNING id
+      `);
+      const insertedId = Number((insertResult.rows[0] as { id?: number } | undefined)?.id ?? 0);
+      if (insertedId > 0) {
+        persistedRunIds[sym] = insertedId;
+      }
+    }
+
     res.json({
       ok: true,
       symbol,
       totalTrades,
       results,
+      persistedRunIds,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "V3 backtest failed";
     console.error("[backtest/v3/run] error:", message);
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/backtest/v3/history", async (req, res): Promise<void> => {
+  const symbol = String(req.query.symbol ?? "").toUpperCase();
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit ?? 25)));
+  if (!symbol) {
+    res.status(400).json({ error: "symbol query parameter is required" });
+    return;
+  }
+  try {
+    await ensureV3BacktestRunsTable();
+    const rows = await db.execute(sql`
+      SELECT
+        id,
+        symbol,
+        start_ts AS "startTs",
+        end_ts AS "endTs",
+        mode,
+        tier_mode AS "tierMode",
+        runtime_model_run_id AS "runtimeModelRunId",
+        summary,
+        created_at AS "createdAt"
+      FROM v3_backtest_runs
+      WHERE symbol = ${symbol}
+      ORDER BY created_at DESC
+      LIMIT ${limit}
+    `);
+    const runs = rows.rows.map((row) => ({
+      ...row,
+      createdAt: (() => {
+        const raw = (row as { createdAt?: string | Date }).createdAt;
+        if (!raw) return "";
+        const d = raw instanceof Date ? raw : new Date(raw);
+        return Number.isNaN(d.getTime()) ? String(raw) : d.toISOString();
+      })(),
+    }));
+    res.json({ ok: true, symbol, runs });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load V3 backtest history";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/backtest/v3/history/:id", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid backtest run id" });
+    return;
+  }
+  try {
+    await ensureV3BacktestRunsTable();
+    const rows = await db.execute(sql`
+      SELECT
+        id,
+        symbol,
+        start_ts AS "startTs",
+        end_ts AS "endTs",
+        mode,
+        tier_mode AS "tierMode",
+        runtime_model_run_id AS "runtimeModelRunId",
+        summary,
+        result,
+        created_at AS "createdAt"
+      FROM v3_backtest_runs
+      WHERE id = ${id}
+      LIMIT 1
+    `);
+    const row = rows.rows[0] as PersistedV3RunRow | undefined;
+    if (!row) {
+      res.status(404).json({ error: "V3 backtest history run not found" });
+      return;
+    }
+    res.json({
+      ok: true,
+      run: {
+        ...row,
+        createdAt: (() => {
+          const raw = (row as unknown as { createdAt?: string | Date }).createdAt;
+          if (!raw) return "";
+          const d = raw instanceof Date ? raw : new Date(raw);
+          return Number.isNaN(d.getTime()) ? String(raw) : d.toISOString();
+        })(),
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load V3 backtest run";
     res.status(500).json({ error: message });
   }
 });

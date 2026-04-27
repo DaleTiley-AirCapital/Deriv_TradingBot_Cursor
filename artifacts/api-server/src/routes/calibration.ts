@@ -78,6 +78,7 @@ import {
   stageBacktestOptimisationWinner,
   startBacktestOptimisation,
 } from "../core/calibration/backtestOptimiser.js";
+import { getSymbolService } from "../symbol-services/shared/SymbolServiceRegistry.js";
 
 const router: IRouter = Router();
 
@@ -845,7 +846,7 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
   const { symbolDomain } = checked;
 
   const exportType = req.query.type ? String(req.query.type) : null;
-  const VALID_EXPORT_TYPES = ["moves", "passes", "profile", "comparison"];
+  const VALID_EXPORT_TYPES = ["moves", "passes", "profile", "comparison", "parity"];
   if (exportType && !VALID_EXPORT_TYPES.includes(exportType)) {
     res.status(400).json({ error: `Invalid export type. Valid: ${VALID_EXPORT_TYPES.join(", ")} (or omit for full export)` });
     return;
@@ -998,6 +999,36 @@ router.get("/calibration/export/:symbol", async (req, res): Promise<void> => {
       };
       filename = `calibration_comparison_${symbol}_${ts}.json`;
 
+    } else if (exportType === "parity") {
+      const service = getSymbolService(symbol);
+      if (!service) {
+        res.status(404).json({ error: `No symbol service registered for ${symbol}` });
+        return;
+      }
+      const endTs = Number(req.query.endTs ?? Math.floor(Date.now() / 1000));
+      const startTs = Number(
+        req.query.startTs ??
+          (Math.floor(Date.now() / 1000) - Math.max(30, Math.min(730, Number(req.query.windowDays ?? 365))) * 86400),
+      );
+      const parity = await service.runCalibrationParity({
+        symbol,
+        startTs,
+        endTs,
+        mode: "parity",
+      });
+      const parityRecord = parity as Record<string, unknown>;
+      const runtimeModel = (parityRecord.runtimeModel ?? null) as Record<string, unknown> | null;
+      response = withSymbolDomain(symbol, symbolDomain, {
+        exportType: "parity",
+        exportedAt: new Date().toISOString(),
+        generatedAt: new Date().toISOString(),
+        promotedModelRunId: runtimeModel?.promotedModelRunId ?? null,
+        stagedModelRunId: runtimeModel?.stagedModelRunId ?? null,
+        totals: parityRecord.totals ?? {},
+        verdicts: Array.isArray(parityRecord.verdicts) ? parityRecord.verdicts : [],
+        report: parityRecord,
+      });
+      filename = `calibration_parity_${symbol}_${ts}.json`;
     } else {
       const [exportData, moves, integrity] = await Promise.all([
         getFullCalibrationExport(symbol),
@@ -1674,6 +1705,48 @@ router.get("/calibration/runtime-model/:symbol/optimise-backtest/:runId", async 
     res.json(withSymbolDomain(symbol, checked.symbolDomain, { ok: true, ...status }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Backtest optimiser status failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/calibration/runtime-model/:symbol/parity-report", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+
+  try {
+    const service = getSymbolService(symbol);
+    if (!service) {
+      res.status(404).json({ error: `No symbol service registered for ${symbol}` });
+      return;
+    }
+    const endTs = Number(req.query.endTs ?? Math.floor(Date.now() / 1000));
+    const startTs = Number(
+      req.query.startTs ??
+        (Math.floor(Date.now() / 1000) - Math.max(30, Math.min(730, Number(req.query.windowDays ?? 365))) * 86400),
+    );
+    const parity = await service.runCalibrationParity({
+      symbol,
+      startTs,
+      endTs,
+      mode: "parity",
+    });
+    const parityRecord = parity as Record<string, unknown>;
+    const runtimeModel = (parityRecord.runtimeModel ?? null) as Record<string, unknown> | null;
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      promotedModelRunId: runtimeModel?.promotedModelRunId ?? null,
+      stagedModelRunId: runtimeModel?.stagedModelRunId ?? null,
+      totals: parityRecord.totals ?? {},
+      verdicts: Array.isArray(parityRecord.verdicts) ? parityRecord.verdicts : [],
+      report: parityRecord,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Parity report generation failed";
     res.status(500).json({ error: message });
   }
 });

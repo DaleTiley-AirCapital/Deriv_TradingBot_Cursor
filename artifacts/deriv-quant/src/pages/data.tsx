@@ -562,6 +562,7 @@ function CleanCanonicalTab() {
 function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatus }) {
   const [symbol, setSymbol] = useState("R_100");
   const [running, setRunning] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [tracker, setTracker] = useState<DataTopUpTracker | null>(null);
@@ -614,6 +615,25 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
     }
   };
 
+  const resetTracker = async () => {
+    setResetting(true);
+    setErr(null);
+    setOk(null);
+    try {
+      const d = await apiFetch<{ message?: string }>(`research/data-top-up-reset/${symbol}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "manual_reset_from_data_ui" }),
+      });
+      setTracker(null);
+      setOk(d.message ?? `Cleared historical download tracker for ${symbol}`);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setResetting(false);
+    }
+  };
+
   return (
     <div className="rounded-xl border border-border/50 bg-card p-5 space-y-4">
       <div className="flex items-start gap-3">
@@ -631,12 +651,22 @@ function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatu
         <SymbolSelectFull value={symbol} onChange={setSymbol} />
         <button
           onClick={startDownload}
-          disabled={running}
+          disabled={running || resetting}
           className="flex items-center gap-2 px-4 py-2 rounded-lg border border-blue-500/40 bg-blue-500/12 text-blue-400 text-xs font-semibold hover:bg-blue-500/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {running
             ? <><Loader2 className="w-4 h-4 animate-spin" /> Starting...</>
             : <><Download className="w-4 h-4" /> Download Historical Data for {symbol}</>}
+        </button>
+        <button
+          onClick={resetTracker}
+          disabled={resetting || running || !tracker}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 text-xs font-semibold hover:bg-amber-500/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          title="Clear a stale/failed tracker so the symbol can be retried without manual DB edits"
+        >
+          {resetting
+            ? <><Loader2 className="w-4 h-4 animate-spin" /> Clearing...</>
+            : <><Wrench className="w-4 h-4" /> Clear Stale Tracker</>}
         </button>
         <span className="text-[11px] text-muted-foreground">
           No-data symbols: <span className="font-semibold text-foreground">{noDataSymbols.length}</span>

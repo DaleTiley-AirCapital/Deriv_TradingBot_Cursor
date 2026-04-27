@@ -18,6 +18,7 @@ const API_RATE_DELAY_MS = 150;
 const DEFAULT_CAPITAL = 600;
 const TWELVE_MONTHS_SECONDS = 365 * 24 * 3600;
 const DATA_TOP_UP_JOB_PREFIX = "data_top_up_job_";
+const DATA_TOP_UP_STALE_TIMEOUT_MS = 20 * 60 * 1000;
 
 type DataTopUpJobState = {
   symbol: string;
@@ -74,6 +75,26 @@ async function writeDataTopUpJob(symbol: string, job: DataTopUpJobState): Promis
       target: platformStateTable.key,
       set: { value: JSON.stringify(job), updatedAt: new Date() },
     });
+}
+
+async function clearDataTopUpJob(symbol: string): Promise<void> {
+  await db.delete(platformStateTable).where(eq(platformStateTable.key, topUpJobKey(symbol)));
+}
+
+function staleDataTopUpJob(job: DataTopUpJobState, nowMs = Date.now()): DataTopUpJobState {
+  const updatedAtMs = new Date(job.updatedAt).getTime();
+  if (!Number.isFinite(updatedAtMs)) return job;
+  const elapsedMs = nowMs - updatedAtMs;
+  if (job.status !== "running" || elapsedMs <= DATA_TOP_UP_STALE_TIMEOUT_MS) {
+    return job;
+  }
+  return {
+    ...job,
+    status: "failed",
+    completedAt: new Date(nowMs).toISOString(),
+    message: `Historical download marked stale after ${Math.round(elapsedMs / 1000)}s without heartbeat`,
+    error: "stale_tracker_timeout",
+  };
 }
 
 async function downloadHistoricalDataForSymbol(
@@ -754,7 +775,11 @@ router.post("/research/data-top-up", async (req, res): Promise<void> => {
   }
 
   try {
-    const existingJob = await readDataTopUpJob(symbol);
+    const existingJobRaw = await readDataTopUpJob(symbol);
+    const existingJob = existingJobRaw ? staleDataTopUpJob(existingJobRaw) : null;
+    if (existingJob && existingJobRaw && existingJob.status !== existingJobRaw.status) {
+      await writeDataTopUpJob(symbol, existingJob);
+    }
     if (existingJob?.status === "running") {
       res.status(409).json({
         success: false,
@@ -842,9 +867,9 @@ router.get("/research/data-top-up-status/:symbol", async (req, res): Promise<voi
   }
 
   try {
-    const tracker = await readDataTopUpJob(symbol);
+    const trackerRaw = await readDataTopUpJob(symbol);
     const current1mCount = await getCurrent1mCount(symbol);
-    if (!tracker) {
+    if (!trackerRaw) {
       res.json({
         success: true,
         tracker: null,
@@ -853,15 +878,16 @@ router.get("/research/data-top-up-status/:symbol", async (req, res): Promise<voi
       return;
     }
 
+    const tracker = staleDataTopUpJob(trackerRaw);
+    if (tracker.status !== trackerRaw.status || tracker.error !== trackerRaw.error || tracker.message !== trackerRaw.message) {
+      await writeDataTopUpJob(symbol, tracker);
+    }
+
     const hydrated: DataTopUpJobState = {
       ...tracker,
       current1mCount,
       downloaded1mCount: Math.max(0, current1mCount - tracker.baseline1mCount),
-      updatedAt: new Date().toISOString(),
     };
-    if (tracker.status === "running") {
-      await writeDataTopUpJob(symbol, hydrated);
-    }
 
     res.json({
       success: true,
@@ -869,6 +895,40 @@ router.get("/research/data-top-up-status/:symbol", async (req, res): Promise<voi
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Top-up status failed" });
+  }
+});
+
+router.post("/research/data-top-up-reset/:symbol", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  if (!ALL_SYMBOLS.includes(symbol)) {
+    res.status(400).json({ error: `Unknown symbol: ${symbol}` });
+    return;
+  }
+
+  try {
+    const tracker = await readDataTopUpJob(symbol);
+    if (!tracker) {
+      res.json({
+        success: true,
+        cleared: false,
+        message: `No tracker found for ${symbol}`,
+      });
+      return;
+    }
+
+    const reason = typeof req.body?.reason === "string" ? req.body.reason : "manual_reset";
+    await clearDataTopUpJob(symbol);
+
+    res.json({
+      success: true,
+      cleared: true,
+      symbol,
+      reason,
+      message: `Cleared historical download tracker for ${symbol}.`,
+      previousTracker: tracker,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "Failed to clear tracker" });
   }
 });
 
