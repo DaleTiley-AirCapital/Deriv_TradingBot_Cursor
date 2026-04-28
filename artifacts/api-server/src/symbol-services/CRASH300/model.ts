@@ -1,5 +1,6 @@
 import { db, platformStateTable } from "@workspace/db";
 import { getPromotedSymbolRuntimeModel, getStagedSymbolRuntimeModel, promoteStagedSymbolRuntimeModel, stageLatestSymbolResearchProfile } from "../../core/calibration/promotedSymbolModel.js";
+import { assertValidCrash300RuntimeModel, validateCrash300RuntimeModel } from "./runtimeFeeddown.js";
 
 const SYMBOL = "CRASH300";
 
@@ -27,13 +28,20 @@ export async function stageCrash300RuntimeModel() {
   if (!staged) {
     throw new Error("CRASH300 runtime model missing: no research profile to stage.");
   }
+  const stagedValidation = validateCrash300RuntimeModel(staged);
+  if (!stagedValidation.valid) {
+    throw new Error(`CRASH300 staged runtime model invalid: ${stagedValidation.errors.join(",")}`);
+  }
   return loadCrash300RuntimeEnvelope();
 }
 
 export async function promoteCrash300StagedRuntimeModel() {
+  const staged = await getStagedSymbolRuntimeModel(SYMBOL);
+  assertValidCrash300RuntimeModel(staged);
   const promoted = await promoteStagedSymbolRuntimeModel(SYMBOL);
   if (!promoted) {
     throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
   }
+  assertValidCrash300RuntimeModel(promoted);
   return loadCrash300RuntimeEnvelope();
 }

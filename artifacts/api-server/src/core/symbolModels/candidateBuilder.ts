@@ -5,6 +5,7 @@ import type { LiveCalibrationProfile } from "../calibration/liveCalibrationProfi
 import {
   evaluateRuntimeEntryEvidence,
   selectRuntimeTpBucket,
+  type RuntimeLeadInShape,
   type RuntimeQualityBand,
 } from "../calibration/runtimeProfileUtils.js";
 import { extractNativeScore } from "../allocatorCore.js";
@@ -14,6 +15,8 @@ import {
   calculateSRFibTP,
 } from "../tradeEngine.js";
 import type { SymbolTradeCandidate } from "./types.js";
+import { createCrash300TradeCandidate } from "../../symbol-services/CRASH300/candidateFactory.js";
+import type { SymbolDecisionResult } from "../../symbol-services/shared/SymbolDecisionResult.js";
 
 const SYNTHETIC_EQUITY = 10_000;
 const SYNTHETIC_SIZE = 1_500;
@@ -50,6 +53,78 @@ export function buildSymbolTradeCandidate(params: {
 }): BuiltSymbolTradeCandidate | null {
   const winner = params.winner ?? params.coordinatorOutput.winner;
   if (!winner) return null;
+
+  if (params.symbol === "CRASH300") {
+    const rawDecision = winner.metadata?.["symbolServiceDecision"];
+    if (!rawDecision || typeof rawDecision !== "object") {
+      throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service. symbol_service_decision_missing");
+    }
+    const decision = rawDecision as SymbolDecisionResult;
+    const runtimeCandidate = createCrash300TradeCandidate(decision);
+    const setupSignature = `${runtimeCandidate.setupFamily}|${runtimeCandidate.moveBucket}`;
+    const takeProfitPrice = Number((runtimeCandidate.tpPolicy.params as Record<string, unknown>)["takeProfitPrice"]);
+    const stopLossPrice = Number((runtimeCandidate.slPolicy.params as Record<string, unknown>)["stopLossPrice"]);
+    const trailingDistancePct = Number((runtimeCandidate.trailingPolicy.params as Record<string, unknown>)["distancePct"]);
+    const trailingArmPct = Number((runtimeCandidate.trailingPolicy.params as Record<string, unknown>)["activationPct"]);
+    const minHoldMinutes = Number((runtimeCandidate.trailingPolicy.params as Record<string, unknown>)["minHoldMinutes"]);
+    const qualityBand: RuntimeQualityBand =
+      decision.qualityTier === "A" || decision.qualityTier === "B" || decision.qualityTier === "C"
+        ? decision.qualityTier
+        : "C";
+    const leadInShapeRaw = String((decision.evidence as Record<string, unknown>)["leadInShape"] ?? "all");
+    const leadInShape: RuntimeLeadInShape =
+      leadInShapeRaw === "expanding" || leadInShapeRaw === "compressing" || leadInShapeRaw === "ranging" || leadInShapeRaw === "trending"
+        ? leadInShapeRaw
+        : "all";
+    const runtimeSetup = {
+      allowed: decision.valid,
+      reason: decision.failReasons[0] ?? "runtime_model_evidence_matched",
+      leadInShape,
+      qualityBand,
+      matchedBucketKey: runtimeCandidate.moveBucket,
+      evidenceScore: decision.setupMatch,
+      weakComponents: decision.failReasons,
+    };
+    const candidate: SymbolTradeCandidate = {
+      symbol: params.symbol,
+      engineName: winner.engineName,
+      direction: decision.direction!,
+      nativeScore: Math.round(decision.confidence * 100),
+      confidenceScore: decision.confidence,
+      qualityBand: runtimeSetup.qualityBand,
+      leadInShape: runtimeSetup.leadInShape,
+      setupSignature,
+      runtimeSetup,
+      exitPolicy: {
+        source: "promoted_runtime_model",
+        takeProfitPrice,
+        stopLossPrice,
+        takeProfitPct: Number((runtimeCandidate.tpPolicy.params as Record<string, unknown>)["takeProfitPct"] ?? 0),
+        stopLossPct: Number((runtimeCandidate.slPolicy.params as Record<string, unknown>)["stopLossPct"] ?? 0),
+        trailingArmPct,
+        trailingDistancePct,
+        minHoldMinutes: Number.isFinite(minHoldMinutes) ? minHoldMinutes : undefined,
+        bucketKey: runtimeCandidate.moveBucket,
+      },
+      features: params.features,
+      runtimeCalibration: params.runtimeCalibration,
+      sourceEngineResult: winner,
+      reason: runtimeCandidate.entryReason,
+      metadata: {
+        scoringSource: winner.metadata?.["crash300ScoringSource"] ?? "promoted_calibrated_runtime_model",
+        setupSignature,
+        runtimeSetupReason: runtimeSetup.reason,
+      },
+    };
+    return {
+      candidate,
+      nativeScore: candidate.nativeScore,
+      setupSignature,
+      takeProfitPrice,
+      stopLossPrice,
+      trailingDistancePct,
+    };
+  }
 
   const direction = params.coordinatorOutput.resolvedDirection;
   const spotPrice = Number(params.spotPrice ?? params.features.latestClose);

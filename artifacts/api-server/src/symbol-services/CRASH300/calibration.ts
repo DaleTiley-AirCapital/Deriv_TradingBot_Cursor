@@ -267,11 +267,7 @@ export async function runCrash300CalibrationParity(params: {
 
       const decision = await evaluateCrash300Runtime(context);
       let candidateProduced = false;
-      const builtCandidateEvidence = (
-        (decision.evidence as Record<string, unknown> | null)?.__builtCandidate ??
-        null
-      );
-      if (decision.direction && (decision.valid || Boolean(builtCandidateEvidence))) {
+      if (decision.direction && decision.valid) {
         candidateProduced = true;
       } else if (decision.valid && decision.direction) {
         try {

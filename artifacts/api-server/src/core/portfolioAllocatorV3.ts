@@ -166,7 +166,7 @@ export async function allocateV3Signal(
             : "";
           const weakParts = blockReasons && blockReasons.length > 0 ? ` | weak=[${blockReasons.join("; ")}]` : "";
           return deny(
-            `crash300_score_below_mode_threshold:native=${nativeScore ?? "?"}/100,engine_gate=${gateThreshold ?? "?"},mode_min=${minScore}` +
+            `crash300_runtime_evidence_below_mode_threshold:evidence=${nativeScore ?? "?"}/100,engine_gate=${gateThreshold ?? "?"},mode_min=${minScore}` +
             (breakdown ? ` | breakdown:[${breakdown}]` : "") +
             weakParts
           );

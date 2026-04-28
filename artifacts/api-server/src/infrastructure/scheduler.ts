@@ -142,9 +142,12 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   const modesToProcess: TradingMode[] = activeModes.length > 0 ? activeModes : ["paper" as TradingMode];
   const isIntelOnly = activeModes.length === 0;
   const paperModeInUse = isIntelOnly || modesToProcess.includes("paper");
-  const runtimeCalibration = paperModeInUse
+  const runtimeCalibration = (paperModeInUse || symbol === "CRASH300")
     ? await getLiveCalibrationProfile(symbol, "paper", stateMap).catch(() => null)
     : null;
+  if (symbol === "CRASH300" && !runtimeCalibration) {
+    throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
+  }
 
   if (runtimeCalibration && paperModeInUse) {
     const watchSymbols = new Set(getSymbolsNeedingWatchScan());
@@ -253,17 +256,50 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     );
 
     // ── Extract engine-native score and component breakdown ─────────────────
-    const candidateScoringDims = winner.metadata?.["componentScores"] as Record<string, number> | null ?? null;
-    const candidateNativeScore =
-      winner.metadata?.["boom300NativeScore"] != null ? (winner.metadata["boom300NativeScore"] as number)
-      : winner.metadata?.["crash300NativeScore"] != null ? (winner.metadata["crash300NativeScore"] as number)
-      : winner.metadata?.["r75ReversalNativeScore"] != null ? (winner.metadata["r75ReversalNativeScore"] as number)
-      : winner.metadata?.["r75ContinuationNativeScore"] != null ? (winner.metadata["r75ContinuationNativeScore"] as number)
-      : winner.metadata?.["r75BreakoutNativeScore"] != null ? (winner.metadata["r75BreakoutNativeScore"] as number)
-      : winner.metadata?.["r100ReversalNativeScore"] != null ? (winner.metadata["r100ReversalNativeScore"] as number)
-      : winner.metadata?.["r100BreakoutNativeScore"] != null ? (winner.metadata["r100BreakoutNativeScore"] as number)
-      : winner.metadata?.["r100ContinuationNativeScore"] != null ? (winner.metadata["r100ContinuationNativeScore"] as number)
-      : Math.round(coordinatorOutput.coordinatorConfidence * 100);
+    const candidateScoringDims = (winner.metadata?.["componentScores"] as Record<string, number> | null) ?? null;
+    const signalScoringDimensions = (() => {
+      if (symbol === "CRASH300") {
+        const decision = winner.metadata?.["symbolServiceDecision"] as Record<string, unknown> | undefined;
+        const componentScores = winner.metadata?.["componentScores"] as Record<string, number> | undefined;
+        if (decision && typeof decision === "object") {
+          return {
+            ...(componentScores ?? {}),
+            selectedRuntimeFamily: decision["setupFamily"] ?? null,
+            selectedBucket: decision["moveBucket"] ?? null,
+            setupMatch: decision["setupMatch"] ?? null,
+            confidence: decision["confidence"] ?? null,
+            failReasons: decision["failReasons"] ?? [],
+            candidateProduced: decision["valid"] ?? false,
+            candidateDirection: decision["direction"] ?? null,
+            promotedModelRunId: winner.metadata?.["runtimeModelRunId"] ?? null,
+            generatedAt: (decision["evidence"] && typeof decision["evidence"] === "object")
+              ? (decision["evidence"] as Record<string, unknown>)["generatedAt"] ?? null
+              : null,
+            featureSnapshot: decision["featureSnapshot"] ?? null,
+          } as Record<string, unknown>;
+        }
+      }
+      return candidateScoringDims;
+    })();
+    const candidateNativeScore = (() => {
+      if (symbol === "CRASH300") {
+        const runtimeEvidenceScore = winner.metadata?.["crash300CalibratedRuntimeScore"];
+        if (runtimeEvidenceScore == null) {
+          throw new Error(
+            "CRASH300 runtime model missing/invalid. Cannot evaluate symbol service. crash300_runtime_evidence_score_missing",
+          );
+        }
+        return runtimeEvidenceScore as number;
+      }
+      return winner.metadata?.["boom300NativeScore"] != null ? (winner.metadata["boom300NativeScore"] as number)
+        : winner.metadata?.["r75ReversalNativeScore"] != null ? (winner.metadata["r75ReversalNativeScore"] as number)
+        : winner.metadata?.["r75ContinuationNativeScore"] != null ? (winner.metadata["r75ContinuationNativeScore"] as number)
+        : winner.metadata?.["r75BreakoutNativeScore"] != null ? (winner.metadata["r75BreakoutNativeScore"] as number)
+        : winner.metadata?.["r100ReversalNativeScore"] != null ? (winner.metadata["r100ReversalNativeScore"] as number)
+        : winner.metadata?.["r100BreakoutNativeScore"] != null ? (winner.metadata["r100BreakoutNativeScore"] as number)
+        : winner.metadata?.["r100ContinuationNativeScore"] != null ? (winner.metadata["r100ContinuationNativeScore"] as number)
+        : Math.round(coordinatorOutput.coordinatorConfidence * 100);
+    })();
 
     const builtCandidate = buildSymbolTradeCandidate({
       symbol,
@@ -329,7 +365,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
             regime: operationalRegime,
             regimeConfidence,
             executionStatus: "blocked",
-            scoringDimensions: candidateScoringDims,
+            scoringDimensions: signalScoringDimensions,
           });
           totalDecisionsLogged++;
         } catch (logErr) {
@@ -382,7 +418,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
             regime: operationalRegime,
             regimeConfidence,
             executionStatus: "blocked",
-            scoringDimensions: candidateScoringDims,
+            scoringDimensions: signalScoringDimensions,
           });
           totalDecisionsLogged++;
         } catch (logErr) {
@@ -436,7 +472,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
             regime: operationalRegime,
             regimeConfidence,
             executionStatus: "blocked",
-            scoringDimensions: candidateScoringDims,
+            scoringDimensions: signalScoringDimensions,
           });
           totalDecisionsLogged++;
         } catch (logErr) {
@@ -539,7 +575,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         regime: operationalRegime,
         regimeConfidence,
         executionStatus: "executed",
-        scoringDimensions: candidateScoringDims,
+        scoringDimensions: signalScoringDimensions,
       });
       totalDecisionsLogged++;
     } catch (logErr) {

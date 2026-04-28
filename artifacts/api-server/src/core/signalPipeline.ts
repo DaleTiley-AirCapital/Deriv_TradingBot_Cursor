@@ -48,6 +48,11 @@ export function runEnginesAndCoordinate(
   input: EngineCoordinatorInput,
 ): EngineCoordinatorOutput {
   const { symbol, features, operationalRegime, regimeConfidence, runtimeCalibration } = input;
+  if (symbol === "CRASH300") {
+    throw new Error(
+      "CRASH300 runtime model missing/invalid. Cannot evaluate symbol service. use_CRASH300_symbol_service_runtime_path",
+    );
+  }
 
   const engines = getEnginesForSymbol(symbol);
 

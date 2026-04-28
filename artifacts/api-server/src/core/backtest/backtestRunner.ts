@@ -63,6 +63,7 @@ import {
   applyBarStateTransitions,
 } from "../tradeManagement.js";
 import { buildSymbolTradeCandidate } from "../symbolModels/candidateBuilder.js";
+import { evaluateCrash300Runtime, coordinatorFromCrash300Decision } from "../../symbol-services/CRASH300/engine.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "../../infrastructure/deriv.js";
 import {
   getLiveCalibrationProfile,
@@ -889,6 +890,9 @@ export async function runV3Backtest(
       }
     : await resolveLiveCalibrationProfile(symbol, mode as "paper" | "demo" | "real", stateMap).catch(() => null);
   const runtimeCalibration = runtimeCalibrationResolution?.profile ?? null;
+  if (symbol === "CRASH300" && !runtimeCalibration) {
+    throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
+  }
   const modeGate = resolveModeScoreGate(stateMap, modePrefix, mode, runtimeCalibration);
   const trailingCfg = runtimeCalibration
     ? resolveTrailingConfigFromProfile(runtimeCalibration.trailingModel ?? {})
@@ -1129,16 +1133,41 @@ export async function runV3Backtest(
     let engineResults: EngineResult[];
     let coordinatorOutput: ReturnType<typeof runEnginesAndCoordinate>["coordinatorOutput"];
     try {
-      const pipelineResult = runEnginesAndCoordinate({
-        symbol,
-        features,
-        operationalRegime: regimeResult.regime,
-        regimeConfidence: regimeResult.confidence,
-        runtimeCalibration,
-      });
-      engineResults = pipelineResult.engineResults;
-      coordinatorOutput = pipelineResult.coordinatorOutput;
-    } catch {
+      if (symbol === "CRASH300") {
+        const runtimeDecision = await evaluateCrash300Runtime({
+          symbol,
+          mode,
+          ts: bar.closeTs,
+          marketState: {
+            features,
+            featureHistory,
+            operationalRegime: regimeResult.regime,
+            regimeConfidence: regimeResult.confidence,
+          },
+          runtimeModel: runtimeCalibration as unknown as Record<string, unknown> | null,
+          stateMap: {},
+        });
+        const serviceResult = coordinatorFromCrash300Decision(
+          runtimeDecision,
+          runtimeCalibration as LiveCalibrationProfile,
+          Number((runtimeDecision.evidence as Record<string, unknown>)["expectedMovePct"] ?? 0),
+          ((runtimeDecision.evidence as Record<string, unknown>)["componentScores"] as Record<string, number>) ?? {},
+        );
+        engineResults = serviceResult.engineResults;
+        coordinatorOutput = serviceResult.coordinatorOutput;
+      } else {
+        const pipelineResult = runEnginesAndCoordinate({
+          symbol,
+          features,
+          operationalRegime: regimeResult.regime,
+          regimeConfidence: regimeResult.confidence,
+          runtimeCalibration,
+        });
+        engineResults = pipelineResult.engineResults;
+        coordinatorOutput = pipelineResult.coordinatorOutput;
+      }
+    } catch (err) {
+      if (symbol === "CRASH300") throw err;
       continue;
     }
 
@@ -1315,60 +1344,69 @@ export async function runV3Backtest(
       continue;
     }
 
-    // â”€â”€ SR/Fib TP (exact live calculateSRFibTP) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    let tp = calculateSRFibTP({
-      entryPrice: bar.close,
-      direction: winner.direction,
-      swingHigh: features.swingHigh,
-      swingLow: features.swingLow,
-      majorSwingHigh: features.majorSwingHigh,
-      majorSwingLow: features.majorSwingLow,
-      fibExtensionLevels: features.fibExtensionLevels ?? [],
-      fibExtensionLevelsDown: features.fibExtensionLevelsDown ?? [],
-      bbUpper: features.bbUpper,
-      bbLower: features.bbLower,
-      atrPct: features.atr14,
-      pivotLevels: [
-        features.pivotR1, features.pivotR2, features.pivotS1, features.pivotS2,
-      ].filter((v): v is number => typeof v === "number"),
-      vwap: features.vwap,
-      psychRound: features.psychRound,
-      prevSessionHigh: features.prevSessionHigh,
-      prevSessionLow: features.prevSessionLow,
-      spikeMagnitude: features.spikeMagnitude,
-    });
+    let tp: number;
+    let sl: number;
+    if (symbol === "CRASH300") {
+      const crashTp = builtCandidate.candidate.exitPolicy.takeProfitPrice;
+      const crashSl = builtCandidate.candidate.exitPolicy.stopLossPrice;
+      if (typeof crashTp !== "number" || typeof crashSl !== "number" || !Number.isFinite(crashTp) || !Number.isFinite(crashSl) || crashTp <= 0 || crashSl <= 0) {
+        throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service. runtime_exit_policy_missing");
+      }
+      tp = crashTp;
+      sl = crashSl;
+    } else {
+      // SR/Fib TP/SL plus runtime calibration model for non-CRASH symbols.
+      tp = calculateSRFibTP({
+        entryPrice: bar.close,
+        direction: winner.direction,
+        swingHigh: features.swingHigh,
+        swingLow: features.swingLow,
+        majorSwingHigh: features.majorSwingHigh,
+        majorSwingLow: features.majorSwingLow,
+        fibExtensionLevels: features.fibExtensionLevels ?? [],
+        fibExtensionLevelsDown: features.fibExtensionLevelsDown ?? [],
+        bbUpper: features.bbUpper,
+        bbLower: features.bbLower,
+        atrPct: features.atr14,
+        pivotLevels: [
+          features.pivotR1, features.pivotR2, features.pivotS1, features.pivotS2,
+        ].filter((v): v is number => typeof v === "number"),
+        vwap: features.vwap,
+        psychRound: features.psychRound,
+        prevSessionHigh: features.prevSessionHigh,
+        prevSessionLow: features.prevSessionLow,
+        spikeMagnitude: features.spikeMagnitude,
+      });
 
-    if (!isFinite(tp) || tp <= 0) continue;
-    if (winner.direction === "buy" && tp <= bar.close) continue;
-    if (winner.direction === "sell" && tp >= bar.close) continue;
+      if (!isFinite(tp) || tp <= 0) continue;
+      if (winner.direction === "buy" && tp <= bar.close) continue;
+      if (winner.direction === "sell" && tp >= bar.close) continue;
 
-    // â”€â”€ SR/Fib SL at 1:5 RR (exact live calculateSRFibSL) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    let sl = calculateSRFibSL({
-      entryPrice: bar.close,
-      direction: winner.direction,
-      tp,
-      positionSize: SYNTHETIC_SIZE,
-      equity: SYNTHETIC_EQUITY,
-    });
+      sl = calculateSRFibSL({
+        entryPrice: bar.close,
+        direction: winner.direction,
+        tp,
+        positionSize: SYNTHETIC_SIZE,
+        equity: SYNTHETIC_EQUITY,
+      });
+      if (!isFinite(sl) || sl <= 0) continue;
 
-    if (!isFinite(sl) || sl <= 0) continue;
-
-    ({ tp, sl } = applyRuntimeCalibrationExitModel({
-      spotPrice: bar.close,
-      direction: winner.direction,
-      tp,
-      sl,
-      trailingStopPct: trailingCfg.trailingDistancePct ?? 0,
-      mode,
-      runtimeCalibration,
-      nativeScore,
-      features,
-    }));
-
-    if (!isFinite(tp) || tp <= 0) continue;
-    if (winner.direction === "buy" && tp <= bar.close) continue;
-    if (winner.direction === "sell" && tp >= bar.close) continue;
-    if (!isFinite(sl) || sl <= 0) continue;
+      ({ tp, sl } = applyRuntimeCalibrationExitModel({
+        spotPrice: bar.close,
+        direction: winner.direction,
+        tp,
+        sl,
+        trailingStopPct: trailingCfg.trailingDistancePct ?? 0,
+        mode,
+        runtimeCalibration,
+        nativeScore,
+        features,
+      }));
+      if (!isFinite(tp) || tp <= 0) continue;
+      if (winner.direction === "buy" && tp <= bar.close) continue;
+      if (winner.direction === "sell" && tp >= bar.close) continue;
+      if (!isFinite(sl) || sl <= 0) continue;
+    }
 
     const tpPct = Math.abs(tp - bar.close) / bar.close;
     const slOriginalPct = Math.abs(sl - bar.close) / bar.close;
@@ -1420,9 +1458,15 @@ export async function runV3Backtest(
       tpPct,
       slOriginalPct,
       tpProgressAtBe: 0,
-      trailingActivationThresholdPct: trailingCfg.trailingActivationThresholdPct,
-      trailingDistancePct: trailingCfg.trailingDistancePct,
-      trailingMinHoldBars: trailingCfg.trailingMinHoldBars,
+      trailingActivationThresholdPct: symbol === "CRASH300"
+        ? builtCandidate.candidate.exitPolicy.trailingArmPct
+        : trailingCfg.trailingActivationThresholdPct,
+      trailingDistancePct: symbol === "CRASH300"
+        ? builtCandidate.candidate.exitPolicy.trailingDistancePct
+        : trailingCfg.trailingDistancePct,
+      trailingMinHoldBars: symbol === "CRASH300"
+        ? builtCandidate.candidate.exitPolicy.minHoldMinutes
+        : trailingCfg.trailingMinHoldBars,
     };
 
     // Register opening in shared ledger so concurrent symbols see this position
@@ -1635,6 +1679,9 @@ export async function runV3BacktestMulti(
     const runtimeCalibrationResolution =
       await resolveLiveCalibrationProfile(ctx.sym, _mode, stateMap).catch(() => null);
     const runtimeCalibration = runtimeCalibrationResolution?.profile ?? null;
+    if (ctx.sym === "CRASH300" && !runtimeCalibration) {
+      throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
+    }
     ctx.runtimeCalibrationResolution = runtimeCalibrationResolution;
     ctx.runtimeCalibration = runtimeCalibration;
     ctx.modeGate = resolveModeScoreGate(stateMap, modePrefix, _mode, runtimeCalibration);
@@ -1794,14 +1841,41 @@ export async function runV3BacktestMulti(
       let engineResults: EngineResult[];
       let coordinatorOutput: ReturnType<typeof runEnginesAndCoordinate>["coordinatorOutput"];
       try {
-        const p = runEnginesAndCoordinate({
-          symbol: ctx.sym, features,
-          operationalRegime: regimeResult.regime, regimeConfidence: regimeResult.confidence,
-          runtimeCalibration: ctx.runtimeCalibration,
-        });
-        engineResults = p.engineResults;
-        coordinatorOutput = p.coordinatorOutput;
-      } catch { continue; }
+        if (ctx.sym === "CRASH300") {
+          const runtimeDecision = await evaluateCrash300Runtime({
+            symbol: ctx.sym,
+            mode: _mode,
+            ts,
+            marketState: {
+              features,
+              featureHistory: ctx.featureHistory,
+              operationalRegime: regimeResult.regime,
+              regimeConfidence: regimeResult.confidence,
+            },
+            runtimeModel: ctx.runtimeCalibration as unknown as Record<string, unknown> | null,
+            stateMap: {},
+          });
+          const serviceResult = coordinatorFromCrash300Decision(
+            runtimeDecision,
+            ctx.runtimeCalibration as LiveCalibrationProfile,
+            Number((runtimeDecision.evidence as Record<string, unknown>)["expectedMovePct"] ?? 0),
+            ((runtimeDecision.evidence as Record<string, unknown>)["componentScores"] as Record<string, number>) ?? {},
+          );
+          engineResults = serviceResult.engineResults;
+          coordinatorOutput = serviceResult.coordinatorOutput;
+        } else {
+          const p = runEnginesAndCoordinate({
+            symbol: ctx.sym, features,
+            operationalRegime: regimeResult.regime, regimeConfidence: regimeResult.confidence,
+            runtimeCalibration: ctx.runtimeCalibration,
+          });
+          engineResults = p.engineResults;
+          coordinatorOutput = p.coordinatorOutput;
+        }
+      } catch (err) {
+        if (ctx.sym === "CRASH300") throw err;
+        continue;
+      }
 
       if (engineResults.length === 0 || !coordinatorOutput) continue;
 
@@ -1863,18 +1937,37 @@ export async function runV3BacktestMulti(
         continue;
       }
 
-      const setupEvidence = evaluateRuntimeEntryEvidence({
-        symbol: ctx.sym,
-        direction: winner.direction,
-        nativeScore,
-        winner,
-        features,
-        runtimeCalibration: ctx.runtimeCalibration,
-        allowedQualityBands: runtimeQualityBands,
-      });
-      const setupSignature = setupEvidence.matchedBucketKey
-        ? setupEvidence.matchedBucketKey
-        : `${setupEvidence.leadInShape}|${setupEvidence.qualityBand}`;
+      const builtCandidate = ctx.sym === "CRASH300"
+        ? buildSymbolTradeCandidate({
+            symbol: ctx.sym,
+            mode: _mode,
+            coordinatorOutput: coordinatorOutput as NonNullable<typeof coordinatorOutput>,
+            winner,
+            features,
+            spotPrice: bar.close,
+            runtimeCalibration: ctx.runtimeCalibration,
+            allowedQualityBands: runtimeQualityBands,
+            positionSize: SYNTHETIC_SIZE,
+            equity: SYNTHETIC_EQUITY,
+          })
+        : null;
+      if (ctx.sym === "CRASH300" && !builtCandidate) continue;
+      const setupEvidence = builtCandidate
+        ? builtCandidate.candidate.runtimeSetup
+        : evaluateRuntimeEntryEvidence({
+            symbol: ctx.sym,
+            direction: winner.direction,
+            nativeScore,
+            winner,
+            features,
+            runtimeCalibration: ctx.runtimeCalibration,
+            allowedQualityBands: runtimeQualityBands,
+          });
+      const setupSignature = builtCandidate
+        ? builtCandidate.setupSignature
+        : (setupEvidence.matchedBucketKey
+            ? setupEvidence.matchedBucketKey
+            : `${setupEvidence.leadInShape}|${setupEvidence.qualityBand}`);
 
       if (!setupEvidence.allowed) {
         ctx.signalsBlocked++;
@@ -1915,45 +2008,57 @@ export async function runV3BacktestMulti(
       }
 
       // SR/Fib TP â€” same as single-symbol path
-      let tp = calculateSRFibTP({
-        entryPrice: bar.close, direction: winner.direction,
-        swingHigh: features.swingHigh, swingLow: features.swingLow,
-        majorSwingHigh: features.majorSwingHigh, majorSwingLow: features.majorSwingLow,
-        fibExtensionLevels:     features.fibExtensionLevels     ?? [],
-        fibExtensionLevelsDown: features.fibExtensionLevelsDown ?? [],
-        bbUpper: features.bbUpper, bbLower: features.bbLower, atrPct: features.atr14,
-        pivotLevels: [features.pivotR1, features.pivotR2, features.pivotS1, features.pivotS2]
-          .filter((v): v is number => typeof v === "number"),
-        vwap: features.vwap, psychRound: features.psychRound,
-        prevSessionHigh: features.prevSessionHigh, prevSessionLow: features.prevSessionLow,
-        spikeMagnitude: features.spikeMagnitude,
-      });
-      if (!isFinite(tp) || tp <= 0) continue;
-      if (winner.direction === "buy"  && tp <= bar.close) continue;
-      if (winner.direction === "sell" && tp >= bar.close) continue;
+      let tp: number;
+      let sl: number;
+      if (ctx.sym === "CRASH300" && builtCandidate) {
+        const crashTp = builtCandidate.candidate.exitPolicy.takeProfitPrice;
+        const crashSl = builtCandidate.candidate.exitPolicy.stopLossPrice;
+        if (typeof crashTp !== "number" || typeof crashSl !== "number" || !Number.isFinite(crashTp) || !Number.isFinite(crashSl) || crashTp <= 0 || crashSl <= 0) {
+          throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service. runtime_exit_policy_missing");
+        }
+        tp = crashTp;
+        sl = crashSl;
+      } else {
+        tp = calculateSRFibTP({
+          entryPrice: bar.close, direction: winner.direction,
+          swingHigh: features.swingHigh, swingLow: features.swingLow,
+          majorSwingHigh: features.majorSwingHigh, majorSwingLow: features.majorSwingLow,
+          fibExtensionLevels:     features.fibExtensionLevels     ?? [],
+          fibExtensionLevelsDown: features.fibExtensionLevelsDown ?? [],
+          bbUpper: features.bbUpper, bbLower: features.bbLower, atrPct: features.atr14,
+          pivotLevels: [features.pivotR1, features.pivotR2, features.pivotS1, features.pivotS2]
+            .filter((v): v is number => typeof v === "number"),
+          vwap: features.vwap, psychRound: features.psychRound,
+          prevSessionHigh: features.prevSessionHigh, prevSessionLow: features.prevSessionLow,
+          spikeMagnitude: features.spikeMagnitude,
+        });
+        if (!isFinite(tp) || tp <= 0) continue;
+        if (winner.direction === "buy"  && tp <= bar.close) continue;
+        if (winner.direction === "sell" && tp >= bar.close) continue;
 
-      let sl = calculateSRFibSL({
-        entryPrice: bar.close, direction: winner.direction, tp,
-        positionSize: SYNTHETIC_SIZE, equity: SYNTHETIC_EQUITY,
-      });
-      if (!isFinite(sl) || sl <= 0) continue;
+        sl = calculateSRFibSL({
+          entryPrice: bar.close, direction: winner.direction, tp,
+          positionSize: SYNTHETIC_SIZE, equity: SYNTHETIC_EQUITY,
+        });
+        if (!isFinite(sl) || sl <= 0) continue;
 
-      ({ tp, sl } = applyRuntimeCalibrationExitModel({
-        spotPrice: bar.close,
-        direction: winner.direction,
-        tp,
-        sl,
-        trailingStopPct: ctx.trailingDistancePct ?? 0,
-        mode: _mode,
-        runtimeCalibration: ctx.runtimeCalibration,
-        nativeScore,
-        features,
-      }));
+        ({ tp, sl } = applyRuntimeCalibrationExitModel({
+          spotPrice: bar.close,
+          direction: winner.direction,
+          tp,
+          sl,
+          trailingStopPct: ctx.trailingDistancePct ?? 0,
+          mode: _mode,
+          runtimeCalibration: ctx.runtimeCalibration,
+          nativeScore,
+          features,
+        }));
 
-      if (!isFinite(tp) || tp <= 0) continue;
-      if (winner.direction === "buy"  && tp <= bar.close) continue;
-      if (winner.direction === "sell" && tp >= bar.close) continue;
-      if (!isFinite(sl) || sl <= 0) continue;
+        if (!isFinite(tp) || tp <= 0) continue;
+        if (winner.direction === "buy"  && tp <= bar.close) continue;
+        if (winner.direction === "sell" && tp >= bar.close) continue;
+        if (!isFinite(sl) || sl <= 0) continue;
+      }
 
       const tpPct        = Math.abs(tp - bar.close) / bar.close;
       const slOriginalPct = Math.abs(sl - bar.close) / bar.close;
@@ -1980,9 +2085,15 @@ export async function runV3BacktestMulti(
         instrumentFamily: ctx.instrumentFamily,
         emaSlope: features.emaSlope, spikeCount4h: features.spikeCount4h ?? 0,
         adverseCandleCount: 0, tpPct, slOriginalPct, tpProgressAtBe: 0,
-        trailingActivationThresholdPct: ctx.trailingActivationThresholdPct,
-        trailingDistancePct: ctx.trailingDistancePct,
-        trailingMinHoldBars: ctx.trailingMinHoldBars,
+        trailingActivationThresholdPct: ctx.sym === "CRASH300" && builtCandidate
+          ? builtCandidate.candidate.exitPolicy.trailingArmPct
+          : ctx.trailingActivationThresholdPct,
+        trailingDistancePct: ctx.sym === "CRASH300" && builtCandidate
+          ? builtCandidate.candidate.exitPolicy.trailingDistancePct
+          : ctx.trailingDistancePct,
+        trailingMinHoldBars: ctx.sym === "CRASH300" && builtCandidate
+          ? builtCandidate.candidate.exitPolicy.minHoldMinutes
+          : ctx.trailingMinHoldBars,
       };
       ledger.open(ctx.sym, ctx.instrumentFamily, tsMs);
       markReplayCandidateExecuted(ctx.candidateWindows, candidateWindow.key, ts, ctx.runtimeCalibration);

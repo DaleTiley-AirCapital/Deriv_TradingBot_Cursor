@@ -88,6 +88,7 @@ function classifyDecision(sig: SignalLog): DecisionState {
     if (r.includes("score") && r.includes("below")) return "rejected";
     if (r.startsWith("boom300_score_below")) return "rejected";
     if (r.startsWith("crash300_score_below")) return "rejected";
+    if (r.startsWith("crash300_runtime_evidence_below")) return "rejected";
     if (r.startsWith("r75_reversal_score_below")) return "rejected";
     if (r.startsWith("r75_continuation_score_below")) return "rejected";
     if (r.startsWith("r75_breakout_score_below")) return "rejected";
@@ -190,6 +191,8 @@ interface RuntimeEvidenceView {
   failReasons: string[];
   candidateProduced: boolean | null;
   candidateDirection: string | null;
+  generatedAt: string | null;
+  featureSnapshot: Record<string, unknown> | null;
 }
 
 function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
@@ -210,14 +213,26 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
   }
 
   // CRASH300-specific patterns
+  if (r.startsWith("crash300_runtime_evidence_below_mode_threshold")) {
+    const nativeMatch = r.match(/evidence=(\d+)/);
+    const modeMinMatch = r.match(/mode_min=(\d+)/);
+    const native = nativeMatch ? nativeMatch[1] : "?";
+    const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
+    return {
+      gate: "CRASH300 Runtime Evidence Gate",
+      detail: `Runtime evidence ${native}/100 < mode threshold ${modeMin}`,
+      raw: r,
+    };
+  }
+
   if (r.startsWith("crash300_score_below_mode_threshold")) {
     const nativeMatch = r.match(/native=(\d+)/);
     const modeMinMatch = r.match(/mode_min=(\d+)/);
     const native = nativeMatch ? nativeMatch[1] : "?";
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
-      gate: "CRASH300 Score Gate",
-      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      gate: "CRASH300 Legacy Score Gate",
+      detail: `Legacy score ${native}/100 < mode threshold ${modeMin}`,
       raw: r,
     };
   }
@@ -352,6 +367,10 @@ function extractRuntimeEvidence(sig: SignalLog, crashPromotedRunId?: number | nu
       ? null
       : String(candidateRaw).toLowerCase() === "true";
   const directionRaw = dims.candidateDirection ?? dims.candidate_direction ?? sig.direction ?? null;
+  const generatedAt = typeof dims.generatedAt === "string" ? dims.generatedAt : null;
+  const featureSnapshot = dims.featureSnapshot && typeof dims.featureSnapshot === "object"
+    ? (dims.featureSnapshot as Record<string, unknown>)
+    : null;
   return {
     promotedModelRunId: Number.isFinite(promotedModelRunId) ? promotedModelRunId : null,
     selectedRuntimeFamily: typeof (dims.selectedRuntimeFamily ?? dims.runtimeFamily) === "string"
@@ -364,6 +383,8 @@ function extractRuntimeEvidence(sig: SignalLog, crashPromotedRunId?: number | nu
     failReasons,
     candidateProduced,
     candidateDirection: directionRaw ? String(directionRaw) : null,
+    generatedAt,
+    featureSnapshot,
   };
 }
 
@@ -755,6 +776,13 @@ function DecisionDetailPanel({
             <DR label="Candidate produced" value={runtimeEvidence.candidateProduced == null ? "—" : runtimeEvidence.candidateProduced ? "true" : "false"} />
             <DR label="Candidate direction" value={runtimeEvidence.candidateDirection ?? "—"} />
             <DR label="Fail reasons" value={runtimeEvidence.failReasons.length > 0 ? runtimeEvidence.failReasons.join(", ") : "—"} />
+            <DR label="Generated at" value={runtimeEvidence.generatedAt ? compactDateTime(runtimeEvidence.generatedAt) : "—"} />
+            <DR
+              label="Feature snapshot"
+              value={runtimeEvidence.featureSnapshot
+                ? `emaSlope=${formatNumber(Number(runtimeEvidence.featureSnapshot["emaSlope"] ?? NaN), 5)}, priceVsEma20=${formatNumber(Number(runtimeEvidence.featureSnapshot["priceVsEma20"] ?? NaN), 4)}, atrRank=${formatNumber(Number(runtimeEvidence.featureSnapshot["atrRank"] ?? NaN), 2)}`
+                : "—"}
+            />
             <DR label="Runtime source status" value={isStaleCrashRuntime ? "stale decision vs promoted runtime" : "current runtime epoch"} />
           </div>
         )}
