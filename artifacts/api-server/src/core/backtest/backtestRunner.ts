@@ -111,6 +111,15 @@ export interface V3BacktestTrade {
   modeGateApplied: number;
   scoringSource?: string;
   runtimeModelRunId?: number | null;
+  runtimeFamily?: string | null;
+  selectedBucket?: string | null;
+  qualityTier?: string | null;
+  confidence?: number | null;
+  setupMatch?: number | null;
+  trailingActivationPct?: number | null;
+  trailingDistancePct?: number | null;
+  trailingMinHoldBars?: number | null;
+  trailingActivated?: boolean;
 }
 
 export interface V3BacktestResult {
@@ -523,6 +532,12 @@ interface OpenTradeState {
   trailingActivationThresholdPct?: number;
   trailingDistancePct?: number;
   trailingMinHoldBars?: number;
+  runtimeFamily?: string | null;
+  selectedBucket?: string | null;
+  qualityTier?: string | null;
+  confidence?: number | null;
+  setupMatch?: number | null;
+  trailingActivated?: boolean;
 }
 
 interface BacktestTrailingConfig {
@@ -582,6 +597,24 @@ function runtimeModelDiagnostics(
 function scoringSourceFromWinner(winner: EngineResult): string {
   const source = winner.metadata?.["crash300ScoringSource"];
   return typeof source === "string" ? source : "native_engine";
+}
+
+function winnerSymbolServiceDecision(
+  winner: EngineResult,
+): Record<string, unknown> {
+  const decision = winner.metadata?.["symbolServiceDecision"];
+  return decision && typeof decision === "object" && !Array.isArray(decision)
+    ? (decision as Record<string, unknown>)
+    : {};
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function optionalNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function parseRuntimeWindowSeconds(raw: string | undefined, fallbackSeconds: number): number {
@@ -954,6 +987,7 @@ export async function runV3Backtest(
       openTrade.peakPrice        = barState.peakPrice;
       openTrade.mfePct           = barState.mfePct;
       openTrade.maePct           = barState.maePct;
+      openTrade.trailingActivated = openTrade.trailingActivated || barState.stage === 3;
       openTrade.adverseCandleCount = barState.adverseCandleCount;
       if (barState.peakPrice !== prevPeakPrice) openTrade.mfePeakBar = i;
 
@@ -1050,6 +1084,15 @@ export async function runV3Backtest(
           modeGateApplied: modeGate,
           scoringSource: openTrade.scoringSource,
           runtimeModelRunId: openTrade.runtimeModelRunId,
+          runtimeFamily: openTrade.runtimeFamily ?? null,
+          selectedBucket: openTrade.selectedBucket ?? null,
+          qualityTier: openTrade.qualityTier ?? null,
+          confidence: openTrade.confidence ?? null,
+          setupMatch: openTrade.setupMatch ?? null,
+          trailingActivationPct: openTrade.trailingActivationThresholdPct ?? null,
+          trailingDistancePct: openTrade.trailingDistancePct ?? null,
+          trailingMinHoldBars: openTrade.trailingMinHoldBars ?? null,
+          trailingActivated: Boolean(openTrade.trailingActivated || openTrade.stage === 3),
         };
 
         trades.push(trade);
@@ -1467,6 +1510,12 @@ export async function runV3Backtest(
       trailingMinHoldBars: symbol === "CRASH300"
         ? builtCandidate.candidate.exitPolicy.minHoldMinutes
         : trailingCfg.trailingMinHoldBars,
+      runtimeFamily: optionalString(winnerSymbolServiceDecision(winner)["setupFamily"]),
+      selectedBucket: optionalString(winnerSymbolServiceDecision(winner)["moveBucket"]),
+      qualityTier: optionalString(winnerSymbolServiceDecision(winner)["qualityTier"]),
+      confidence: optionalNumber(winnerSymbolServiceDecision(winner)["confidence"]),
+      setupMatch: optionalNumber(winnerSymbolServiceDecision(winner)["setupMatch"]),
+      trailingActivated: false,
     };
 
     // Register opening in shared ledger so concurrent symbols see this position
@@ -1734,6 +1783,7 @@ export async function runV3BacktestMulti(
       ot.peakPrice          = barState.peakPrice;
       ot.mfePct             = barState.mfePct;
       ot.maePct             = barState.maePct;
+      ot.trailingActivated  = ot.trailingActivated || barState.stage === 3;
       ot.adverseCandleCount = barState.adverseCandleCount;
       if (barState.peakPrice !== prevPeak) ot.mfePeakBar = i;
 
@@ -1787,6 +1837,15 @@ export async function runV3BacktestMulti(
           conflictResolution: ot.conflictResolution, modeGateApplied: ctx.modeGate,
           scoringSource: ot.scoringSource,
           runtimeModelRunId: ot.runtimeModelRunId,
+          runtimeFamily: ot.runtimeFamily ?? null,
+          selectedBucket: ot.selectedBucket ?? null,
+          qualityTier: ot.qualityTier ?? null,
+          confidence: ot.confidence ?? null,
+          setupMatch: ot.setupMatch ?? null,
+          trailingActivationPct: ot.trailingActivationThresholdPct ?? null,
+          trailingDistancePct: ot.trailingDistancePct ?? null,
+          trailingMinHoldBars: ot.trailingMinHoldBars ?? null,
+          trailingActivated: Boolean(ot.trailingActivated || ot.stage === 3),
         });
         ctx.simClosedPnls.push({ closeTs: tsMs, pnlUsd: finalPnl * SYNTHETIC_SIZE });
         ctx.simEquity *= (1 + finalPnl);
@@ -2094,6 +2153,12 @@ export async function runV3BacktestMulti(
         trailingMinHoldBars: ctx.sym === "CRASH300" && builtCandidate
           ? builtCandidate.candidate.exitPolicy.minHoldMinutes
           : ctx.trailingMinHoldBars,
+        runtimeFamily: optionalString(winnerSymbolServiceDecision(winner)["setupFamily"]),
+        selectedBucket: optionalString(winnerSymbolServiceDecision(winner)["moveBucket"]),
+        qualityTier: optionalString(winnerSymbolServiceDecision(winner)["qualityTier"]),
+        confidence: optionalNumber(winnerSymbolServiceDecision(winner)["confidence"]),
+        setupMatch: optionalNumber(winnerSymbolServiceDecision(winner)["setupMatch"]),
+        trailingActivated: false,
       };
       ledger.open(ctx.sym, ctx.instrumentFamily, tsMs);
       markReplayCandidateExecuted(ctx.candidateWindows, candidateWindow.key, ts, ctx.runtimeCalibration);

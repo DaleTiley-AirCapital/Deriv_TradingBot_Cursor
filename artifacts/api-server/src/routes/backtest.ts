@@ -11,7 +11,9 @@ import {
 import {
   runV3Backtest,
   runV3BacktestMulti,
+  type V3BacktestResult,
 } from "../core/backtest/backtestRunner.js";
+import { buildCrash300TradeOutcomeAttributionReport } from "../core/backtest/tradeOutcomeAttribution.js";
 import { ACTIVE_SYMBOLS } from "../core/engineTypes.js";
 
 const router: IRouter = Router();
@@ -645,6 +647,53 @@ router.get("/backtest/v3/history/:id", async (req, res): Promise<void> => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load V3 backtest run";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/backtest/v3/history/:id/attribution", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid backtest run id" });
+    return;
+  }
+  try {
+    await ensureV3BacktestRunsTable();
+    const rows = await db.execute(sql`
+      SELECT
+        id,
+        symbol,
+        start_ts AS "startTs",
+        end_ts AS "endTs",
+        mode,
+        tier_mode AS "tierMode",
+        runtime_model_run_id AS "runtimeModelRunId",
+        summary,
+        result,
+        created_at AS "createdAt"
+      FROM v3_backtest_runs
+      WHERE id = ${id}
+      LIMIT 1
+    `);
+    const row = rows.rows[0] as PersistedV3RunRow | undefined;
+    if (!row) {
+      res.status(404).json({ error: "V3 backtest history run not found" });
+      return;
+    }
+    const result = asRecord(row.result) as unknown as V3BacktestResult;
+    if (String(row.symbol).toUpperCase() !== "CRASH300") {
+      res.status(400).json({ error: "Trade-outcome attribution is currently available for CRASH300 only" });
+      return;
+    }
+    const report = await buildCrash300TradeOutcomeAttributionReport({
+      runId: row.id,
+      result,
+      createdAt: row.createdAt,
+    });
+    res.json({ ok: true, report });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to build trade-outcome attribution report";
+    console.error(`[backtest/v3/history/${id}/attribution] error:`, message);
     res.status(500).json({ error: message });
   }
 });

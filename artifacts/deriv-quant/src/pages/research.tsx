@@ -428,6 +428,15 @@ interface V3Trade {
   nativeScore: number;
   scoringSource?: string;
   runtimeModelRunId?: number | null;
+  runtimeFamily?: string | null;
+  selectedBucket?: string | null;
+  qualityTier?: string | null;
+  confidence?: number | null;
+  setupMatch?: number | null;
+  trailingActivationPct?: number | null;
+  trailingDistancePct?: number | null;
+  trailingMinHoldBars?: number | null;
+  trailingActivated?: boolean;
   regimeAtEntry: string;
   holdBars: number;
   pnlPct: number;
@@ -831,6 +840,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const [historyRuns, setHistoryRuns] = useState<PersistedV3BacktestHistoryRun[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedHistoryRunId, setSelectedHistoryRunId] = useState<number | null>(null);
+  const [latestPersistedRunIds, setLatestPersistedRunIds] = useState<Record<string, number>>({});
   const [historyRunLoadError, setHistoryRunLoadError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -912,6 +922,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       });
 
       setResults(d.results as Record<string, V3Result>);
+      setLatestPersistedRunIds((d.persistedRunIds as Record<string, number> | undefined) ?? {});
       await loadBacktestHistory(symbol, true);
     } catch (e: any) {
       setErr(e.message);
@@ -945,6 +956,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
           body: JSON.stringify({ symbol, startTs, endTs, tierMode: mode }),
         });
         sweep[mode] = d.results as Record<string, V3Result>;
+        setLatestPersistedRunIds((d.persistedRunIds as Record<string, number> | undefined) ?? {});
       }
 
       setTierSweep(sweep);
@@ -1037,6 +1049,26 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       downloadJson(data, `signals-export-${isAllSymbols ? "all" : symbol}-${timestamp}.json`);
     } catch (e: any) {
       setErr(`Signal export failed: ${e?.message ?? "Unknown error"}`);
+    }
+  }
+
+  async function exportAttribution() {
+    if (symbol !== "CRASH300") {
+      setErr("Trade-outcome attribution export is currently available for CRASH300 only.");
+      return;
+    }
+    const runId = selectedHistoryRunId ?? latestPersistedRunIds.CRASH300;
+    if (!runId) {
+      setErr("Run a CRASH300 backtest or select a persisted CRASH300 run before exporting attribution.");
+      return;
+    }
+    try {
+      setErr(null);
+      const data = await apiFetch(`backtest/v3/history/${runId}/attribution`) as { report?: unknown };
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+      downloadJson(data.report ?? data, `bt-attribution-CRASH300-${timestamp}.json`);
+    } catch (e: any) {
+      setErr(`Attribution export failed: ${e?.message ?? "Unknown error"}`);
     }
   }
 
@@ -1183,6 +1215,16 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
                 <Download className="w-3.5 h-3.5" />
                 Export Trades JSON
               </button>
+              {symbol === "CRASH300" && (
+                <button
+                  onClick={() => void exportAttribution()}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
+                  title="Export deterministic CRASH300 trade-outcome attribution for the selected or latest persisted backtest run"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Export Attribution JSON
+                </button>
+              )}
             </>
           )}
 
