@@ -2221,6 +2221,44 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
     }
   };
 
+  const buildPhaseIdentifierEndpoint = (mode: "summary" | "sample" | "full") => {
+    const effectiveWindowDays = Number.isFinite(windowDays) && windowDays > 0 ? windowDays : 30;
+    const { startTs, endTs } = getWindowRange(effectiveWindowDays);
+    const query = new URLSearchParams();
+    if (startTs) query.set("startTs", String(startTs));
+    if (endTs) query.set("endTs", String(endTs));
+    if (mode === "sample") query.set("limit", "5");
+    return `calibration/runtime-model/${symbol}/phase-identifiers${mode === "summary" ? "/summary" : ""}?${query.toString()}`;
+  };
+
+  const exportPhaseIdentifiers = async (mode: "summary" | "sample" | "full") => {
+    const key = `phase-${mode}`;
+    const dateSuffix = new Date().toISOString().slice(0, 10);
+    const filenames = {
+      summary: `crash300_phase_identifier_summary_${dateSuffix}.json`,
+      sample: `crash300_phase_identifier_sample_${dateSuffix}.json`,
+      full: `crash300_phase_identifier_report_${dateSuffix}.json`,
+    } as const;
+    setRuntimeErr(null);
+    setRuntimeNotice(null);
+    setExportBusy(p => ({ ...p, [key]: true }));
+    try {
+      const d = await apiFetch(buildPhaseIdentifierEndpoint(mode));
+      downloadJson(d, filenames[mode]);
+      setRuntimeNotice(
+        mode === "summary"
+          ? "Downloaded CRASH300 phase identifier summary report."
+          : mode === "sample"
+            ? "Downloaded CRASH300 phase identifier sample report."
+            : "Downloaded CRASH300 full phase identifier report.",
+      );
+    } catch (e: unknown) {
+      setRuntimeErr(e instanceof Error ? e.message : "Phase identifier export failed");
+    } finally {
+      setExportBusy(p => ({ ...p, [key]: false }));
+    }
+  };
+
   const updateRuntimeModel = async (action: "stage" | "promote") => {
     setRuntimeBusy(action);
     setRuntimeErr(null);
@@ -3606,6 +3644,47 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             Promotion is the explicit handoff from research into the model layer above the V3 engine.
           </p>
         </div>
+
+        {symbol === "CRASH300" && (
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
+            <p className="text-[11px] font-semibold text-foreground">Phase Identifier Reports</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void exportPhaseIdentifiers("summary")}
+                disabled={!!exportBusy["phase-summary"]}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
+                title="Download aggregate-only CRASH300 phase identifier statistics for the current research window"
+              >
+                {exportBusy["phase-summary"] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                Export Phase Identifier Summary
+              </button>
+              <button
+                type="button"
+                onClick={() => void exportPhaseIdentifiers("sample")}
+                disabled={!!exportBusy["phase-sample"]}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
+                title="Download a small sample of five CRASH300 phase identifier move reports for the current research window"
+              >
+                {exportBusy["phase-sample"] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                Export Phase Identifier Sample
+              </button>
+              <button
+                type="button"
+                onClick={() => void exportPhaseIdentifiers("full")}
+                disabled={!!exportBusy["phase-full"]}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
+                title="Download the full CRASH300 phase identifier report for the current research window"
+              >
+                {exportBusy["phase-full"] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                Export Full 1-Month Phase Identifier Report
+              </button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Uses the currently selected research window for CRASH300 and downloads JSON only.
+            </p>
+          </div>
+        )}
 
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3">
           <p className="text-[11px] font-semibold text-foreground mb-2">CRASH300 workflow</p>
