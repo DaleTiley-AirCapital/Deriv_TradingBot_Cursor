@@ -44,6 +44,8 @@ export function buildCrash300TriggerSnapshot(params: {
   const oneBarMomentum = oneBarReturnPct / impulseBase;
   const threeBarMomentum = threeBarReturnPct / Math.max(impulseBase * 2.5, 1e-9);
   const fiveBarMomentum = fiveBarReturnPct / Math.max(impulseBase * 4, 1e-9);
+  const momentumAcceleration1v3 = oneBarMomentum - threeBarMomentum;
+  const momentumAcceleration3v5 = threeBarMomentum - fiveBarMomentum;
   const breakoutUp = last.close > windowHigh15 * (1 - 0.0005);
   const breakoutDown = last.close < windowLow15 * (1 + 0.0005);
   const microBreakDirection = breakoutUp ? "up" : breakoutDown ? "down" : "none";
@@ -71,12 +73,18 @@ export function buildCrash300TriggerSnapshot(params: {
   let triggerTransition: Crash300TriggerTransition = "none";
   let triggerDirection: "buy" | "sell" | "none" = "none";
   let confirmationBars = 0;
+  let compressionBreakUp = false;
+  let compressionBreakDown = false;
+  let recoveryContinuationUp = false;
+  let failedRecoveryBreakDown = false;
+  let crashContinuationDown = false;
   if (
     params.context.compressionToExpansionScore > 0.55 &&
     params.context.trendPersistenceScore > 0.55 &&
     breakoutUp &&
     oneBarReturnPct > 0
   ) {
+    compressionBreakUp = true;
     triggerTransition = "compression_break_up";
     triggerDirection = "buy";
     confirmationBars = threeBarReturnPct > 0 ? 2 : 1;
@@ -85,6 +93,7 @@ export function buildCrash300TriggerSnapshot(params: {
     breakoutDown &&
     oneBarReturnPct < 0
   ) {
+    compressionBreakDown = true;
     triggerTransition = "compression_break_down";
     triggerDirection = "sell";
     confirmationBars = threeBarReturnPct < 0 ? 2 : 1;
@@ -93,6 +102,7 @@ export function buildCrash300TriggerSnapshot(params: {
     params.context.recoveryQualityScore > 0.55 &&
     (reversalWickDirection === "up" || (oneBarReturnPct > 0 && threeBarReturnPct > 0))
   ) {
+    recoveryContinuationUp = true;
     triggerTransition = "recovery_continuation_up";
     triggerDirection = "buy";
     confirmationBars = threeBarReturnPct > 0 ? 2 : 1;
@@ -101,6 +111,7 @@ export function buildCrash300TriggerSnapshot(params: {
     params.context.recoveryQualityScore < 0.55 &&
     (reversalWickDirection === "down" || breakoutDown)
   ) {
+    failedRecoveryBreakDown = true;
     triggerTransition = "failed_recovery_break_down";
     triggerDirection = "sell";
     confirmationBars = threeBarReturnPct < 0 ? 2 : 1;
@@ -110,6 +121,7 @@ export function buildCrash300TriggerSnapshot(params: {
     fiveBarReturnPct < 0 &&
     breakoutDown
   ) {
+    crashContinuationDown = true;
     triggerTransition = "crash_continuation_down";
     triggerDirection = "sell";
     confirmationBars = 1;
@@ -141,15 +153,22 @@ export function buildCrash300TriggerSnapshot(params: {
     oneBarMomentum,
     threeBarMomentum,
     fiveBarMomentum,
+    momentumAcceleration1v3,
+    momentumAcceleration3v5,
     microBreakDirection,
     microBreakStrengthPct,
+    microBreakLookbackBars: 5,
     reversalWickDirection,
     rejectionScore,
     impulseScore,
+    compressionBreakUp,
+    compressionBreakDown,
+    recoveryContinuationUp,
+    failedRecoveryBreakDown,
+    crashContinuationDown,
     triggerTransition,
     confirmationBars,
     triggerDirection,
     triggerStrengthScore,
   };
 }
-

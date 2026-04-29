@@ -83,6 +83,7 @@ import { getSymbolService } from "../symbol-services/shared/SymbolServiceRegistr
 import { loadCrash300RuntimeEnvelope } from "../symbol-services/CRASH300/model.js";
 import { runCrash300CalibrationParity } from "../symbol-services/CRASH300/calibration.js";
 import { buildCrash300PreMoveSnapshots, summarizeCrash300PreMoveSnapshots } from "../symbol-services/CRASH300/featureSnapshots.js";
+import { buildCrash300PhaseIdentifierReport } from "../symbol-services/CRASH300/phaseIdentifiers.js";
 
 const router: IRouter = Router();
 
@@ -1900,6 +1901,114 @@ router.get("/calibration/runtime-model/:symbol/pre-move-feature-snapshots", asyn
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Pre-move feature snapshot generation failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/calibration/runtime-model/:symbol/phase-identifiers", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  if (symbol !== "CRASH300") {
+    res.status(400).json({ error: "Phase identifiers are currently available for CRASH300 only." });
+    return;
+  }
+
+  try {
+    const report = await buildCrash300PhaseIdentifierReport({
+      startTs: req.query.startTs != null ? Number(req.query.startTs) : null,
+      endTs: req.query.endTs != null ? Number(req.query.endTs) : null,
+      limit: req.query.limit != null ? Number(req.query.limit) : null,
+      includeMoves: req.query.includeMoves == null ? true : String(req.query.includeMoves).toLowerCase() !== "false",
+      includeAggregates: req.query.includeAggregates == null ? true : String(req.query.includeAggregates).toLowerCase() !== "false",
+    });
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      ...report,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Phase identifier report generation failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/calibration/runtime-model/:symbol/phase-identifiers/summary", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  if (symbol !== "CRASH300") {
+    res.status(400).json({ error: "Phase identifier summaries are currently available for CRASH300 only." });
+    return;
+  }
+
+  try {
+    const report = await buildCrash300PhaseIdentifierReport({
+      startTs: req.query.startTs != null ? Number(req.query.startTs) : null,
+      endTs: req.query.endTs != null ? Number(req.query.endTs) : null,
+      limit: req.query.limit != null ? Number(req.query.limit) : null,
+      includeMoves: false,
+      includeAggregates: true,
+    });
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      symbol: report.symbol,
+      generatedAt: report.generatedAt,
+      source: report.source,
+      window: report.window,
+      promotedModelRunId: report.promotedModelRunId,
+      detectedMoveCount: report.detectedMoveCount,
+      aggregates: report.aggregates,
+      diagnostics: report.diagnostics,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Phase identifier summary generation failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/calibration/runtime-model/:symbol/phase-identifiers/move/:moveId", async (req, res): Promise<void> => {
+  const { symbol, moveId } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  if (symbol !== "CRASH300") {
+    res.status(400).json({ error: "Single-move phase identifiers are currently available for CRASH300 only." });
+    return;
+  }
+
+  try {
+    const report = await buildCrash300PhaseIdentifierReport({
+      startTs: req.query.startTs != null ? Number(req.query.startTs) : null,
+      endTs: req.query.endTs != null ? Number(req.query.endTs) : null,
+      includeMoves: true,
+      includeAggregates: false,
+    });
+    const numericMoveId = Number(moveId);
+    const row = report.moves.find((move) => move.moveId === numericMoveId) ?? null;
+    if (!row) {
+      res.status(404).json({ error: `No CRASH300 phase identifier report row found for move ${moveId}` });
+      return;
+    }
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      symbol: report.symbol,
+      generatedAt: report.generatedAt,
+      source: report.source,
+      window: report.window,
+      promotedModelRunId: report.promotedModelRunId,
+      move: row,
+      diagnostics: report.diagnostics,
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Single-move phase identifier generation failed";
     res.status(500).json({ error: message });
   }
 });

@@ -106,11 +106,19 @@ export interface Crash300TriggerSnapshot {
   oneBarMomentum: number;
   threeBarMomentum: number;
   fiveBarMomentum: number;
+  momentumAcceleration1v3: number;
+  momentumAcceleration3v5: number;
   microBreakDirection: "up" | "down" | "none";
   microBreakStrengthPct: number;
+  microBreakLookbackBars: number;
   reversalWickDirection: "up" | "down" | "none";
   rejectionScore: number;
   impulseScore: number;
+  compressionBreakUp: boolean;
+  compressionBreakDown: boolean;
+  recoveryContinuationUp: boolean;
+  failedRecoveryBreakDown: boolean;
+  crashContinuationDown: boolean;
   triggerTransition: Crash300TriggerTransition;
   confirmationBars: number;
   triggerDirection: "buy" | "sell" | "none";
@@ -143,4 +151,3 @@ export interface Crash300RuntimeState {
   lastValidTriggerDirection: "buy" | "sell" | null;
   lastValidTriggerStrength: number | null;
 }
-
