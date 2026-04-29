@@ -9,8 +9,13 @@ export type Crash300TriggerTransition =
   | "compression_break_up"
   | "compression_break_down"
   | "recovery_continuation_up"
+  | "post_crash_recovery_reclaim_up"
+  | "bear_trap_reversal_up"
+  | "failed_down_impulse_reclaim_up"
   | "failed_recovery_break_down"
-  | "crash_continuation_down";
+  | "crash_continuation_down"
+  | "bull_trap_reversal_down"
+  | "failed_up_impulse_break_down";
 
 export interface Crash300CrashEvent {
   eventStartTs: number;

@@ -62,7 +62,38 @@ type Crash300TriggerSnapshotWithMoveMeta = Crash300TriggerSnapshot & {
   expectedTradeDirection: "buy" | "sell" | null;
   directionMatchesMove: boolean;
   triggerFreshAtMoveStart: boolean;
+  contextTrendPersistenceScore: number;
+  contextRecoveryQualityScore: number;
+  contextCrashRecencyScore: number;
+  contextCompressionToExpansionScore: number;
+  contextRecoveryFromLastCrashPct: number | null;
+  contextPriceVsEma20Pct: number;
+  contextPriceVsEma50Pct: number;
+  contextAtr14Pct: number;
+  triggerDiagnosticOnly: boolean;
+  liveEligibleTrigger: boolean;
+  triggerConfirmationOffsetBars: number | null;
+  adverseImpulseBeforeTrigger: boolean;
+  adverseImpulseDirection: "up" | "down" | "none";
+  adverseImpulsePct: number;
+  reclaimConfirmed: boolean;
 };
+
+type Crash300PhaseDerivedFamily =
+  | Crash300RuntimeFamily
+  | "bear_trap_reversal_up"
+  | "bull_trap_reversal_down"
+  | "unknown";
+
+type Crash300PhaseBucketContext =
+  | "trending"
+  | "recovery"
+  | "compression"
+  | "failed_recovery"
+  | "crash_event"
+  | "reversal";
+
+type Crash300PhaseDerivedBucket = `${"up" | "down"}|${Crash300PhaseBucketContext}|${MoveSizeBucket}`;
 
 type Crash300DuringHorizon = {
   horizonBars: number | "move_end";
@@ -108,8 +139,10 @@ type Crash300MovePhaseTrigger = {
   strongestTriggerOffset: number | null;
   strongestTriggerDirection: "buy" | "sell" | "none";
   strongestTriggerStrength: number;
+  strongestTriggerTransition: Crash300TriggerSnapshot["triggerTransition"];
   firstValidTriggerOffset: number | null;
   firstValidTriggerDirection: "buy" | "sell" | "none";
+  firstValidTriggerTransition: Crash300TriggerSnapshot["triggerTransition"];
 };
 
 type Crash300MovePhaseDuring = {
@@ -190,6 +223,14 @@ export interface Crash300MovePhaseIdentifiers {
   qualityTier: string;
   runtimeFamily: string | null;
   selectedBucket: string | null;
+  parityRuntimeFamily: string | null;
+  phaseDerivedFamily: Crash300PhaseDerivedFamily;
+  familySource: "phase-derived" | "parity-only" | "unknown";
+  parityFamilyDisagreesWithPhaseFamily: boolean;
+  paritySelectedBucket: string | null;
+  phaseDerivedBucket: Crash300PhaseDerivedBucket;
+  bucketSource: "phase-derived";
+  parityBucketMissing: boolean;
   before: Crash300MovePhaseBefore;
   trigger: Crash300MovePhaseTrigger;
   during: Crash300MovePhaseDuring;
@@ -228,6 +269,13 @@ export interface Crash300MovePhaseIdentifierReport {
     truncatedAfterHorizons: number;
     movesWithoutNextMove: number;
     linkedBacktestRunId: number | null;
+    move11419Summary: {
+      triggerFound: boolean;
+      phaseDerivedFamily: Crash300PhaseDerivedFamily | null;
+      phaseDerivedBucket: Crash300PhaseDerivedBucket | null;
+      strongestTriggerOffset: number | null;
+      strongestTriggerTransition: Crash300TriggerSnapshot["triggerTransition"] | null;
+    } | null;
   };
 }
 
@@ -308,6 +356,57 @@ function toRuntimeFamily(value: string | null | undefined): Crash300RuntimeFamil
     return value;
   }
   return null;
+}
+
+function parityBucketMissing(value: string | null | undefined): boolean {
+  if (!value) return true;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length === 0 || normalized === "unknown" || normalized === "none";
+}
+
+function directionFromFamily(family: Crash300PhaseDerivedFamily): "up" | "down" | "unknown" {
+  if (
+    family === "drift_continuation_up" ||
+    family === "post_crash_recovery_up" ||
+    family === "bear_trap_reversal_up"
+  ) {
+    return "up";
+  }
+  if (
+    family === "failed_recovery_short" ||
+    family === "crash_event_down" ||
+    family === "bull_trap_reversal_down"
+  ) {
+    return "down";
+  }
+  return "unknown";
+}
+
+function bucketContextFromFamily(
+  family: Crash300PhaseDerivedFamily,
+  trigger: Crash300MovePhaseTrigger,
+): Crash300PhaseBucketContext {
+  const hasCompressionBreak = trigger.snapshots.some((snapshot) =>
+    snapshot.triggerTransition === "compression_break_up" || snapshot.triggerTransition === "compression_break_down",
+  );
+  if (hasCompressionBreak) return "compression";
+  if (family === "post_crash_recovery_up") return "recovery";
+  if (family === "failed_recovery_short") return "failed_recovery";
+  if (family === "crash_event_down") return "crash_event";
+  if (family === "bear_trap_reversal_up" || family === "bull_trap_reversal_down") return "reversal";
+  return "trending";
+}
+
+function buildPhaseDerivedBucket(params: {
+  moveDirection: "up" | "down" | "unknown";
+  family: Crash300PhaseDerivedFamily;
+  trigger: Crash300MovePhaseTrigger;
+  moveSizeBucket: MoveSizeBucket;
+}): Crash300PhaseDerivedBucket {
+  const direction = params.moveDirection === "unknown" ? directionFromFamily(params.family) : params.moveDirection;
+  const safeDirection = direction === "down" ? "down" : "up";
+  const context = bucketContextFromFamily(params.family, params.trigger);
+  return `${safeDirection}|${context}|${params.moveSizeBucket}`;
 }
 
 function triggerOffsetLabel(offset: number): string {
@@ -587,8 +686,175 @@ function computeTriggerSnapshots(params: {
       expectedTradeDirection: expectedDirection,
       directionMatchesMove: expectedDirection !== null && trigger.triggerDirection === expectedDirection,
       triggerFreshAtMoveStart: offset >= -1 && offset <= 1 && trigger.triggerDirection !== "none",
+      contextTrendPersistenceScore: context.trendPersistenceScore,
+      contextRecoveryQualityScore: context.recoveryQualityScore,
+      contextCrashRecencyScore: context.crashRecencyScore,
+      contextCompressionToExpansionScore: context.compressionToExpansionScore,
+      contextRecoveryFromLastCrashPct: context.recoveryFromLastCrashPct,
+      contextPriceVsEma20Pct: context.priceVsEma20Pct,
+      contextPriceVsEma50Pct: context.priceVsEma50Pct,
+      contextAtr14Pct: context.atr14 / Math.max(trigger.candleClose, 1e-9),
+      triggerDiagnosticOnly: false,
+      liveEligibleTrigger: offset === 0 && trigger.triggerDirection !== "none",
+      triggerConfirmationOffsetBars: 0,
+      adverseImpulseBeforeTrigger: false,
+      adverseImpulseDirection: "none",
+      adverseImpulsePct: 0,
+      reclaimConfirmed: false,
       ...trigger,
     } satisfies Crash300TriggerSnapshotWithMoveMeta;
+  });
+}
+
+function isStrongDirectionalImpulse(
+  snapshot: Crash300TriggerSnapshotWithMoveMeta,
+  direction: "up" | "down",
+): boolean {
+  const atrPct = Math.max(snapshot.contextAtr14Pct, 0.0005);
+  if (direction === "down") {
+    return (
+      snapshot.oneBarReturnPct <= -Math.max(atrPct * 0.7, 0.0015) ||
+      snapshot.oneBarMomentum <= -0.9 ||
+      (snapshot.microBreakDirection === "down" && snapshot.impulseScore >= 0.65)
+    );
+  }
+  return (
+    snapshot.oneBarReturnPct >= Math.max(atrPct * 0.7, 0.0015) ||
+    snapshot.oneBarMomentum >= 0.9 ||
+    (snapshot.microBreakDirection === "up" && snapshot.impulseScore >= 0.65)
+  );
+}
+
+function reclaimsAdverseBody(
+  adverse: Crash300TriggerSnapshotWithMoveMeta,
+  candidate: Crash300TriggerSnapshotWithMoveMeta,
+  direction: "up" | "down",
+): boolean {
+  const body = Math.abs(adverse.candleOpen - adverse.candleClose);
+  if (direction === "up") {
+    const reclaimHalfBody = candidate.candleClose >= adverse.candleClose + body * 0.5;
+    const reclaimOpen = candidate.candleClose >= adverse.candleOpen || candidate.candleHigh >= adverse.candleOpen;
+    return reclaimHalfBody || reclaimOpen;
+  }
+  const reclaimHalfBody = candidate.candleClose <= adverse.candleClose - body * 0.5;
+  const reclaimOpen = candidate.candleClose <= adverse.candleOpen || candidate.candleLow <= adverse.candleOpen;
+  return reclaimHalfBody || reclaimOpen;
+}
+
+function momentumReclaims(
+  adverse: Crash300TriggerSnapshotWithMoveMeta,
+  candidate: Crash300TriggerSnapshotWithMoveMeta,
+  direction: "up" | "down",
+): boolean {
+  if (direction === "up") {
+    return (
+      candidate.threeBarReturnPct > 0 ||
+      candidate.fiveBarReturnPct > 0 ||
+      candidate.oneBarMomentum > adverse.oneBarMomentum + 0.6 ||
+      candidate.closeLocationInRangePct >= 0.55
+    );
+  }
+  return (
+    candidate.threeBarReturnPct < 0 ||
+    candidate.fiveBarReturnPct < 0 ||
+    candidate.oneBarMomentum < adverse.oneBarMomentum - 0.6 ||
+    candidate.closeLocationInRangePct <= 0.45
+  );
+}
+
+function findRecentAdverseImpulse(
+  snapshots: Crash300TriggerSnapshotWithMoveMeta[],
+  currentIndex: number,
+  direction: "up" | "down",
+): { snapshot: Crash300TriggerSnapshotWithMoveMeta; offsetBars: number } | null {
+  const adverseDirection = direction === "up" ? "down" : "up";
+  for (let i = Math.max(0, currentIndex - 3); i < currentIndex; i++) {
+    const snapshot = snapshots[i];
+    if (!snapshot) continue;
+    if (isStrongDirectionalImpulse(snapshot, adverseDirection)) {
+      return { snapshot, offsetBars: currentIndex - i };
+    }
+  }
+  return null;
+}
+
+function enrichDiagnosticTriggers(params: {
+  move: DetectedMoveRow;
+  beforeSnapshots: Crash300ContextSnapshotWithMoveMeta[];
+  snapshots: Crash300TriggerSnapshotWithMoveMeta[];
+}): Crash300TriggerSnapshotWithMoveMeta[] {
+  const direction = params.move.direction;
+  const tMinus15 = params.beforeSnapshots.find((snapshot) => snapshot.offsetBars === -15) ?? params.beforeSnapshots[0];
+  return params.snapshots.map((snapshot, currentIndex) => {
+    const next = { ...snapshot };
+    next.liveEligibleTrigger = snapshot.offsetBars === 0 && snapshot.triggerDirection !== "none";
+    if (snapshot.triggerDirection !== "none") {
+      next.triggerDiagnosticOnly = snapshot.offsetBars !== 0;
+    }
+    const recentAdverse = (direction === "up" || direction === "down")
+      ? findRecentAdverseImpulse(params.snapshots, currentIndex, direction)
+      : null;
+    if (recentAdverse) {
+      next.adverseImpulseBeforeTrigger = true;
+      next.adverseImpulseDirection = direction === "up" ? "down" : "up";
+      next.adverseImpulsePct = Math.abs(recentAdverse.snapshot.oneBarReturnPct);
+    }
+
+    if (direction === "up" && recentAdverse) {
+      const adverse = recentAdverse.snapshot;
+      const reclaim = reclaimsAdverseBody(adverse, snapshot, "up");
+      const momentum = momentumReclaims(adverse, snapshot, "up");
+      const noFurtherDownImpulse = snapshot.microBreakDirection !== "down" || snapshot.oneBarReturnPct > adverse.oneBarReturnPct;
+      if (reclaim && momentum && noFurtherDownImpulse) {
+        next.reclaimConfirmed = true;
+        next.triggerDirection = "buy";
+        next.directionMatchesMove = true;
+        next.triggerDiagnosticOnly = true;
+        next.liveEligibleTrigger = false;
+        next.triggerConfirmationOffsetBars = recentAdverse.offsetBars;
+        next.triggerTransition =
+          adverse.microBreakDirection === "down" || adverse.impulseScore >= 0.75
+            ? "bear_trap_reversal_up"
+            : "failed_down_impulse_reclaim_up";
+      }
+    }
+
+    if (direction === "down" && recentAdverse) {
+      const adverse = recentAdverse.snapshot;
+      const reclaim = reclaimsAdverseBody(adverse, snapshot, "down");
+      const momentum = momentumReclaims(adverse, snapshot, "down");
+      const noFurtherUpImpulse = snapshot.microBreakDirection !== "up" || snapshot.oneBarReturnPct < adverse.oneBarReturnPct;
+      if (reclaim && momentum && noFurtherUpImpulse) {
+        next.reclaimConfirmed = true;
+        next.triggerDirection = "sell";
+        next.directionMatchesMove = true;
+        next.triggerDiagnosticOnly = true;
+        next.liveEligibleTrigger = false;
+        next.triggerConfirmationOffsetBars = recentAdverse.offsetBars;
+        next.triggerTransition =
+          adverse.microBreakDirection === "up" || adverse.impulseScore >= 0.75
+            ? "bull_trap_reversal_down"
+            : "failed_up_impulse_break_down";
+      }
+    }
+
+    if (
+      direction === "up" &&
+      next.triggerTransition === "none" &&
+      snapshot.contextCrashRecencyScore > 0.2 &&
+      (snapshot.contextRecoveryFromLastCrashPct ?? 0) > 0 &&
+      snapshot.contextRecoveryQualityScore >= (tMinus15?.recoveryQualityScore ?? snapshot.contextRecoveryQualityScore) - 0.02 &&
+      (snapshot.candleDirection === "up" || snapshot.contextPriceVsEma20Pct >= 0 || snapshot.contextPriceVsEma50Pct >= 0)
+    ) {
+      next.triggerTransition = "post_crash_recovery_reclaim_up";
+      next.triggerDirection = "buy";
+      next.directionMatchesMove = true;
+      next.triggerDiagnosticOnly = snapshot.offsetBars !== 0;
+      next.liveEligibleTrigger = snapshot.offsetBars === 0;
+      next.reclaimConfirmed = next.reclaimConfirmed || snapshot.closeLocationInRangePct >= 0.5;
+    }
+
+    return next;
   });
 }
 
@@ -870,6 +1136,55 @@ function computeAfterPhase(params: {
   } satisfies Crash300MovePhaseAfter;
 }
 
+function derivePhaseFamily(params: {
+  move: DetectedMoveRow;
+  before: Crash300MovePhaseBefore;
+  trigger: Crash300MovePhaseTrigger;
+  parityRuntimeFamily: string | null;
+}): {
+  family: Crash300PhaseDerivedFamily;
+  source: "phase-derived" | "parity-only" | "unknown";
+} {
+  const startContext = params.before.snapshots[params.before.snapshots.length - 1];
+  const transitions = params.trigger.snapshots.map((snapshot) => snapshot.triggerTransition);
+
+  if (params.move.direction === "up") {
+    if (transitions.includes("bear_trap_reversal_up") || transitions.includes("failed_down_impulse_reclaim_up")) {
+      return { family: "bear_trap_reversal_up", source: "phase-derived" };
+    }
+    if (
+      (startContext?.crashRecencyScore ?? 0) > 0.2 &&
+      ((startContext?.recoveryFromLastCrashPct ?? 0) > 0 || (startContext?.recoveryQualityScore ?? 0) >= (startContext?.trendPersistenceScore ?? 0))
+    ) {
+      return { family: "post_crash_recovery_up", source: "phase-derived" };
+    }
+    if ((startContext?.trendPersistenceScore ?? 0) > 0.45 || params.move.leadInShape === "trending") {
+      return { family: "drift_continuation_up", source: "phase-derived" };
+    }
+  }
+
+  if (params.move.direction === "down") {
+    if (transitions.includes("bull_trap_reversal_down") || transitions.includes("failed_up_impulse_break_down")) {
+      return { family: "bull_trap_reversal_down", source: "phase-derived" };
+    }
+    if (
+      transitions.includes("crash_continuation_down") ||
+      ((startContext?.crashRecencyScore ?? 0) > 0.4 && (startContext?.compressionToExpansionScore ?? 0) > 0.45)
+    ) {
+      return { family: "crash_event_down", source: "phase-derived" };
+    }
+    if ((startContext?.recoveryQualityScore ?? 0) < Math.max(0.35, (startContext?.trendPersistenceScore ?? 0) - 0.05)) {
+      return { family: "failed_recovery_short", source: "phase-derived" };
+    }
+  }
+
+  const parityFamily = toRuntimeFamily(params.parityRuntimeFamily);
+  if (parityFamily) {
+    return { family: parityFamily, source: "parity-only" };
+  }
+  return { family: "unknown", source: "unknown" };
+}
+
 function deriveLabels(params: {
   move: DetectedMoveRow;
   before: Crash300MovePhaseBefore;
@@ -971,15 +1286,17 @@ function aggregateByGroups(moves: Crash300MovePhaseIdentifiers[]) {
   for (const move of moves) {
     push(`direction:${move.direction}`, move);
     push(`moveType:${move.moveType}`, move);
-    push(`runtimeFamily:${move.runtimeFamily ?? "unknown"}`, move);
-    push(`selectedBucket:${move.selectedBucket ?? "unknown"}`, move);
+    push(`runtimeFamily:${move.phaseDerivedFamily}`, move);
+    push(`selectedBucket:${move.phaseDerivedBucket}`, move);
+    push(`parityRuntimeFamily:${move.parityRuntimeFamily ?? "unknown"}`, move);
+    push(`paritySelectedBucket:${move.paritySelectedBucket ?? "unknown"}`, move);
     push(`moveSizeBucket:${move.moveSizeBucket}`, move);
     push(`qualityTier:${move.qualityTier}`, move);
     push(`eventualOutcome:${move.eventualOutcome}`, move);
     push(`tradeBacktestOutcome:${move.tradeBacktestOutcome ?? "none"}`, move);
     push(`direction+moveSizeBucket:${move.direction}|${move.moveSizeBucket}`, move);
-    push(`runtimeFamily+selectedBucket:${move.runtimeFamily ?? "unknown"}|${move.selectedBucket ?? "unknown"}`, move);
-    push(`runtimeFamily+moveSizeBucket:${move.runtimeFamily ?? "unknown"}|${move.moveSizeBucket}`, move);
+    push(`runtimeFamily+selectedBucket:${move.phaseDerivedFamily}|${move.phaseDerivedBucket}`, move);
+    push(`runtimeFamily+moveSizeBucket:${move.phaseDerivedFamily}|${move.moveSizeBucket}`, move);
     push(`qualityTier+moveSizeBucket:${move.qualityTier}|${move.moveSizeBucket}`, move);
   }
 
@@ -998,7 +1315,9 @@ function aggregateByGroups(moves: Crash300MovePhaseIdentifiers[]) {
         trigger: {
           strongestTriggerOffset: move.trigger.strongestTriggerOffset,
           strongestTriggerStrength: move.trigger.strongestTriggerStrength,
+          strongestTriggerTransition: move.trigger.strongestTriggerTransition,
           firstValidTriggerOffset: move.trigger.firstValidTriggerOffset,
+          firstValidTriggerTransition: move.trigger.firstValidTriggerTransition,
           snapshots: move.trigger.snapshots,
         },
         during: move.during,
@@ -1079,6 +1398,89 @@ function buildSeparationDiagnostics(groupMap: Map<string, Crash300MovePhaseIdent
   };
 }
 
+function buildTriggerDiagnostics(rows: Crash300MovePhaseIdentifiers[]) {
+  const transitionByOffset: Record<string, Record<string, number>> = {};
+  const strongestTriggerOffset: Record<string, number> = {};
+  const firstValidTriggerOffset: Record<string, number> = {};
+  const phaseDerivedFamily: Record<string, number> = {};
+  const phaseDerivedBucket: Record<string, number> = {};
+  const liveEligibleTrigger: Record<string, number> = { true: 0, false: 0 };
+  const diagnosticOnlyTrigger: Record<string, number> = { true: 0, false: 0 };
+  const triggerDirectionVsMoveDirection: Record<string, number> = {};
+  const parityRuntimeFamilyVsPhaseDerivedFamily: Record<string, number> = {};
+  const paritySelectedBucketVsPhaseDerivedBucket: Record<string, number> = {};
+  let adverseImpulseBeforeTrigger = 0;
+  let reclaimConfirmed = 0;
+  let movesWithNoTrigger = 0;
+  let movesWithOnlyDiagnosticDelayedTrigger = 0;
+  let movesWithAdverseImpulseBeforeCorrectMove = 0;
+  let movesWhereParityFamilyDisagrees = 0;
+  let movesWhereBucketWasUnknown = 0;
+
+  for (const move of rows) {
+    phaseDerivedFamily[move.phaseDerivedFamily] = (phaseDerivedFamily[move.phaseDerivedFamily] ?? 0) + 1;
+    phaseDerivedBucket[move.phaseDerivedBucket] = (phaseDerivedBucket[move.phaseDerivedBucket] ?? 0) + 1;
+    const parityFamilyKey = `${move.parityRuntimeFamily ?? "unknown"}->${move.phaseDerivedFamily}`;
+    parityRuntimeFamilyVsPhaseDerivedFamily[parityFamilyKey] = (parityRuntimeFamilyVsPhaseDerivedFamily[parityFamilyKey] ?? 0) + 1;
+    const parityBucketKey = `${move.paritySelectedBucket ?? "unknown"}->${move.phaseDerivedBucket}`;
+    paritySelectedBucketVsPhaseDerivedBucket[parityBucketKey] = (paritySelectedBucketVsPhaseDerivedBucket[parityBucketKey] ?? 0) + 1;
+    if (move.parityFamilyDisagreesWithPhaseFamily) movesWhereParityFamilyDisagrees += 1;
+    if (move.parityBucketMissing) movesWhereBucketWasUnknown += 1;
+
+    const hasAnyTrigger = move.trigger.snapshots.some((snapshot) => snapshot.triggerDirection !== "none");
+    const hasLiveEligible = move.trigger.snapshots.some((snapshot) => snapshot.liveEligibleTrigger);
+    const hasDiagnosticOnly = move.trigger.snapshots.some((snapshot) => snapshot.triggerDiagnosticOnly);
+    liveEligibleTrigger[String(hasLiveEligible) as "true" | "false"] += 1;
+    diagnosticOnlyTrigger[String(hasDiagnosticOnly) as "true" | "false"] += 1;
+    if (!hasAnyTrigger) movesWithNoTrigger += 1;
+    if (hasAnyTrigger && !hasLiveEligible && hasDiagnosticOnly) movesWithOnlyDiagnosticDelayedTrigger += 1;
+
+    const firstTrigger = move.trigger.snapshots.find((snapshot) => snapshot.triggerDirection !== "none") ?? null;
+    const directionKey = `${move.direction}->${firstTrigger?.triggerDirection ?? "none"}`;
+    triggerDirectionVsMoveDirection[directionKey] = (triggerDirectionVsMoveDirection[directionKey] ?? 0) + 1;
+
+    const strongestKey = move.trigger.strongestTriggerOffset == null ? "none" : triggerOffsetLabel(move.trigger.strongestTriggerOffset);
+    strongestTriggerOffset[strongestKey] = (strongestTriggerOffset[strongestKey] ?? 0) + 1;
+    const firstKey = move.trigger.firstValidTriggerOffset == null ? "none" : triggerOffsetLabel(move.trigger.firstValidTriggerOffset);
+    firstValidTriggerOffset[firstKey] = (firstValidTriggerOffset[firstKey] ?? 0) + 1;
+
+    let moveHasAdverseImpulseBeforeTrigger = false;
+    for (const snapshot of move.trigger.snapshots) {
+      const offsetKey = triggerOffsetLabel(snapshot.offsetBars);
+      transitionByOffset[offsetKey] ??= {};
+      transitionByOffset[offsetKey]![snapshot.triggerTransition] = (transitionByOffset[offsetKey]![snapshot.triggerTransition] ?? 0) + 1;
+      if (snapshot.adverseImpulseBeforeTrigger) {
+        adverseImpulseBeforeTrigger += 1;
+        moveHasAdverseImpulseBeforeTrigger = true;
+      }
+      if (snapshot.reclaimConfirmed) reclaimConfirmed += 1;
+    }
+    if (moveHasAdverseImpulseBeforeTrigger && firstTrigger && firstTrigger.directionMatchesMove) {
+      movesWithAdverseImpulseBeforeCorrectMove += 1;
+    }
+  }
+
+  return {
+    countByTriggerTransitionAtOffset: transitionByOffset,
+    countByPhaseDerivedFamily: phaseDerivedFamily,
+    countByPhaseDerivedBucket: phaseDerivedBucket,
+    countByStrongestTriggerOffset: strongestTriggerOffset,
+    countByFirstValidTriggerOffset: firstValidTriggerOffset,
+    countByLiveEligibleTrigger: liveEligibleTrigger,
+    countByDiagnosticOnlyTrigger: diagnosticOnlyTrigger,
+    countOfAdverseImpulseBeforeTrigger: adverseImpulseBeforeTrigger,
+    countOfReclaimConfirmed: reclaimConfirmed,
+    triggerDirectionVsMoveDirection,
+    parityRuntimeFamilyVsPhaseDerivedFamily,
+    paritySelectedBucketVsPhaseDerivedBucket,
+    movesWithNoTrigger,
+    movesWithOnlyDiagnosticDelayedTrigger,
+    movesWithAdverseImpulseBeforeCorrectMove,
+    movesWhereParityFamilyDisagrees,
+    movesWhereBucketWasUnknown,
+  };
+}
+
 export async function buildCrash300PhaseIdentifierReport(params: {
   startTs?: number | null;
   endTs?: number | null;
@@ -1102,6 +1504,7 @@ export async function buildCrash300PhaseIdentifierReport(params: {
     truncatedAfterHorizons: 0,
     movesWithoutNextMove: 0,
     linkedBacktestRunId: null,
+    move11419Summary: null,
   };
 
   const moves = await loadDetectedMoves(window, params.limit ?? undefined);
@@ -1128,13 +1531,18 @@ export async function buildCrash300PhaseIdentifierReport(params: {
       }),
     } satisfies Crash300MovePhaseBefore;
     const trigger = (() => {
-      const snapshots = computeTriggerSnapshots({
+      const rawSnapshots = computeTriggerSnapshots({
         move,
         moves,
         candles,
         runtimeModel: envelope.promotedModel!,
         startIndex,
         diagnostics,
+      });
+      const snapshots = enrichDiagnosticTriggers({
+        move,
+        beforeSnapshots: before.snapshots,
+        snapshots: rawSnapshots,
       });
       const strongest = [...snapshots].sort((a, b) => b.triggerStrengthScore - a.triggerStrengthScore)[0] ?? null;
       const firstValid = snapshots.find((snapshot) =>
@@ -1147,8 +1555,10 @@ export async function buildCrash300PhaseIdentifierReport(params: {
         strongestTriggerOffset: strongest?.offsetBars ?? null,
         strongestTriggerDirection: strongest?.triggerDirection ?? "none",
         strongestTriggerStrength: strongest?.triggerStrengthScore ?? 0,
+        strongestTriggerTransition: strongest?.triggerTransition ?? "none",
         firstValidTriggerOffset: firstValid?.offsetBars ?? null,
         firstValidTriggerDirection: firstValid?.triggerDirection ?? "none",
+        firstValidTriggerTransition: firstValid?.triggerTransition ?? "none",
       } satisfies Crash300MovePhaseTrigger;
     })();
     const during = computeDuringPhase({
@@ -1166,7 +1576,19 @@ export async function buildCrash300PhaseIdentifierReport(params: {
       diagnostics,
     });
     const parityVerdict = parityByMoveId.get(move.id) ?? null;
-    const runtimeFamily = parityVerdict?.runtimeFamily ?? parityVerdict?.selectedRuntimeFamily ?? null;
+    const parityRuntimeFamily = parityVerdict?.runtimeFamily ?? parityVerdict?.selectedRuntimeFamily ?? null;
+    const familyDerivation = derivePhaseFamily({
+      move,
+      before,
+      trigger,
+      parityRuntimeFamily,
+    });
+    const phaseDerivedBucket = buildPhaseDerivedBucket({
+      moveDirection: move.direction,
+      family: familyDerivation.family,
+      trigger,
+      moveSizeBucket: moveSizeBucket(move.movePct),
+    });
     const linkage = buildTradeLinkage(move.id, backtest?.runId ?? null, backtest?.report ?? null);
     const derived = deriveLabels({
       move,
@@ -1174,9 +1596,9 @@ export async function buildCrash300PhaseIdentifierReport(params: {
       trigger,
       during,
       after,
-      runtimeFamily,
+      runtimeFamily: familyDerivation.family,
     });
-    return {
+    const row = {
       moveId: move.id,
       symbol: move.symbol,
       startTs: move.startTs,
@@ -1186,8 +1608,16 @@ export async function buildCrash300PhaseIdentifierReport(params: {
       movePct: move.movePct,
       moveSizeBucket: moveSizeBucket(move.movePct),
       qualityTier: move.qualityTier,
-      runtimeFamily,
-      selectedBucket: parityVerdict?.selectedBucket ?? null,
+      runtimeFamily: familyDerivation.family,
+      selectedBucket: phaseDerivedBucket,
+      parityRuntimeFamily,
+      phaseDerivedFamily: familyDerivation.family,
+      familySource: familyDerivation.source,
+      parityFamilyDisagreesWithPhaseFamily: Boolean(parityRuntimeFamily) && familyDerivation.family !== "unknown" && parityRuntimeFamily !== familyDerivation.family,
+      paritySelectedBucket: parityVerdict?.selectedBucket ?? null,
+      phaseDerivedBucket,
+      bucketSource: "phase-derived",
+      parityBucketMissing: parityBucketMissing(parityVerdict?.selectedBucket ?? null),
       before,
       trigger,
       during,
@@ -1206,9 +1636,20 @@ export async function buildCrash300PhaseIdentifierReport(params: {
       } : null,
       backtestLinkage: linkage,
     } satisfies Crash300MovePhaseIdentifiers;
+    if (move.id === 11419) {
+      diagnostics.move11419Summary = {
+        triggerFound: trigger.snapshots.some((snapshot) => snapshot.triggerDirection !== "none"),
+        phaseDerivedFamily: row.phaseDerivedFamily,
+        phaseDerivedBucket: row.phaseDerivedBucket,
+        strongestTriggerOffset: trigger.strongestTriggerOffset,
+        strongestTriggerTransition: trigger.strongestTriggerTransition,
+      };
+    }
+    return row;
   });
 
   const { groupMap, aggregates } = aggregateByGroups(rows);
+  const triggerDiagnostics = buildTriggerDiagnostics(rows);
   const out: Crash300MovePhaseIdentifierReport = {
     symbol: SYMBOL,
     generatedAt: new Date().toISOString(),
@@ -1221,14 +1662,18 @@ export async function buildCrash300PhaseIdentifierReport(params: {
     moves: params.includeMoves === false ? [] : rows,
     aggregates: params.includeAggregates === false
       ? {}
-      : {
+        : {
           ...aggregates,
           distributions: {
             rawDetectedMoveFamily: Object.fromEntries(Object.entries(groupMap).filter(([key]) => key.startsWith("moveType:")).map(([key, value]) => [key.replace("moveType:", ""), value.length])),
             runtimeFamily: Object.fromEntries(Object.entries(groupMap).filter(([key]) => key.startsWith("runtimeFamily:")).map(([key, value]) => [key.replace("runtimeFamily:", ""), value.length])),
+            parityRuntimeFamily: Object.fromEntries(Object.entries(groupMap).filter(([key]) => key.startsWith("parityRuntimeFamily:")).map(([key, value]) => [key.replace("parityRuntimeFamily:", ""), value.length])),
+            phaseDerivedBucket: Object.fromEntries(Object.entries(groupMap).filter(([key]) => key.startsWith("selectedBucket:")).map(([key, value]) => [key.replace("selectedBucket:", ""), value.length])),
+            paritySelectedBucket: Object.fromEntries(Object.entries(groupMap).filter(([key]) => key.startsWith("paritySelectedBucket:")).map(([key, value]) => [key.replace("paritySelectedBucket:", ""), value.length])),
             moveSizeBucket: Object.fromEntries(Object.entries(groupMap).filter(([key]) => key.startsWith("moveSizeBucket:")).map(([key, value]) => [key.replace("moveSizeBucket:", ""), value.length])),
             qualityTier: Object.fromEntries(Object.entries(groupMap).filter(([key]) => key.startsWith("qualityTier:")).map(([key, value]) => [key.replace("qualityTier:", ""), value.length])),
           },
+          triggerDiagnostics,
           separationDiagnostics: buildSeparationDiagnostics(groupMap),
         },
     diagnostics,
@@ -1236,4 +1681,3 @@ export async function buildCrash300PhaseIdentifierReport(params: {
 
   return out;
 }
-
