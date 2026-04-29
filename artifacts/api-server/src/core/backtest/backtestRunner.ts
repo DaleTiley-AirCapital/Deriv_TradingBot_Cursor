@@ -64,6 +64,7 @@ import {
 } from "../tradeManagement.js";
 import { buildSymbolTradeCandidate } from "../symbolModels/candidateBuilder.js";
 import { evaluateCrash300Runtime, coordinatorFromCrash300Decision } from "../../symbol-services/CRASH300/engine.js";
+import type { Crash300RuntimeState } from "../../symbol-services/CRASH300/features.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "../../infrastructure/deriv.js";
 import {
   getLiveCalibrationProfile,
@@ -120,6 +121,25 @@ export interface V3BacktestTrade {
   trailingDistancePct?: number | null;
   trailingMinHoldBars?: number | null;
   trailingActivated?: boolean;
+  contextSnapshotAtEntry?: Record<string, unknown> | null;
+  triggerSnapshotAtEntry?: Record<string, unknown> | null;
+  contextFamilyCandidates?: Array<Record<string, unknown>> | null;
+  selectedContextFamily?: string | null;
+  selectedTriggerTransition?: string | null;
+  triggerDirection?: string | null;
+  triggerStrengthScore?: number | null;
+  contextAgeBars?: number | null;
+  contextAgeMinutes?: number | null;
+  triggerAgeBars?: number | null;
+  triggerFresh?: boolean | null;
+  contextEpochId?: string | null;
+  duplicateWithinContextEpoch?: boolean | null;
+  previousTradeInSameContextEpoch?: string | null;
+  wouldBlockNoTrigger?: boolean | null;
+  wouldBlockStaleContext?: boolean | null;
+  wouldBlockDuplicateEpoch?: boolean | null;
+  wouldBlockDirectionMismatch?: boolean | null;
+  wouldBlockLateAfterMoveWindow?: boolean | null;
 }
 
 export interface V3BacktestResult {
@@ -283,6 +303,7 @@ interface SymCtx {
   blockedByEngine: Record<string, number>;
   scoringSourceCounts: Record<string, number>;
   candidateWindows: Map<string, ReplayCandidateWindow>;
+  crash300RuntimeState?: Crash300RuntimeState;
   runtimeCalibration: LiveCalibrationProfile | null;
   runtimeCalibrationResolution: LiveCalibrationProfileResolution | null;
   trailingActivationThresholdPct?: number;
@@ -538,6 +559,25 @@ interface OpenTradeState {
   confidence?: number | null;
   setupMatch?: number | null;
   trailingActivated?: boolean;
+  contextSnapshotAtEntry?: Record<string, unknown> | null;
+  triggerSnapshotAtEntry?: Record<string, unknown> | null;
+  contextFamilyCandidates?: Array<Record<string, unknown>> | null;
+  selectedContextFamily?: string | null;
+  selectedTriggerTransition?: string | null;
+  triggerDirection?: string | null;
+  triggerStrengthScore?: number | null;
+  contextAgeBars?: number | null;
+  contextAgeMinutes?: number | null;
+  triggerAgeBars?: number | null;
+  triggerFresh?: boolean | null;
+  contextEpochId?: string | null;
+  duplicateWithinContextEpoch?: boolean | null;
+  previousTradeInSameContextEpoch?: string | null;
+  wouldBlockNoTrigger?: boolean | null;
+  wouldBlockStaleContext?: boolean | null;
+  wouldBlockDuplicateEpoch?: boolean | null;
+  wouldBlockDirectionMismatch?: boolean | null;
+  wouldBlockLateAfterMoveWindow?: boolean | null;
 }
 
 interface BacktestTrailingConfig {
@@ -615,6 +655,27 @@ function optionalString(value: unknown): string | null {
 function optionalNumber(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function optionalBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (value == null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  return null;
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function optionalRecordArray(value: unknown): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(value)) return null;
+  const rows = value.filter((row) => row && typeof row === "object" && !Array.isArray(row)) as Array<Record<string, unknown>>;
+  return rows.length > 0 ? rows : null;
 }
 
 function parseRuntimeWindowSeconds(raw: string | undefined, fallbackSeconds: number): number {
@@ -866,6 +927,13 @@ export async function runV3Backtest(
   const trades: V3BacktestTrade[] = [];
   let openTrade: OpenTradeState | null = null;
   const featureHistory: FeatureSample[] = [];
+  const crash300RuntimeState: Crash300RuntimeState = {
+    currentEpoch: null,
+    previousEpochId: null,
+    lastValidTriggerTs: null,
+    lastValidTriggerDirection: null,
+    lastValidTriggerStrength: null,
+  };
   let signalsFired = 0;
   let signalsBlocked = 0;
   const blockedByEngine: Record<string, number> = {};
@@ -1093,6 +1161,25 @@ export async function runV3Backtest(
           trailingDistancePct: openTrade.trailingDistancePct ?? null,
           trailingMinHoldBars: openTrade.trailingMinHoldBars ?? null,
           trailingActivated: Boolean(openTrade.trailingActivated || openTrade.stage === 3),
+          contextSnapshotAtEntry: openTrade.contextSnapshotAtEntry ?? null,
+          triggerSnapshotAtEntry: openTrade.triggerSnapshotAtEntry ?? null,
+          contextFamilyCandidates: openTrade.contextFamilyCandidates ?? null,
+          selectedContextFamily: openTrade.selectedContextFamily ?? null,
+          selectedTriggerTransition: openTrade.selectedTriggerTransition ?? null,
+          triggerDirection: openTrade.triggerDirection ?? null,
+          triggerStrengthScore: openTrade.triggerStrengthScore ?? null,
+          contextAgeBars: openTrade.contextAgeBars ?? null,
+          contextAgeMinutes: openTrade.contextAgeMinutes ?? null,
+          triggerAgeBars: openTrade.triggerAgeBars ?? null,
+          triggerFresh: openTrade.triggerFresh ?? null,
+          contextEpochId: openTrade.contextEpochId ?? null,
+          duplicateWithinContextEpoch: openTrade.duplicateWithinContextEpoch ?? null,
+          previousTradeInSameContextEpoch: openTrade.previousTradeInSameContextEpoch ?? null,
+          wouldBlockNoTrigger: openTrade.wouldBlockNoTrigger ?? null,
+          wouldBlockStaleContext: openTrade.wouldBlockStaleContext ?? null,
+          wouldBlockDuplicateEpoch: openTrade.wouldBlockDuplicateEpoch ?? null,
+          wouldBlockDirectionMismatch: openTrade.wouldBlockDirectionMismatch ?? null,
+          wouldBlockLateAfterMoveWindow: openTrade.wouldBlockLateAfterMoveWindow ?? null,
         };
 
         trades.push(trade);
@@ -1184,6 +1271,8 @@ export async function runV3Backtest(
           marketState: {
             features,
             featureHistory,
+            candles: slice,
+            runtimeState: crash300RuntimeState,
             operationalRegime: regimeResult.regime,
             regimeConfidence: regimeResult.confidence,
           },
@@ -1357,16 +1446,18 @@ export async function runV3Backtest(
       continue;
     }
 
-    const candidateWindow = evaluateReplayCandidateWindow({
-      windows: candidateWindows,
-      runtimeCalibration,
-      symbol,
-      engineName: winner.engineName,
-      direction: winner.direction,
-      nativeScore,
-      setupSignature,
-      ts: bar.closeTs,
-    });
+    const candidateWindow = symbol === "CRASH300"
+      ? { allowed: true, reason: "crash300_context_trigger_only", key: `${symbol}|instant` }
+      : evaluateReplayCandidateWindow({
+          windows: candidateWindows,
+          runtimeCalibration,
+          symbol,
+          engineName: winner.engineName,
+          direction: winner.direction,
+          nativeScore,
+          setupSignature,
+          ts: bar.closeTs,
+        });
     if (!candidateWindow.allowed) {
       signalsBlocked++;
       blockedByEngine[winner.engineName] = (blockedByEngine[winner.engineName] ?? 0) + 1;
@@ -1471,6 +1562,8 @@ export async function runV3Backtest(
       slPct: slOriginalPct,
     });
 
+    const crashDecision = winnerSymbolServiceDecision(winner);
+    const crashEvidence = optionalRecord(crashDecision["evidence"]);
     openTrade = {
       winner,
       entryBar: i,
@@ -1510,17 +1603,38 @@ export async function runV3Backtest(
       trailingMinHoldBars: symbol === "CRASH300"
         ? builtCandidate.candidate.exitPolicy.minHoldMinutes
         : trailingCfg.trailingMinHoldBars,
-      runtimeFamily: optionalString(winnerSymbolServiceDecision(winner)["setupFamily"]),
-      selectedBucket: optionalString(winnerSymbolServiceDecision(winner)["moveBucket"]),
-      qualityTier: optionalString(winnerSymbolServiceDecision(winner)["qualityTier"]),
-      confidence: optionalNumber(winnerSymbolServiceDecision(winner)["confidence"]),
-      setupMatch: optionalNumber(winnerSymbolServiceDecision(winner)["setupMatch"]),
+      runtimeFamily: optionalString(crashDecision["setupFamily"]),
+      selectedBucket: optionalString(crashDecision["moveBucket"]),
+      qualityTier: optionalString(crashDecision["qualityTier"]),
+      confidence: optionalNumber(crashDecision["confidence"]),
+      setupMatch: optionalNumber(crashDecision["setupMatch"]),
       trailingActivated: false,
+      contextSnapshotAtEntry: optionalRecord(crashEvidence?.["contextSnapshot"]),
+      triggerSnapshotAtEntry: optionalRecord(crashEvidence?.["triggerSnapshot"]),
+      contextFamilyCandidates: optionalRecordArray(crashEvidence?.["contextFamilyCandidates"]),
+      selectedContextFamily: optionalString(crashEvidence?.["selectedContextFamily"]),
+      selectedTriggerTransition: optionalString(crashEvidence?.["selectedTriggerTransition"]),
+      triggerDirection: optionalString(crashEvidence?.["triggerDirection"]),
+      triggerStrengthScore: optionalNumber(crashEvidence?.["triggerStrengthScore"]),
+      contextAgeBars: optionalNumber(crashEvidence?.["contextAgeBars"]),
+      contextAgeMinutes: optionalNumber(crashEvidence?.["contextAgeMinutes"]),
+      triggerAgeBars: optionalNumber(crashEvidence?.["triggerAgeBars"]),
+      triggerFresh: optionalBoolean(crashEvidence?.["triggerFresh"]),
+      contextEpochId: optionalString(crashEvidence?.["contextEpochId"]),
+      duplicateWithinContextEpoch: optionalBoolean(crashEvidence?.["duplicateWithinContextEpoch"]),
+      previousTradeInSameContextEpoch: optionalString(crashEvidence?.["previousTradeInSameContextEpoch"]),
+      wouldBlockNoTrigger: optionalBoolean(crashEvidence?.["wouldBlockNoTrigger"]),
+      wouldBlockStaleContext: optionalBoolean(crashEvidence?.["wouldBlockStaleContext"]),
+      wouldBlockDuplicateEpoch: optionalBoolean(crashEvidence?.["wouldBlockDuplicateEpoch"]),
+      wouldBlockDirectionMismatch: optionalBoolean(crashEvidence?.["wouldBlockDirectionMismatch"]),
+      wouldBlockLateAfterMoveWindow: optionalBoolean(crashEvidence?.["wouldBlockLateAfterMoveWindow"]),
     };
 
     // Register opening in shared ledger so concurrent symbols see this position
     if (sharedLedger) sharedLedger.open(symbol, instrumentFamily, bar.closeTs * 1000);
-    markReplayCandidateExecuted(candidateWindows, candidateWindow.key, bar.closeTs, runtimeCalibration);
+    if (symbol !== "CRASH300") {
+      markReplayCandidateExecuted(candidateWindows, candidateWindow.key, bar.closeTs, runtimeCalibration);
+    }
   }
 
   const barsInRange = Math.max(0, candles.length - simStart);
@@ -1688,6 +1802,15 @@ export async function runV3BacktestMulti(
       blockedByEngine:        {},
       scoringSourceCounts:     {},
       candidateWindows:       new Map<string, ReplayCandidateWindow>(),
+      crash300RuntimeState:   sym === "CRASH300"
+        ? {
+            currentEpoch: null,
+            previousEpochId: null,
+            lastValidTriggerTs: null,
+            lastValidTriggerDirection: null,
+            lastValidTriggerStrength: null,
+          }
+        : undefined,
       runtimeCalibration:     null,
       runtimeCalibrationResolution: null,
       trailingActivationThresholdPct: undefined,
@@ -1846,6 +1969,25 @@ export async function runV3BacktestMulti(
           trailingDistancePct: ot.trailingDistancePct ?? null,
           trailingMinHoldBars: ot.trailingMinHoldBars ?? null,
           trailingActivated: Boolean(ot.trailingActivated || ot.stage === 3),
+          contextSnapshotAtEntry: ot.contextSnapshotAtEntry ?? null,
+          triggerSnapshotAtEntry: ot.triggerSnapshotAtEntry ?? null,
+          contextFamilyCandidates: ot.contextFamilyCandidates ?? null,
+          selectedContextFamily: ot.selectedContextFamily ?? null,
+          selectedTriggerTransition: ot.selectedTriggerTransition ?? null,
+          triggerDirection: ot.triggerDirection ?? null,
+          triggerStrengthScore: ot.triggerStrengthScore ?? null,
+          contextAgeBars: ot.contextAgeBars ?? null,
+          contextAgeMinutes: ot.contextAgeMinutes ?? null,
+          triggerAgeBars: ot.triggerAgeBars ?? null,
+          triggerFresh: ot.triggerFresh ?? null,
+          contextEpochId: ot.contextEpochId ?? null,
+          duplicateWithinContextEpoch: ot.duplicateWithinContextEpoch ?? null,
+          previousTradeInSameContextEpoch: ot.previousTradeInSameContextEpoch ?? null,
+          wouldBlockNoTrigger: ot.wouldBlockNoTrigger ?? null,
+          wouldBlockStaleContext: ot.wouldBlockStaleContext ?? null,
+          wouldBlockDuplicateEpoch: ot.wouldBlockDuplicateEpoch ?? null,
+          wouldBlockDirectionMismatch: ot.wouldBlockDirectionMismatch ?? null,
+          wouldBlockLateAfterMoveWindow: ot.wouldBlockLateAfterMoveWindow ?? null,
         });
         ctx.simClosedPnls.push({ closeTs: tsMs, pnlUsd: finalPnl * SYNTHETIC_SIZE });
         ctx.simEquity *= (1 + finalPnl);
@@ -1908,6 +2050,8 @@ export async function runV3BacktestMulti(
             marketState: {
               features,
               featureHistory: ctx.featureHistory,
+              candles: slice,
+              runtimeState: ctx.crash300RuntimeState,
               operationalRegime: regimeResult.regime,
               regimeConfidence: regimeResult.confidence,
             },
@@ -2042,16 +2186,18 @@ export async function runV3BacktestMulti(
         continue;
       }
 
-      const candidateWindow = evaluateReplayCandidateWindow({
-        windows: ctx.candidateWindows,
-        runtimeCalibration: ctx.runtimeCalibration,
-        symbol: ctx.sym,
-        engineName: winner.engineName,
-        direction: winner.direction,
-        nativeScore,
-        setupSignature,
-        ts,
-      });
+      const candidateWindow = ctx.sym === "CRASH300"
+        ? { allowed: true, reason: "crash300_context_trigger_only", key: `${ctx.sym}|instant` }
+        : evaluateReplayCandidateWindow({
+            windows: ctx.candidateWindows,
+            runtimeCalibration: ctx.runtimeCalibration,
+            symbol: ctx.sym,
+            engineName: winner.engineName,
+            direction: winner.direction,
+            nativeScore,
+            setupSignature,
+            ts,
+          });
       if (!candidateWindow.allowed) {
         ctx.signalsBlocked++;
         ctx.blockedByEngine[winner.engineName] = (ctx.blockedByEngine[winner.engineName] ?? 0) + 1;
@@ -2131,6 +2277,9 @@ export async function runV3BacktestMulti(
         entryTs: bar.closeTs, tpPct, slPct: slOriginalPct,
       });
 
+      const symbolServiceDecision = winnerSymbolServiceDecision(winner);
+      const symbolServiceEvidence = optionalRecord(symbolServiceDecision["evidence"]);
+
       ctx.openTrade = {
         winner, entryBar: i, entryPrice: bar.close, entryTs: bar.closeTs,
         regimeAtEntry: regimeResult.regime, regimeConfidence: regimeResult.confidence,
@@ -2153,15 +2302,36 @@ export async function runV3BacktestMulti(
         trailingMinHoldBars: ctx.sym === "CRASH300" && builtCandidate
           ? builtCandidate.candidate.exitPolicy.minHoldMinutes
           : ctx.trailingMinHoldBars,
-        runtimeFamily: optionalString(winnerSymbolServiceDecision(winner)["setupFamily"]),
-        selectedBucket: optionalString(winnerSymbolServiceDecision(winner)["moveBucket"]),
-        qualityTier: optionalString(winnerSymbolServiceDecision(winner)["qualityTier"]),
-        confidence: optionalNumber(winnerSymbolServiceDecision(winner)["confidence"]),
-        setupMatch: optionalNumber(winnerSymbolServiceDecision(winner)["setupMatch"]),
+        runtimeFamily: optionalString(symbolServiceDecision["setupFamily"]),
+        selectedBucket: optionalString(symbolServiceDecision["moveBucket"]),
+        qualityTier: optionalString(symbolServiceDecision["qualityTier"]),
+        confidence: optionalNumber(symbolServiceDecision["confidence"]),
+        setupMatch: optionalNumber(symbolServiceDecision["setupMatch"]),
         trailingActivated: false,
+        contextSnapshotAtEntry: optionalRecord(symbolServiceEvidence?.["contextSnapshot"]),
+        triggerSnapshotAtEntry: optionalRecord(symbolServiceEvidence?.["triggerSnapshot"]),
+        contextFamilyCandidates: optionalRecordArray(symbolServiceEvidence?.["contextFamilyCandidates"]),
+        selectedContextFamily: optionalString(symbolServiceEvidence?.["selectedContextFamily"]),
+        selectedTriggerTransition: optionalString(symbolServiceEvidence?.["selectedTriggerTransition"]),
+        triggerDirection: optionalString(symbolServiceEvidence?.["triggerDirection"]),
+        triggerStrengthScore: optionalNumber(symbolServiceEvidence?.["triggerStrengthScore"]),
+        contextAgeBars: optionalNumber(symbolServiceEvidence?.["contextAgeBars"]),
+        contextAgeMinutes: optionalNumber(symbolServiceEvidence?.["contextAgeMinutes"]),
+        triggerAgeBars: optionalNumber(symbolServiceEvidence?.["triggerAgeBars"]),
+        triggerFresh: optionalBoolean(symbolServiceEvidence?.["triggerFresh"]),
+        contextEpochId: optionalString(symbolServiceEvidence?.["contextEpochId"]),
+        duplicateWithinContextEpoch: optionalBoolean(symbolServiceEvidence?.["duplicateWithinContextEpoch"]),
+        previousTradeInSameContextEpoch: optionalString(symbolServiceEvidence?.["previousTradeInSameContextEpoch"]),
+        wouldBlockNoTrigger: optionalBoolean(symbolServiceEvidence?.["wouldBlockNoTrigger"]),
+        wouldBlockStaleContext: optionalBoolean(symbolServiceEvidence?.["wouldBlockStaleContext"]),
+        wouldBlockDuplicateEpoch: optionalBoolean(symbolServiceEvidence?.["wouldBlockDuplicateEpoch"]),
+        wouldBlockDirectionMismatch: optionalBoolean(symbolServiceEvidence?.["wouldBlockDirectionMismatch"]),
+        wouldBlockLateAfterMoveWindow: optionalBoolean(symbolServiceEvidence?.["wouldBlockLateAfterMoveWindow"]),
       };
       ledger.open(ctx.sym, ctx.instrumentFamily, tsMs);
-      markReplayCandidateExecuted(ctx.candidateWindows, candidateWindow.key, ts, ctx.runtimeCalibration);
+      if (ctx.sym !== "CRASH300") {
+        markReplayCandidateExecuted(ctx.candidateWindows, candidateWindow.key, ts, ctx.runtimeCalibration);
+      }
     }
   }
 

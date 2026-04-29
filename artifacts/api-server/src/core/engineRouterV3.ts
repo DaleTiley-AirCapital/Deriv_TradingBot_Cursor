@@ -1,6 +1,8 @@
 /**
  * V3 Engine Router - Live Decision Path
  */
+import { db, candlesTable } from "@workspace/db";
+import { and, desc, eq } from "drizzle-orm";
 import { computeFeatures } from "./features.js";
 import { getCachedRegime, classifyRegimeFromHTF, cacheRegime, accumulateHourlyFeatures } from "./regimeEngine.js";
 import { runEnginesAndCoordinate } from "./signalPipeline.js";
@@ -8,6 +10,30 @@ import type { CoordinatorOutput, EngineResult } from "./engineTypes.js";
 import type { FeatureVector } from "./features.js";
 import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
 import { evaluateCrash300Runtime, coordinatorFromCrash300Decision } from "../symbol-services/CRASH300/engine.js";
+import type { CandleRow } from "./backtest/featureSlice.js";
+
+const CRASH300_LIVE_LOOKBACK_BARS = 1600;
+
+async function loadRecentCrash300Candles(symbol: string): Promise<CandleRow[]> {
+  const rows = await db
+    .select({
+      open: candlesTable.open,
+      high: candlesTable.high,
+      low: candlesTable.low,
+      close: candlesTable.close,
+      openTs: candlesTable.openTs,
+      closeTs: candlesTable.closeTs,
+    })
+    .from(candlesTable)
+    .where(and(
+      eq(candlesTable.symbol, symbol),
+      eq(candlesTable.timeframe, "1m"),
+      eq(candlesTable.isInterpolated, false),
+    ))
+    .orderBy(desc(candlesTable.openTs))
+    .limit(CRASH300_LIVE_LOOKBACK_BARS);
+  return (rows as CandleRow[]).reverse();
+}
 
 export interface V3ScanResult {
   symbol: string;
@@ -55,12 +81,14 @@ export async function scanSymbolV3(
   let coordinatorOutput: CoordinatorOutput | null;
   try {
     if (symbol === "CRASH300") {
+      const candles = await loadRecentCrash300Candles(symbol);
       const runtimeDecision = await evaluateCrash300Runtime({
         symbol,
         mode: "paper",
         ts: Math.floor(scannedAt.getTime() / 1000),
         marketState: {
           features,
+          candles,
           operationalRegime,
           regimeConfidence,
         },

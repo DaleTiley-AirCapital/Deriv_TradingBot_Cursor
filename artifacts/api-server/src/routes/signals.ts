@@ -1,14 +1,64 @@
 import { Router, type IRouter } from "express";
 import { desc, asc, eq, gte, lte, and, sql } from "drizzle-orm";
-import { db, signalLogTable, platformStateTable } from "@workspace/db";
+import { db, signalLogTable, platformStateTable, candlesTable } from "@workspace/db";
 import { computeFeatures } from "../core/features.js";
+import { computeFeaturesFromSlice, type CandleRow } from "../core/backtest/featureSlice.js";
 import { getPendingSignalStatus } from "../core/pendingSignals.js";
 import { getWatchedCandidates } from "../core/candidateLifecycle.js";
+import { getPromotedSymbolRuntimeModel } from "../core/calibration/promotedSymbolModel.js";
+import { evaluateCrash300Runtime } from "../symbol-services/CRASH300/engine.js";
 
 const router: IRouter = Router();
 
 const SYMBOLS = ["BOOM1000", "BOOM900", "BOOM600", "BOOM500", "BOOM300", "CRASH1000", "CRASH900", "CRASH600", "CRASH500", "CRASH300", "R_75", "R_100"];
 const ACTIVE_SYMBOLS = ["CRASH300", "BOOM300", "R_75", "R_100"];
+const CRASH300_LIVE_DIAGNOSTIC_LOOKBACK = 1600;
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function optionalNumber(value: unknown): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function optionalBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (value == null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  return null;
+}
+
+async function loadRecentCrash300Candles(): Promise<CandleRow[]> {
+  const rows = await db
+    .select({
+      open: candlesTable.open,
+      high: candlesTable.high,
+      low: candlesTable.low,
+      close: candlesTable.close,
+      openTs: candlesTable.openTs,
+      closeTs: candlesTable.closeTs,
+    })
+    .from(candlesTable)
+    .where(and(
+      eq(candlesTable.symbol, "CRASH300"),
+      eq(candlesTable.timeframe, "1m"),
+      eq(candlesTable.isInterpolated, false),
+    ))
+    .orderBy(desc(candlesTable.openTs))
+    .limit(CRASH300_LIVE_DIAGNOSTIC_LOOKBACK);
+
+  return [...rows].reverse() as CandleRow[];
+}
 
 router.get("/signals/latest", async (req, res): Promise<void> => {
   const limit = Math.min(Number(req.query.limit || 50), 200);
@@ -126,11 +176,32 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
 router.get("/signals/live-windows", async (_req, res): Promise<void> => {
   try {
     const watched = getWatchedCandidates();
+    const crash300RuntimeModel = await getPromotedSymbolRuntimeModel("CRASH300").catch(() => null);
+    const crash300Candles = crash300RuntimeModel ? await loadRecentCrash300Candles().catch(() => []) : [];
+    const crash300Features = crash300Candles.length > 0
+      ? computeFeaturesFromSlice("CRASH300", crash300Candles)
+      : null;
+    const crash300Decision = (crash300RuntimeModel && crash300Features && crash300Candles.length > 0)
+      ? await evaluateCrash300Runtime({
+          symbol: "CRASH300",
+          mode: "paper",
+          ts: crash300Candles[crash300Candles.length - 1]?.closeTs ?? Math.floor(Date.now() / 1000),
+          marketState: {
+            features: crash300Features,
+            candles: crash300Candles,
+            featureHistory: [],
+            operationalRegime: "unknown",
+            regimeConfidence: 0,
+          },
+          runtimeModel: crash300RuntimeModel as unknown as Record<string, unknown>,
+          stateMap: {},
+        }).catch(() => null)
+      : null;
     const now = Date.now();
     const rows = await Promise.all(ACTIVE_SYMBOLS.map(async symbol => {
       const features = await computeFeatures(symbol).catch(() => null);
       const latestCloseMs = Number(features?.latestCandleCloseTs ?? 0);
-      const watchedCandidates = watched
+      const watchedCandidates = (symbol === "CRASH300" ? [] : watched)
         .filter(c => c.symbol === symbol)
         .map(c => {
           const componentDelta: Record<string, number> = {};
@@ -164,6 +235,10 @@ router.get("/signals/live-windows", async (_req, res): Promise<void> => {
           };
         });
 
+      const crashEvidence = symbol === "CRASH300" && crash300Decision
+        ? asRecord(crash300Decision.evidence)
+        : null;
+
       return {
         symbol,
         generatedAt: new Date().toISOString(),
@@ -191,12 +266,30 @@ router.get("/signals/live-windows", async (_req, res): Promise<void> => {
           thirtyDayStart: new Date(latestCloseMs - 30 * 24 * 60 * 60 * 1000).toISOString(),
         } : null,
         watchedCandidates,
+        contextDiagnostics: symbol === "CRASH300" ? {
+          activeDecisionSource: "context_plus_fresh_1m_trigger",
+          currentContextFamily: optionalString(crashEvidence?.["selectedContextFamily"] ?? crash300Decision?.setupFamily),
+          currentTrigger: optionalString(crashEvidence?.["selectedTriggerTransition"]),
+          triggerDirection: optionalString(crashEvidence?.["triggerDirection"] ?? crash300Decision?.direction),
+          triggerStrength: optionalNumber(crashEvidence?.["triggerStrengthScore"]),
+          contextAgeBars: optionalNumber(crashEvidence?.["contextAgeBars"]),
+          triggerFresh: optionalBoolean(crashEvidence?.["triggerFresh"]),
+          candidateProduced: optionalBoolean(crashEvidence?.["candidateProduced"] ?? crash300Decision?.valid),
+          failReasons: Array.isArray(crashEvidence?.["failReasons"])
+            ? (crashEvidence["failReasons"] as unknown[]).map((reason) => String(reason))
+            : (Array.isArray(crash300Decision?.failReasons) ? crash300Decision.failReasons.map((reason) => String(reason)) : []),
+          lastValidTriggerTs: optionalNumber(crashEvidence?.["lastValidTriggerTs"])
+            ? new Date(Number(crashEvidence?.["lastValidTriggerTs"]) * 1000).toISOString()
+            : null,
+          lastValidTriggerDirection: optionalString(crashEvidence?.["lastValidTriggerDirection"]),
+          promotedModelRunId: optionalNumber(crashEvidence?.["promotedModelRunId"] ?? crash300RuntimeModel?.sourceRunId),
+        } : null,
       };
     }));
 
     res.json({
       generatedAt: new Date().toISOString(),
-      note: "Rolling windows are recomputed from latest stored 1m candles on each poll. Values move as new candles arrive and old candles leave each lookback window.",
+      note: "CRASH300 rolling windows are context diagnostics only. A CRASH300 trade candidate is produced only when a fresh 1m trigger fires inside a valid context.",
       symbols: rows,
     });
   } catch (err: unknown) {

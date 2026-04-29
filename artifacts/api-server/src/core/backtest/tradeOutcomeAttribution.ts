@@ -72,6 +72,25 @@ type AttributionTradeRow = {
   trailingActivated: boolean;
   trailingExitBeforeCalibratedMoveEnd: boolean;
   slHitBeforeCalibratedMoveDirectionDeveloped: boolean;
+  contextSnapshotAtEntry: Record<string, unknown> | null;
+  triggerSnapshotAtEntry: Record<string, unknown> | null;
+  contextFamilyCandidates: Array<Record<string, unknown>> | null;
+  selectedContextFamily: string | null;
+  selectedTriggerTransition: string | null;
+  triggerDirection: string | null;
+  triggerStrengthScore: number | null;
+  contextAgeBars: number | null;
+  contextAgeMinutes: number | null;
+  triggerAgeBars: number | null;
+  triggerFresh: boolean | null;
+  contextEpochId: string | null;
+  duplicateWithinContextEpoch: boolean | null;
+  previousTradeInSameContextEpoch: string | null;
+  wouldBlockNoTrigger: boolean | null;
+  wouldBlockStaleContext: boolean | null;
+  wouldBlockDuplicateEpoch: boolean | null;
+  wouldBlockDirectionMismatch: boolean | null;
+  wouldBlockLateAfterMoveWindow: boolean | null;
   outcomeClassification: TradeOutcomeClassification;
 };
 
@@ -282,6 +301,25 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
       trailingActivated,
       trailingExitBeforeCalibratedMoveEnd: trailingExitBeforeMoveEnd,
       slHitBeforeCalibratedMoveDirectionDeveloped: slHitBeforeMoveDirectionDeveloped,
+      contextSnapshotAtEntry: trade.contextSnapshotAtEntry ?? null,
+      triggerSnapshotAtEntry: trade.triggerSnapshotAtEntry ?? null,
+      contextFamilyCandidates: trade.contextFamilyCandidates ?? null,
+      selectedContextFamily: trade.selectedContextFamily ?? null,
+      selectedTriggerTransition: trade.selectedTriggerTransition ?? null,
+      triggerDirection: trade.triggerDirection ?? null,
+      triggerStrengthScore: trade.triggerStrengthScore ?? null,
+      contextAgeBars: trade.contextAgeBars ?? null,
+      contextAgeMinutes: trade.contextAgeMinutes ?? null,
+      triggerAgeBars: trade.triggerAgeBars ?? null,
+      triggerFresh: trade.triggerFresh ?? null,
+      contextEpochId: trade.contextEpochId ?? null,
+      duplicateWithinContextEpoch: trade.duplicateWithinContextEpoch ?? null,
+      previousTradeInSameContextEpoch: trade.previousTradeInSameContextEpoch ?? null,
+      wouldBlockNoTrigger: trade.wouldBlockNoTrigger ?? null,
+      wouldBlockStaleContext: trade.wouldBlockStaleContext ?? null,
+      wouldBlockDuplicateEpoch: trade.wouldBlockDuplicateEpoch ?? null,
+      wouldBlockDirectionMismatch: trade.wouldBlockDirectionMismatch ?? null,
+      wouldBlockLateAfterMoveWindow: trade.wouldBlockLateAfterMoveWindow ?? null,
       outcomeClassification: classifyOutcome({
         trade,
         matchedMove,
@@ -340,6 +378,17 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
   const wins = trades.filter((trade) => trade.pnlPct > 0);
   const slLosses = trades.filter((trade) => trade.exitReason === "sl_hit");
   const matchedTrades = trades.filter((trade) => trade.matchedCalibratedMove);
+  const tradesWithNoFreshTrigger = trades.filter((trade) => trade.triggerFresh === false).length;
+  const tradesFromStaleContext = trades.filter((trade) => trade.wouldBlockStaleContext === true).length;
+  const duplicateEpochTrades = trades.filter((trade) => trade.duplicateWithinContextEpoch === true || trade.wouldBlockDuplicateEpoch === true).length;
+  const wrongDirectionWithTrigger = trades.filter((trade) => trade.tradeDirectionAlignedWithCalibratedMove === false && trade.triggerFresh === true).length;
+  const lossesFromStaleContext = losses.filter((trade) => trade.wouldBlockStaleContext === true).length;
+  const lossesFromDuplicateEpoch = losses.filter((trade) => trade.duplicateWithinContextEpoch === true || trade.wouldBlockDuplicateEpoch === true).length;
+  const lossesWithNoFreshTrigger = losses.filter((trade) => trade.triggerFresh === false || trade.wouldBlockNoTrigger === true).length;
+  const estimatedTradesAfterFreshTriggerOnly = trades.filter((trade) => trade.triggerFresh !== false && trade.wouldBlockNoTrigger !== true && trade.wouldBlockStaleContext !== true).length;
+  const estimatedLossesRemovedByFreshTriggerOnly = losses.filter((trade) => trade.triggerFresh === false || trade.wouldBlockNoTrigger === true || trade.wouldBlockStaleContext === true).length;
+  const estimatedTradesAfterOnePerContextEpoch = trades.filter((trade) => trade.duplicateWithinContextEpoch !== true && trade.wouldBlockDuplicateEpoch !== true).length;
+  const estimatedLossesRemovedByOnePerEpoch = losses.filter((trade) => trade.duplicateWithinContextEpoch === true || trade.wouldBlockDuplicateEpoch === true).length;
 
   return {
     symbol: "CRASH300",
@@ -383,6 +432,17 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
       tradesWithNoMatchingCalibratedMove: trades.filter((trade) => !trade.matchedCalibratedMove).length,
       matchedByRuntimeFamily,
       outcomeClassificationCounts: classificationCounts,
+      tradesWithNoFreshTrigger,
+      tradesFromStaleContext,
+      duplicateEpochTrades,
+      wrongDirectionWithTrigger,
+      lossesFromStaleContext,
+      lossesFromDuplicateEpoch,
+      lossesWithNoFreshTrigger,
+      estimatedTradesAfterFreshTriggerOnly,
+      estimatedLossesRemovedByFreshTriggerOnly,
+      estimatedTradesAfterOnePerContextEpoch,
+      estimatedLossesRemovedByOnePerEpoch,
     },
     trades,
   };

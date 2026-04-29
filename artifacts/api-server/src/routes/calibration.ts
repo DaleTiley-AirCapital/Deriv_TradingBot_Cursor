@@ -34,8 +34,9 @@ import {
   moveProgressionArtifactsTable,
   platformStateTable,
   strategyCalibrationProfilesTable,
+  candlesTable,
 } from "@workspace/db";
-import { count, desc, eq } from "drizzle-orm";
+import { count, desc, eq, and, gte, lte, asc } from "drizzle-orm";
 import { detectAndStoreMoves, getDetectedMoves, clearCalibrationArtifactsForSymbol } from "../core/calibration/moveDetector.js";
 import {
   startCalibrationPassesBackground,
@@ -79,6 +80,9 @@ import {
   startBacktestOptimisation,
 } from "../core/calibration/backtestOptimiser.js";
 import { getSymbolService } from "../symbol-services/shared/SymbolServiceRegistry.js";
+import { loadCrash300RuntimeEnvelope } from "../symbol-services/CRASH300/model.js";
+import { runCrash300CalibrationParity } from "../symbol-services/CRASH300/calibration.js";
+import { buildCrash300PreMoveSnapshots, summarizeCrash300PreMoveSnapshots } from "../symbol-services/CRASH300/featureSnapshots.js";
 
 const router: IRouter = Router();
 
@@ -1749,6 +1753,153 @@ router.get("/calibration/runtime-model/:symbol/parity-report", async (req, res):
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Parity report generation failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/calibration/runtime-model/:symbol/pre-move-feature-snapshots", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  if (symbol !== "CRASH300") {
+    res.status(400).json({ error: "Pre-move feature snapshots are currently available for CRASH300 only." });
+    return;
+  }
+
+  try {
+    const endTs = Number(req.query.endTs ?? Math.floor(Date.now() / 1000));
+    const startTs = Number(
+      req.query.startTs ??
+        (Math.floor(Date.now() / 1000) - Math.max(30, Math.min(730, Number(req.query.windowDays ?? 365))) * 86400),
+    );
+    const envelope = await loadCrash300RuntimeEnvelope();
+    if (!envelope.promotedModel) {
+      res.status(409).json({ error: "CRASH300 runtime model missing/invalid. Cannot evaluate symbol service." });
+      return;
+    }
+
+    const moves = await db
+      .select({
+        id: detectedMovesTable.id,
+        startTs: detectedMovesTable.startTs,
+        endTs: detectedMovesTable.endTs,
+        direction: detectedMovesTable.direction,
+        moveType: detectedMovesTable.moveType,
+        movePct: detectedMovesTable.movePct,
+        qualityTier: detectedMovesTable.qualityTier,
+        leadInShape: detectedMovesTable.leadInShape,
+        leadInBars: detectedMovesTable.leadInBars,
+        rangeExpansion: detectedMovesTable.rangeExpansion,
+        directionalPersistence: detectedMovesTable.directionalPersistence,
+        holdingMinutes: detectedMovesTable.holdingMinutes,
+      })
+      .from(detectedMovesTable)
+      .where(and(
+        eq(detectedMovesTable.symbol, symbol),
+        gte(detectedMovesTable.startTs, startTs),
+        lte(detectedMovesTable.startTs, endTs),
+      ))
+      .orderBy(asc(detectedMovesTable.startTs));
+
+    const parity = await runCrash300CalibrationParity({ startTs, endTs, mode: "parity" });
+    const parityByMoveId = new Map(
+      parity.verdicts.map((verdict) => [Number(verdict.moveId), verdict] as const),
+    );
+
+    const minCandleTs = moves.length > 0
+      ? Math.min(...moves.map((move) => Math.max(0, Number(move.startTs) - 240 * 60)))
+      : 0;
+    const maxCandleTs = moves.length > 0
+      ? Math.max(...moves.map((move) => Number(move.startTs) + 5 * 60))
+      : 0;
+    const candles = moves.length === 0
+      ? []
+      : await db
+          .select({
+            open: candlesTable.open,
+            high: candlesTable.high,
+            low: candlesTable.low,
+            close: candlesTable.close,
+            openTs: candlesTable.openTs,
+            closeTs: candlesTable.closeTs,
+          })
+          .from(candlesTable)
+          .where(and(
+            eq(candlesTable.symbol, symbol),
+            eq(candlesTable.timeframe, "1m"),
+            eq(candlesTable.isInterpolated, false),
+            gte(candlesTable.openTs, minCandleTs),
+            lte(candlesTable.openTs, maxCandleTs),
+          ))
+          .orderBy(asc(candlesTable.openTs));
+
+    const rows = moves.map((move) => {
+      const moveCandles = candles.filter((candle) => candle.openTs <= Number(move.startTs) + 5 * 60);
+      const verdict = parityByMoveId.get(Number(move.id));
+      const snapshot = buildCrash300PreMoveSnapshots({
+        symbol,
+        runtimeModel: envelope.promotedModel!,
+        candles: moveCandles,
+        moveStartTs: Number(move.startTs),
+        moveMetadata: {
+          moveId: move.id,
+          direction: move.direction,
+          moveType: move.moveType,
+          movePct: move.movePct,
+          qualityTier: move.qualityTier,
+          leadInShape: move.leadInShape,
+          leadInBars: move.leadInBars,
+          rangeExpansion: move.rangeExpansion,
+          directionalPersistence: move.directionalPersistence,
+          startTs: move.startTs,
+          endTs: move.endTs,
+          holdingMinutes: move.holdingMinutes,
+          trendPersistenceScore: verdict?.parityDistanceScore ?? null,
+        },
+        selectedRuntimeFamily: verdict?.runtimeFamily ?? verdict?.selectedRuntimeFamily ?? null,
+        selectedBucket: verdict?.selectedBucket ?? null,
+      });
+
+      const t0Context = Array.isArray(snapshot.contextSnapshots)
+        ? snapshot.contextSnapshots.find((row) => Number(row["offsetBars"]) === 0) ?? snapshot.contextSnapshots[snapshot.contextSnapshots.length - 1]
+        : null;
+      const t0Trigger = Array.isArray(snapshot.triggerSnapshots)
+        ? snapshot.triggerSnapshots.find((row) => Number(row["offsetBars"]) === 0) ?? snapshot.triggerSnapshots[snapshot.triggerSnapshots.length - 1]
+        : null;
+
+      return {
+        ...snapshot,
+        trendPersistenceScore: Number(t0Context?.["trendPersistenceScore"] ?? 0),
+        recoveryQualityScore: Number(t0Context?.["recoveryQualityScore"] ?? 0),
+        compressionToExpansionScore: Number(t0Context?.["compressionToExpansionScore"] ?? 0),
+        crashRecencyScore: Number(t0Context?.["crashRecencyScore"] ?? 0),
+        barsSinceLastCrash: Number(t0Context?.["barsSinceLastCrash"] ?? 0),
+        priceDistanceFromLastCrashLowPct: Number(t0Context?.["priceDistanceFromLastCrashLowPct"] ?? 0),
+        recoveryFromLastCrashPct: Number(t0Context?.["recoveryFromLastCrashPct"] ?? 0),
+        triggerStrengthScore: Number(t0Trigger?.["triggerStrengthScore"] ?? 0),
+        oneBarReturnPct: Number(t0Trigger?.["oneBarReturnPct"] ?? 0),
+        threeBarReturnPct: Number(t0Trigger?.["threeBarReturnPct"] ?? 0),
+        fiveBarReturnPct: Number(t0Trigger?.["fiveBarReturnPct"] ?? 0),
+        candleBodyPct: Number(t0Trigger?.["candleBodyPct"] ?? 0),
+        closeLocationInRangePct: Number(t0Trigger?.["closeLocationInRangePct"] ?? 0),
+      };
+    });
+
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      promotedModelRunId: envelope.promotedModel.sourceRunId ?? null,
+      stagedModelRunId: envelope.stagedModel?.sourceRunId ?? null,
+      window: { startTs, endTs },
+      count: rows.length,
+      snapshots: rows,
+      aggregates: summarizeCrash300PreMoveSnapshots(rows as Array<Record<string, unknown>>),
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Pre-move feature snapshot generation failed";
     res.status(500).json({ error: message });
   }
 });

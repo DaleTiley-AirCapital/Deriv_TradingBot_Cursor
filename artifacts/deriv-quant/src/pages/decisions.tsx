@@ -166,6 +166,20 @@ interface LiveWindowSymbol {
     thirtyDayStart: string;
   } | null;
   watchedCandidates: LiveWindowCandidate[];
+  contextDiagnostics?: {
+    activeDecisionSource: string;
+    currentContextFamily: string | null;
+    currentTrigger: string | null;
+    triggerDirection: string | null;
+    triggerStrength: number | null;
+    contextAgeBars: number | null;
+    triggerFresh: boolean | null;
+    candidateProduced: boolean | null;
+    failReasons: string[];
+    lastValidTriggerTs: string | null;
+    lastValidTriggerDirection: string | null;
+    promotedModelRunId: number | null;
+  } | null;
 }
 
 interface LiveWindowsResponse {
@@ -1053,7 +1067,7 @@ function LiveWindowsBlock({ data }: { data: LiveWindowsResponse | undefined }) {
       <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-primary/15">
         <div className="flex items-center gap-2">
           <Activity className="w-3.5 h-3.5 text-primary" />
-          <span className="text-xs font-semibold text-primary">Live Rolling Windows</span>
+          <span className="text-xs font-semibold text-primary">CRASH300 Context Diagnostics</span>
           <span className="text-[10px] text-muted-foreground">updates every 5s</span>
         </div>
         <span className="text-[10px] text-muted-foreground">Generated {compactDateTime(data.generatedAt)}</span>
@@ -1078,7 +1092,13 @@ function LiveWindowsBlock({ data }: { data: LiveWindowsResponse | undefined }) {
                     ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
                     : "border-border/40 text-muted-foreground",
                 )}>
-                  {watched.length > 0 ? `${watched.length} watch candidate${watched.length === 1 ? "" : "s"}` : "no active watch"}
+                  {row.symbol === "CRASH300"
+                    ? (row.contextDiagnostics?.candidateProduced
+                        ? "fresh 1m trigger produced candidate"
+                        : "context only")
+                    : watched.length > 0
+                      ? `${watched.length} watch candidate${watched.length === 1 ? "" : "s"}`
+                      : "no active watch"}
                 </span>
               </div>
 
@@ -1095,6 +1115,41 @@ function LiveWindowsBlock({ data }: { data: LiveWindowsResponse | undefined }) {
                 </div>
               ) : (
                 <p className="text-xs text-muted-foreground">No feature window available yet.</p>
+              )}
+
+              {row.symbol === "CRASH300" && row.contextDiagnostics && (
+                <div className="rounded-lg border border-primary/15 bg-primary/5 p-3 space-y-2">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <MetricTile label="Context family" value={row.contextDiagnostics.currentContextFamily ?? "—"} />
+                    <MetricTile label="1m trigger" value={row.contextDiagnostics.currentTrigger ?? "none"} />
+                    <MetricTile label="Trigger dir" value={row.contextDiagnostics.triggerDirection ?? "none"} />
+                    <MetricTile
+                      label="Trigger strength"
+                      value={row.contextDiagnostics.triggerStrength != null ? `${Math.round(row.contextDiagnostics.triggerStrength * 100)}%` : "—"}
+                      tone={row.contextDiagnostics.triggerStrength != null && row.contextDiagnostics.triggerStrength >= 0.6 ? "up" : undefined}
+                    />
+                    <MetricTile label="Context age (bars)" value={row.contextDiagnostics.contextAgeBars ?? "—"} />
+                    <MetricTile label="Fresh trigger" value={row.contextDiagnostics.triggerFresh ? "yes" : "no"} tone={row.contextDiagnostics.triggerFresh ? "up" : "warn"} />
+                    <MetricTile label="Candidate" value={row.contextDiagnostics.candidateProduced ? "produced" : "none"} tone={row.contextDiagnostics.candidateProduced ? "up" : "warn"} />
+                    <MetricTile label="Model run" value={row.contextDiagnostics.promotedModelRunId ?? "—"} />
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {row.contextDiagnostics.triggerFresh
+                      ? "Fresh 1m trigger present inside valid CRASH300 context."
+                      : "No fresh 1m trigger — context only."}
+                  </p>
+                  {row.contextDiagnostics.lastValidTriggerTs && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Last valid trigger {compactDateTime(row.contextDiagnostics.lastValidTriggerTs)}
+                      {row.contextDiagnostics.lastValidTriggerDirection ? ` | ${row.contextDiagnostics.lastValidTriggerDirection}` : ""}
+                    </p>
+                  )}
+                  {row.contextDiagnostics.failReasons.length > 0 && (
+                    <p className="text-[10px] text-amber-300/80">
+                      Fail reason: {row.contextDiagnostics.failReasons[0]}
+                    </p>
+                  )}
+                </div>
               )}
 
               {row.windowAnchors && (
