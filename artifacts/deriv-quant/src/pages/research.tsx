@@ -443,6 +443,9 @@ interface V3Trade {
   leg1Hit: boolean;
   mfePct: number;
   maePct: number;
+  admissionPolicyWouldBlock?: boolean | null;
+  admissionPolicyBlockedReasons?: string[] | null;
+  admissionPolicyMode?: "off" | "preview" | "enforce" | null;
 }
 
 interface V3Summary {
@@ -460,9 +463,39 @@ interface V3Summary {
   leg1HitRate: number;
   byEngine: Record<string, { count: number; wins: number; avgPnlPct: number }>;
   byExitReason: Record<string, number>;
+  admissionPolicyEnabled?: boolean;
+  admissionPolicyMode?: "off" | "preview" | "enforce";
+  admissionPolicyConfig?: Crash300AdmissionPolicyConfig;
+  candidatesBlockedByAdmissionPolicy?: number;
+  blockedReasonsCounts?: Record<string, number>;
+  tradesWouldHaveBeenBlocked?: number;
+  winsBlocked?: number | null;
+  lossesBlocked?: number | null;
+  slHitsBlocked?: number | null;
+  resultingWinRate?: number | null;
+  resultingTradeCount?: number | null;
 }
 
 type BacktestTierMode = "A" | "AB" | "ABC" | "ALL";
+type Crash300AdmissionPolicyMode = "off" | "preview" | "enforce";
+
+type Crash300AdmissionPolicyConfig = {
+  enabled: boolean;
+  mode: Crash300AdmissionPolicyMode;
+  blockWrongDirectionWithTrigger: boolean;
+  blockPostCrashRecoveryUp: boolean;
+  blockUpRecovery10PlusPct: boolean;
+  blockRecoveryUpOnDownMove: boolean;
+  blockCrashDownOnUpMove: boolean;
+};
+
+type Crash300AdmissionPolicyPreset =
+  | "off"
+  | "preview_wrong_direction"
+  | "enforce_wrong_direction"
+  | "enforce_wrong_direction_plus_up_recovery_10_plus"
+  | "enforce_wrong_direction_plus_post_crash_recovery"
+  | "custom";
 
 const BACKTEST_TIER_MODES: Array<{ value: BacktestTierMode; label: string }> = [
   { value: "A", label: "A only" },
@@ -470,6 +503,112 @@ const BACKTEST_TIER_MODES: Array<{ value: BacktestTierMode; label: string }> = [
   { value: "ABC", label: "A+B+C" },
   { value: "ALL", label: "All tiers" },
 ];
+
+const CRASH300_ADMISSION_POLICY_PRESETS: Array<{
+  value: Crash300AdmissionPolicyPreset;
+  label: string;
+  config: Crash300AdmissionPolicyConfig;
+}> = [
+  {
+    value: "off",
+    label: "Baseline / Policy Off",
+    config: {
+      enabled: false,
+      mode: "off",
+      blockWrongDirectionWithTrigger: false,
+      blockPostCrashRecoveryUp: false,
+      blockUpRecovery10PlusPct: false,
+      blockRecoveryUpOnDownMove: false,
+      blockCrashDownOnUpMove: false,
+    },
+  },
+  {
+    value: "preview_wrong_direction",
+    label: "Preview: wrong-direction block only",
+    config: {
+      enabled: true,
+      mode: "preview",
+      blockWrongDirectionWithTrigger: true,
+      blockPostCrashRecoveryUp: false,
+      blockUpRecovery10PlusPct: false,
+      blockRecoveryUpOnDownMove: true,
+      blockCrashDownOnUpMove: true,
+    },
+  },
+  {
+    value: "enforce_wrong_direction",
+    label: "Enforce: wrong-direction block only",
+    config: {
+      enabled: true,
+      mode: "enforce",
+      blockWrongDirectionWithTrigger: true,
+      blockPostCrashRecoveryUp: false,
+      blockUpRecovery10PlusPct: false,
+      blockRecoveryUpOnDownMove: true,
+      blockCrashDownOnUpMove: true,
+    },
+  },
+  {
+    value: "enforce_wrong_direction_plus_up_recovery_10_plus",
+    label: "Enforce: wrong-direction + block up|recovery|10_plus_pct",
+    config: {
+      enabled: true,
+      mode: "enforce",
+      blockWrongDirectionWithTrigger: true,
+      blockPostCrashRecoveryUp: false,
+      blockUpRecovery10PlusPct: true,
+      blockRecoveryUpOnDownMove: true,
+      blockCrashDownOnUpMove: true,
+    },
+  },
+  {
+    value: "enforce_wrong_direction_plus_post_crash_recovery",
+    label: "Enforce: wrong-direction + block post_crash_recovery_up",
+    config: {
+      enabled: true,
+      mode: "enforce",
+      blockWrongDirectionWithTrigger: true,
+      blockPostCrashRecoveryUp: true,
+      blockUpRecovery10PlusPct: false,
+      blockRecoveryUpOnDownMove: true,
+      blockCrashDownOnUpMove: true,
+    },
+  },
+];
+
+const DEFAULT_CRASH300_ADMISSION_POLICY =
+  CRASH300_ADMISSION_POLICY_PRESETS[0].config;
+
+function cloneCrash300AdmissionPolicy(
+  config: Crash300AdmissionPolicyConfig,
+): Crash300AdmissionPolicyConfig {
+  return { ...config };
+}
+
+function crash300AdmissionPolicyEquals(
+  left: Crash300AdmissionPolicyConfig,
+  right: Crash300AdmissionPolicyConfig,
+) {
+  return (
+    left.enabled === right.enabled &&
+    left.mode === right.mode &&
+    left.blockWrongDirectionWithTrigger === right.blockWrongDirectionWithTrigger &&
+    left.blockPostCrashRecoveryUp === right.blockPostCrashRecoveryUp &&
+    left.blockUpRecovery10PlusPct === right.blockUpRecovery10PlusPct &&
+    left.blockRecoveryUpOnDownMove === right.blockRecoveryUpOnDownMove &&
+    left.blockCrashDownOnUpMove === right.blockCrashDownOnUpMove
+  );
+}
+
+function presetForCrash300AdmissionPolicy(
+  config: Crash300AdmissionPolicyConfig,
+): Crash300AdmissionPolicyPreset {
+  return (
+    CRASH300_ADMISSION_POLICY_PRESETS.find((preset) =>
+      crash300AdmissionPolicyEquals(preset.config, config),
+    )?.value ?? "custom"
+  );
+}
 
 interface V3Result {
   symbol: string;
@@ -498,6 +637,19 @@ interface V3Result {
     captureRate: number;
     ghostTrades: number;
     ghostTradeRate: number;
+  };
+  admissionPolicy?: {
+    enabled: boolean;
+    mode: Crash300AdmissionPolicyMode;
+    config: Crash300AdmissionPolicyConfig;
+    candidatesBlockedByAdmissionPolicy: number;
+    blockedReasonsCounts: Record<string, number>;
+    tradesWouldHaveBeenBlocked: number;
+    winsBlocked: number | null;
+    lossesBlocked: number | null;
+    slHitsBlocked: number | null;
+    resultingWinRate: number | null;
+    resultingTradeCount: number | null;
   };
   summary: V3Summary;
 }
@@ -643,6 +795,11 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
   const runtimeApplied = runtime?.applied ?? runtime?.enabled ?? false;
   const runtimeReason = runtime?.reason ?? "unknown";
   const overlap = result.moveOverlap;
+  const admissionPolicy = result.admissionPolicy;
+  const showAdmissionPolicy =
+    result.symbol === "CRASH300" &&
+    admissionPolicy &&
+    admissionPolicy.config;
 
   return (
     <div className="space-y-4">
@@ -712,6 +869,60 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
                 {overlap.ghostTrades} ({pct(overlap.ghostTradeRate)})
               </span>
             </span>
+          </div>
+        </div>
+      )}
+
+      {showAdmissionPolicy && (
+        <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-xs space-y-2">
+          <div className="flex flex-wrap gap-x-5 gap-y-1">
+            <span>
+              <span className="text-muted-foreground">Admission policy: </span>
+              <span className={admissionPolicy.enabled ? "text-cyan-300 font-semibold" : "text-muted-foreground"}>
+                {admissionPolicy.enabled ? "enabled" : "off"}
+              </span>
+            </span>
+            <span><span className="text-muted-foreground">Mode: </span>{admissionPolicy.mode}</span>
+            <span><span className="text-muted-foreground">Candidates blocked: </span>{admissionPolicy.candidatesBlockedByAdmissionPolicy}</span>
+            <span><span className="text-muted-foreground">Trades would be blocked: </span>{admissionPolicy.tradesWouldHaveBeenBlocked}</span>
+            <span><span className="text-muted-foreground">Wins blocked: </span>{admissionPolicy.winsBlocked ?? "n/a"}</span>
+            <span><span className="text-muted-foreground">Losses blocked: </span>{admissionPolicy.lossesBlocked ?? "n/a"}</span>
+            <span><span className="text-muted-foreground">SL hits blocked: </span>{admissionPolicy.slHitsBlocked ?? "n/a"}</span>
+            <span>
+              <span className="text-muted-foreground">Resulting win rate: </span>
+              {typeof admissionPolicy.resultingWinRate === "number" ? pct(admissionPolicy.resultingWinRate) : "n/a"}
+            </span>
+            <span><span className="text-muted-foreground">Resulting trade count: </span>{admissionPolicy.resultingTradeCount ?? "n/a"}</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(admissionPolicy.config)
+              .filter(([key, value]) => key !== "enabled" && key !== "mode" && value === true)
+              .map(([key]) => (
+                <span
+                  key={key}
+                  className="inline-flex items-center rounded border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-200"
+                >
+                  {key}
+                </span>
+              ))}
+            {Object.entries(admissionPolicy.config).every(([key, value]) => key === "enabled" || key === "mode" || value !== true) && (
+              <span className="text-[11px] text-muted-foreground">No admission-policy block flags enabled for this run.</span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(admissionPolicy.blockedReasonsCounts ?? {}).length > 0 ? (
+              Object.entries(admissionPolicy.blockedReasonsCounts ?? {}).map(([reason, count]) => (
+                <span
+                  key={reason}
+                  className="inline-flex items-center gap-1 rounded border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-200"
+                >
+                  <span className="font-mono">{reason}</span>
+                  <span className="text-cyan-100">{count}</span>
+                </span>
+              ))
+            ) : (
+              <span className="text-[11px] text-muted-foreground">No blocked reasons recorded for this run.</span>
+            )}
           </div>
         </div>
       )}
@@ -831,6 +1042,11 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
 
   const [symbol, setSymbol] = useState(backtestSymbols[0] ?? "all");
   const [tierMode, setTierMode] = useState<BacktestTierMode>("ALL");
+  const [admissionPolicyPreset, setAdmissionPolicyPreset] =
+    useState<Crash300AdmissionPolicyPreset>("off");
+  const [admissionPolicyConfig, setAdmissionPolicyConfig] = useState<Crash300AdmissionPolicyConfig>(
+    cloneCrash300AdmissionPolicy(DEFAULT_CRASH300_ADMISSION_POLICY),
+  );
   const [running, setRunning] = useState(false);
   const [sweeping, setSweeping] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -853,6 +1069,44 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       setSymbol(backtestSymbols[0] ?? "all");
     }
   }, [domain, backtestSymbols, symbol]);
+
+  useEffect(() => {
+    if (symbol !== "CRASH300") {
+      setAdmissionPolicyPreset("off");
+      setAdmissionPolicyConfig(cloneCrash300AdmissionPolicy(DEFAULT_CRASH300_ADMISSION_POLICY));
+    }
+  }, [symbol]);
+
+  const crash300PolicyRequest =
+    symbol === "CRASH300"
+      ? cloneCrash300AdmissionPolicy(admissionPolicyConfig)
+      : undefined;
+
+  const setAdmissionPolicyPresetValue = (presetValue: Crash300AdmissionPolicyPreset) => {
+    setAdmissionPolicyPreset(presetValue);
+    if (presetValue === "custom") return;
+    const preset = CRASH300_ADMISSION_POLICY_PRESETS.find((item) => item.value === presetValue);
+    if (preset) {
+      setAdmissionPolicyConfig(cloneCrash300AdmissionPolicy(preset.config));
+    }
+  };
+
+  const updateAdmissionPolicyToggle = (
+    key: keyof Crash300AdmissionPolicyConfig,
+    value: boolean,
+  ) => {
+    setAdmissionPolicyConfig((prev) => {
+      const next = { ...prev, [key]: value };
+      const matchedPreset = presetForCrash300AdmissionPolicy(next);
+      setAdmissionPolicyPreset(matchedPreset);
+      if (matchedPreset !== "custom") {
+        return cloneCrash300AdmissionPolicy(
+          CRASH300_ADMISSION_POLICY_PRESETS.find((preset) => preset.value === matchedPreset)?.config ?? next,
+        );
+      }
+      return next;
+    });
+  };
 
   const loadBacktestHistory = async (sym = symbol, silent = false) => {
     if (!sym || sym === "all") {
@@ -883,6 +1137,14 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       const selectedSymbol = String(run.symbol);
       setSymbol(selectedSymbol);
       setTierMode(run.result.tierMode ?? "ALL");
+      if (selectedSymbol === "CRASH300" && run.result.admissionPolicy?.config) {
+        const nextConfig = cloneCrash300AdmissionPolicy(run.result.admissionPolicy.config);
+        setAdmissionPolicyConfig(nextConfig);
+        setAdmissionPolicyPreset(presetForCrash300AdmissionPolicy(nextConfig));
+      } else {
+        setAdmissionPolicyConfig(cloneCrash300AdmissionPolicy(DEFAULT_CRASH300_ADMISSION_POLICY));
+        setAdmissionPolicyPreset("off");
+      }
       setResults({ [selectedSymbol]: run.result });
       setTierSweep(null);
     } catch (e: any) {
@@ -914,6 +1176,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     try {
       const { startTs, endTs } = getWindowRange(windowDays);
       const body: Record<string, unknown> = { symbol, startTs, endTs, tierMode };
+      if (crash300PolicyRequest) body.crash300AdmissionPolicy = crash300PolicyRequest;
 
       const d = await apiFetch("backtest/v3/run", {
         method: "POST",
@@ -950,10 +1213,12 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       const sweep = {} as Record<BacktestTierMode, Record<string, V3Result>>;
 
       for (const mode of BACKTEST_TIER_MODES.map(item => item.value)) {
+        const body: Record<string, unknown> = { symbol, startTs, endTs, tierMode: mode };
+        if (crash300PolicyRequest) body.crash300AdmissionPolicy = crash300PolicyRequest;
         const d = await apiFetch("backtest/v3/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbol, startTs, endTs, tierMode: mode }),
+          body: JSON.stringify(body),
         });
         sweep[mode] = d.results as Record<string, V3Result>;
         setLatestPersistedRunIds((d.persistedRunIds as Record<string, number> | undefined) ?? {});
@@ -989,11 +1254,18 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
     const summary = {
       exported_at: new Date().toISOString(),
-      params: { symbol, tierMode, ...getWindowRange(windowDays), scoreGate: "runtime-platform-state" },
+      params: {
+        symbol,
+        tierMode,
+        ...getWindowRange(windowDays),
+        scoreGate: "runtime-platform-state",
+        crash300AdmissionPolicy: crash300PolicyRequest ?? null,
+      },
       symbols: Object.fromEntries(
         Object.entries(results).map(([sym, r]) => [sym, {
           totalBars: r.totalBars,
           runtimeModel: r.runtimeModel ?? null,
+          admissionPolicy: r.admissionPolicy ?? null,
           totalTrades: r.trades.length,
           wins: r.trades.filter(t => t.pnlPct > 0).length,
           losses: r.trades.filter(t => t.pnlPct <= 0).length,
@@ -1026,7 +1298,16 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     ).sort((a, b) => (a.entryTs ?? 0) - (b.entryTs ?? 0));
     downloadJson({
       exported_at: new Date().toISOString(),
-      params: { symbol, tierMode, ...getWindowRange(windowDays), scoreGate: "runtime-platform-state" },
+      params: {
+        symbol,
+        tierMode,
+        ...getWindowRange(windowDays),
+        scoreGate: "runtime-platform-state",
+        crash300AdmissionPolicy: crash300PolicyRequest ?? null,
+      },
+      admissionPolicyBySymbol: Object.fromEntries(
+        Object.entries(results).map(([sym, r]) => [sym, r.admissionPolicy ?? null]),
+      ),
       total_trades: allTrades.length,
       trades: allTrades,
     }, `bt-trades-${timestamp}.json`);
@@ -1130,6 +1411,58 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
             </select>
           </div>
         </div>
+
+        {symbol === "CRASH300" && (
+          <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3">
+            <div>
+              <h4 className="text-xs font-semibold text-cyan-100">CRASH300 Admission Policy</h4>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Backtest-only admission filter presets for previewing or enforcing proven-bad trade blocks without changing strategy logic.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[11px] text-muted-foreground">Preset</label>
+              <select
+                value={admissionPolicyPreset}
+                onChange={(e) => setAdmissionPolicyPresetValue(e.target.value as Crash300AdmissionPolicyPreset)}
+                className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+              >
+                {CRASH300_ADMISSION_POLICY_PRESETS.map((preset) => (
+                  <option key={preset.value} value={preset.value}>{preset.label}</option>
+                ))}
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {([
+                ["blockWrongDirectionWithTrigger", "blockWrongDirectionWithTrigger"],
+                ["blockPostCrashRecoveryUp", "blockPostCrashRecoveryUp"],
+                ["blockUpRecovery10PlusPct", "blockUpRecovery10PlusPct"],
+                ["blockRecoveryUpOnDownMove", "blockRecoveryUpOnDownMove"],
+                ["blockCrashDownOnUpMove", "blockCrashDownOnUpMove"],
+              ] as Array<[keyof Crash300AdmissionPolicyConfig, string]>).map(([key, label]) => (
+                <label
+                  key={key}
+                  className="flex items-center gap-2 rounded border border-border/30 bg-muted/10 px-2 py-2 text-[11px] text-foreground"
+                >
+                  <input
+                    type="checkbox"
+                    checked={Boolean(admissionPolicyConfig[key])}
+                    onChange={(e) => updateAdmissionPolicyToggle(key, e.target.checked)}
+                    disabled={key === "enabled" || key === "mode"}
+                    className="rounded border-border/50 bg-background"
+                  />
+                  <span className="font-mono">{label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+              <span>Enabled: <span className="text-foreground">{String(admissionPolicyConfig.enabled)}</span></span>
+              <span>Mode: <span className="text-foreground">{admissionPolicyConfig.mode}</span></span>
+              <span>Preset: <span className="text-foreground">{admissionPolicyPreset === "custom" ? "Custom" : CRASH300_ADMISSION_POLICY_PRESETS.find((preset) => preset.value === admissionPolicyPreset)?.label ?? "Custom"}</span></span>
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="space-y-1">
