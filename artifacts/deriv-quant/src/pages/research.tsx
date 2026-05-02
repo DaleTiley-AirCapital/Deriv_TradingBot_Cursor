@@ -520,6 +520,27 @@ type Crash300AdmissionPolicyPreset =
   | "enforce_wrong_direction_plus_post_crash_recovery"
   | "custom";
 
+type V3BacktestJobStatus = {
+  id: number;
+  symbol: string;
+  startTs: number;
+  endTs: number;
+  mode: string;
+  tierMode: string;
+  status: string;
+  phase: string;
+  progressPct: number;
+  message?: string | null;
+  errorSummary?: unknown;
+  resultSummary?: Record<string, unknown> | null;
+  persistedRunIds?: Record<string, number> | null;
+  params?: Record<string, unknown> | null;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  lastHeartbeatAt?: string | null;
+};
+
 const BACKTEST_TIER_MODES: Array<{ value: BacktestTierMode; label: string }> = [
   { value: "A", label: "A only" },
   { value: "AB", label: "A+B" },
@@ -1087,11 +1108,17 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const [selectedHistoryRunId, setSelectedHistoryRunId] = useState<number | null>(null);
   const [latestPersistedRunIds, setLatestPersistedRunIds] = useState<Record<string, number>>({});
   const [historyRunLoadError, setHistoryRunLoadError] = useState<string | null>(null);
+  const [activeJob, setActiveJob] = useState<V3BacktestJobStatus | null>(null);
+  const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startingCapitalUsd = 600;
 
   useEffect(() => {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, []);
+
+  useEffect(() => {
+    return () => { if (jobPollRef.current) clearInterval(jobPollRef.current); };
   }, []);
 
   useEffect(() => {
@@ -1190,12 +1217,70 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     void loadBacktestHistory(symbol);
   }, [symbol]);
 
+  const shouldUseAsyncBacktest = symbol === "CRASH300" && windowDays >= 60;
+
+  const stopRunTimers = () => {
+    setRunning(false);
+    if (timerRef.current) clearInterval(timerRef.current);
+  };
+
+  const stopJobPolling = () => {
+    if (jobPollRef.current) {
+      clearInterval(jobPollRef.current);
+      jobPollRef.current = null;
+    }
+  };
+
+  const pollBacktestJob = (jobId: number, targetSymbol: string) => {
+    stopJobPolling();
+    const tick = async () => {
+      try {
+        const statusResp = await apiFetch(`backtest/v3/jobs/${jobId}`) as { job?: V3BacktestJobStatus };
+        const job = statusResp.job ?? null;
+        setActiveJob(job);
+        if (!job) return;
+        if (job.status === "completed") {
+          stopJobPolling();
+          stopRunTimers();
+          const resultResp = await apiFetch(`backtest/v3/jobs/${jobId}/result`) as {
+            result?: {
+              persistedRunIds?: Record<string, number>;
+              summaryBySymbol?: Record<string, unknown>;
+            };
+          };
+          const persisted = resultResp.result?.persistedRunIds ?? {};
+          setLatestPersistedRunIds(persisted);
+          await loadBacktestHistory(targetSymbol, true);
+          const runId = persisted[targetSymbol];
+          if (runId) {
+            await loadBacktestHistoryRun(runId);
+          } else {
+            setErr(`Backtest completed for ${targetSymbol}, but no persisted run id was returned.`);
+          }
+          return;
+        }
+        if (job.status === "failed") {
+          stopJobPolling();
+          stopRunTimers();
+          setErr(String(job.message ?? "Long backtest failed"));
+        }
+      } catch (e: any) {
+        stopJobPolling();
+        stopRunTimers();
+        setErr(e?.message ?? "Failed to poll long backtest job");
+      }
+    };
+    void tick();
+    jobPollRef.current = setInterval(() => { void tick(); }, 2000);
+  };
+
   const run = async () => {
     setRunning(true);
     setErr(null);
     setHistoryRunLoadError(null);
     setResults(null);
     setTierSweep(null);
+    setActiveJob(null);
     setElapsed(0);
 
     const startTime = Date.now();
@@ -1207,6 +1292,20 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       const { startTs, endTs } = getWindowRange(windowDays);
       const body: Record<string, unknown> = { symbol, startTs, endTs, tierMode, startingCapitalUsd };
       if (crash300PolicyRequest) body.crash300AdmissionPolicy = crash300PolicyRequest;
+
+      if (shouldUseAsyncBacktest) {
+        const d = await apiFetch("backtest/v3/run-async", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }) as { jobId?: number };
+        const jobId = Number(d.jobId ?? 0);
+        if (!Number.isInteger(jobId) || jobId <= 0) {
+          throw new Error("Long backtest did not return a valid job id.");
+        }
+        pollBacktestJob(jobId, symbol);
+        return;
+      }
 
       const d = await apiFetch("backtest/v3/run", {
         method: "POST",
@@ -1220,8 +1319,9 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     } catch (e: any) {
       setErr(e.message);
     } finally {
-      setRunning(false);
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (!shouldUseAsyncBacktest) {
+        stopRunTimers();
+      }
     }
   };
 
@@ -1386,6 +1486,26 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       downloadJson(data.report ?? data, `bt-attribution-CRASH300-${timestamp}.json`);
     } catch (e: any) {
       setErr(`Attribution export failed: ${e?.message ?? "Unknown error"}`);
+    }
+  }
+
+  async function exportCalibrationReconciliation() {
+    if (symbol !== "CRASH300") {
+      setErr("Calibration reconciliation export is currently available for CRASH300 only.");
+      return;
+    }
+    const runId = selectedHistoryRunId ?? latestPersistedRunIds.CRASH300;
+    if (!runId) {
+      setErr("Run a CRASH300 backtest or select a persisted CRASH300 run before exporting calibration reconciliation.");
+      return;
+    }
+    try {
+      setErr(null);
+      const data = await apiFetch(`backtest/v3/history/${runId}/calibration-reconciliation`) as { report?: unknown };
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+      downloadJson(data.report ?? data, `bt-calibration-reconciliation-CRASH300-${timestamp}.json`);
+    } catch (e: any) {
+      setErr(`Calibration reconciliation export failed: ${e?.message ?? "Unknown error"}`);
     }
   }
 
@@ -1585,14 +1705,24 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
                 Export Trades JSON
               </button>
               {symbol === "CRASH300" && (
-                <button
-                  onClick={() => void exportAttribution()}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
-                  title="Export deterministic CRASH300 trade-outcome attribution for the selected or latest persisted backtest run"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Export Attribution JSON
-                </button>
+                <>
+                  <button
+                    onClick={() => void exportAttribution()}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
+                    title="Export deterministic CRASH300 trade-outcome attribution for the selected or latest persisted backtest run"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Export Attribution JSON
+                  </button>
+                  <button
+                    onClick={() => void exportCalibrationReconciliation()}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
+                    title="Export CRASH300 trade-vs-calibration reconciliation for the selected or latest persisted backtest run"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Export Calibration Reconciliation JSON
+                  </button>
+                </>
               )}
             </>
           )}
@@ -1611,10 +1741,39 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
 
           {(running || sweeping) && (
             <p className="text-xs text-muted-foreground">
-              Loading candles and replaying bars  this may take up to 2 minutes for all symbols.
+              {shouldUseAsyncBacktest
+                ? "Queued long-window backtest. The UI will poll progress and load the persisted run when it completes."
+                : "Loading candles and replaying bars  this may take up to 2 minutes for all symbols."}
             </p>
           )}
         </div>
+
+        {activeJob && (
+          <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/5 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold text-cyan-100">Long Backtest Job #{activeJob.id}</p>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  {activeJob.symbol}  {windowLabel(windowDays)}  {activeJob.phase}  {activeJob.status}
+                </p>
+              </div>
+              <span className="text-xs font-mono text-cyan-200">{Number(activeJob.progressPct ?? 0)}%</span>
+            </div>
+            <div className="h-2 rounded bg-background/70 overflow-hidden">
+              <div
+                className="h-full bg-cyan-400 transition-all duration-300"
+                style={{ width: `${Math.max(0, Math.min(100, Number(activeJob.progressPct ?? 0)))}%` }}
+              />
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+              <span>Message: <span className="text-foreground">{activeJob.message ?? "Processing"}</span></span>
+              <span>Heartbeat: <span className="text-foreground">{activeJob.lastHeartbeatAt ? new Date(activeJob.lastHeartbeatAt).toLocaleTimeString() : "n/a"}</span></span>
+              {activeJob.completedAt && (
+                <span>Completed: <span className="text-foreground">{new Date(activeJob.completedAt).toLocaleTimeString()}</span></span>
+              )}
+            </div>
+          </div>
+        )}
 
         {err && <ErrorBox msg={err} />}
         {historyRunLoadError && (

@@ -13,8 +13,10 @@ import {
   runV3BacktestMulti,
   type V3BacktestResult,
 } from "../core/backtest/backtestRunner.js";
+import type { Crash300AdmissionPolicyConfig } from "../symbol-services/CRASH300/admissionPolicy.js";
 import { buildCrash300TradeOutcomeAttributionReport } from "../core/backtest/tradeOutcomeAttribution.js";
 import { buildCrash300BacktestComparisonReport } from "../core/backtest/backtestComparison.js";
+import { buildCrash300CalibrationReconciliationReport } from "../core/backtest/calibrationReconciliation.js";
 import { ACTIVE_SYMBOLS } from "../core/engineTypes.js";
 
 const router: IRouter = Router();
@@ -91,6 +93,39 @@ type PersistedV3RunRow = {
   createdAt: string;
 };
 
+type PersistedV3JobRow = {
+  id: number;
+  symbol: string;
+  startTs: number;
+  endTs: number;
+  mode: string;
+  tierMode: string;
+  status: string;
+  phase: string;
+  progressPct: number;
+  message: string | null;
+  errorSummary: Record<string, unknown> | null;
+  resultSummary: Record<string, unknown> | null;
+  persistedRunIds: Record<string, number> | null;
+  params: Record<string, unknown> | null;
+  createdAt: string | Date;
+  startedAt: string | Date | null;
+  completedAt: string | Date | null;
+  lastHeartbeatAt: string | Date | null;
+};
+
+type V3BacktestJobParams = {
+  symbol: string;
+  startTs?: number;
+  endTs?: number;
+  mode?: "paper" | "demo" | "real";
+  tierMode: "A" | "AB" | "ABC" | "ALL";
+  crash300AdmissionPolicy?: Partial<Crash300AdmissionPolicyConfig> | null;
+  startingCapitalUsd: number;
+};
+
+const activeV3BacktestJobs = new Map<number, Promise<void>>();
+
 async function ensureV3BacktestRunsTable(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS v3_backtest_runs (
@@ -109,10 +144,256 @@ async function ensureV3BacktestRunsTable(): Promise<void> {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v3_backtest_runs_symbol_created ON v3_backtest_runs(symbol, created_at DESC)`);
 }
 
+async function ensureV3BacktestJobsTable(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS v3_backtest_jobs (
+      id serial PRIMARY KEY,
+      symbol text NOT NULL,
+      start_ts integer NOT NULL,
+      end_ts integer NOT NULL,
+      mode text NOT NULL,
+      tier_mode text NOT NULL DEFAULT 'ALL',
+      params jsonb NOT NULL,
+      status text NOT NULL DEFAULT 'queued',
+      phase text NOT NULL DEFAULT 'queued',
+      progress_pct integer NOT NULL DEFAULT 0,
+      message text,
+      error_summary jsonb,
+      result_summary jsonb,
+      persisted_run_ids jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      started_at timestamptz,
+      completed_at timestamptz,
+      last_heartbeat_at timestamptz
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v3_backtest_jobs_symbol_created ON v3_backtest_jobs(symbol, created_at DESC)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v3_backtest_jobs_status ON v3_backtest_jobs(status, created_at DESC)`);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function toIsoString(raw: string | Date | null | undefined): string | null {
+  if (!raw) return null;
+  const d = raw instanceof Date ? raw : new Date(raw);
+  return Number.isNaN(d.getTime()) ? String(raw) : d.toISOString();
+}
+
+function summarizeV3Results(results: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(results).map(([sym, raw]) => {
+      const result = raw as V3BacktestResult;
+      return [sym, {
+        symbol: sym,
+        startTs: result.startTs,
+        endTs: result.endTs,
+        totalBars: result.totalBars,
+        totalTrades: result.summary.tradeCount,
+        wins: result.summary.winCount,
+        losses: result.summary.lossCount,
+        winRate: result.summary.winRate,
+        summedTradePnlPct: result.summary.summedTradePnlPct ?? result.summary.totalPnlPct,
+        accountReturnPct: result.summary.accountReturnPct ?? 0,
+        netProfitUsd: result.summary.netProfitUsd ?? 0,
+        endingCapitalUsd: result.summary.endingCapitalUsd ?? 0,
+        maxDrawdownPct: result.summary.accountMaxDrawdownPct ?? result.summary.maxDrawdownPct,
+        profitFactor: result.summary.profitFactor,
+        moveCapture: result.moveOverlap,
+        runtimeModel: result.runtimeModel,
+        admissionPolicy: result.admissionPolicy,
+        exits: result.summary.byExitReason,
+      }];
+    }),
+  );
+}
+
+async function persistV3BacktestResults(params: {
+  results: Record<string, unknown>;
+  normalizedTierMode: "A" | "AB" | "ABC" | "ALL";
+  mode?: "paper" | "demo" | "real";
+  parsedStart?: number;
+  parsedEnd?: number;
+}) {
+  const persistedRunIds: Record<string, number> = {};
+  for (const [sym, raw] of Object.entries(params.results)) {
+    const result = asRecord(raw);
+    const runtimeModel = asRecord(result.runtimeModel);
+    const summary = asRecord(result.summary);
+    const tierModeResult = String(result.tierMode ?? params.normalizedTierMode ?? "ALL").toUpperCase();
+    const modeResult = String(result.mode ?? params.mode ?? "paper");
+    const startTsResult = Number(result.startTs ?? params.parsedStart ?? 0);
+    const endTsResult = Number(result.endTs ?? params.parsedEnd ?? Math.floor(Date.now() / 1000));
+    const runtimeModelRunIdRaw = runtimeModel.sourceRunId;
+    const runtimeModelRunId = Number.isFinite(Number(runtimeModelRunIdRaw))
+      ? Number(runtimeModelRunIdRaw)
+      : null;
+
+    const insertResult = await db.execute(sql`
+      INSERT INTO v3_backtest_runs (
+        symbol, start_ts, end_ts, mode, tier_mode, runtime_model_run_id, summary, result
+      ) VALUES (
+        ${sym},
+        ${startTsResult},
+        ${endTsResult},
+        ${modeResult},
+        ${tierModeResult},
+        ${runtimeModelRunId},
+        ${JSON.stringify(summary)}::jsonb,
+        ${JSON.stringify(result)}::jsonb
+      )
+      RETURNING id
+    `);
+    const insertedId = Number((insertResult.rows[0] as { id?: number } | undefined)?.id ?? 0);
+    if (insertedId > 0) persistedRunIds[sym] = insertedId;
+  }
+
+  const totalTrades = Object.values(params.results).reduce(
+    (sum: number, r) => sum + (((r as { trades?: unknown[] }).trades?.length) ?? 0),
+    0,
+  );
+  return {
+    persistedRunIds,
+    totalTrades,
+    summaryBySymbol: summarizeV3Results(params.results),
+  };
+}
+
+async function runV3BacktestRequest(params: V3BacktestJobParams) {
+  if (params.symbol === "all") {
+    const multi = await runV3BacktestMulti(
+      [...ACTIVE_SYMBOLS],
+      params.startTs,
+      params.endTs,
+      params.mode,
+      params.tierMode,
+      params.crash300AdmissionPolicy ?? null,
+      Number(params.startingCapitalUsd),
+    );
+    return multi as Record<string, unknown>;
+  }
+  const single = await runV3Backtest({
+    symbol: params.symbol,
+    startTs: params.startTs,
+    endTs: params.endTs,
+    mode: params.mode,
+    tierMode: params.tierMode,
+    crash300AdmissionPolicy: params.crash300AdmissionPolicy ?? null,
+    startingCapitalUsd: Number(params.startingCapitalUsd),
+  });
+  return { [params.symbol]: single };
+}
+
+async function heartbeatV3BacktestJob(jobId: number, patch: {
+  status?: string;
+  phase?: string;
+  progressPct?: number;
+  message?: string | null;
+  errorSummary?: Record<string, unknown> | null;
+  resultSummary?: Record<string, unknown> | null;
+  persistedRunIds?: Record<string, number> | null;
+  startedAt?: boolean;
+  completedAt?: boolean;
+}) {
+  const assignments = [
+    patch.status !== undefined ? sql`status = ${patch.status}` : null,
+    patch.phase !== undefined ? sql`phase = ${patch.phase}` : null,
+    patch.progressPct !== undefined ? sql`progress_pct = ${patch.progressPct}` : null,
+    patch.message !== undefined ? sql`message = ${patch.message}` : null,
+    patch.errorSummary !== undefined ? sql`error_summary = ${patch.errorSummary ? JSON.stringify(patch.errorSummary) : null}::jsonb` : null,
+    patch.resultSummary !== undefined ? sql`result_summary = ${patch.resultSummary ? JSON.stringify(patch.resultSummary) : null}::jsonb` : null,
+    patch.persistedRunIds !== undefined ? sql`persisted_run_ids = ${patch.persistedRunIds ? JSON.stringify(patch.persistedRunIds) : null}::jsonb` : null,
+    patch.startedAt ? sql`started_at = COALESCE(started_at, now())` : null,
+    patch.completedAt ? sql`completed_at = now()` : null,
+    sql`last_heartbeat_at = now()`,
+  ].filter(Boolean);
+  if (assignments.length === 0) return;
+  await db.execute(sql`
+    UPDATE v3_backtest_jobs
+    SET ${sql.join(assignments as NonNullable<typeof assignments[number]>[], sql`, `)}
+    WHERE id = ${jobId}
+  `);
+}
+
+async function executeV3BacktestJob(jobId: number, params: V3BacktestJobParams) {
+  await heartbeatV3BacktestJob(jobId, {
+    status: "running",
+    phase: "running_backtest",
+    progressPct: 10,
+    message: `Running V3 backtest for ${params.symbol}...`,
+    startedAt: true,
+  });
+  try {
+    const results = await runV3BacktestRequest(params);
+    await heartbeatV3BacktestJob(jobId, {
+      phase: "persisting_results",
+      progressPct: 80,
+      message: "Persisting backtest results...",
+      resultSummary: summarizeV3Results(results),
+    });
+    const persisted = await persistV3BacktestResults({
+      results,
+      normalizedTierMode: params.tierMode,
+      mode: params.mode,
+      parsedStart: params.startTs,
+      parsedEnd: params.endTs,
+    });
+    await heartbeatV3BacktestJob(jobId, {
+      status: "completed",
+      phase: "completed",
+      progressPct: 100,
+      message: `Completed ${params.symbol} V3 backtest`,
+      resultSummary: persisted.summaryBySymbol,
+      persistedRunIds: persisted.persistedRunIds,
+      completedAt: true,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "V3 backtest job failed";
+    await heartbeatV3BacktestJob(jobId, {
+      status: "failed",
+      phase: "failed",
+      progressPct: 100,
+      message,
+      errorSummary: { message },
+      completedAt: true,
+    });
+  } finally {
+    activeV3BacktestJobs.delete(jobId);
+  }
+}
+
+async function createV3BacktestJob(params: V3BacktestJobParams) {
+  await ensureV3BacktestRunsTable();
+  await ensureV3BacktestJobsTable();
+  const insertResult = await db.execute(sql`
+    INSERT INTO v3_backtest_jobs (
+      symbol, start_ts, end_ts, mode, tier_mode, params, status, phase, progress_pct, message, last_heartbeat_at
+    ) VALUES (
+      ${params.symbol},
+      ${params.startTs ?? 0},
+      ${params.endTs ?? Math.floor(Date.now() / 1000)},
+      ${params.mode ?? "paper"},
+      ${params.tierMode},
+      ${JSON.stringify(params)}::jsonb,
+      'queued',
+      'queued',
+      0,
+      ${`Queued ${params.symbol} V3 backtest`},
+      now()
+    )
+    RETURNING id
+  `);
+  const jobId = Number((insertResult.rows[0] as { id?: number } | undefined)?.id ?? 0);
+  if (!Number.isInteger(jobId) || jobId <= 0) {
+    throw new Error("Failed to create V3 backtest job");
+  }
+  const promise = executeV3BacktestJob(jobId, params);
+  activeV3BacktestJobs.set(jobId, promise);
+  void promise;
+  return jobId;
 }
 
 router.post("/backtest/run", async (req, res): Promise<void> => {
@@ -479,6 +760,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
 
   try {
     await ensureV3BacktestRunsTable();
+    await ensureV3BacktestJobsTable();
     let results: Record<string, unknown>;
 
     const mode = req.body?.mode;
@@ -517,55 +799,77 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
       results = { [symbol]: single };
     }
 
-    const totalTrades = Object.values(results).reduce(
-      (sum: number, r) => sum + ((r as { trades: unknown[] }).trades?.length ?? 0), 0
-    );
-
-    const persistedRunIds: Record<string, number> = {};
-    for (const [sym, raw] of Object.entries(results)) {
-      const result = asRecord(raw);
-      const runtimeModel = asRecord(result.runtimeModel);
-      const summary = asRecord(result.summary);
-      const tierModeResult = String(result.tierMode ?? normalizedTierMode ?? "ALL").toUpperCase();
-      const modeResult = String(result.mode ?? mode ?? "paper");
-      const startTsResult = Number(result.startTs ?? parsedStart ?? 0);
-      const endTsResult = Number(result.endTs ?? parsedEnd ?? Math.floor(Date.now() / 1000));
-      const runtimeModelRunIdRaw = runtimeModel.sourceRunId;
-      const runtimeModelRunId = Number.isFinite(Number(runtimeModelRunIdRaw))
-        ? Number(runtimeModelRunIdRaw)
-        : null;
-
-      const insertResult = await db.execute(sql`
-        INSERT INTO v3_backtest_runs (
-          symbol, start_ts, end_ts, mode, tier_mode, runtime_model_run_id, summary, result
-        ) VALUES (
-          ${sym},
-          ${startTsResult},
-          ${endTsResult},
-          ${modeResult},
-          ${tierModeResult},
-          ${runtimeModelRunId},
-          ${JSON.stringify(summary)}::jsonb,
-          ${JSON.stringify(result)}::jsonb
-        )
-        RETURNING id
-      `);
-      const insertedId = Number((insertResult.rows[0] as { id?: number } | undefined)?.id ?? 0);
-      if (insertedId > 0) {
-        persistedRunIds[sym] = insertedId;
-      }
-    }
+    const persisted = await persistV3BacktestResults({
+      results,
+      normalizedTierMode: normalizedTierMode as "A" | "AB" | "ABC" | "ALL",
+      mode,
+      parsedStart,
+      parsedEnd,
+    });
 
     res.json({
       ok: true,
       symbol,
-      totalTrades,
+      totalTrades: persisted.totalTrades,
       results,
-      persistedRunIds,
+      persistedRunIds: persisted.persistedRunIds,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "V3 backtest failed";
     console.error("[backtest/v3/run] error:", message);
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/backtest/v3/run-async", async (req, res): Promise<void> => {
+  const {
+    symbol = "all",
+    startTs,
+    endTs,
+    tierMode = "ALL",
+    crash300AdmissionPolicy = null,
+    startingCapitalUsd = 600,
+  } = req.body ?? {};
+
+  const validSymbols = [...ACTIVE_SYMBOLS, "all"];
+  if (!validSymbols.includes(symbol)) {
+    res.status(400).json({ error: `Invalid symbol. Use one of: ${validSymbols.join(", ")}` });
+    return;
+  }
+  const parsedStart = startTs !== undefined ? Number(startTs) : undefined;
+  const parsedEnd = endTs !== undefined ? Number(endTs) : undefined;
+  const mode = req.body?.mode;
+  const validModes = [undefined, "paper", "demo", "real"];
+  if (!validModes.includes(mode)) {
+    res.status(400).json({ error: "mode must be one of: paper, demo, real" });
+    return;
+  }
+  const normalizedTierMode = String(tierMode).toUpperCase();
+  if (!["A", "AB", "ABC", "ALL"].includes(normalizedTierMode)) {
+    res.status(400).json({ error: "tierMode must be one of: A, AB, ABC, ALL" });
+    return;
+  }
+
+  try {
+    const jobId = await createV3BacktestJob({
+      symbol,
+      startTs: parsedStart,
+      endTs: parsedEnd,
+      mode,
+      tierMode: normalizedTierMode as "A" | "AB" | "ABC" | "ALL",
+      crash300AdmissionPolicy,
+      startingCapitalUsd: Number(startingCapitalUsd),
+    });
+    res.json({
+      ok: true,
+      jobId,
+      status: "queued",
+      phase: "queued",
+      message: `Queued V3 backtest for ${symbol}`,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to queue V3 backtest";
+    console.error("[backtest/v3/run-async] error:", message);
     res.status(500).json({ error: message });
   }
 });
@@ -665,6 +969,118 @@ router.get("/backtest/v3/history/compare", async (req, res): Promise<void> => {
   }
 });
 
+router.get("/backtest/v3/jobs/:id", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid V3 backtest job id" });
+    return;
+  }
+  try {
+    await ensureV3BacktestJobsTable();
+    const rows = await db.execute(sql`
+      SELECT
+        id,
+        symbol,
+        start_ts AS "startTs",
+        end_ts AS "endTs",
+        mode,
+        tier_mode AS "tierMode",
+        status,
+        phase,
+        progress_pct AS "progressPct",
+        message,
+        error_summary AS "errorSummary",
+        result_summary AS "resultSummary",
+        persisted_run_ids AS "persistedRunIds",
+        params,
+        created_at AS "createdAt",
+        started_at AS "startedAt",
+        completed_at AS "completedAt",
+        last_heartbeat_at AS "lastHeartbeatAt"
+      FROM v3_backtest_jobs
+      WHERE id = ${id}
+      LIMIT 1
+    `);
+    const row = rows.rows[0] as PersistedV3JobRow | undefined;
+    if (!row) {
+      res.status(404).json({ error: "V3 backtest job not found" });
+      return;
+    }
+    res.json({
+      ok: true,
+      job: {
+        ...row,
+        createdAt: toIsoString(row.createdAt),
+        startedAt: toIsoString(row.startedAt),
+        completedAt: toIsoString(row.completedAt),
+        lastHeartbeatAt: toIsoString(row.lastHeartbeatAt),
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load V3 backtest job";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/backtest/v3/jobs/:id/result", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid V3 backtest job id" });
+    return;
+  }
+  try {
+    await ensureV3BacktestJobsTable();
+    const rows = await db.execute(sql`
+      SELECT
+        id,
+        symbol,
+        status,
+        phase,
+        result_summary AS "resultSummary",
+        persisted_run_ids AS "persistedRunIds",
+        error_summary AS "errorSummary",
+        completed_at AS "completedAt"
+      FROM v3_backtest_jobs
+      WHERE id = ${id}
+      LIMIT 1
+    `);
+    const row = rows.rows[0] as PersistedV3JobRow | undefined;
+    if (!row) {
+      res.status(404).json({ error: "V3 backtest job not found" });
+      return;
+    }
+    if (String(row.status) !== "completed") {
+      res.status(409).json({
+        error: "V3 backtest job has not completed yet",
+        job: {
+          id: row.id,
+          symbol: row.symbol,
+          status: row.status,
+          phase: row.phase,
+          completedAt: toIsoString(row.completedAt),
+          errorSummary: row.errorSummary ?? null,
+        },
+      });
+      return;
+    }
+    res.json({
+      ok: true,
+      result: {
+        jobId: row.id,
+        symbol: row.symbol,
+        status: row.status,
+        phase: row.phase,
+        completedAt: toIsoString(row.completedAt),
+        persistedRunIds: row.persistedRunIds ?? {},
+        summaryBySymbol: row.resultSummary ?? {},
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load V3 backtest job result";
+    res.status(500).json({ error: message });
+  }
+});
+
 router.get("/backtest/v3/history/:id", async (req, res): Promise<void> => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
@@ -755,6 +1171,53 @@ router.get("/backtest/v3/history/:id/attribution", async (req, res): Promise<voi
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to build trade-outcome attribution report";
     console.error(`[backtest/v3/history/${id}/attribution] error:`, message);
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/backtest/v3/history/:id/calibration-reconciliation", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid backtest run id" });
+    return;
+  }
+  try {
+    await ensureV3BacktestRunsTable();
+    const rows = await db.execute(sql`
+      SELECT
+        id,
+        symbol,
+        start_ts AS "startTs",
+        end_ts AS "endTs",
+        mode,
+        tier_mode AS "tierMode",
+        runtime_model_run_id AS "runtimeModelRunId",
+        summary,
+        result,
+        created_at AS "createdAt"
+      FROM v3_backtest_runs
+      WHERE id = ${id}
+      LIMIT 1
+    `);
+    const row = rows.rows[0] as PersistedV3RunRow | undefined;
+    if (!row) {
+      res.status(404).json({ error: "V3 backtest history run not found" });
+      return;
+    }
+    const result = asRecord(row.result) as unknown as V3BacktestResult;
+    if (String(row.symbol).toUpperCase() !== "CRASH300") {
+      res.status(400).json({ error: "Calibration reconciliation is currently available for CRASH300 only" });
+      return;
+    }
+    const report = await buildCrash300CalibrationReconciliationReport({
+      runId: row.id,
+      result,
+      createdAt: row.createdAt,
+    });
+    res.json({ ok: true, report });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to build calibration reconciliation report";
+    console.error(`[backtest/v3/history/${id}/calibration-reconciliation] error:`, message);
     res.status(500).json({ error: message });
   }
 });
