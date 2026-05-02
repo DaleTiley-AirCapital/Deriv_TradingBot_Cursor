@@ -619,13 +619,25 @@ export async function runCrash300RuntimeTriggerValidation(params: {
     movesWithT0ReclaimTrigger: 0,
     movesWithT0CrashContinuationTrigger: 0,
     movesWithOnlyTPlus1DiagnosticTrigger: 0,
+    movesWithCandidateBeforeT0: 0,
+    movesWithCandidateAfterT0: 0,
+    movesWithNoCandidateAtAnyOffset: 0,
+    commonBestTriggerOffsets: {} as Record<string, number>,
+    commonT0FailureReasons: {} as Record<string, number>,
   };
 
   for (const move of moves) {
     const evalOffsets = [
-      { key: "runtimeAtTMinus1", ts: move.startTs - 60, diagnostic: false },
-      { key: "runtimeAtT0", ts: move.startTs, diagnostic: false },
-      { key: "runtimeAtTPlus1Diagnostic", ts: move.startTs + 60, diagnostic: true },
+      { key: "runtimeAtTMinus5", label: "T-5", ts: move.startTs - 5 * 60, offsetBars: -5, diagnostic: false },
+      { key: "runtimeAtTMinus3", label: "T-3", ts: move.startTs - 3 * 60, offsetBars: -3, diagnostic: false },
+      { key: "runtimeAtTMinus2", label: "T-2", ts: move.startTs - 2 * 60, offsetBars: -2, diagnostic: false },
+      { key: "runtimeAtTMinus1", label: "T-1", ts: move.startTs - 60, offsetBars: -1, diagnostic: false },
+      { key: "runtimeAtT0", label: "T0", ts: move.startTs, offsetBars: 0, diagnostic: false },
+      { key: "runtimeAtTPlus1Diagnostic", label: "T+1", ts: move.startTs + 60, offsetBars: 1, diagnostic: true },
+      { key: "runtimeAtTPlus3Diagnostic", label: "T+3", ts: move.startTs + 3 * 60, offsetBars: 3, diagnostic: true },
+      { key: "runtimeAtTPlus5Diagnostic", label: "T+5", ts: move.startTs + 5 * 60, offsetBars: 5, diagnostic: true },
+      { key: "runtimeAtTPlus10Diagnostic", label: "T+10", ts: move.startTs + 10 * 60, offsetBars: 10, diagnostic: true },
+      { key: "runtimeAtTPlus15Diagnostic", label: "T+15", ts: move.startTs + 15 * 60, offsetBars: 15, diagnostic: true },
     ] as const;
     const evaluations: Record<string, unknown> = {};
     let candidateAtT0 = false;
@@ -634,6 +646,17 @@ export async function runCrash300RuntimeTriggerValidation(params: {
     let t0Family: string | null = null;
     let t0Bucket: string | null = null;
     let t0FailReason: string | null = null;
+    const producedOffsets: Array<{
+      label: string;
+      offsetBars: number;
+      triggerTransition: string;
+      triggerDirection: "buy" | "sell" | "none";
+      runtimeFamily: string | null;
+      selectedBucket: string | null;
+      confidence: number;
+      setupMatch: number;
+      diagnosticOnly: boolean;
+    }> = [];
 
     for (const evalPoint of evalOffsets) {
       const candles = await loadCandlesUntilTs(evalPoint.ts);
@@ -665,6 +688,8 @@ export async function runCrash300RuntimeTriggerValidation(params: {
       const failReason = decision.failReasons[0] ?? null;
       const out = {
         ts: evalPoint.ts,
+        label: evalPoint.label,
+        offsetBars: evalPoint.offsetBars,
         diagnosticOnly: evalPoint.diagnostic,
         candidateProduced: Boolean(decision.valid && decision.direction),
         triggerTransition: String(evidence["selectedTriggerTransition"] ?? "none"),
@@ -672,9 +697,26 @@ export async function runCrash300RuntimeTriggerValidation(params: {
         liveEligibleTrigger: Boolean(evidence["liveEligibleTrigger"]),
         runtimeFamily: decision.setupFamily ?? null,
         selectedBucket: decision.moveBucket ?? null,
+        confidence: Number(decision.confidence ?? 0),
+        setupMatch: Number(decision.setupMatch ?? 0),
+        exitPolicyExists: !hasReason(decision.failReasons, "runtime_exit_policy_missing_for_phase_bucket"),
+        bucketExists: !hasReason(decision.failReasons, "runtime_family_bucket_missing"),
         failReason,
       };
       evaluations[evalPoint.key] = out;
+      if (out.candidateProduced) {
+        producedOffsets.push({
+          label: evalPoint.label,
+          offsetBars: evalPoint.offsetBars,
+          triggerTransition: out.triggerTransition,
+          triggerDirection: out.triggerDirection,
+          runtimeFamily: out.runtimeFamily,
+          selectedBucket: out.selectedBucket,
+          confidence: out.confidence,
+          setupMatch: out.setupMatch,
+          diagnosticOnly: evalPoint.diagnostic,
+        });
+      }
       if (evalPoint.key === "runtimeAtT0") {
         candidateAtT0 = out.candidateProduced;
         t0Transition = out.triggerTransition;
@@ -690,6 +732,16 @@ export async function runCrash300RuntimeTriggerValidation(params: {
     const expectedDirection = normalizeMoveDirection(move.direction) === "up" ? "buy" : normalizeMoveDirection(move.direction) === "down" ? "sell" : null;
     const directionCompatible = expectedDirection == null || t0Direction === expectedDirection;
     const bucketCompatible = Boolean(phaseBucket && phaseBucket !== "unknown");
+    const firstProduced = producedOffsets
+      .slice()
+      .sort((a, b) => a.offsetBars - b.offsetBars)[0] ?? null;
+    const bestProduced = producedOffsets
+      .slice()
+      .sort((a, b) => {
+        const scoreDiff = (b.setupMatch + b.confidence) - (a.setupMatch + a.confidence);
+        if (Math.abs(scoreDiff) > 1e-9) return scoreDiff;
+        return Math.abs(a.offsetBars) - Math.abs(b.offsetBars);
+      })[0] ?? null;
     if (candidateAtT0) aggregates.candidateAtT0Count += 1;
     if (t0FailReason === "no_fresh_1m_trigger") aggregates.noFreshTriggerCount += 1;
     if (t0FailReason === "runtime_exit_policy_missing_for_phase_bucket") aggregates.exitPolicyMissingCount += 1;
@@ -700,6 +752,15 @@ export async function runCrash300RuntimeTriggerValidation(params: {
     if (t0Transition === "crash_continuation_down") aggregates.movesWithT0CrashContinuationTrigger += 1;
     const plusOne = evaluations["runtimeAtTPlus1Diagnostic"] as Record<string, unknown> | undefined;
     if (!candidateAtT0 && Boolean(plusOne?.["candidateProduced"])) aggregates.movesWithOnlyTPlus1DiagnosticTrigger += 1;
+    if (firstProduced && firstProduced.offsetBars < 0) aggregates.movesWithCandidateBeforeT0 += 1;
+    if (firstProduced && firstProduced.offsetBars > 0) aggregates.movesWithCandidateAfterT0 += 1;
+    if (!firstProduced) aggregates.movesWithNoCandidateAtAnyOffset += 1;
+    if (bestProduced) {
+      aggregates.commonBestTriggerOffsets[bestProduced.label] = (aggregates.commonBestTriggerOffsets[bestProduced.label] ?? 0) + 1;
+    }
+    if (t0FailReason) {
+      aggregates.commonT0FailureReasons[t0FailReason] = (aggregates.commonT0FailureReasons[t0FailReason] ?? 0) + 1;
+    }
 
     rows.push({
       moveId: move.id,
@@ -707,9 +768,25 @@ export async function runCrash300RuntimeTriggerValidation(params: {
       movePct: move.movePct,
       phaseDerivedFamily: phaseFamily,
       phaseDerivedBucket: phaseBucket,
+      firstOffsetWithCandidate: firstProduced?.label ?? null,
+      bestTriggerOffset: bestProduced?.label ?? null,
+      bestTriggerTransition: bestProduced?.triggerTransition ?? null,
+      bestRuntimeFamily: bestProduced?.runtimeFamily ?? null,
+      bestSelectedBucket: bestProduced?.selectedBucket ?? null,
+      directionMatchesAtBestOffset: bestProduced ? (expectedDirection == null || bestProduced.triggerDirection === expectedDirection) : false,
+      bucketExistsAtBestOffset: Boolean(bestProduced?.selectedBucket && bestProduced.selectedBucket !== "unknown"),
+      exitPolicyExistsAtBestOffset: bestProduced ? true : false,
+      whyT0Failed: t0FailReason,
       runtimeAtTMinus1: evaluations["runtimeAtTMinus1"],
+      runtimeAtTMinus5: evaluations["runtimeAtTMinus5"],
+      runtimeAtTMinus3: evaluations["runtimeAtTMinus3"],
+      runtimeAtTMinus2: evaluations["runtimeAtTMinus2"],
       runtimeAtT0: evaluations["runtimeAtT0"],
       runtimeAtTPlus1Diagnostic: evaluations["runtimeAtTPlus1Diagnostic"],
+      runtimeAtTPlus3Diagnostic: evaluations["runtimeAtTPlus3Diagnostic"],
+      runtimeAtTPlus5Diagnostic: evaluations["runtimeAtTPlus5Diagnostic"],
+      runtimeAtTPlus10Diagnostic: evaluations["runtimeAtTPlus10Diagnostic"],
+      runtimeAtTPlus15Diagnostic: evaluations["runtimeAtTPlus15Diagnostic"],
       candidateAtT0,
       triggerTransitionAtT0: t0Transition,
       triggerDirectionAtT0: t0Direction,

@@ -1,7 +1,7 @@
 import { db, detectedMovesTable } from "@workspace/db";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import type { V3BacktestResult, V3BacktestTrade } from "./backtestRunner.js";
-import { runCrash300CalibrationParity } from "../../symbol-services/CRASH300/calibration.js";
+import { runCrash300CalibrationParity, runCrash300RuntimeTriggerValidation } from "../../symbol-services/CRASH300/calibration.js";
 import type { ParityMoveVerdict } from "../../symbol-services/shared/parityTypes.js";
 
 type DetectedMove = {
@@ -91,6 +91,10 @@ type AttributionTradeRow = {
   wouldBlockDuplicateEpoch: boolean | null;
   wouldBlockDirectionMismatch: boolean | null;
   wouldBlockLateAfterMoveWindow: boolean | null;
+  familyDirection: "buy" | "sell" | "unknown";
+  bucketDirection: "buy" | "sell" | "unknown";
+  moveExpectedDirection: "buy" | "sell" | "unknown";
+  directionConsistencyFlags: string[];
   outcomeClassification: TradeOutcomeClassification;
 };
 
@@ -135,6 +139,59 @@ function avg(values: number[]): number {
 
 function bump(map: Record<string, number>, key: string) {
   map[key] = (map[key] ?? 0) + 1;
+}
+
+function keyOf(value: string | null | undefined): string {
+  const normalized = String(value ?? "").trim();
+  return normalized.length > 0 ? normalized : "unknown";
+}
+
+function avgNullable(values: Array<number | null | undefined>): number {
+  const filtered = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  return avg(filtered);
+}
+
+function familyDirection(runtimeFamily: string | null): "buy" | "sell" | "unknown" {
+  const family = keyOf(runtimeFamily).toLowerCase();
+  if ([
+    "drift_continuation_up",
+    "post_crash_recovery_up",
+    "bear_trap_reversal_up",
+  ].includes(family)) return "buy";
+  if ([
+    "failed_recovery_short",
+    "crash_event_down",
+    "bull_trap_reversal_down",
+  ].includes(family)) return "sell";
+  return "unknown";
+}
+
+function bucketDirection(selectedBucket: string | null): "buy" | "sell" | "unknown" {
+  const [direction] = keyOf(selectedBucket).split("|");
+  if (direction === "up") return "buy";
+  if (direction === "down") return "sell";
+  return "unknown";
+}
+
+function moveDirectionToTradeDirection(direction: "up" | "down" | "unknown"): "buy" | "sell" | "unknown" {
+  if (direction === "up") return "buy";
+  if (direction === "down") return "sell";
+  return "unknown";
+}
+
+function summarizeSimulatedTrades(trades: AttributionTradeRow[]) {
+  const wins = trades.filter((trade) => trade.pnlPct > 0);
+  const losses = trades.length - wins.length;
+  const totalPnlPct = trades.reduce((sum, trade) => sum + trade.pnlPct, 0);
+  return {
+    remainingTrades: trades.length,
+    wins: wins.length,
+    losses,
+    newWinRate: trades.length > 0 ? (wins.length / trades.length) * 100 : 0,
+    newSlHitCount: trades.filter((trade) => trade.exitReason === "sl_hit").length,
+    newTrailingStopCount: trades.filter((trade) => trade.exitReason === "trailing_stop").length,
+    newTotalPnlPct: totalPnlPct,
+  };
 }
 
 function resolveNearestMoves(entryTs: number, moves: DetectedMove[]) {
@@ -253,6 +310,25 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
       directionAligned &&
       !reached25
     );
+    const derivedFamilyDirection = familyDirection(trade.runtimeFamily ?? null);
+    const derivedBucketDirection = bucketDirection(trade.selectedBucket ?? null);
+    const matchedMoveDirection = moveDirectionToTradeDirection(matchedMove?.direction ?? "unknown");
+    const directionConsistencyFlags: string[] = [];
+    if (derivedFamilyDirection !== "unknown" && derivedBucketDirection !== "unknown" && derivedFamilyDirection !== derivedBucketDirection) {
+      directionConsistencyFlags.push("family_bucket_direction_mismatch");
+    }
+    if (trade.triggerDirection && trade.triggerDirection !== "unknown" && trade.triggerDirection !== "none" && trade.triggerDirection !== trade.direction) {
+      directionConsistencyFlags.push("trigger_trade_direction_mismatch");
+    }
+    if (matchedMoveDirection !== "unknown" && trade.direction !== matchedMoveDirection) {
+      directionConsistencyFlags.push("trade_move_direction_mismatch");
+    }
+    if ((trade.runtimeFamily ?? null) === "post_crash_recovery_up" && matchedMove?.direction === "down") {
+      directionConsistencyFlags.push("recovery_up_family_on_down_move");
+    }
+    if ((trade.runtimeFamily ?? null) === "crash_event_down" && matchedMove?.direction === "up") {
+      directionConsistencyFlags.push("crash_down_family_on_up_move");
+    }
 
     return {
       tradeId: `${trade.symbol}:${trade.entryTs}:${index + 1}`,
@@ -320,6 +396,10 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
       wouldBlockDuplicateEpoch: trade.wouldBlockDuplicateEpoch ?? null,
       wouldBlockDirectionMismatch: trade.wouldBlockDirectionMismatch ?? null,
       wouldBlockLateAfterMoveWindow: trade.wouldBlockLateAfterMoveWindow ?? null,
+      familyDirection: derivedFamilyDirection,
+      bucketDirection: derivedBucketDirection,
+      moveExpectedDirection: matchedMoveDirection,
+      directionConsistencyFlags,
       outcomeClassification: classifyOutcome({
         trade,
         matchedMove,
@@ -333,6 +413,10 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
     };
   });
 
+  const losses = trades.filter((trade) => trade.pnlPct <= 0);
+  const wins = trades.filter((trade) => trade.pnlPct > 0);
+  const slLosses = trades.filter((trade) => trade.exitReason === "sl_hit");
+  const matchedTrades = trades.filter((trade) => trade.matchedCalibratedMove);
   const byRuntimeFamily: Record<string, number> = {};
   const bySelectedBucket: Record<string, number> = {};
   const winLossByRuntimeFamily: Record<string, { wins: number; losses: number }> = {};
@@ -346,8 +430,8 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
   const exitReasonCounts: Record<string, number> = {};
 
   for (const trade of trades) {
-    const familyKey = trade.runtimeFamily ?? "unknown";
-    const bucketKey = trade.selectedBucket ?? "unknown";
+    const familyKey = keyOf(trade.runtimeFamily);
+    const bucketKey = keyOf(trade.selectedBucket);
     bump(byRuntimeFamily, familyKey);
     bump(bySelectedBucket, bucketKey);
     bump(classificationCounts, trade.outcomeClassification);
@@ -374,10 +458,6 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
     }
   }
 
-  const losses = trades.filter((trade) => trade.pnlPct <= 0);
-  const wins = trades.filter((trade) => trade.pnlPct > 0);
-  const slLosses = trades.filter((trade) => trade.exitReason === "sl_hit");
-  const matchedTrades = trades.filter((trade) => trade.matchedCalibratedMove);
   const tradesWithNoFreshTrigger = trades.filter((trade) => trade.triggerFresh === false).length;
   const tradesFromStaleContext = trades.filter((trade) => trade.wouldBlockStaleContext === true).length;
   const duplicateEpochTrades = trades.filter((trade) => trade.duplicateWithinContextEpoch === true || trade.wouldBlockDuplicateEpoch === true).length;
@@ -389,6 +469,151 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
   const estimatedLossesRemovedByFreshTriggerOnly = losses.filter((trade) => trade.triggerFresh === false || trade.wouldBlockNoTrigger === true || trade.wouldBlockStaleContext === true).length;
   const estimatedTradesAfterOnePerContextEpoch = trades.filter((trade) => trade.duplicateWithinContextEpoch !== true && trade.wouldBlockDuplicateEpoch !== true).length;
   const estimatedLossesRemovedByOnePerEpoch = losses.filter((trade) => trade.duplicateWithinContextEpoch === true || trade.wouldBlockDuplicateEpoch === true).length;
+  const totalLosses = losses.length;
+  const overallWinRate = trades.length > 0 ? wins.length / trades.length : 0;
+  const overallSlHitRate = trades.length > 0 ? trades.filter((trade) => trade.exitReason === "sl_hit").length / trades.length : 0;
+  const overallTargetUnrealisticRate = trades.length > 0 ? trades.filter((trade) => trade.outcomeClassification === "target_unrealistic_for_bucket").length / trades.length : 0;
+  const overallWrongDirectionRate = trades.length > 0 ? trades.filter((trade) => trade.outcomeClassification === "wrong_direction").length / trades.length : 0;
+  const familyBucketDirectionMismatchCount = trades.filter((trade) => trade.directionConsistencyFlags.includes("family_bucket_direction_mismatch")).length;
+  const triggerTradeDirectionMismatchCount = trades.filter((trade) => trade.directionConsistencyFlags.includes("trigger_trade_direction_mismatch")).length;
+  const tradeMoveDirectionMismatchCount = trades.filter((trade) => trade.directionConsistencyFlags.includes("trade_move_direction_mismatch")).length;
+  const recoveryUpFamilyOnDownMoveCount = trades.filter((trade) => trade.directionConsistencyFlags.includes("recovery_up_family_on_down_move")).length;
+  const crashDownFamilyOnUpMoveCount = trades.filter((trade) => trade.directionConsistencyFlags.includes("crash_down_family_on_up_move")).length;
+
+  const buildGroupReport = (groupName: string, keyFn: (trade: AttributionTradeRow) => string) => {
+    const map = new Map<string, AttributionTradeRow[]>();
+    for (const trade of trades) {
+      const key = keyFn(trade);
+      const bucket = map.get(key);
+      if (bucket) bucket.push(trade);
+      else map.set(key, [trade]);
+    }
+    const materialLossFloor = Math.max(2, Math.ceil(totalLosses / Math.max(1, map.size)));
+    return Array.from(map.entries()).map(([key, groupTrades]) => {
+      const groupWins = groupTrades.filter((trade) => trade.pnlPct > 0);
+      const groupLosses = groupTrades.length - groupWins.length;
+      const slHitCount = groupTrades.filter((trade) => trade.exitReason === "sl_hit").length;
+      const trailingStopCount = groupTrades.filter((trade) => trade.exitReason === "trailing_stop").length;
+      const wrongDirectionCount = groupTrades.filter((trade) => trade.outcomeClassification === "wrong_direction").length;
+      const enteredTooEarlyCount = groupTrades.filter((trade) => trade.outcomeClassification === "entered_too_early").length;
+      const enteredTooLateCount = groupTrades.filter((trade) => trade.outcomeClassification === "entered_too_late").length;
+      const targetUnrealisticCount = groupTrades.filter((trade) => trade.outcomeClassification === "target_unrealistic_for_bucket").length;
+      const trailingTooEarlyCount = groupTrades.filter((trade) => trade.outcomeClassification === "good_entry_trailing_too_early").length;
+      const winRate = groupTrades.length > 0 ? groupWins.length / groupTrades.length : 0;
+      const slHitRate = groupTrades.length > 0 ? slHitCount / groupTrades.length : 0;
+      const wrongDirectionRate = groupTrades.length > 0 ? wrongDirectionCount / groupTrades.length : 0;
+      const targetUnrealisticRate = groupTrades.length > 0 ? targetUnrealisticCount / groupTrades.length : 0;
+      const weakGroupReasons: string[] = [];
+      const materialLosses = groupLosses >= materialLossFloor;
+      if (materialLosses && slHitRate > overallSlHitRate) weakGroupReasons.push("sl_hit_rate_above_month_average");
+      if (materialLosses && winRate < overallWinRate) weakGroupReasons.push("win_rate_below_month_average");
+      if (materialLosses && targetUnrealisticRate > overallTargetUnrealisticRate) weakGroupReasons.push("target_unrealistic_rate_above_month_average");
+      if (materialLosses && wrongDirectionRate > overallWrongDirectionRate) weakGroupReasons.push("wrong_direction_rate_above_month_average");
+      if (groupTrades.some((trade) => trade.directionConsistencyFlags.includes("family_bucket_direction_mismatch"))) weakGroupReasons.push("family_bucket_direction_mismatch_present");
+      return {
+        groupName,
+        key,
+        trades: groupTrades.length,
+        wins: groupWins.length,
+        losses: groupLosses,
+        winRatePct: winRate * 100,
+        slHitCount,
+        trailingStopCount,
+        avgPnlPct: avg(groupTrades.map((trade) => trade.pnlPct)),
+        avgMfePct: avg(groupTrades.map((trade) => trade.mfePct)),
+        avgMaePct: avg(groupTrades.map((trade) => trade.maePct)),
+        avgMfeBeforeSl: avg(groupTrades.filter((trade) => trade.exitReason === "sl_hit").map((trade) => trade.mfePct)),
+        avgMaeBeforeWin: avg(groupWins.map((trade) => trade.maePct)),
+        avgEntryDelayFromMoveStartMinutes: avgNullable(groupTrades.map((trade) => trade.minutesFromMoveStartToEntry)),
+        wrongDirectionCount,
+        enteredTooEarlyCount,
+        enteredTooLateCount,
+        targetUnrealisticCount,
+        trailingTooEarlyCount,
+        weakGroupReasons,
+      };
+    }).sort((a, b) => b.trades - a.trades || a.key.localeCompare(b.key));
+  };
+
+  const groupedPerformance = {
+    byRuntimeFamily: buildGroupReport("runtimeFamily", (trade) => keyOf(trade.runtimeFamily)),
+    bySelectedBucket: buildGroupReport("selectedBucket", (trade) => keyOf(trade.selectedBucket)),
+    byTriggerTransition: buildGroupReport("triggerTransition", (trade) => keyOf(trade.selectedTriggerTransition)),
+    byTriggerDirection: buildGroupReport("triggerDirection", (trade) => keyOf(trade.triggerDirection)),
+    byQualityTier: buildGroupReport("qualityTier", (trade) => keyOf(trade.qualityTier)),
+    byContextFamilyAndTriggerTransition: buildGroupReport("contextFamily+triggerTransition", (trade) => `${keyOf(trade.selectedContextFamily)}|${keyOf(trade.selectedTriggerTransition)}`),
+    byRuntimeFamilyBucketTrigger: buildGroupReport("runtimeFamily+selectedBucket+triggerTransition", (trade) => `${keyOf(trade.runtimeFamily)}|${keyOf(trade.selectedBucket)}|${keyOf(trade.selectedTriggerTransition)}`),
+  };
+
+  const weakGroups = Object.values(groupedPerformance)
+    .flat()
+    .filter((group) => group.weakGroupReasons.length > 0);
+
+  const buildSimulation = (name: string, reason: string, removePredicate: (trade: AttributionTradeRow) => boolean) => {
+    const removedTrades = trades.filter(removePredicate);
+    const keptTrades = trades.filter((trade) => !removePredicate(trade));
+    const removedWins = removedTrades.filter((trade) => trade.pnlPct > 0).length;
+    const removedLosses = removedTrades.length - removedWins;
+    const keptSummary = summarizeSimulatedTrades(keptTrades);
+    const baselinePnl = trades.reduce((sum, trade) => sum + trade.pnlPct, 0);
+    return {
+      name,
+      reason,
+      removedTrades: removedTrades.length,
+      removedWins,
+      removedLosses,
+      estimatedNetPnlChange: keptSummary.newTotalPnlPct - baselinePnl,
+      ...keptSummary,
+    };
+  };
+
+  const whatIfDisabled = [
+    buildSimulation("disable_post_crash_recovery_up", "Disable post_crash_recovery_up family", (trade) => trade.runtimeFamily === "post_crash_recovery_up"),
+    buildSimulation("disable_up_recovery_10_plus_pct", "Disable up|recovery|10_plus_pct bucket", (trade) => trade.selectedBucket === "up|recovery|10_plus_pct"),
+    buildSimulation("disable_family_bucket_direction_mismatch", "Disable trades with family/bucket direction mismatch", (trade) => trade.directionConsistencyFlags.includes("family_bucket_direction_mismatch")),
+    buildSimulation("disable_wrong_direction_with_trigger", "Disable trades with wrong direction despite fresh trigger", (trade) => trade.outcomeClassification === "wrong_direction" && trade.triggerFresh === true),
+    buildSimulation("disable_entered_too_early", "Disable entries classified entered_too_early", (trade) => trade.outcomeClassification === "entered_too_early"),
+    buildSimulation("disable_entered_too_late", "Disable entries classified entered_too_late", (trade) => trade.outcomeClassification === "entered_too_late"),
+    buildSimulation("allow_only_bear_trap_reversal_up", "Allow only bear_trap_reversal_up family", (trade) => trade.runtimeFamily !== "bear_trap_reversal_up"),
+    buildSimulation("allow_only_crash_event_down", "Allow only crash_event_down family", (trade) => trade.runtimeFamily !== "crash_event_down"),
+    buildSimulation("allow_only_crash_event_down_plus_bear_trap_reversal_up", "Allow only crash_event_down and bear_trap_reversal_up families", (trade) => !["crash_event_down", "bear_trap_reversal_up"].includes(keyOf(trade.runtimeFamily))),
+  ];
+
+  const parityTimingDiagnostic = await runCrash300RuntimeTriggerValidation({
+    startTs: params.result.startTs,
+    endTs: params.result.endTs,
+  });
+
+  const recommendationReport = {
+    groupsToDisableFirst: weakGroups
+      .filter((group) => group.weakGroupReasons.some((reason) => [
+        "sl_hit_rate_above_month_average",
+        "wrong_direction_rate_above_month_average",
+        "family_bucket_direction_mismatch_present",
+      ].includes(reason)))
+      .map((group) => ({ groupName: group.groupName, key: group.key, reasons: group.weakGroupReasons })),
+    groupsToKeep: groupedPerformance.byRuntimeFamily
+      .filter((group) => group.losses === 0 || (group.winRatePct >= overallWinRate * 100 && group.weakGroupReasons.length === 0))
+      .map((group) => ({ groupName: group.groupName, key: group.key })),
+    groupsNeedingMoreData: Object.values(groupedPerformance)
+      .flat()
+      .filter((group) => group.trades <= 3)
+      .map((group) => ({ groupName: group.groupName, key: group.key, trades: group.trades })),
+    parityTimingIssueSummary: {
+      totalMoves: parityTimingDiagnostic.aggregates.totalMoves,
+      movesWithCandidateAtT0: parityTimingDiagnostic.aggregates.candidateAtT0Count,
+      movesWithCandidateBeforeT0: parityTimingDiagnostic.aggregates.movesWithCandidateBeforeT0,
+      movesWithCandidateAfterT0: parityTimingDiagnostic.aggregates.movesWithCandidateAfterT0,
+      movesWithNoCandidateAtAnyOffset: parityTimingDiagnostic.aggregates.movesWithNoCandidateAtAnyOffset,
+      commonBestTriggerOffsets: parityTimingDiagnostic.aggregates.commonBestTriggerOffsets,
+      commonT0FailureReasons: parityTimingDiagnostic.aggregates.commonT0FailureReasons,
+    },
+    safestNextRuntimeChange: {
+      previewOnly: true,
+      recommendation: "Use this report to preview disabling weak family/bucket groups before any runtime admission change.",
+      strongestDisableCandidate: whatIfDisabled.sort((a, b) => b.estimatedNetPnlChange - a.estimatedNetPnlChange)[0] ?? null,
+    },
+  };
 
   return {
     symbol: "CRASH300",
@@ -443,7 +668,35 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
       estimatedLossesRemovedByFreshTriggerOnly,
       estimatedTradesAfterOnePerContextEpoch,
       estimatedLossesRemovedByOnePerEpoch,
+      familyBucketDirectionMismatchCount,
+      triggerTradeDirectionMismatchCount,
+      tradeMoveDirectionMismatchCount,
+      recoveryUpFamilyOnDownMoveCount,
+      crashDownFamilyOnUpMoveCount,
     },
+    familyBucketAdmissionAnalysis: {
+      monthAverages: {
+        totalTrades: trades.length,
+        wins: wins.length,
+        losses: totalLosses,
+        winRatePct: overallWinRate * 100,
+        slHitRatePct: overallSlHitRate * 100,
+        targetUnrealisticRatePct: overallTargetUnrealisticRate * 100,
+        wrongDirectionRatePct: overallWrongDirectionRate * 100,
+      },
+      groupedPerformance,
+      weakGroups,
+      directionConsistency: {
+        familyBucketDirectionMismatchCount,
+        triggerTradeDirectionMismatchCount,
+        tradeMoveDirectionMismatchCount,
+        recoveryUpFamilyOnDownMoveCount,
+        crashDownFamilyOnUpMoveCount,
+      },
+      whatIfDisabled,
+    },
+    parityTimingDiagnostic,
+    recommendationReport,
     trades,
   };
 }
