@@ -21,7 +21,7 @@ import { loadCrash300RuntimeEnvelope } from "./model.js";
 import type { ParityMoveVerdict } from "../shared/parityTypes.js";
 import { buildCrash300TriggerSnapshot } from "./trigger.js";
 import { detectCrash300TriggerTransition } from "./triggerSemantics.js";
-import { deriveCrash300RuntimeFamily } from "./familySemantics.js";
+import { deriveCrash300RuntimeFamilyWithSemantics, moveDirectionFromCrash300Family } from "./familySemantics.js";
 import { deriveCrash300RuntimeBucket } from "./bucketSemantics.js";
 
 const SYMBOL = "CRASH300";
@@ -207,6 +207,9 @@ export interface Crash300MovePhaseIdentifiers {
   runtimeFamily: string | null;
   selectedBucket: string | null;
   parityRuntimeFamily: string | null;
+  phaseDerivedFamilyRaw: Crash300PhaseDerivedFamily;
+  phaseDerivedFamilyDirectionCompatible: boolean;
+  phaseDerivedFamilyFinal: Crash300PhaseDerivedFamily;
   phaseDerivedFamily: Crash300PhaseDerivedFamily;
   familySource: "phase-derived" | "parity-only" | "unknown";
   parityFamilyDisagreesWithPhaseFamily: boolean;
@@ -214,6 +217,7 @@ export interface Crash300MovePhaseIdentifiers {
   phaseDerivedBucket: Crash300PhaseDerivedBucket;
   bucketSource: "phase-derived";
   parityBucketMissing: boolean;
+  semanticConflictReasons: string[];
   before: Crash300MovePhaseBefore;
   trigger: Crash300MovePhaseTrigger;
   during: Crash300MovePhaseDuring;
@@ -351,24 +355,6 @@ function parityBucketMissing(value: string | null | undefined): boolean {
   return normalized.length === 0 || normalized === "unknown" || normalized === "none";
 }
 
-function directionFromFamily(family: Crash300PhaseDerivedFamily): "up" | "down" | "unknown" {
-  if (
-    family === "drift_continuation_up" ||
-    family === "post_crash_recovery_up" ||
-    family === "bear_trap_reversal_up"
-  ) {
-    return "up";
-  }
-  if (
-    family === "failed_recovery_short" ||
-    family === "crash_event_down" ||
-    family === "bull_trap_reversal_down"
-  ) {
-    return "down";
-  }
-  return "unknown";
-}
-
 function bucketContextFromFamily(
   family: Crash300PhaseDerivedFamily,
   trigger: Crash300MovePhaseTrigger,
@@ -390,7 +376,7 @@ function buildPhaseDerivedBucket(params: {
   trigger: Crash300MovePhaseTrigger;
   moveSizeBucket: MoveSizeBucket;
 }): Crash300PhaseDerivedBucket {
-  const direction = params.moveDirection === "unknown" ? directionFromFamily(params.family) : params.moveDirection;
+  const direction = params.moveDirection === "unknown" ? moveDirectionFromCrash300Family(params.family) : params.moveDirection;
   const safeDirection = direction === "down" ? "down" : "up";
   const context = bucketContextFromFamily(params.family, params.trigger);
   return `${safeDirection}|${context}|${params.moveSizeBucket}`;
@@ -1080,28 +1066,59 @@ function derivePhaseFamily(params: {
   trigger: Crash300MovePhaseTrigger;
   parityRuntimeFamily: string | null;
 }): {
-  family: Crash300PhaseDerivedFamily;
+  familyRaw: Crash300PhaseDerivedFamily;
+  familyDirectionCompatible: boolean;
+  familyFinal: Crash300PhaseDerivedFamily;
   source: "phase-derived" | "parity-only" | "unknown";
+  semanticConflictReasons: string[];
 } {
   const startContext = params.before.snapshots[params.before.snapshots.length - 1];
   const strongestTrigger = params.trigger.snapshots.find((snapshot) => snapshot.triggerDirection !== "none")
     ?? params.trigger.snapshots.find((snapshot) => snapshot.triggerTransition !== "none")
     ?? null;
   if (startContext && strongestTrigger) {
-    const family = deriveCrash300RuntimeFamily({
+    const family = deriveCrash300RuntimeFamilyWithSemantics({
       context: startContext,
       trigger: strongestTrigger,
       moveDirection: params.move.direction,
     });
-    if (family !== "unknown") {
-      return { family, source: "phase-derived" };
+    if (family.familyRaw !== "unknown") {
+      return {
+        familyRaw: family.familyRaw,
+        familyDirectionCompatible: family.directionCompatible,
+        familyFinal: family.familyFinal,
+        source: "phase-derived",
+        semanticConflictReasons: family.semanticConflictReasons,
+      };
     }
   }
   const parityFamily = toRuntimeFamily(params.parityRuntimeFamily);
   if (parityFamily) {
-    return { family: parityFamily, source: "parity-only" };
+    const parityDirectionCompatible =
+      params.move.direction === "unknown" ||
+      moveDirectionFromCrash300Family(parityFamily) === "unknown" ||
+      moveDirectionFromCrash300Family(parityFamily) === params.move.direction;
+    return {
+      familyRaw: parityFamily,
+      familyDirectionCompatible: parityDirectionCompatible,
+      familyFinal: parityDirectionCompatible ? parityFamily : "unknown",
+      source: "parity-only",
+      semanticConflictReasons: parityDirectionCompatible
+        ? []
+        : [
+          params.move.direction === "up"
+            ? "diagnostic_conflict:down_family_on_up_move"
+            : "diagnostic_conflict:up_family_on_down_move",
+        ],
+    };
   }
-  return { family: "unknown", source: "unknown" };
+  return {
+    familyRaw: "unknown",
+    familyDirectionCompatible: true,
+    familyFinal: "unknown",
+    source: "unknown",
+    semanticConflictReasons: [],
+  };
 }
 
 function deriveLabels(params: {
@@ -1504,7 +1521,7 @@ export async function buildCrash300PhaseIdentifierReport(params: {
     });
     const phaseDerivedBucket = deriveCrash300RuntimeBucket({
       moveDirection: move.direction,
-      family: familyDerivation.family,
+      family: familyDerivation.familyFinal,
       trigger: trigger.snapshots.find((snapshot) => snapshot.triggerDirection !== "none") ?? trigger.snapshots[trigger.snapshots.length - 1]!,
       moveSizeBucket: moveSizeBucket(move.movePct),
     });
@@ -1515,7 +1532,7 @@ export async function buildCrash300PhaseIdentifierReport(params: {
       trigger,
       during,
       after,
-      runtimeFamily: familyDerivation.family,
+      runtimeFamily: familyDerivation.familyFinal,
     });
     const row = {
       moveId: move.id,
@@ -1527,16 +1544,23 @@ export async function buildCrash300PhaseIdentifierReport(params: {
       movePct: move.movePct,
       moveSizeBucket: moveSizeBucket(move.movePct),
       qualityTier: move.qualityTier,
-      runtimeFamily: familyDerivation.family,
+      runtimeFamily: familyDerivation.familyFinal,
       selectedBucket: phaseDerivedBucket,
       parityRuntimeFamily,
-      phaseDerivedFamily: familyDerivation.family,
+      phaseDerivedFamilyRaw: familyDerivation.familyRaw,
+      phaseDerivedFamilyDirectionCompatible: familyDerivation.familyDirectionCompatible,
+      phaseDerivedFamilyFinal: familyDerivation.familyFinal,
+      phaseDerivedFamily: familyDerivation.familyFinal,
       familySource: familyDerivation.source,
-      parityFamilyDisagreesWithPhaseFamily: Boolean(parityRuntimeFamily) && familyDerivation.family !== "unknown" && parityRuntimeFamily !== familyDerivation.family,
+      parityFamilyDisagreesWithPhaseFamily:
+        Boolean(parityRuntimeFamily) &&
+        familyDerivation.familyFinal !== "unknown" &&
+        parityRuntimeFamily !== familyDerivation.familyFinal,
       paritySelectedBucket: parityVerdict?.selectedBucket ?? null,
       phaseDerivedBucket,
       bucketSource: "phase-derived",
       parityBucketMissing: parityBucketMissing(parityVerdict?.selectedBucket ?? null),
+      semanticConflictReasons: familyDerivation.semanticConflictReasons,
       before,
       trigger,
       during,

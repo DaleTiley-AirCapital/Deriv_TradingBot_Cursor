@@ -8,6 +8,7 @@ import type {
   Crash300PhaseDerivedFamily,
   Crash300SemanticTriggerSnapshot,
 } from "./features.js";
+import { moveDirectionFromCrash300Family } from "./familySemantics.js";
 
 export interface Crash300RuntimeBucketResolution {
   phaseDerivedBucket: Crash300PhaseDerivedBucket;
@@ -17,21 +18,11 @@ export interface Crash300RuntimeBucketResolution {
   qualityBand: "A" | "B" | "C";
 }
 
-function directionFromFamily(family: Crash300PhaseDerivedFamily): "up" | "down" | "unknown" {
-  if (
-    family === "drift_continuation_up" ||
-    family === "post_crash_recovery_up" ||
-    family === "bear_trap_reversal_up"
-  ) {
-    return "up";
-  }
-  if (
-    family === "failed_recovery_short" ||
-    family === "crash_event_down" ||
-    family === "bull_trap_reversal_down"
-  ) {
-    return "down";
-  }
+export function directionFromCrash300Bucket(bucket: string | null | undefined): "buy" | "sell" | "unknown" {
+  if (!bucket) return "unknown";
+  const direction = bucket.split("|")[0]?.trim().toLowerCase();
+  if (direction === "up") return "buy";
+  if (direction === "down") return "sell";
   return "unknown";
 }
 
@@ -56,7 +47,7 @@ export function deriveCrash300RuntimeBucket(params: {
   moveSizeBucket: Crash300MoveSizeBucket;
 }): Crash300PhaseDerivedBucket {
   const direction = params.moveDirection === "unknown" || params.moveDirection == null
-    ? directionFromFamily(params.family)
+    ? moveDirectionFromCrash300Family(params.family)
     : params.moveDirection;
   const safeDirection = direction === "down" ? "down" : "up";
   const context = bucketContextFromFamily(params.family, params.trigger);
@@ -82,7 +73,7 @@ function contextCompatibilityOrder(context: Crash300PhaseBucketContext): string[
   }
 }
 
-function parsePhaseBucket(bucket: Crash300PhaseDerivedBucket): {
+export function parseCrash300PhaseBucket(bucket: Crash300PhaseDerivedBucket): {
   direction: "up" | "down";
   context: Crash300PhaseBucketContext;
 } {
@@ -114,7 +105,7 @@ export function resolveCrash300RuntimeBucket(params: {
     };
   }
 
-  const { direction, context } = parsePhaseBucket(params.phaseDerivedBucket);
+  const { direction, context } = parseCrash300PhaseBucket(params.phaseDerivedBucket);
   const qualityBand = scoreToRuntimeQualityBand(params.qualityScore);
   const leadIns = contextCompatibilityOrder(context);
   const candidateKeys = [

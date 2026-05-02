@@ -2,6 +2,8 @@ import { db, detectedMovesTable } from "@workspace/db";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { buildCrash300TradeOutcomeAttributionReport } from "./tradeOutcomeAttribution.js";
 import { runCrash300RuntimeTriggerValidation } from "../../symbol-services/CRASH300/calibration.js";
+import { directionFromCrash300Bucket } from "../../symbol-services/CRASH300/bucketSemantics.js";
+import { directionFromCrash300Family, moveDirectionFromCrash300Family } from "../../symbol-services/CRASH300/familySemantics.js";
 import type { V3BacktestResult } from "./backtestRunner.js";
 
 type AttributionReport = Awaited<ReturnType<typeof buildCrash300TradeOutcomeAttributionReport>>;
@@ -34,6 +36,66 @@ function directionMatches(moveDirection: string | null | undefined, tradeDirecti
   if (moveDirection === "up") return tradeDirection === "buy";
   if (moveDirection === "down") return tradeDirection === "sell";
   return false;
+}
+
+function moveDirectionToTradeDirection(direction: string | null | undefined): "buy" | "sell" | "unknown" {
+  if (direction === "up") return "buy";
+  if (direction === "down") return "sell";
+  return "unknown";
+}
+
+function normalizeMoveDirection(direction: string | null | undefined): "up" | "down" | "unknown" {
+  if (direction === "up" || direction === "down") return direction;
+  return "unknown";
+}
+
+function isSemanticConflictFlag(flag: string): boolean {
+  return [
+    "family_bucket_direction_mismatch",
+    "trigger_trade_direction_mismatch",
+    "trade_move_direction_mismatch",
+    "recovery_up_family_on_down_move",
+    "crash_down_family_on_up_move",
+  ].includes(flag);
+}
+
+function moveValidationConflictReasons(params: {
+  moveDirection: "up" | "down" | "unknown";
+  familyAtT0: string | null;
+  bucketAtT0: string | null;
+  triggerDirectionAtT0: "buy" | "sell" | "none";
+  bestRuntimeFamily: string | null;
+  bestSelectedBucket: string | null;
+}): string[] {
+  const reasons: string[] = [];
+  const expectedTradeDirection = moveDirectionToTradeDirection(params.moveDirection);
+  const t0FamilyDirection = directionFromCrash300Family((params.familyAtT0 as Parameters<typeof directionFromCrash300Family>[0]) ?? "unknown");
+  const t0BucketDirection = directionFromCrash300Bucket(params.bucketAtT0);
+  const bestFamilyMoveDirection = moveDirectionFromCrash300Family((params.bestRuntimeFamily as Parameters<typeof moveDirectionFromCrash300Family>[0]) ?? "unknown");
+  const bestBucketDirection = directionFromCrash300Bucket(params.bestSelectedBucket);
+
+  if (expectedTradeDirection !== "unknown" && params.triggerDirectionAtT0 !== "none" && params.triggerDirectionAtT0 !== expectedTradeDirection) {
+    reasons.push("trigger_trade_direction_mismatch");
+  }
+  if (t0FamilyDirection !== "unknown" && params.triggerDirectionAtT0 !== "none" && t0FamilyDirection !== params.triggerDirectionAtT0) {
+    reasons.push("family_trigger_direction_mismatch");
+  }
+  if (t0BucketDirection !== "unknown" && params.triggerDirectionAtT0 !== "none" && t0BucketDirection !== params.triggerDirectionAtT0) {
+    reasons.push("bucket_trigger_direction_mismatch");
+  }
+  if (t0FamilyDirection !== "unknown" && t0BucketDirection !== "unknown" && t0FamilyDirection !== t0BucketDirection) {
+    reasons.push("family_bucket_direction_mismatch");
+  }
+  if (params.moveDirection === "down" && bestFamilyMoveDirection === "up") {
+    reasons.push("recovery_up_family_on_down_move");
+  }
+  if (params.moveDirection === "up" && bestFamilyMoveDirection === "down") {
+    reasons.push("crash_down_family_on_up_move");
+  }
+  if (expectedTradeDirection !== "unknown" && bestBucketDirection !== "unknown" && bestBucketDirection !== expectedTradeDirection) {
+    reasons.push("trade_move_direction_mismatch");
+  }
+  return [...new Set(reasons)];
 }
 
 function buildNearestRef(trade: AttributionTrade, field: "nearestCalibratedMoveBefore" | "nearestCalibratedMoveAfter") {
@@ -225,6 +287,7 @@ export async function buildCrash300CalibrationReconciliationReport(params: {
 
   const trades = attribution.trades.map((trade) => {
     const relation = relationToMove(trade);
+    const semanticConflictFlags = trade.directionConsistencyFlags.filter(isSemanticConflictFlag);
     return {
       tradeId: trade.tradeId,
       entryTs: trade.entryTs,
@@ -251,6 +314,8 @@ export async function buildCrash300CalibrationReconciliationReport(params: {
       maePct: trade.maePct,
       wouldHaveCapturedMoveIfHeld: wouldHaveCapturedMoveIfHeld(trade),
       wasNoiseTrade: isNoiseTrade(trade),
+      semanticConflictFlags,
+      hasSemanticConflict: semanticConflictFlags.length > 0,
     };
   });
 
@@ -264,11 +329,20 @@ export async function buildCrash300CalibrationReconciliationReport(params: {
   }
 
   const moves = validation.rows.map((row) => {
+    const validationRow = row;
     const moveId = Number(row.moveId);
     const moveMeta = detectedMoveById.get(moveId);
     const linkedTrades = (tradesByMoveId.get(moveId) ?? []).slice().sort((a, b) => a.entryTs - b.entryTs);
     const first = linkedTrades[0] ?? null;
     const wasCaptured = linkedTrades.length > 0;
+    const semanticConflictReasons = moveValidationConflictReasons({
+      moveDirection: normalizeMoveDirection(String(row.moveDirection ?? "unknown")),
+      familyAtT0: typeof row.familyAtT0 === "string" ? row.familyAtT0 : null,
+      bucketAtT0: typeof row.bucketAtT0 === "string" ? row.bucketAtT0 : null,
+      triggerDirectionAtT0: row.triggerDirectionAtT0 === "buy" || row.triggerDirectionAtT0 === "sell" ? row.triggerDirectionAtT0 : "none",
+      bestRuntimeFamily: typeof row.bestRuntimeFamily === "string" ? row.bestRuntimeFamily : null,
+      bestSelectedBucket: typeof row.bestSelectedBucket === "string" ? row.bestSelectedBucket : null,
+    });
     const captureClassification = wasCaptured
       ? classifyCapturedMove(linkedTrades)
       : classifyMissedMove({
@@ -308,7 +382,9 @@ export async function buildCrash300CalibrationReconciliationReport(params: {
       didReach100PctOfMove: first?.reachedProjectedMove100PctBeforeExit ?? false,
       slBeforeMoveReached25PctMfe: first?.exitReason === "sl_hit" && !first.reachedProjectedMove25PctBeforeExit,
       trailingExitedBeforeMoveEnd: first?.trailingExitBeforeCalibratedMoveEnd ?? false,
-      validation,
+      semanticConflictReasons,
+      hasSemanticConflict: semanticConflictReasons.length > 0,
+      validation: validationRow,
     };
   });
 
@@ -339,6 +415,35 @@ export async function buildCrash300CalibrationReconciliationReport(params: {
 
   const slInside = attribution.trades.filter((trade) => trade.exitReason === "sl_hit" && trade.entryInsideCalibratedMoveWindow).length;
   const slOutside = attribution.trades.filter((trade) => trade.exitReason === "sl_hit" && !trade.entryInsideCalibratedMoveWindow).length;
+  const semanticConflictTrades = trades.filter((trade) => trade.hasSemanticConflict);
+  const semanticConflictMoves = moves.filter((move) => move.hasSemanticConflict);
+  const semanticConflictTradeIds = new Set(semanticConflictTrades.map((trade) => String(trade.tradeId)));
+  const hypotheticalConflictBlocked = attribution.trades.filter((trade) => !semanticConflictTradeIds.has(String(trade.tradeId)));
+  const hypotheticalConflictBlockedWins = hypotheticalConflictBlocked.filter((trade) => trade.pnlPct > 0).length;
+  const hypotheticalConflictBlockedLosses = hypotheticalConflictBlocked.length - hypotheticalConflictBlockedWins;
+  const topSemanticConflictMoves = semanticConflictMoves
+    .slice()
+    .sort((a, b) => {
+      const aScore = (a.didHitSL ? 2 : 0) + (a.wasCaptured ? 0 : 1) + a.semanticConflictReasons.length;
+      const bScore = (b.didHitSL ? 2 : 0) + (b.wasCaptured ? 0 : 1) + b.semanticConflictReasons.length;
+      return bScore - aScore;
+    })
+    .slice(0, 20)
+    .map((move) => ({
+      moveId: move.moveId,
+      direction: move.direction,
+      movePct: move.movePct,
+      phaseDerivedFamily: move.phaseDerivedFamily,
+      phaseDerivedBucket: move.phaseDerivedBucket,
+      triggerDirectionAtT0: typeof move.validation?.triggerDirectionAtT0 === "string" ? move.validation.triggerDirectionAtT0 : null,
+      familyAtT0: typeof move.validation?.familyAtT0 === "string" ? move.validation.familyAtT0 : null,
+      bucketAtT0: typeof move.validation?.bucketAtT0 === "string" ? move.validation.bucketAtT0 : null,
+      bestTriggerOffset: typeof move.validation?.bestTriggerOffset === "string" ? move.validation.bestTriggerOffset : null,
+      bestRuntimeFamily: typeof move.validation?.bestRuntimeFamily === "string" ? move.validation.bestRuntimeFamily : null,
+      bestSelectedBucket: typeof move.validation?.bestSelectedBucket === "string" ? move.validation.bestSelectedBucket : null,
+      whyT0Failed: typeof move.validation?.failReasonAtT0 === "string" ? move.validation.failReasonAtT0 : null,
+      semanticConflictReasons: move.semanticConflictReasons,
+    }));
 
   const allocationSimulations = {
     fixed15Pct: simulateAllocation(attribution.trades, {
@@ -447,6 +552,23 @@ export async function buildCrash300CalibrationReconciliationReport(params: {
       noiseTradeCount: noiseTrades.length,
       noiseTradeWins: noiseTrades.filter((trade) => trade.wasProfitable).length,
       noiseTradeLosses: noiseTrades.filter((trade) => !trade.wasProfitable).length,
+      semanticConflictMoves: semanticConflictMoves.length,
+      semanticConflictTrades: semanticConflictTrades.length,
+      semanticConflictSlHits: semanticConflictTrades.filter((trade) => trade.exitReason === "sl_hit").length,
+      semanticConflictWins: semanticConflictTrades.filter((trade) => trade.wasProfitable).length,
+      semanticConflictLosses: semanticConflictTrades.filter((trade) => !trade.wasProfitable).length,
+      topSemanticConflictMoves,
+      hypotheticalResultIfSemanticConflictsBlocked: {
+        remainingTrades: hypotheticalConflictBlocked.length,
+        removedTrades: semanticConflictTrades.length,
+        wins: hypotheticalConflictBlockedWins,
+        losses: hypotheticalConflictBlockedLosses,
+        removedWins: semanticConflictTrades.filter((trade) => trade.wasProfitable).length,
+        removedLosses: semanticConflictTrades.filter((trade) => !trade.wasProfitable).length,
+        removedSlHits: semanticConflictTrades.filter((trade) => trade.exitReason === "sl_hit").length,
+        newWinRate: hypotheticalConflictBlocked.length > 0 ? hypotheticalConflictBlockedWins / hypotheticalConflictBlocked.length : 0,
+        estimatedSummedTradePnlPct: hypotheticalConflictBlocked.reduce((sum, trade) => sum + trade.pnlPct, 0),
+      },
       slHitsInsideCalibratedMoves: slInside,
       slHitsOutsideCalibratedMoves: slOutside,
       missedMovesByFamilyBucketDirection: missedByGroup,

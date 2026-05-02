@@ -17,8 +17,8 @@ import {
 import { buildCrash300ContextSnapshot } from "./context.js";
 import { buildCrash300TriggerSnapshot } from "./trigger.js";
 import { detectCrash300TriggerTransition } from "./triggerSemantics.js";
-import { deriveCrash300RuntimeFamily } from "./familySemantics.js";
-import { resolveCrash300RuntimeBucketForFamily } from "./bucketSemantics.js";
+import { deriveCrash300RuntimeFamilyWithSemantics } from "./familySemantics.js";
+import { directionFromCrash300Bucket, resolveCrash300RuntimeBucketForFamily } from "./bucketSemantics.js";
 
 const SYMBOL = "CRASH300";
 const SERVICE = "crash300_service";
@@ -404,6 +404,9 @@ function failDecision(params: {
   wouldBlockLateAfterMoveWindow?: boolean;
   familySource?: string | null;
   bucketSource?: string | null;
+  familyDirection?: "buy" | "sell" | "unknown";
+  bucketDirection?: "buy" | "sell" | "unknown";
+  candidateDirection?: "buy" | "sell" | null;
   thresholdSource?: Crash300ThresholdSource;
   runtimeModelBucketKey?: string | null;
 }): SymbolDecisionResult {
@@ -426,6 +429,9 @@ function failDecision(params: {
       selectedBucket: params.bucket ?? null,
       familySource: params.familySource ?? null,
       bucketSource: params.bucketSource ?? null,
+      familyDirection: params.familyDirection ?? "unknown",
+      bucketDirection: params.bucketDirection ?? "unknown",
+      candidateDirection: params.candidateDirection ?? params.direction ?? null,
       thresholdSource: params.thresholdSource ?? thresholdSource(params.runtimeCalibration),
       runtimeModelBucketKey: params.runtimeModelBucketKey ?? null,
       leadInShape: params.context ? leadInShapeFromContext(params.context) : "all",
@@ -677,21 +683,28 @@ export async function evaluateCrash300Runtime(
     });
   }
 
-  const derivedFamily = deriveCrash300RuntimeFamily({
+  const familySemantics = deriveCrash300RuntimeFamilyWithSemantics({
     context: contextSnapshot,
     trigger: triggerSnapshot,
   });
+  const derivedFamily = familySemantics.familyFinal;
   if (derivedFamily === "unknown") {
     invalidateEpoch(runtimeState);
     return failDecision({
       runtimeCalibration,
       direction: triggerSnapshot.triggerDirection === "buy" ? "buy" : triggerSnapshot.triggerDirection === "sell" ? "sell" : null,
+      family: familySemantics.familyRaw === "unknown" ? undefined : familySemantics.familyRaw,
       context: contextSnapshot,
       trigger: triggerSnapshot,
       setupMatch: provisionalScore,
       confidence: provisionalScore * 0.7,
+      familySource: "phase_derived_trigger_semantics",
+      familyDirection: familySemantics.familyDirection,
+      candidateDirection: triggerSnapshot.triggerDirection,
       thresholdSource: thresholdOrigin,
-      failReasons: ["no_context_match"],
+      failReasons: familySemantics.semanticConflictReasons.length > 0
+        ? [...familySemantics.semanticConflictReasons, "no_context_match"]
+        : ["no_context_match"],
       candidateProduced: false,
     });
   }
@@ -726,7 +739,11 @@ export async function evaluateCrash300Runtime(
   const epochAnchorTs = resolveEpochAnchorTs(contextSnapshot, context.ts, derivedFamily);
   const epoch = ensureEpoch(runtimeState, context.ts, derivedFamily, bucketResolution.phaseDerivedBucket, direction, epochAnchorTs);
   const epochAgeBars = Math.max(0, Math.round((context.ts - epoch.startTs) / 60));
-  const triggerDirectionMismatch = triggerSnapshot.triggerDirection !== direction;
+  const familyDirection = familySemantics.familyDirection;
+  const bucketDirection = directionFromCrash300Bucket(bucketResolution.phaseDerivedBucket);
+  const familyTriggerDirectionMismatch = familyDirection !== "unknown" && familyDirection !== direction;
+  const bucketTriggerDirectionMismatch = bucketDirection !== "unknown" && bucketDirection !== direction;
+  const familyBucketDirectionMismatch = familyDirection !== "unknown" && bucketDirection !== "unknown" && familyDirection !== bucketDirection;
   const componentScoreMap = componentScores(contextSnapshot, triggerSnapshot, derivedFamily);
 
   runtimeState.lastValidTriggerTs = context.ts;
@@ -734,7 +751,7 @@ export async function evaluateCrash300Runtime(
   runtimeState.lastValidTriggerStrength = triggerSnapshot.triggerStrengthScore;
   epoch.lastTriggerTs = context.ts;
 
-  if (triggerDirectionMismatch) {
+  if (familyTriggerDirectionMismatch || bucketTriggerDirectionMismatch || familyBucketDirectionMismatch) {
     return failDecision({
       runtimeCalibration,
       direction,
@@ -757,7 +774,14 @@ export async function evaluateCrash300Runtime(
       runtimeModelBucketKey: bucketResolution.runtimeModelBucketKey,
       familySource: "phase_derived_trigger_semantics",
       bucketSource: bucketResolution.bucketSource,
-      failReasons: ["trigger_direction_mismatch"],
+      familyDirection,
+      bucketDirection,
+      candidateDirection: direction,
+      failReasons: [
+        ...(familyTriggerDirectionMismatch ? ["family_trigger_direction_mismatch"] : []),
+        ...(bucketTriggerDirectionMismatch ? ["bucket_trigger_direction_mismatch"] : []),
+        ...(familyBucketDirectionMismatch ? ["family_bucket_direction_mismatch"] : []),
+      ],
       candidateProduced: false,
     });
   }
@@ -782,6 +806,9 @@ export async function evaluateCrash300Runtime(
       runtimeModelBucketKey: bucketResolution.runtimeModelBucketKey,
       familySource: "phase_derived_trigger_semantics",
       bucketSource: bucketResolution.bucketSource,
+      familyDirection,
+      bucketDirection,
+      candidateDirection: direction,
       failReasons: ["trigger_below_model_threshold"],
       candidateProduced: false,
     });
@@ -811,6 +838,9 @@ export async function evaluateCrash300Runtime(
       runtimeModelBucketKey: bucketResolution.runtimeModelBucketKey,
       familySource: "phase_derived_trigger_semantics",
       bucketSource: bucketResolution.bucketSource,
+      familyDirection,
+      bucketDirection,
+      candidateDirection: direction,
       failReasons: ["duplicate_signal_same_context_epoch"],
       candidateProduced: false,
     });
@@ -845,6 +875,8 @@ export async function evaluateCrash300Runtime(
       selectedBucket: bucketResolution.phaseDerivedBucket,
       familySource: "phase_derived_trigger_semantics",
       bucketSource: bucketResolution.bucketSource,
+      familyDirection,
+      bucketDirection,
       thresholdSource: thresholdOrigin,
       runtimeModelBucketKey: bucketResolution.runtimeModelBucketKey,
       leadInShape: leadInShapeFromContext(contextSnapshot),

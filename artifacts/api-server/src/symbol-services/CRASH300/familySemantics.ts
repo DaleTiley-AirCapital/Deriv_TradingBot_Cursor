@@ -4,6 +4,43 @@ import type {
   Crash300SemanticTriggerSnapshot,
 } from "./features.js";
 
+export type Crash300FamilyTradeDirection = "buy" | "sell" | "unknown";
+export type Crash300FamilyMoveDirection = "up" | "down" | "unknown";
+
+export type Crash300FamilyDerivation = {
+  familyRaw: Crash300PhaseDerivedFamily;
+  familyDirection: Crash300FamilyTradeDirection;
+  familyMoveDirection: Crash300FamilyMoveDirection;
+  directionCompatible: boolean;
+  familyFinal: Crash300PhaseDerivedFamily;
+  semanticConflictReasons: string[];
+};
+
+export function directionFromCrash300Family(family: Crash300PhaseDerivedFamily): Crash300FamilyTradeDirection {
+  if (
+    family === "drift_continuation_up" ||
+    family === "post_crash_recovery_up" ||
+    family === "bear_trap_reversal_up"
+  ) {
+    return "buy";
+  }
+  if (
+    family === "failed_recovery_short" ||
+    family === "crash_event_down" ||
+    family === "bull_trap_reversal_down"
+  ) {
+    return "sell";
+  }
+  return "unknown";
+}
+
+export function moveDirectionFromCrash300Family(family: Crash300PhaseDerivedFamily): Crash300FamilyMoveDirection {
+  const tradeDirection = directionFromCrash300Family(family);
+  if (tradeDirection === "buy") return "up";
+  if (tradeDirection === "sell") return "down";
+  return "unknown";
+}
+
 export function deriveCrash300RuntimeFamily(params: {
   context: Crash300ContextSnapshot;
   trigger: Crash300SemanticTriggerSnapshot;
@@ -59,4 +96,36 @@ export function deriveCrash300RuntimeFamily(params: {
   }
 
   return "unknown";
+}
+
+export function deriveCrash300RuntimeFamilyWithSemantics(params: {
+  context: Crash300ContextSnapshot;
+  trigger: Crash300SemanticTriggerSnapshot;
+  moveDirection?: "up" | "down" | "unknown";
+}): Crash300FamilyDerivation {
+  const familyRaw = deriveCrash300RuntimeFamily(params);
+  const familyDirection = directionFromCrash300Family(familyRaw);
+  const familyMoveDirection = moveDirectionFromCrash300Family(familyRaw);
+  const moveDirection = params.moveDirection ?? "unknown";
+  const semanticConflictReasons: string[] = [];
+  const directionCompatible =
+    moveDirection === "unknown" ||
+    familyMoveDirection === "unknown" ||
+    familyMoveDirection === moveDirection;
+
+  if (!directionCompatible && moveDirection === "up" && familyMoveDirection === "down") {
+    semanticConflictReasons.push("diagnostic_conflict:down_family_on_up_move");
+  }
+  if (!directionCompatible && moveDirection === "down" && familyMoveDirection === "up") {
+    semanticConflictReasons.push("diagnostic_conflict:up_family_on_down_move");
+  }
+
+  return {
+    familyRaw,
+    familyDirection,
+    familyMoveDirection,
+    directionCompatible,
+    familyFinal: directionCompatible ? familyRaw : "unknown",
+    semanticConflictReasons,
+  };
 }
