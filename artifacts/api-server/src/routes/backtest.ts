@@ -20,6 +20,7 @@ import { buildCrash300CalibrationReconciliationReport } from "../core/backtest/c
 import { ACTIVE_SYMBOLS } from "../core/engineTypes.js";
 
 const router: IRouter = Router();
+let v3BacktestJobsSchemaPromise: Promise<void> | null = null;
 
 export { runBacktestSimulation } from "../runtimes/backtestEngine.js";
 
@@ -145,30 +146,65 @@ async function ensureV3BacktestRunsTable(): Promise<void> {
 }
 
 async function ensureV3BacktestJobsTable(): Promise<void> {
-  await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS v3_backtest_jobs (
-      id serial PRIMARY KEY,
-      symbol text NOT NULL,
-      start_ts integer NOT NULL,
-      end_ts integer NOT NULL,
-      mode text NOT NULL,
-      tier_mode text NOT NULL DEFAULT 'ALL',
-      params jsonb NOT NULL,
-      status text NOT NULL DEFAULT 'queued',
-      phase text NOT NULL DEFAULT 'queued',
-      progress_pct integer NOT NULL DEFAULT 0,
-      message text,
-      error_summary jsonb,
-      result_summary jsonb,
-      persisted_run_ids jsonb,
-      created_at timestamptz NOT NULL DEFAULT now(),
-      started_at timestamptz,
-      completed_at timestamptz,
-      last_heartbeat_at timestamptz
-    )
-  `);
-  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v3_backtest_jobs_symbol_created ON v3_backtest_jobs(symbol, created_at DESC)`);
-  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v3_backtest_jobs_status ON v3_backtest_jobs(status, created_at DESC)`);
+  if (v3BacktestJobsSchemaPromise) {
+    return v3BacktestJobsSchemaPromise;
+  }
+  v3BacktestJobsSchemaPromise = (async () => {
+    try {
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS v3_backtest_jobs (
+          id serial PRIMARY KEY,
+          symbol text NOT NULL,
+          start_ts integer NOT NULL,
+          end_ts integer NOT NULL,
+          mode text NOT NULL,
+          tier_mode text NOT NULL DEFAULT 'ALL',
+          params jsonb,
+          status text NOT NULL DEFAULT 'queued',
+          phase text NOT NULL DEFAULT 'queued',
+          progress_pct integer NOT NULL DEFAULT 0,
+          message text,
+          error_summary jsonb,
+          result_summary jsonb,
+          persisted_run_ids jsonb,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          started_at timestamptz,
+          completed_at timestamptz,
+          last_heartbeat_at timestamptz
+        )
+      `);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS symbol text`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS start_ts integer`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS end_ts integer`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS mode text`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS tier_mode text`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS params jsonb`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS status text`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS phase text`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS progress_pct integer`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS message text`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS error_summary jsonb`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS result_summary jsonb`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS persisted_run_ids jsonb`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS created_at timestamptz`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS started_at timestamptz`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS completed_at timestamptz`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at timestamptz`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ALTER COLUMN tier_mode SET DEFAULT 'ALL'`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ALTER COLUMN status SET DEFAULT 'queued'`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ALTER COLUMN phase SET DEFAULT 'queued'`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ALTER COLUMN progress_pct SET DEFAULT 0`);
+      await db.execute(sql`ALTER TABLE v3_backtest_jobs ALTER COLUMN created_at SET DEFAULT now()`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v3_backtest_jobs_symbol_created ON v3_backtest_jobs(symbol, created_at DESC)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v3_backtest_jobs_status ON v3_backtest_jobs(status, created_at DESC)`);
+    } catch (err) {
+      v3BacktestJobsSchemaPromise = null;
+      const message = err instanceof Error ? err.message : "unknown schema bootstrap error";
+      console.error("[backtest/v3/jobs/schema] bootstrap failed:", message);
+      throw new Error(`V3 backtest job schema is not ready: ${message}`);
+    }
+  })();
+  return v3BacktestJobsSchemaPromise;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -760,7 +796,6 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
 
   try {
     await ensureV3BacktestRunsTable();
-    await ensureV3BacktestJobsTable();
     let results: Record<string, unknown>;
 
     const mode = req.body?.mode;
@@ -966,6 +1001,34 @@ router.get("/backtest/v3/history/compare", async (req, res): Promise<void> => {
     const message = err instanceof Error ? err.message : "Failed to compare V3 backtest runs";
     console.error(`[backtest/v3/history/compare] error:`, message);
     res.status(500).json({ error: message });
+  }
+});
+
+router.get("/backtest/v3/jobs/schema-status", async (_req, res): Promise<void> => {
+  try {
+    await ensureV3BacktestJobsTable();
+    const rows = await db.execute(sql`
+      SELECT
+        column_name AS "columnName",
+        data_type AS "dataType"
+      FROM information_schema.columns
+      WHERE table_name = 'v3_backtest_jobs'
+      ORDER BY ordinal_position
+    `);
+    res.json({
+      ok: true,
+      ready: true,
+      table: "v3_backtest_jobs",
+      columns: rows.rows,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "V3 backtest job schema check failed";
+    res.status(500).json({
+      ok: false,
+      ready: false,
+      table: "v3_backtest_jobs",
+      error: message,
+    });
   }
 });
 

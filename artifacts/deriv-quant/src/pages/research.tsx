@@ -1109,6 +1109,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const [latestPersistedRunIds, setLatestPersistedRunIds] = useState<Record<string, number>>({});
   const [historyRunLoadError, setHistoryRunLoadError] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<V3BacktestJobStatus | null>(null);
+  const [jobAdminDiagnostic, setJobAdminDiagnostic] = useState<string | null>(null);
   const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startingCapitalUsd = 600;
@@ -1242,20 +1243,24 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
         if (job.status === "completed") {
           stopJobPolling();
           stopRunTimers();
-          const resultResp = await apiFetch(`backtest/v3/jobs/${jobId}/result`) as {
-            result?: {
-              persistedRunIds?: Record<string, number>;
-              summaryBySymbol?: Record<string, unknown>;
+          try {
+            const resultResp = await apiFetch(`backtest/v3/jobs/${jobId}/result`) as {
+              result?: {
+                persistedRunIds?: Record<string, number>;
+                summaryBySymbol?: Record<string, unknown>;
+              };
             };
-          };
-          const persisted = resultResp.result?.persistedRunIds ?? {};
-          setLatestPersistedRunIds(persisted);
-          await loadBacktestHistory(targetSymbol, true);
-          const runId = persisted[targetSymbol];
-          if (runId) {
-            await loadBacktestHistoryRun(runId);
-          } else {
-            setErr(`Backtest completed for ${targetSymbol}, but no persisted run id was returned.`);
+            const persisted = resultResp.result?.persistedRunIds ?? {};
+            setLatestPersistedRunIds(persisted);
+            await loadBacktestHistory(targetSymbol, true);
+            const runId = persisted[targetSymbol];
+            if (runId) {
+              await loadBacktestHistoryRun(runId);
+            } else {
+              setJobAdminDiagnostic(`Backtest job ${jobId} completed, but no persisted run id was returned for ${targetSymbol}.`);
+            }
+          } catch (e: any) {
+            setJobAdminDiagnostic(e?.message ?? `Backtest job ${jobId} completed, but persisted result retrieval failed.`);
           }
           return;
         }
@@ -1267,7 +1272,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       } catch (e: any) {
         stopJobPolling();
         stopRunTimers();
-        setErr(e?.message ?? "Failed to poll long backtest job");
+        setJobAdminDiagnostic(e?.message ?? "Failed to poll long backtest job");
       }
     };
     void tick();
@@ -1278,6 +1283,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     setRunning(true);
     setErr(null);
     setHistoryRunLoadError(null);
+    setJobAdminDiagnostic(null);
     setResults(null);
     setTierSweep(null);
     setActiveJob(null);
@@ -1772,6 +1778,13 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
                 <span>Completed: <span className="text-foreground">{new Date(activeJob.completedAt).toLocaleTimeString()}</span></span>
               )}
             </div>
+          </div>
+        )}
+
+        {jobAdminDiagnostic && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+            <p className="text-xs font-semibold text-amber-200">Backtest job admin diagnostic</p>
+            <p className="text-[11px] text-amber-100/90 mt-1">{jobAdminDiagnostic}</p>
           </div>
         )}
 
