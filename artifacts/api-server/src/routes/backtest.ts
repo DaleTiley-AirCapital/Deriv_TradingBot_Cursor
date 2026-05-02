@@ -452,6 +452,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
     startTs,
     endTs,
     tierMode = "ALL",
+    crash300AdmissionPolicy = null,
   } = req.body ?? {};
 
   const validSymbols = [...ACTIVE_SYMBOLS, "all"];
@@ -497,6 +498,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
         parsedEnd,
         mode,
         normalizedTierMode as "A" | "AB" | "ABC" | "ALL",
+        crash300AdmissionPolicy,
       );
       results = multi as Record<string, unknown>;
     } else {
@@ -506,6 +508,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
         endTs: parsedEnd,
         mode,
         tierMode: normalizedTierMode as "A" | "AB" | "ABC" | "ALL",
+        crash300AdmissionPolicy,
       });
       results = { [symbol]: single };
     }

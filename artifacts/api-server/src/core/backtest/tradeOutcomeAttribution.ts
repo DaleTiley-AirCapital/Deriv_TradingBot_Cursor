@@ -91,6 +91,9 @@ type AttributionTradeRow = {
   wouldBlockDuplicateEpoch: boolean | null;
   wouldBlockDirectionMismatch: boolean | null;
   wouldBlockLateAfterMoveWindow: boolean | null;
+  admissionPolicyWouldBlock: boolean | null;
+  admissionPolicyBlockedReasons: string[] | null;
+  admissionPolicyMode: string | null;
   familyDirection: "buy" | "sell" | "unknown";
   bucketDirection: "buy" | "sell" | "unknown";
   moveExpectedDirection: "buy" | "sell" | "unknown";
@@ -396,6 +399,9 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
       wouldBlockDuplicateEpoch: trade.wouldBlockDuplicateEpoch ?? null,
       wouldBlockDirectionMismatch: trade.wouldBlockDirectionMismatch ?? null,
       wouldBlockLateAfterMoveWindow: trade.wouldBlockLateAfterMoveWindow ?? null,
+      admissionPolicyWouldBlock: trade.admissionPolicyWouldBlock ?? null,
+      admissionPolicyBlockedReasons: trade.admissionPolicyBlockedReasons ?? null,
+      admissionPolicyMode: trade.admissionPolicyMode ?? null,
       familyDirection: derivedFamilyDirection,
       bucketDirection: derivedBucketDirection,
       moveExpectedDirection: matchedMoveDirection,
@@ -636,6 +642,7 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
       totals: parity.totals,
       diagnostics: parity.diagnostics,
     },
+    admissionPolicy: params.result.admissionPolicy,
     summary: {
       totalTrades: trades.length,
       byRuntimeFamily,

@@ -65,6 +65,13 @@ import {
 import { buildSymbolTradeCandidate } from "../symbolModels/candidateBuilder.js";
 import { evaluateCrash300Runtime, coordinatorFromCrash300Decision } from "../../symbol-services/CRASH300/engine.js";
 import type { Crash300RuntimeState } from "../../symbol-services/CRASH300/features.js";
+import {
+  DEFAULT_CRASH300_ADMISSION_POLICY,
+  evaluateCrash300AdmissionPolicy,
+  normalizeCrash300AdmissionPolicyConfig,
+  type Crash300AdmissionPolicyConfig,
+  type Crash300AdmissionPolicyMode,
+} from "../../symbol-services/CRASH300/admissionPolicy.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "../../infrastructure/deriv.js";
 import {
   getLiveCalibrationProfile,
@@ -140,6 +147,9 @@ export interface V3BacktestTrade {
   wouldBlockDuplicateEpoch?: boolean | null;
   wouldBlockDirectionMismatch?: boolean | null;
   wouldBlockLateAfterMoveWindow?: boolean | null;
+  admissionPolicyWouldBlock?: boolean | null;
+  admissionPolicyBlockedReasons?: string[] | null;
+  admissionPolicyMode?: Crash300AdmissionPolicyMode | null;
 }
 
 export interface V3BacktestResult {
@@ -165,6 +175,19 @@ export interface V3BacktestResult {
     tpBucketCount: number;
     dynamicTpEnabled: boolean;
     scoringSourceCounts: Record<string, number>;
+  };
+  admissionPolicy: {
+    enabled: boolean;
+    mode: Crash300AdmissionPolicyMode;
+    config: Crash300AdmissionPolicyConfig;
+    candidatesBlockedByAdmissionPolicy: number;
+    blockedReasonsCounts: Record<string, number>;
+    tradesWouldHaveBeenBlocked: number;
+    winsBlocked: number | null;
+    lossesBlocked: number | null;
+    slHitsBlocked: number | null;
+    resultingWinRate: number | null;
+    resultingTradeCount: number | null;
   };
   trades: V3BacktestTrade[];
   /**
@@ -212,6 +235,17 @@ export interface V3BacktestResult {
     byExitReason: Record<string, number>;
     bySlStage: Record<string, number>;
     byRegime: Record<string, { count: number; wins: number; winRate: number }>;
+    admissionPolicyEnabled?: boolean;
+    admissionPolicyMode?: Crash300AdmissionPolicyMode;
+    admissionPolicyConfig?: Crash300AdmissionPolicyConfig;
+    candidatesBlockedByAdmissionPolicy?: number;
+    blockedReasonsCounts?: Record<string, number>;
+    tradesWouldHaveBeenBlocked?: number;
+    winsBlocked?: number | null;
+    lossesBlocked?: number | null;
+    slHitsBlocked?: number | null;
+    resultingWinRate?: number | null;
+    resultingTradeCount?: number | null;
   };
 }
 
@@ -222,6 +256,7 @@ export interface V3BacktestRequest {
   mode?: "paper" | "demo" | "real";
   tierMode?: BacktestTierMode;
   runtimeCalibrationOverride?: LiveCalibrationProfile | null;
+  crash300AdmissionPolicy?: Partial<Crash300AdmissionPolicyConfig> | null;
 }
 
 export type BacktestTierMode = "A" | "AB" | "ABC" | "ALL";
@@ -304,6 +339,9 @@ interface SymCtx {
   scoringSourceCounts: Record<string, number>;
   candidateWindows: Map<string, ReplayCandidateWindow>;
   crash300RuntimeState?: Crash300RuntimeState;
+  detectedMoves: Array<{ startTs: number; endTs: number; direction: "up" | "down" | "unknown" }>;
+  admissionPolicyBlockedCandidates: number;
+  admissionPolicyBlockedReasonsCounts: Record<string, number>;
   runtimeCalibration: LiveCalibrationProfile | null;
   runtimeCalibrationResolution: LiveCalibrationProfileResolution | null;
   trailingActivationThresholdPct?: number;
@@ -376,6 +414,7 @@ function percentile(sorted: number[], p: number): number {
 function computeSummary(
   trades: V3BacktestTrade[],
   blockedByEngine: Record<string, number>,
+  admissionPolicyMeta?: V3BacktestResult["admissionPolicy"],
 ): V3BacktestResult["summary"] {
   if (trades.length === 0) {
     return {
@@ -387,6 +426,17 @@ function computeSummary(
       maePctP25: 0, maePctP50: 0, maePctP75: 0, maePctP90: 0,
       barsToMfeP50: 0,
       byEngine: {}, byExitReason: {}, bySlStage: {}, byRegime: {},
+      admissionPolicyEnabled: admissionPolicyMeta?.enabled ?? false,
+      admissionPolicyMode: admissionPolicyMeta?.mode ?? "off",
+      admissionPolicyConfig: admissionPolicyMeta?.config ?? DEFAULT_CRASH300_ADMISSION_POLICY,
+      candidatesBlockedByAdmissionPolicy: admissionPolicyMeta?.candidatesBlockedByAdmissionPolicy ?? 0,
+      blockedReasonsCounts: admissionPolicyMeta?.blockedReasonsCounts ?? {},
+      tradesWouldHaveBeenBlocked: admissionPolicyMeta?.tradesWouldHaveBeenBlocked ?? 0,
+      winsBlocked: admissionPolicyMeta?.winsBlocked ?? null,
+      lossesBlocked: admissionPolicyMeta?.lossesBlocked ?? null,
+      slHitsBlocked: admissionPolicyMeta?.slHitsBlocked ?? null,
+      resultingWinRate: admissionPolicyMeta?.resultingWinRate ?? 0,
+      resultingTradeCount: admissionPolicyMeta?.resultingTradeCount ?? 0,
     };
   }
 
@@ -476,6 +526,17 @@ function computeSummary(
     byExitReason,
     bySlStage,
     byRegime,
+    admissionPolicyEnabled: admissionPolicyMeta?.enabled ?? false,
+    admissionPolicyMode: admissionPolicyMeta?.mode ?? "off",
+    admissionPolicyConfig: admissionPolicyMeta?.config ?? DEFAULT_CRASH300_ADMISSION_POLICY,
+    candidatesBlockedByAdmissionPolicy: admissionPolicyMeta?.candidatesBlockedByAdmissionPolicy ?? 0,
+    blockedReasonsCounts: admissionPolicyMeta?.blockedReasonsCounts ?? {},
+    tradesWouldHaveBeenBlocked: admissionPolicyMeta?.tradesWouldHaveBeenBlocked ?? 0,
+    winsBlocked: admissionPolicyMeta?.winsBlocked ?? null,
+    lossesBlocked: admissionPolicyMeta?.lossesBlocked ?? null,
+    slHitsBlocked: admissionPolicyMeta?.slHitsBlocked ?? null,
+    resultingWinRate: admissionPolicyMeta?.resultingWinRate ?? (trades.length > 0 ? wins.length / trades.length : 0),
+    resultingTradeCount: admissionPolicyMeta?.resultingTradeCount ?? trades.length,
   };
 }
 
@@ -578,6 +639,9 @@ interface OpenTradeState {
   wouldBlockDuplicateEpoch?: boolean | null;
   wouldBlockDirectionMismatch?: boolean | null;
   wouldBlockLateAfterMoveWindow?: boolean | null;
+  admissionPolicyWouldBlock?: boolean | null;
+  admissionPolicyBlockedReasons?: string[] | null;
+  admissionPolicyMode?: Crash300AdmissionPolicyMode | null;
 }
 
 interface BacktestTrailingConfig {
@@ -631,6 +695,86 @@ function runtimeModelDiagnostics(
     tpBucketCount,
     dynamicTpEnabled: runtimeCalibration?.tpModel?.["dynamicByQualityLeadIn"] === true && tpBucketCount > 0,
     scoringSourceCounts,
+  };
+}
+
+type PolicyDetectedMove = {
+  startTs: number;
+  endTs: number;
+  direction: "up" | "down" | "unknown";
+};
+
+function normalizePolicyMoveDirection(value: unknown): "up" | "down" | "unknown" {
+  if (value === "up" || value === "down") return value;
+  return "unknown";
+}
+
+function familyDirectionForAdmission(runtimeFamily: string | null | undefined): "buy" | "sell" | "unknown" {
+  const family = String(runtimeFamily ?? "").trim().toLowerCase();
+  if (["drift_continuation_up", "post_crash_recovery_up", "bear_trap_reversal_up"].includes(family)) return "buy";
+  if (["failed_recovery_short", "crash_event_down", "bull_trap_reversal_down"].includes(family)) return "sell";
+  return "unknown";
+}
+
+function bucketDirectionForAdmission(selectedBucket: string | null | undefined): "buy" | "sell" | "unknown" {
+  const direction = String(selectedBucket ?? "").trim().split("|")[0] ?? "";
+  if (direction === "up") return "buy";
+  if (direction === "down") return "sell";
+  return "unknown";
+}
+
+function matchDetectedMoveForAdmission(
+  entryTs: number,
+  tradeDirection: "buy" | "sell",
+  moves: PolicyDetectedMove[],
+): PolicyDetectedMove | null {
+  const expectedDirection = tradeDirection === "buy" ? "up" : "down";
+  const inside = moves.filter((move) => entryTs >= move.startTs && entryTs <= move.endTs);
+  const insideSameDirection = inside.filter((move) => move.direction === expectedDirection);
+  if (insideSameDirection.length > 0) {
+    return insideSameDirection.sort((a, b) => Math.abs(entryTs - a.startTs) - Math.abs(entryTs - b.startTs))[0] ?? null;
+  }
+  if (inside.length > 0) {
+    return inside.sort((a, b) => Math.abs(entryTs - a.startTs) - Math.abs(entryTs - b.startTs))[0] ?? null;
+  }
+  const sameDirection = moves.filter((move) => move.direction === expectedDirection);
+  const source = sameDirection.length > 0 ? sameDirection : moves;
+  return source.sort((a, b) => Math.abs(entryTs - a.startTs) - Math.abs(entryTs - b.startTs))[0] ?? null;
+}
+
+function bumpReasonCounts(target: Record<string, number>, reasons: string[]) {
+  for (const reason of reasons) {
+    target[reason] = (target[reason] ?? 0) + 1;
+  }
+}
+
+function buildAdmissionPolicyMeta(params: {
+  config: Crash300AdmissionPolicyConfig;
+  trades: V3BacktestTrade[];
+  blockedCandidateCount: number;
+  blockedReasonsCounts: Record<string, number>;
+}): V3BacktestResult["admissionPolicy"] {
+  const { config, trades, blockedCandidateCount, blockedReasonsCounts } = params;
+  const wouldBlockTrades = trades.filter((trade) => trade.admissionPolicyWouldBlock === true);
+  const remainingTrades = config.enabled && config.mode === "preview"
+    ? trades.filter((trade) => trade.admissionPolicyWouldBlock !== true)
+    : trades;
+  const remainingWins = remainingTrades.filter((trade) => trade.pnlPct > 0).length;
+  const winsBlocked = wouldBlockTrades.filter((trade) => trade.pnlPct > 0).length;
+  const lossesBlocked = wouldBlockTrades.filter((trade) => trade.pnlPct <= 0).length;
+  const slHitsBlocked = wouldBlockTrades.filter((trade) => trade.exitReason === "sl_hit").length;
+  return {
+    enabled: config.enabled,
+    mode: config.enabled ? config.mode : "off",
+    config,
+    candidatesBlockedByAdmissionPolicy: Math.max(blockedCandidateCount, wouldBlockTrades.length),
+    blockedReasonsCounts,
+    tradesWouldHaveBeenBlocked: wouldBlockTrades.length,
+    winsBlocked: config.enabled ? winsBlocked : 0,
+    lossesBlocked: config.enabled ? lossesBlocked : 0,
+    slHitsBlocked: config.enabled ? slHitsBlocked : 0,
+    resultingWinRate: remainingTrades.length > 0 ? remainingWins / remainingTrades.length : 0,
+    resultingTradeCount: remainingTrades.length,
   };
 }
 
@@ -859,6 +1003,7 @@ export async function runV3Backtest(
   const tierMode = normalizeBacktestTierMode(req.tierMode);
   const runtimeQualityBands = allowedRuntimeQualityBands(tierMode);
   const detectedMoveTiers = allowedDetectedMoveTiers(tierMode);
+  const crash300AdmissionPolicy = normalizeCrash300AdmissionPolicyConfig(req.crash300AdmissionPolicy);
 
   const bufferStartTs = startTs - STRUCTURAL_LOOKBACK * 60;
 
@@ -886,6 +1031,12 @@ export async function runV3Backtest(
       modeScoreGate: MODE_SCORE_GATES[mode] ?? 60,
       signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
       runtimeModel: runtimeModelDiagnostics(null),
+      admissionPolicy: buildAdmissionPolicyMeta({
+        config: crash300AdmissionPolicy,
+        trades: [],
+        blockedCandidateCount: 0,
+        blockedReasonsCounts: {},
+      }),
       trades: [],
       simulationGaps: [],
       moveOverlap: {
@@ -898,7 +1049,12 @@ export async function runV3Backtest(
         ghostRate: 0,
         moveDirectionSplit: { up: 0, down: 0 },
       },
-      summary: computeSummary([], {}),
+      summary: computeSummary([], {}, buildAdmissionPolicyMeta({
+        config: crash300AdmissionPolicy,
+        trades: [],
+        blockedCandidateCount: 0,
+        blockedReasonsCounts: {},
+      })),
     };
   }
 
@@ -939,6 +1095,8 @@ export async function runV3Backtest(
   const blockedByEngine: Record<string, number> = {};
   const scoringSourceCounts: Record<string, number> = {};
   const candidateWindows = new Map<string, ReplayCandidateWindow>();
+  let admissionPolicyBlockedCandidates = 0;
+  const admissionPolicyBlockedReasonsCounts: Record<string, number> = {};
 
   // â”€â”€ Simulation PnL state â€” used to evaluate daily/weekly risk gates â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Tracks closed simulation trades with their close timestamp and $ PnL so
@@ -994,6 +1152,28 @@ export async function runV3Backtest(
   if (symbol === "CRASH300" && !runtimeCalibration) {
     throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
   }
+  const detectedMovesForPolicy = symbol === "CRASH300"
+    ? await db
+        .select({
+          startTs: detectedMovesTable.startTs,
+          endTs: detectedMovesTable.endTs,
+          direction: detectedMovesTable.direction,
+          qualityTier: detectedMovesTable.qualityTier,
+        })
+        .from(detectedMovesTable)
+        .where(and(
+          eq(detectedMovesTable.symbol, symbol),
+          gte(detectedMovesTable.endTs, startTs),
+          lte(detectedMovesTable.startTs, endTs),
+        ))
+    : [];
+  const filteredDetectedMovesForPolicy: PolicyDetectedMove[] = detectedMovesForPolicy
+    .filter((move) => !detectedMoveTiers || detectedMoveTiers.includes(move.qualityTier as "A" | "B" | "C" | "D"))
+    .map((move) => ({
+      startTs: move.startTs,
+      endTs: move.endTs,
+      direction: normalizePolicyMoveDirection(move.direction),
+    }));
   const modeGate = resolveModeScoreGate(stateMap, modePrefix, mode, runtimeCalibration);
   const trailingCfg = runtimeCalibration
     ? resolveTrailingConfigFromProfile(runtimeCalibration.trailingModel ?? {})
@@ -1180,6 +1360,9 @@ export async function runV3Backtest(
           wouldBlockDuplicateEpoch: openTrade.wouldBlockDuplicateEpoch ?? null,
           wouldBlockDirectionMismatch: openTrade.wouldBlockDirectionMismatch ?? null,
           wouldBlockLateAfterMoveWindow: openTrade.wouldBlockLateAfterMoveWindow ?? null,
+          admissionPolicyWouldBlock: openTrade.admissionPolicyWouldBlock ?? null,
+          admissionPolicyBlockedReasons: openTrade.admissionPolicyBlockedReasons ?? null,
+          admissionPolicyMode: openTrade.admissionPolicyMode ?? null,
         };
 
         trades.push(trade);
@@ -1545,6 +1728,72 @@ export async function runV3Backtest(
     const tpPct = Math.abs(tp - bar.close) / bar.close;
     const slOriginalPct = Math.abs(sl - bar.close) / bar.close;
     const runtimeProjectedMovePct = tpPct;
+    const crashDecision = winnerSymbolServiceDecision(winner);
+    const crashEvidence = optionalRecord(crashDecision["evidence"]);
+    const matchedPolicyMove = symbol === "CRASH300"
+      ? matchDetectedMoveForAdmission(bar.closeTs, winner.direction, filteredDetectedMovesForPolicy)
+      : null;
+    const admissionSemanticFlags: string[] = [];
+    const runtimeFamily = optionalString(crashDecision["setupFamily"]);
+    const selectedBucket = optionalString(crashDecision["moveBucket"]);
+    const triggerDirection = optionalString(crashEvidence?.["triggerDirection"]) ?? "unknown";
+    const familyDirection = familyDirectionForAdmission(runtimeFamily);
+    const bucketDirection = bucketDirectionForAdmission(selectedBucket);
+    if (triggerDirection !== "unknown" && triggerDirection !== "none" && triggerDirection !== winner.direction) {
+      admissionSemanticFlags.push("trigger_trade_direction_mismatch");
+    }
+    if (familyDirection !== "unknown" && bucketDirection !== "unknown" && familyDirection !== bucketDirection) {
+      admissionSemanticFlags.push("family_bucket_direction_mismatch");
+    }
+    if (runtimeFamily === "post_crash_recovery_up" && matchedPolicyMove?.direction === "down") {
+      admissionSemanticFlags.push("recovery_up_family_on_down_move");
+    }
+    if (runtimeFamily === "crash_event_down" && matchedPolicyMove?.direction === "up") {
+      admissionSemanticFlags.push("crash_down_family_on_up_move");
+    }
+    const admissionDecision = symbol === "CRASH300"
+      ? evaluateCrash300AdmissionPolicy(
+          { setupFamily: runtimeFamily, moveBucket: selectedBucket },
+          optionalRecord(crashEvidence?.["contextSnapshot"]),
+          optionalRecord(crashEvidence?.["triggerSnapshot"]),
+          {
+            tradeDirection: winner.direction,
+            triggerDirection: triggerDirection as "buy" | "sell" | "none" | "unknown",
+            runtimeFamily,
+            selectedBucket,
+            matchedMoveDirection: matchedPolicyMove?.direction ?? "unknown",
+            triggerFresh: optionalBoolean(crashEvidence?.["triggerFresh"]),
+            familyDirection,
+            bucketDirection,
+            semanticFlags: admissionSemanticFlags,
+            evaluationMode: "backtest",
+          },
+          crash300AdmissionPolicy,
+        )
+      : null;
+    if (admissionDecision?.wouldHaveBlocked) {
+      bumpReasonCounts(admissionPolicyBlockedReasonsCounts, admissionDecision.blockedReasons);
+      if (admissionDecision.policyMode === "enforce") {
+        admissionPolicyBlockedCandidates += 1;
+        signalsBlocked++;
+        blockedByEngine[winner.engineName] = (blockedByEngine[winner.engineName] ?? 0) + 1;
+        recordBehaviorEvent({
+          eventType: "blocked_by_gate",
+          symbol,
+          engineName: winner.engineName,
+          direction: winner.direction,
+          regimeAtEntry: regimeResult.regime,
+          nativeScore,
+          modeGate,
+          mode,
+          ts: bar.closeTs,
+          rejectionStage: 13,
+          rejectionReason: `admission_policy:${admissionDecision.blockedReasons.join("|")}`,
+          isSignalQualityBlock: false,
+        });
+        continue;
+      }
+    }
 
     // Record entry event
     recordBehaviorEvent({
@@ -1561,9 +1810,6 @@ export async function runV3Backtest(
       tpPct,
       slPct: slOriginalPct,
     });
-
-    const crashDecision = winnerSymbolServiceDecision(winner);
-    const crashEvidence = optionalRecord(crashDecision["evidence"]);
     openTrade = {
       winner,
       entryBar: i,
@@ -1628,6 +1874,9 @@ export async function runV3Backtest(
       wouldBlockDuplicateEpoch: optionalBoolean(crashEvidence?.["wouldBlockDuplicateEpoch"]),
       wouldBlockDirectionMismatch: optionalBoolean(crashEvidence?.["wouldBlockDirectionMismatch"]),
       wouldBlockLateAfterMoveWindow: optionalBoolean(crashEvidence?.["wouldBlockLateAfterMoveWindow"]),
+      admissionPolicyWouldBlock: admissionDecision?.wouldHaveBlocked ?? false,
+      admissionPolicyBlockedReasons: admissionDecision?.blockedReasons ?? [],
+      admissionPolicyMode: admissionDecision?.policyMode ?? (crash300AdmissionPolicy.enabled ? crash300AdmissionPolicy.mode : "off"),
     };
 
     // Register opening in shared ledger so concurrent symbols see this position
@@ -1656,6 +1905,12 @@ export async function runV3Backtest(
     ? detectedMovesInWindow.filter((move) => detectedMoveTiers.includes(move.qualityTier as "A" | "B" | "C" | "D"))
     : detectedMovesInWindow;
   const moveOverlap = calcMoveOverlapDiagnostics({ moves: targetMovesInWindow, trades });
+  const admissionPolicyMeta = buildAdmissionPolicyMeta({
+    config: crash300AdmissionPolicy,
+    trades,
+    blockedCandidateCount: admissionPolicyBlockedCandidates,
+    blockedReasonsCounts: admissionPolicyBlockedReasonsCounts,
+  });
 
   return {
     symbol,
@@ -1669,10 +1924,11 @@ export async function runV3Backtest(
     signalsBlocked,
     blockedRate,
     runtimeModel: runtimeModelDiagnostics(runtimeCalibrationResolution, scoringSourceCounts),
+    admissionPolicy: admissionPolicyMeta,
     trades,
     simulationGaps: runSimulationGaps,
     moveOverlap,
-    summary: computeSummary(trades, blockedByEngine),
+    summary: computeSummary(trades, blockedByEngine, admissionPolicyMeta),
   };
 }
 
@@ -1702,12 +1958,21 @@ export async function runV3BacktestMulti(
   endTs?: number,
   mode?: "paper" | "demo" | "real",
   tierModeRaw?: BacktestTierMode,
+  crash300AdmissionPolicyRaw?: Partial<Crash300AdmissionPolicyConfig> | null,
 ): Promise<Record<string, V3BacktestResult>> {
   const tierMode = normalizeBacktestTierMode(tierModeRaw);
   const runtimeQualityBands = allowedRuntimeQualityBands(tierMode);
   const detectedMoveTiers = allowedDetectedMoveTiers(tierMode);
+  const crash300AdmissionPolicy = normalizeCrash300AdmissionPolicyConfig(crash300AdmissionPolicyRaw);
   if (symbols.length <= 1) {
-    const result = await runV3Backtest({ symbol: symbols[0] ?? "", startTs, endTs, mode, tierMode });
+    const result = await runV3Backtest({
+      symbol: symbols[0] ?? "",
+      startTs,
+      endTs,
+      mode,
+      tierMode,
+      crash300AdmissionPolicy,
+    });
     return symbols[0] ? { [symbols[0]]: result } : {};
   }
 
@@ -1735,6 +2000,32 @@ export async function runV3BacktestMulti(
   const sharedMaxDailyLoss   = parseFloat(stateMap[`${modePrefix}_max_daily_loss_pct`]   || stateMap["max_daily_loss_pct"]   || "5")  / 100;
   const sharedMaxWeeklyLoss  = parseFloat(stateMap[`${modePrefix}_max_weekly_loss_pct`]  || stateMap["max_weekly_loss_pct"]  || "10") / 100;
   const sharedMaxDrawdownPct = parseFloat(stateMap[`${modePrefix}_max_drawdown_pct`]     || stateMap["max_drawdown_pct"]     || "20") / 100;
+
+  const detectedMovesBySymbol = new Map<string, Array<PolicyDetectedMove>>();
+  const detectedMovesRows = await db
+    .select({
+      symbol: detectedMovesTable.symbol,
+      startTs: detectedMovesTable.startTs,
+      endTs: detectedMovesTable.endTs,
+      direction: detectedMovesTable.direction,
+      qualityTier: detectedMovesTable.qualityTier,
+    })
+    .from(detectedMovesTable)
+    .where(and(
+      inArray(detectedMovesTable.symbol, symbols),
+      gte(detectedMovesTable.endTs, _startTs),
+      lte(detectedMovesTable.startTs, _endTs),
+    ));
+  for (const row of detectedMovesRows) {
+    if (detectedMoveTiers && !detectedMoveTiers.includes(row.qualityTier as "A" | "B" | "C" | "D")) continue;
+    const list = detectedMovesBySymbol.get(row.symbol) ?? [];
+    list.push({
+      startTs: row.startTs,
+      endTs: row.endTs,
+      direction: normalizePolicyMoveDirection(row.direction),
+    });
+    detectedMovesBySymbol.set(row.symbol, list);
+  }
 
   // â”€â”€ Load candles for all symbols in parallel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const bufferStartTs = _startTs - STRUCTURAL_LOOKBACK * 60;
@@ -1802,6 +2093,9 @@ export async function runV3BacktestMulti(
       blockedByEngine:        {},
       scoringSourceCounts:     {},
       candidateWindows:       new Map<string, ReplayCandidateWindow>(),
+      detectedMoves:          detectedMovesBySymbol.get(sym) ?? [],
+      admissionPolicyBlockedCandidates: 0,
+      admissionPolicyBlockedReasonsCounts: {},
       crash300RuntimeState:   sym === "CRASH300"
         ? {
             currentEpoch: null,
@@ -1827,6 +2121,12 @@ export async function runV3BacktestMulti(
       totalBars: 0, modeScoreGate: sharedModeGate,
       signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
       runtimeModel: runtimeModelDiagnostics(null),
+      admissionPolicy: buildAdmissionPolicyMeta({
+        config: crash300AdmissionPolicy,
+        trades: [],
+        blockedCandidateCount: 0,
+        blockedReasonsCounts: {},
+      }),
       trades: [],
         simulationGaps: [],
         moveOverlap: {
@@ -1839,7 +2139,12 @@ export async function runV3BacktestMulti(
           ghostRate: 0,
           moveDirectionSplit: { up: 0, down: 0 },
         },
-        summary: computeSummary([], {}),
+        summary: computeSummary([], {}, buildAdmissionPolicyMeta({
+          config: crash300AdmissionPolicy,
+          trades: [],
+          blockedCandidateCount: 0,
+          blockedReasonsCounts: {},
+        })),
       };
     }
     return out;
@@ -1988,6 +2293,9 @@ export async function runV3BacktestMulti(
           wouldBlockDuplicateEpoch: ot.wouldBlockDuplicateEpoch ?? null,
           wouldBlockDirectionMismatch: ot.wouldBlockDirectionMismatch ?? null,
           wouldBlockLateAfterMoveWindow: ot.wouldBlockLateAfterMoveWindow ?? null,
+          admissionPolicyWouldBlock: ot.admissionPolicyWouldBlock ?? null,
+          admissionPolicyBlockedReasons: ot.admissionPolicyBlockedReasons ?? null,
+          admissionPolicyMode: ot.admissionPolicyMode ?? null,
         });
         ctx.simClosedPnls.push({ closeTs: tsMs, pnlUsd: finalPnl * SYNTHETIC_SIZE });
         ctx.simEquity *= (1 + finalPnl);
@@ -2268,6 +2576,66 @@ export async function runV3BacktestMulti(
       const tpPct        = Math.abs(tp - bar.close) / bar.close;
       const slOriginalPct = Math.abs(sl - bar.close) / bar.close;
       const runtimeProjectedMovePct = tpPct;
+      const symbolServiceDecision = winnerSymbolServiceDecision(winner);
+      const symbolServiceEvidence = optionalRecord(symbolServiceDecision["evidence"]);
+      const matchedPolicyMove = ctx.sym === "CRASH300"
+        ? matchDetectedMoveForAdmission(bar.closeTs, winner.direction, ctx.detectedMoves)
+        : null;
+      const admissionSemanticFlags: string[] = [];
+      const runtimeFamily = optionalString(symbolServiceDecision["setupFamily"]);
+      const selectedBucket = optionalString(symbolServiceDecision["moveBucket"]);
+      const triggerDirection = optionalString(symbolServiceEvidence?.["triggerDirection"]) ?? "unknown";
+      const familyDirection = familyDirectionForAdmission(runtimeFamily);
+      const bucketDirection = bucketDirectionForAdmission(selectedBucket);
+      if (triggerDirection !== "unknown" && triggerDirection !== "none" && triggerDirection !== winner.direction) {
+        admissionSemanticFlags.push("trigger_trade_direction_mismatch");
+      }
+      if (familyDirection !== "unknown" && bucketDirection !== "unknown" && familyDirection !== bucketDirection) {
+        admissionSemanticFlags.push("family_bucket_direction_mismatch");
+      }
+      if (runtimeFamily === "post_crash_recovery_up" && matchedPolicyMove?.direction === "down") {
+        admissionSemanticFlags.push("recovery_up_family_on_down_move");
+      }
+      if (runtimeFamily === "crash_event_down" && matchedPolicyMove?.direction === "up") {
+        admissionSemanticFlags.push("crash_down_family_on_up_move");
+      }
+      const admissionDecision = ctx.sym === "CRASH300" && builtCandidate
+        ? evaluateCrash300AdmissionPolicy(
+            { setupFamily: runtimeFamily, moveBucket: selectedBucket },
+            optionalRecord(symbolServiceEvidence?.["contextSnapshot"]),
+            optionalRecord(symbolServiceEvidence?.["triggerSnapshot"]),
+            {
+              tradeDirection: winner.direction,
+              triggerDirection: triggerDirection as "buy" | "sell" | "none" | "unknown",
+              runtimeFamily,
+              selectedBucket,
+              matchedMoveDirection: matchedPolicyMove?.direction ?? "unknown",
+              triggerFresh: optionalBoolean(symbolServiceEvidence?.["triggerFresh"]),
+              familyDirection,
+              bucketDirection,
+              semanticFlags: admissionSemanticFlags,
+              evaluationMode: "backtest",
+            },
+            crash300AdmissionPolicy,
+          )
+        : null;
+      if (admissionDecision?.wouldHaveBlocked) {
+        bumpReasonCounts(ctx.admissionPolicyBlockedReasonsCounts, admissionDecision.blockedReasons);
+        if (admissionDecision.policyMode === "enforce") {
+          ctx.admissionPolicyBlockedCandidates += 1;
+          ctx.signalsBlocked++;
+          ctx.blockedByEngine[winner.engineName] = (ctx.blockedByEngine[winner.engineName] ?? 0) + 1;
+          recordBehaviorEvent({
+            eventType: "blocked_by_gate", symbol: ctx.sym, engineName: winner.engineName,
+            direction: winner.direction, regimeAtEntry: regimeResult.regime,
+            nativeScore, modeGate: ctx.modeGate, mode: _mode, ts: bar.closeTs,
+            rejectionStage: 13,
+            rejectionReason: `admission_policy:${admissionDecision.blockedReasons.join("|")}`,
+            isSignalQualityBlock: false,
+          });
+          continue;
+        }
+      }
 
       recordBehaviorEvent({
         eventType: "entered", symbol: ctx.sym, engineName: winner.engineName,
@@ -2276,9 +2644,6 @@ export async function runV3BacktestMulti(
         nativeScore, projectedMovePct: runtimeProjectedMovePct,
         entryTs: bar.closeTs, tpPct, slPct: slOriginalPct,
       });
-
-      const symbolServiceDecision = winnerSymbolServiceDecision(winner);
-      const symbolServiceEvidence = optionalRecord(symbolServiceDecision["evidence"]);
 
       ctx.openTrade = {
         winner, entryBar: i, entryPrice: bar.close, entryTs: bar.closeTs,
@@ -2327,6 +2692,9 @@ export async function runV3BacktestMulti(
         wouldBlockDuplicateEpoch: optionalBoolean(symbolServiceEvidence?.["wouldBlockDuplicateEpoch"]),
         wouldBlockDirectionMismatch: optionalBoolean(symbolServiceEvidence?.["wouldBlockDirectionMismatch"]),
         wouldBlockLateAfterMoveWindow: optionalBoolean(symbolServiceEvidence?.["wouldBlockLateAfterMoveWindow"]),
+        admissionPolicyWouldBlock: admissionDecision?.wouldHaveBlocked ?? false,
+        admissionPolicyBlockedReasons: admissionDecision?.blockedReasons ?? [],
+        admissionPolicyMode: admissionDecision?.policyMode ?? (crash300AdmissionPolicy.enabled ? crash300AdmissionPolicy.mode : "off"),
       };
       ledger.open(ctx.sym, ctx.instrumentFamily, tsMs);
       if (ctx.sym !== "CRASH300") {
@@ -2337,28 +2705,6 @@ export async function runV3BacktestMulti(
 
   // â”€â”€ Collect results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const out: Record<string, V3BacktestResult> = {};
-  const detectedMovesBySymbol = new Map<string, Array<{ startTs: number; endTs: number; direction: string }>>();
-  const movesRows = await db
-    .select({
-      symbol: detectedMovesTable.symbol,
-      startTs: detectedMovesTable.startTs,
-      endTs: detectedMovesTable.endTs,
-      direction: detectedMovesTable.direction,
-      qualityTier: detectedMovesTable.qualityTier,
-    })
-    .from(detectedMovesTable)
-    .where(and(
-      inArray(detectedMovesTable.symbol, symbols),
-      gte(detectedMovesTable.endTs, _startTs),
-      lte(detectedMovesTable.startTs, _endTs),
-    ));
-  for (const row of movesRows) {
-    const list = detectedMovesBySymbol.get(row.symbol) ?? [];
-    if (!detectedMoveTiers || detectedMoveTiers.includes(row.qualityTier as "A" | "B" | "C" | "D")) {
-      list.push({ startTs: row.startTs, endTs: row.endTs, direction: row.direction });
-    }
-    detectedMovesBySymbol.set(row.symbol, list);
-  }
   for (const [sym, ctx] of symCtxMap.entries()) {
     const barsInRange = Math.max(0, ctx.candles.length - ctx.simStart);
     const blockedRate = ctx.signalsFired > 0 ? ctx.signalsBlocked / ctx.signalsFired : 0;
@@ -2366,15 +2712,22 @@ export async function runV3BacktestMulti(
       moves: detectedMovesBySymbol.get(sym) ?? [],
       trades: ctx.trades,
     });
+    const admissionPolicyMeta = buildAdmissionPolicyMeta({
+      config: crash300AdmissionPolicy,
+      trades: ctx.trades,
+      blockedCandidateCount: ctx.admissionPolicyBlockedCandidates,
+      blockedReasonsCounts: ctx.admissionPolicyBlockedReasonsCounts,
+    });
     out[sym] = {
       symbol: sym, mode: _mode, tierMode, startTs: _startTs, endTs: _endTs,
       totalBars: barsInRange, modeScoreGate: ctx.modeGate,
       signalsFired: ctx.signalsFired, signalsBlocked: ctx.signalsBlocked, blockedRate,
       runtimeModel: runtimeModelDiagnostics(ctx.runtimeCalibrationResolution, ctx.scoringSourceCounts),
+      admissionPolicy: admissionPolicyMeta,
       trades: ctx.trades,
       simulationGaps: [],
       moveOverlap,
-      summary: computeSummary(ctx.trades, ctx.blockedByEngine),
+      summary: computeSummary(ctx.trades, ctx.blockedByEngine, admissionPolicyMeta),
     };
   }
 
@@ -2386,6 +2739,12 @@ export async function runV3BacktestMulti(
         totalBars: 0, modeScoreGate: sharedModeGate,
         signalsFired: 0, signalsBlocked: 0, blockedRate: 0,
         runtimeModel: runtimeModelDiagnostics(null),
+        admissionPolicy: buildAdmissionPolicyMeta({
+          config: crash300AdmissionPolicy,
+          trades: [],
+          blockedCandidateCount: 0,
+          blockedReasonsCounts: {},
+        }),
         trades: [],
         simulationGaps: [],
         moveOverlap: {
@@ -2398,7 +2757,12 @@ export async function runV3BacktestMulti(
           ghostRate: 0,
           moveDirectionSplit: { up: 0, down: 0 },
         },
-        summary: computeSummary([], {}),
+        summary: computeSummary([], {}, buildAdmissionPolicyMeta({
+          config: crash300AdmissionPolicy,
+          trades: [],
+          blockedCandidateCount: 0,
+          blockedReasonsCounts: {},
+        })),
       };
     }
   }
