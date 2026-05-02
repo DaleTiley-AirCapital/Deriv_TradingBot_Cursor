@@ -1,7 +1,5 @@
 import type { CoordinatorOutput, EngineResult } from "../../core/engineTypes.js";
-import type { FeatureVector } from "../../core/features.js";
 import type { LiveCalibrationProfile } from "../../core/calibration/liveCalibrationProfile.js";
-import { inferRuntimeLeadInShape, selectRuntimeTpBucket } from "../../core/calibration/runtimeProfileUtils.js";
 import type { CandleRow } from "../../core/backtest/featureSlice.js";
 import { assertValidCrash300RuntimeModel } from "./runtimeFeeddown.js";
 import type { SymbolRuntimeContext } from "../shared/SymbolRuntimeContext.js";
@@ -10,12 +8,17 @@ import {
   type Crash300ContextSnapshot,
   type Crash300EpochState,
   type Crash300FamilyCandidate,
+  type Crash300PhaseDerivedFamily,
   type Crash300RuntimeFamily,
   type Crash300RuntimeState,
-  type Crash300TriggerSnapshot,
+  type Crash300SemanticTriggerSnapshot,
+  type Crash300ThresholdSource,
 } from "./features.js";
 import { buildCrash300ContextSnapshot } from "./context.js";
 import { buildCrash300TriggerSnapshot } from "./trigger.js";
+import { detectCrash300TriggerTransition } from "./triggerSemantics.js";
+import { deriveCrash300RuntimeFamily } from "./familySemantics.js";
+import { resolveCrash300RuntimeBucketForFamily } from "./bucketSemantics.js";
 
 const SYMBOL = "CRASH300";
 const SERVICE = "crash300_service";
@@ -39,13 +42,6 @@ function clamp01(v: number): number {
 
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-}
-
-function asFeatureVector(v: unknown): FeatureVector | null {
-  if (!v || typeof v !== "object") return null;
-  const row = v as Record<string, unknown>;
-  if (typeof row["symbol"] !== "string" || typeof row["latestClose"] !== "number") return null;
-  return row as unknown as FeatureVector;
 }
 
 function asCandles(v: unknown): CandleRow[] {
@@ -240,11 +236,6 @@ function triggerThreshold(model: LiveCalibrationProfile): number {
   return clamp01(Number(model.recommendedScoreGates?.paper ?? 60) / 100);
 }
 
-function maxTriggerCarryBars(model: LiveCalibrationProfile): number {
-  const override = readFormulaNumber(model, ["triggerCarryBars", "maxTriggerCarryBars"], 0);
-  return Math.max(0, Math.min(1, Math.round(override)));
-}
-
 function maxContextAgeBars(model: LiveCalibrationProfile, context: Crash300ContextSnapshot): number {
   const override = readFormulaNumber(model, ["maxContextAgeBars"], NaN);
   if (Number.isFinite(override) && override > 0) return Math.round(override);
@@ -265,9 +256,55 @@ function qualityTierFromScores(contextScore: number, triggerScore: number): "A" 
   return "C";
 }
 
+function thresholdSource(model: LiveCalibrationProfile): Crash300ThresholdSource {
+  const formula = model.formulaOverride && typeof model.formulaOverride === "object"
+    ? (model.formulaOverride as Record<string, unknown>)
+    : {};
+  if (
+    Number.isFinite(Number(formula["contextMatchThreshold"])) ||
+    Number.isFinite(Number(formula["triggerStrengthThreshold"])) ||
+    (formula["crash300"] &&
+      typeof formula["crash300"] === "object" &&
+      (Number.isFinite(Number((formula["crash300"] as Record<string, unknown>)["contextMatchThreshold"])) ||
+        Number.isFinite(Number((formula["crash300"] as Record<string, unknown>)["triggerStrengthThreshold"]))))
+  ) {
+    return "runtime_model";
+  }
+  return "runtime_model_recommended_gate";
+}
+
+function selectedFamilyScore(
+  candidates: Crash300FamilyCandidate[],
+  family: Crash300PhaseDerivedFamily,
+  context: Crash300ContextSnapshot,
+): Crash300FamilyCandidate {
+  const matched = candidates.find((candidate) => candidate.family === family);
+  if (matched) return matched;
+  const reversalScore = clamp01(
+    context.crashRecencyScore * 0.25 +
+      context.recoveryQualityScore * 0.2 +
+      context.compressionToExpansionScore * 0.15 +
+      clamp01((0.02 - context.priceVsEma20Pct) / 0.04) * 0.15 +
+      clamp01((context.priceDistanceFromLastCrashLowPct ?? 0) / 0.08) * 0.25,
+  );
+  return {
+    family: family === "bull_trap_reversal_down" ? "bull_trap_reversal_down" : "bear_trap_reversal_up",
+    direction: family === "bull_trap_reversal_down" ? "sell" : "buy",
+    leadInShape: leadInShapeFromContext(context),
+    score: reversalScore,
+    components: {
+      crashRecencyScore: context.crashRecencyScore * 100,
+      recoveryQualityScore: context.recoveryQualityScore * 100,
+      compressionToExpansionScore: context.compressionToExpansionScore * 100,
+      priceVsEma20Pct: clamp01((0.02 - Math.abs(context.priceVsEma20Pct)) / 0.04) * 100,
+      priceDistanceFromLastCrashLowPct: clamp01((context.priceDistanceFromLastCrashLowPct ?? 0) / 0.08) * 100,
+    },
+  };
+}
+
 function componentScores(
   context: Crash300ContextSnapshot,
-  trigger: Crash300TriggerSnapshot,
+  trigger: Crash300SemanticTriggerSnapshot,
   selectedFamily: Crash300RuntimeFamily,
 ): Record<string, number> {
   return {
@@ -349,7 +386,7 @@ function failDecision(params: {
   setupMatch?: number;
   confidence?: number;
   context?: Crash300ContextSnapshot | null;
-  trigger?: Crash300TriggerSnapshot | null;
+  trigger?: Crash300SemanticTriggerSnapshot | null;
   componentScoreMap?: Record<string, number>;
   failReasons: string[];
   epochId?: string | null;
@@ -365,6 +402,10 @@ function failDecision(params: {
   wouldBlockDuplicateEpoch?: boolean;
   wouldBlockDirectionMismatch?: boolean;
   wouldBlockLateAfterMoveWindow?: boolean;
+  familySource?: string | null;
+  bucketSource?: string | null;
+  thresholdSource?: Crash300ThresholdSource;
+  runtimeModelBucketKey?: string | null;
 }): SymbolDecisionResult {
   const slModel = asRecord(params.runtimeCalibration.slModel);
   const trailingModel = asRecord(params.runtimeCalibration.trailingModel);
@@ -383,6 +424,10 @@ function failDecision(params: {
       promotedModelRunId: params.runtimeCalibration.sourceRunId,
       selectedRuntimeFamily: params.family ?? null,
       selectedBucket: params.bucket ?? null,
+      familySource: params.familySource ?? null,
+      bucketSource: params.bucketSource ?? null,
+      thresholdSource: params.thresholdSource ?? thresholdSource(params.runtimeCalibration),
+      runtimeModelBucketKey: params.runtimeModelBucketKey ?? null,
       leadInShape: params.context ? leadInShapeFromContext(params.context) : "all",
       setupMatch: params.setupMatch ?? 0,
       expectedMovePct: 0,
@@ -415,14 +460,19 @@ function failDecision(params: {
       wouldBlockDirectionMismatch: params.wouldBlockDirectionMismatch ?? false,
       wouldBlockLateAfterMoveWindow: params.wouldBlockLateAfterMoveWindow ?? false,
       candidateProduced: params.candidateProduced ?? false,
+      liveEligibleTrigger: params.trigger?.liveEligibleTrigger ?? false,
+      entryPrice: params.context?.latestClose ?? null,
+      ts: params.context?.ts ?? null,
       featureSnapshot: {
         context: params.context ?? null,
         trigger: params.trigger ?? null,
+        latestClose: params.context?.latestClose ?? null,
       },
     },
     featureSnapshot: {
       context: params.context ?? null,
       trigger: params.trigger ?? null,
+      latestClose: params.context?.latestClose ?? null,
     },
     failReasons: params.failReasons,
   };
@@ -494,9 +544,8 @@ export async function evaluateCrash300Runtime(
     throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
   }
 
-  const features = asFeatureVector(asRecord(context.marketState)["features"]);
   const candles = asCandles(asRecord(context.marketState)["candles"]);
-  if (!features || candles.length < 20) {
+  if (candles.length < 20) {
     return failDecision({
       runtimeCalibration,
       direction: null,
@@ -514,96 +563,87 @@ export async function evaluateCrash300Runtime(
     runtimeModel: runtimeCalibration,
     detectedMoves,
   });
-  const triggerSnapshot = buildCrash300TriggerSnapshot({
-    symbol: SYMBOL,
-    ts: context.ts,
-    candles,
+  const priorTriggers: Crash300SemanticTriggerSnapshot[] = [];
+  for (let index = Math.max(0, candles.length - 4); index < candles.length - 1; index += 1) {
+    const slice = candles.slice(0, index + 1);
+    const candle = slice[slice.length - 1];
+    if (!candle) continue;
+    const { snapshot: priorContext } = buildCrash300ContextSnapshot({
+      symbol: SYMBOL,
+      ts: candle.closeTs,
+      candles: slice,
+      runtimeModel: runtimeCalibration,
+      detectedMoves,
+    });
+    const raw = buildCrash300TriggerSnapshot({
+      symbol: SYMBOL,
+      ts: candle.closeTs,
+      candles: slice,
+      context: priorContext,
+    });
+    priorTriggers.push(detectCrash300TriggerTransition({
+      context: priorContext,
+      trigger: raw,
+      priorTriggers: priorTriggers.slice(-3),
+      mode: "runtime",
+      offsetBars: index - (candles.length - 1),
+    }));
+  }
+
+  const triggerSnapshot = detectCrash300TriggerTransition({
     context: contextSnapshot,
+    trigger: buildCrash300TriggerSnapshot({
+      symbol: SYMBOL,
+      ts: context.ts,
+      candles,
+      context: contextSnapshot,
+    }),
+    priorTriggers: priorTriggers.slice(-3),
+    mode: "runtime",
+    offsetBars: 0,
   });
 
   const familyCandidates = buildFamilyCandidates(contextSnapshot).sort((a, b) => b.score - a.score);
-  const selectedFamily = familyCandidates[0];
-  if (!selectedFamily) {
+  const provisionalFamily = familyCandidates[0]?.family ?? null;
+  const ctxThreshold = contextThreshold(runtimeCalibration);
+  const trgThreshold = triggerThreshold(runtimeCalibration);
+  const thresholdOrigin = thresholdSource(runtimeCalibration);
+  const provisionalScore = familyCandidates[0]?.score ?? 0;
+  const contextAgeBars = runtimeState.currentEpoch ? Math.max(0, Math.round((context.ts - runtimeState.currentEpoch.startTs) / 60)) : 0;
+  const maxAgeBars = maxContextAgeBars(runtimeCalibration, contextSnapshot);
+  if (provisionalScore < ctxThreshold) {
     invalidateEpoch(runtimeState);
     return failDecision({
       runtimeCalibration,
       direction: null,
+      family: provisionalFamily ?? undefined,
+      qualityTier: qualityTierFromScores(provisionalScore, triggerSnapshot.triggerStrengthScore),
       context: contextSnapshot,
       trigger: triggerSnapshot,
-      failReasons: ["no_context_match"],
-      candidateProduced: false,
-    });
-  }
-
-  const direction = selectedFamily.direction;
-  const leadInShape = selectedFamily.leadInShape === "all" ? inferRuntimeLeadInShape(features) : selectedFamily.leadInShape;
-  const bucket = selectRuntimeTpBucket({
-    runtimeCalibration,
-    direction,
-    nativeScore: selectedFamily.score * 100,
-    leadInShape,
-    features,
-  });
-  if (!bucket.key || !bucket.targetPct) {
-    invalidateEpoch(runtimeState);
-    return failDecision({
-      runtimeCalibration,
-      direction,
-      family: selectedFamily.family,
-      context: contextSnapshot,
-      trigger: triggerSnapshot,
-      setupMatch: selectedFamily.score,
-      confidence: selectedFamily.score,
-      componentScoreMap: componentScores(contextSnapshot, triggerSnapshot, selectedFamily.family),
-      failReasons: ["runtime_family_bucket_missing"],
-      candidateProduced: false,
-    });
-  }
-
-  const ctxThreshold = contextThreshold(runtimeCalibration);
-  const trgThreshold = triggerThreshold(runtimeCalibration);
-  const epochAnchorTs = resolveEpochAnchorTs(contextSnapshot, context.ts, selectedFamily.family);
-  const epoch = ensureEpoch(runtimeState, context.ts, selectedFamily.family, bucket.key, direction, epochAnchorTs);
-  const contextAgeBars = Math.max(0, Math.round((context.ts - epoch.startTs) / 60));
-  const maxAgeBars = maxContextAgeBars(runtimeCalibration, contextSnapshot);
-  const carryBars = maxTriggerCarryBars(runtimeCalibration);
-  const triggerFresh = triggerSnapshot.triggerDirection !== "none";
-  const triggerDirectionMismatch = triggerSnapshot.triggerDirection !== "none" && triggerSnapshot.triggerDirection !== direction;
-  const componentScoreMap = componentScores(contextSnapshot, triggerSnapshot, selectedFamily.family);
-
-  if (selectedFamily.score < ctxThreshold) {
-    invalidateEpoch(runtimeState);
-    return failDecision({
-      runtimeCalibration,
-      direction,
-      family: selectedFamily.family,
-      bucket: bucket.key,
-      qualityTier: qualityTierFromScores(selectedFamily.score, triggerSnapshot.triggerStrengthScore),
-      context: contextSnapshot,
-      trigger: triggerSnapshot,
-      setupMatch: selectedFamily.score,
-      confidence: selectedFamily.score * 0.6,
-      componentScoreMap,
+      setupMatch: provisionalScore,
+      confidence: provisionalScore * 0.6,
+      componentScoreMap: provisionalFamily ? componentScores(contextSnapshot, triggerSnapshot, provisionalFamily) : {},
+      thresholdSource: thresholdOrigin,
       failReasons: ["context_below_model_threshold"],
       candidateProduced: false,
     });
   }
 
-  if (contextAgeBars > maxAgeBars) {
+  if (runtimeState.currentEpoch && contextAgeBars > maxAgeBars) {
+    invalidateEpoch(runtimeState);
     return failDecision({
       runtimeCalibration,
-      direction,
-      family: selectedFamily.family,
-      bucket: bucket.key,
-      qualityTier: qualityTierFromScores(selectedFamily.score, triggerSnapshot.triggerStrengthScore),
+      direction: null,
+      family: provisionalFamily ?? undefined,
+      qualityTier: qualityTierFromScores(provisionalScore, triggerSnapshot.triggerStrengthScore),
       context: contextSnapshot,
       trigger: triggerSnapshot,
-      setupMatch: selectedFamily.score,
-      confidence: selectedFamily.score * 0.65,
-      componentScoreMap,
-      epochId: epoch.epochId,
+      setupMatch: provisionalScore,
+      confidence: provisionalScore * 0.65,
+      componentScoreMap: provisionalFamily ? componentScores(contextSnapshot, triggerSnapshot, provisionalFamily) : {},
+      epochId: runtimeState.currentEpoch?.epochId ?? null,
       contextAgeBars,
-      triggerAgeBars: triggerFresh ? 0 : null,
+      triggerAgeBars: null,
       triggerFresh: false,
       lastValidTriggerTs: runtimeState.lastValidTriggerTs,
       lastValidTriggerDirection: runtimeState.lastValidTriggerDirection,
@@ -613,34 +653,84 @@ export async function evaluateCrash300Runtime(
     });
   }
 
-  if (!triggerFresh) {
+  if (triggerSnapshot.triggerDirection === "none" || !triggerSnapshot.liveEligibleTrigger) {
     return failDecision({
       runtimeCalibration,
-      direction,
-      family: selectedFamily.family,
-      bucket: bucket.key,
-      qualityTier: qualityTierFromScores(selectedFamily.score, 0),
+      direction: null,
+      family: provisionalFamily ?? undefined,
+      qualityTier: qualityTierFromScores(provisionalScore, 0),
       context: contextSnapshot,
       trigger: triggerSnapshot,
-      setupMatch: selectedFamily.score,
-      confidence: selectedFamily.score * 0.7,
-      componentScoreMap,
-      epochId: epoch.epochId,
+      setupMatch: provisionalScore,
+      confidence: provisionalScore * 0.7,
+      componentScoreMap: provisionalFamily ? componentScores(contextSnapshot, triggerSnapshot, provisionalFamily) : {},
+      epochId: runtimeState.currentEpoch?.epochId ?? null,
       contextAgeBars,
-      triggerAgeBars: carryBars > 0 && runtimeState.lastValidTriggerTs
-        ? Math.round((context.ts - runtimeState.lastValidTriggerTs) / 60)
-        : null,
+      triggerAgeBars: null,
       triggerFresh: false,
       lastValidTriggerTs: runtimeState.lastValidTriggerTs,
       lastValidTriggerDirection: runtimeState.lastValidTriggerDirection,
       wouldBlockNoTrigger: true,
-      failReasons: ["no_trigger"],
+      thresholdSource: thresholdOrigin,
+      failReasons: ["no_fresh_1m_trigger"],
       candidateProduced: false,
     });
   }
 
+  const derivedFamily = deriveCrash300RuntimeFamily({
+    context: contextSnapshot,
+    trigger: triggerSnapshot,
+  });
+  if (derivedFamily === "unknown") {
+    invalidateEpoch(runtimeState);
+    return failDecision({
+      runtimeCalibration,
+      direction: triggerSnapshot.triggerDirection === "buy" ? "buy" : triggerSnapshot.triggerDirection === "sell" ? "sell" : null,
+      context: contextSnapshot,
+      trigger: triggerSnapshot,
+      setupMatch: provisionalScore,
+      confidence: provisionalScore * 0.7,
+      thresholdSource: thresholdOrigin,
+      failReasons: ["no_context_match"],
+      candidateProduced: false,
+    });
+  }
+
+  const selectedFamily = selectedFamilyScore(familyCandidates, derivedFamily, contextSnapshot);
+  const direction = triggerSnapshot.triggerDirection;
+  const bucketResolution = resolveCrash300RuntimeBucketForFamily({
+    runtimeCalibration,
+    family: derivedFamily,
+    context: contextSnapshot,
+    trigger: triggerSnapshot,
+    qualityScore: (selectedFamily.score * 0.65 + triggerSnapshot.triggerStrengthScore * 0.35) * 100,
+    moveDirection: direction === "buy" ? "up" : "down",
+  });
+  if (!bucketResolution) {
+    invalidateEpoch(runtimeState);
+    return failDecision({
+      runtimeCalibration,
+      direction,
+      family: derivedFamily,
+      context: contextSnapshot,
+      trigger: triggerSnapshot,
+      setupMatch: selectedFamily.score,
+      confidence: selectedFamily.score,
+      componentScoreMap: componentScores(contextSnapshot, triggerSnapshot, derivedFamily),
+      thresholdSource: thresholdOrigin,
+      failReasons: ["runtime_family_bucket_missing", "runtime_exit_policy_missing_for_phase_bucket"],
+      candidateProduced: false,
+    });
+  }
+
+  const epochAnchorTs = resolveEpochAnchorTs(contextSnapshot, context.ts, derivedFamily);
+  const epoch = ensureEpoch(runtimeState, context.ts, derivedFamily, bucketResolution.phaseDerivedBucket, direction, epochAnchorTs);
+  const epochAgeBars = Math.max(0, Math.round((context.ts - epoch.startTs) / 60));
+  const triggerDirectionMismatch = triggerSnapshot.triggerDirection !== direction;
+  const componentScoreMap = componentScores(contextSnapshot, triggerSnapshot, derivedFamily);
+
   runtimeState.lastValidTriggerTs = context.ts;
-  runtimeState.lastValidTriggerDirection = triggerSnapshot.triggerDirection === "none" ? null : triggerSnapshot.triggerDirection;
+  runtimeState.lastValidTriggerDirection = triggerSnapshot.triggerDirection;
   runtimeState.lastValidTriggerStrength = triggerSnapshot.triggerStrengthScore;
   epoch.lastTriggerTs = context.ts;
 
@@ -648,8 +738,8 @@ export async function evaluateCrash300Runtime(
     return failDecision({
       runtimeCalibration,
       direction,
-      family: selectedFamily.family,
-      bucket: bucket.key,
+      family: derivedFamily,
+      bucket: bucketResolution.phaseDerivedBucket,
       qualityTier: qualityTierFromScores(selectedFamily.score, triggerSnapshot.triggerStrengthScore),
       context: contextSnapshot,
       trigger: triggerSnapshot,
@@ -657,12 +747,16 @@ export async function evaluateCrash300Runtime(
       confidence: selectedFamily.score * 0.7,
       componentScoreMap,
       epochId: epoch.epochId,
-      contextAgeBars,
+      contextAgeBars: epochAgeBars,
       triggerAgeBars: 0,
       triggerFresh: true,
       lastValidTriggerTs: runtimeState.lastValidTriggerTs,
       lastValidTriggerDirection: runtimeState.lastValidTriggerDirection,
       wouldBlockDirectionMismatch: true,
+      thresholdSource: thresholdOrigin,
+      runtimeModelBucketKey: bucketResolution.runtimeModelBucketKey,
+      familySource: "phase_derived_trigger_semantics",
+      bucketSource: bucketResolution.bucketSource,
       failReasons: ["trigger_direction_mismatch"],
       candidateProduced: false,
     });
@@ -672,8 +766,8 @@ export async function evaluateCrash300Runtime(
     return failDecision({
       runtimeCalibration,
       direction,
-      family: selectedFamily.family,
-      bucket: bucket.key,
+      family: derivedFamily,
+      bucket: bucketResolution.phaseDerivedBucket,
       qualityTier: qualityTierFromScores(selectedFamily.score, triggerSnapshot.triggerStrengthScore),
       context: contextSnapshot,
       trigger: triggerSnapshot,
@@ -681,9 +775,13 @@ export async function evaluateCrash300Runtime(
       confidence: selectedFamily.score * 0.75,
       componentScoreMap,
       epochId: epoch.epochId,
-      contextAgeBars,
+      contextAgeBars: epochAgeBars,
       triggerAgeBars: 0,
       triggerFresh: true,
+      thresholdSource: thresholdOrigin,
+      runtimeModelBucketKey: bucketResolution.runtimeModelBucketKey,
+      familySource: "phase_derived_trigger_semantics",
+      bucketSource: bucketResolution.bucketSource,
       failReasons: ["trigger_below_model_threshold"],
       candidateProduced: false,
     });
@@ -693,8 +791,8 @@ export async function evaluateCrash300Runtime(
     return failDecision({
       runtimeCalibration,
       direction,
-      family: selectedFamily.family,
-      bucket: bucket.key,
+      family: derivedFamily,
+      bucket: bucketResolution.phaseDerivedBucket,
       qualityTier: qualityTierFromScores(selectedFamily.score, triggerSnapshot.triggerStrengthScore),
       context: contextSnapshot,
       trigger: triggerSnapshot,
@@ -702,13 +800,17 @@ export async function evaluateCrash300Runtime(
       confidence: selectedFamily.score * 0.8,
       componentScoreMap,
       epochId: epoch.epochId,
-      contextAgeBars,
+      contextAgeBars: epochAgeBars,
       triggerAgeBars: 0,
       triggerFresh: true,
       lastValidTriggerTs: runtimeState.lastValidTriggerTs,
       lastValidTriggerDirection: runtimeState.lastValidTriggerDirection,
       previousTradeInSameContextEpoch: epoch.candidateProducedTs,
       wouldBlockDuplicateEpoch: true,
+      thresholdSource: thresholdOrigin,
+      runtimeModelBucketKey: bucketResolution.runtimeModelBucketKey,
+      familySource: "phase_derived_trigger_semantics",
+      bucketSource: bucketResolution.bucketSource,
       failReasons: ["duplicate_signal_same_context_epoch"],
       candidateProduced: false,
     });
@@ -723,6 +825,7 @@ export async function evaluateCrash300Runtime(
   const featureSnapshot = {
     context: contextSnapshot,
     trigger: triggerSnapshot,
+    latestClose: contextSnapshot.latestClose,
   };
 
   return {
@@ -732,17 +835,21 @@ export async function evaluateCrash300Runtime(
     direction,
     confidence,
     qualityTier,
-    setupFamily: selectedFamily.family,
-    moveBucket: bucket.key,
+    setupFamily: derivedFamily,
+    moveBucket: bucketResolution.phaseDerivedBucket,
     setupMatch,
     evidence: {
       runtimeModelRunId: runtimeCalibration.sourceRunId,
       promotedModelRunId: runtimeCalibration.sourceRunId,
-      selectedRuntimeFamily: selectedFamily.family,
-      selectedBucket: bucket.key,
-      leadInShape,
+      selectedRuntimeFamily: derivedFamily,
+      selectedBucket: bucketResolution.phaseDerivedBucket,
+      familySource: "phase_derived_trigger_semantics",
+      bucketSource: bucketResolution.bucketSource,
+      thresholdSource: thresholdOrigin,
+      runtimeModelBucketKey: bucketResolution.runtimeModelBucketKey,
+      leadInShape: leadInShapeFromContext(contextSnapshot),
       setupMatch,
-      expectedMovePct: bucket.targetPct / 100,
+      expectedMovePct: bucketResolution.targetPct / 100,
       slRiskPct: Number(slModel["maxInitialRiskPct"] ?? 0) / 100,
       trailingActivationPct: Number(trailingModel["activationProfitPct"] ?? 0) / 100,
       trailingDistancePct: Number(trailingModel["trailingDistancePct"] ?? 0) / 100,
@@ -757,10 +864,11 @@ export async function evaluateCrash300Runtime(
       selectedContextFamily: selectedFamily.family,
       selectedTriggerTransition: triggerSnapshot.triggerTransition,
       triggerDirection: triggerSnapshot.triggerDirection,
+      liveEligibleTrigger: triggerSnapshot.liveEligibleTrigger,
       triggerStrengthScore: triggerSnapshot.triggerStrengthScore,
       contextEpochId: epoch.epochId,
-      contextAgeBars,
-      contextAgeMinutes: contextAgeBars,
+      contextAgeBars: epochAgeBars,
+      contextAgeMinutes: epochAgeBars,
       triggerAgeBars: 0,
       triggerFresh: true,
       lastValidTriggerTs: runtimeState.lastValidTriggerTs,
@@ -774,6 +882,8 @@ export async function evaluateCrash300Runtime(
       wouldBlockLateAfterMoveWindow: false,
       candidateProduced: true,
       candidateDirection: direction,
+      entryPrice: contextSnapshot.latestClose,
+      ts: context.ts,
       featureSnapshot,
     },
     featureSnapshot,

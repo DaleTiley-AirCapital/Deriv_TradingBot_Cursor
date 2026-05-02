@@ -7,6 +7,7 @@ import type { ParityAggregateReport, ParityMoveVerdict } from "../shared/parityT
 import { loadCrash300RuntimeEnvelope } from "./model.js";
 import { evaluateCrash300Runtime } from "./engine.js";
 import { createCrash300TradeCandidate } from "./candidateFactory.js";
+import type { Crash300RuntimeState } from "./features.js";
 
 const SYMBOL = "CRASH300";
 const LOOKBACK_BARS = 1500;
@@ -30,6 +31,8 @@ const CRASH300_FAMILY_COMPATIBILITY: Record<string, string[]> = {
     "drift_continuation_up",
     "post_crash_recovery_up",
     "crash_event_down",
+    "bear_trap_reversal_up",
+    "bull_trap_reversal_down",
   ],
 };
 
@@ -64,8 +67,8 @@ function expectedTradeDirection(params: {
   runtimeFamily: string | null;
 }): "buy" | "sell" | null {
   const family = normalizeFamily(params.runtimeFamily);
-  if (family === "drift_continuation_up" || family === "post_crash_recovery_up") return "buy";
-  if (family === "failed_recovery_short" || family === "crash_event_down") return "sell";
+  if (family === "drift_continuation_up" || family === "post_crash_recovery_up" || family === "bear_trap_reversal_up") return "buy";
+  if (family === "failed_recovery_short" || family === "crash_event_down" || family === "bull_trap_reversal_down") return "sell";
   if (params.moveDirection === "up") return "buy";
   if (params.moveDirection === "down") return "sell";
   return null;
@@ -77,6 +80,8 @@ function describeDirectionInterpretation(runtimeFamily: string | null): string {
   if (family === "drift_continuation_up") return "drift family trades continuation of the upward drift";
   if (family === "failed_recovery_short") return "failed recovery family trades the rejection back downward";
   if (family === "crash_event_down") return "crash event family trades the downward event leg";
+  if (family === "bear_trap_reversal_up") return "bear trap reversal family buys the reclaim after failed downside impulse";
+  if (family === "bull_trap_reversal_down") return "bull trap reversal family sells the rejection after failed upside impulse";
   return "direction inferred from move direction fallback";
 }
 
@@ -191,6 +196,29 @@ async function loadCandlesForMove(startTs: number): Promise<CandleRow[]> {
       eq(candlesTable.isInterpolated, false),
       gte(candlesTable.openTs, lookbackStart),
       lte(candlesTable.openTs, startTs),
+    ))
+    .orderBy(asc(candlesTable.openTs));
+  return rows as CandleRow[];
+}
+
+async function loadCandlesUntilTs(ts: number): Promise<CandleRow[]> {
+  const lookbackStart = ts - LOOKBACK_BARS * 60;
+  const rows = await db
+    .select({
+      open: candlesTable.open,
+      high: candlesTable.high,
+      low: candlesTable.low,
+      close: candlesTable.close,
+      openTs: candlesTable.openTs,
+      closeTs: candlesTable.closeTs,
+    })
+    .from(candlesTable)
+    .where(and(
+      eq(candlesTable.symbol, SYMBOL),
+      eq(candlesTable.timeframe, "1m"),
+      eq(candlesTable.isInterpolated, false),
+      gte(candlesTable.openTs, lookbackStart),
+      lte(candlesTable.openTs, ts),
     ))
     .orderBy(asc(candlesTable.openTs));
   return rows as CandleRow[];
@@ -352,6 +380,14 @@ export async function runCrash300CalibrationParity(params: {
         marketState: {
           features,
           featureHistory,
+          candles,
+          runtimeState: {
+            currentEpoch: null,
+            previousEpochId: null,
+            lastValidTriggerTs: null,
+            lastValidTriggerDirection: null,
+            lastValidTriggerStrength: null,
+          } satisfies Crash300RuntimeState,
           operationalRegime: regime.regime,
           regimeConfidence: regime.confidence,
         },
@@ -422,6 +458,13 @@ export async function runCrash300CalibrationParity(params: {
         runtimeFamily: decision.setupFamily ?? null,
         selectedRuntimeFamily: decision.setupFamily ?? null,
         selectedBucket: decision.moveBucket ?? null,
+        phaseDerivedFamily: String((decision.evidence as Record<string, unknown>)["selectedRuntimeFamily"] ?? decision.setupFamily ?? ""),
+        phaseDerivedBucket: String((decision.evidence as Record<string, unknown>)["selectedBucket"] ?? decision.moveBucket ?? ""),
+        triggerTransition: String((decision.evidence as Record<string, unknown>)["selectedTriggerTransition"] ?? "none"),
+        triggerDirectionAtEval: ((decision.evidence as Record<string, unknown>)["triggerDirection"] as "buy" | "sell" | "none" | undefined) ?? "none",
+        liveEligibleTrigger: Boolean((decision.evidence as Record<string, unknown>)["liveEligibleTrigger"]),
+        parityFamilyCompatible: familyMatched,
+        bucketCompatible: bucketMatched,
         candidateProduced,
         expectedTradeDirection: expectedDirection,
         actualCandidateDirection: decision.direction,
@@ -532,5 +575,156 @@ export async function runCrash300CalibrationParity(params: {
       runtimeCalibratedSetupWeak,
       gateComponentFailures,
     },
+  };
+}
+
+export async function runCrash300RuntimeTriggerValidation(params: {
+  startTs?: number;
+  endTs?: number;
+}) {
+  const endTs = params.endTs ?? Math.floor(Date.now() / 1000);
+  const startTs = params.startTs ?? (endTs - 30 * 86400);
+  const envelope = await loadCrash300RuntimeEnvelope();
+  const runtimeModel = envelope.promotedModel;
+  if (!runtimeModel) {
+    throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
+  }
+
+  const moves = await db
+    .select({
+      id: detectedMovesTable.id,
+      startTs: detectedMovesTable.startTs,
+      endTs: detectedMovesTable.endTs,
+      direction: detectedMovesTable.direction,
+      movePct: detectedMovesTable.movePct,
+      moveType: detectedMovesTable.moveType,
+    })
+    .from(detectedMovesTable)
+    .where(and(
+      eq(detectedMovesTable.symbol, SYMBOL),
+      gte(detectedMovesTable.startTs, startTs),
+      lte(detectedMovesTable.startTs, endTs),
+    ))
+    .orderBy(asc(detectedMovesTable.startTs)) as DetectedMoveRow[];
+
+  const rows: Array<Record<string, unknown>> = [];
+  const aggregates = {
+    totalMoves: moves.length,
+    candidateAtT0Count: 0,
+    noFreshTriggerCount: 0,
+    exitPolicyMissingCount: 0,
+    familyBucketMissingCount: 0,
+    directionCompatibleCount: 0,
+    bucketCompatibleCount: 0,
+    movesWithT0ReclaimTrigger: 0,
+    movesWithT0CrashContinuationTrigger: 0,
+    movesWithOnlyTPlus1DiagnosticTrigger: 0,
+  };
+
+  for (const move of moves) {
+    const evalOffsets = [
+      { key: "runtimeAtTMinus1", ts: move.startTs - 60, diagnostic: false },
+      { key: "runtimeAtT0", ts: move.startTs, diagnostic: false },
+      { key: "runtimeAtTPlus1Diagnostic", ts: move.startTs + 60, diagnostic: true },
+    ] as const;
+    const evaluations: Record<string, unknown> = {};
+    let candidateAtT0 = false;
+    let t0Transition = "none";
+    let t0Direction: "buy" | "sell" | "none" = "none";
+    let t0Family: string | null = null;
+    let t0Bucket: string | null = null;
+    let t0FailReason: string | null = null;
+
+    for (const evalPoint of evalOffsets) {
+      const candles = await loadCandlesUntilTs(evalPoint.ts);
+      const features = computeFeaturesFromSlice(SYMBOL, candles);
+      const featureHistory = buildFeatureHistory(candles);
+      const regime = features ? classifyRegimeFromSamples(features, featureHistory) : { regime: "unknown", confidence: 0 };
+      const decision = await evaluateCrash300Runtime({
+        symbol: SYMBOL,
+        mode: "paper",
+        ts: evalPoint.ts,
+        marketState: {
+          candles,
+          features,
+          featureHistory,
+          runtimeState: {
+            currentEpoch: null,
+            previousEpochId: null,
+            lastValidTriggerTs: null,
+            lastValidTriggerDirection: null,
+            lastValidTriggerStrength: null,
+          } satisfies Crash300RuntimeState,
+          operationalRegime: regime.regime,
+          regimeConfidence: regime.confidence,
+        },
+        runtimeModel: runtimeModel as unknown as Record<string, unknown>,
+        stateMap: {},
+      });
+      const evidence = decision.evidence as Record<string, unknown>;
+      const failReason = decision.failReasons[0] ?? null;
+      const out = {
+        ts: evalPoint.ts,
+        diagnosticOnly: evalPoint.diagnostic,
+        candidateProduced: Boolean(decision.valid && decision.direction),
+        triggerTransition: String(evidence["selectedTriggerTransition"] ?? "none"),
+        triggerDirection: ((evidence["triggerDirection"] as "buy" | "sell" | "none" | undefined) ?? "none"),
+        liveEligibleTrigger: Boolean(evidence["liveEligibleTrigger"]),
+        runtimeFamily: decision.setupFamily ?? null,
+        selectedBucket: decision.moveBucket ?? null,
+        failReason,
+      };
+      evaluations[evalPoint.key] = out;
+      if (evalPoint.key === "runtimeAtT0") {
+        candidateAtT0 = out.candidateProduced;
+        t0Transition = out.triggerTransition;
+        t0Direction = out.triggerDirection;
+        t0Family = out.runtimeFamily;
+        t0Bucket = out.selectedBucket;
+        t0FailReason = out.failReason;
+      }
+    }
+
+    const phaseFamily = typeof t0Family === "string" && t0Family.length > 0 ? t0Family : null;
+    const phaseBucket = typeof t0Bucket === "string" && t0Bucket.length > 0 ? t0Bucket : null;
+    const expectedDirection = normalizeMoveDirection(move.direction) === "up" ? "buy" : normalizeMoveDirection(move.direction) === "down" ? "sell" : null;
+    const directionCompatible = expectedDirection == null || t0Direction === expectedDirection;
+    const bucketCompatible = Boolean(phaseBucket && phaseBucket !== "unknown");
+    if (candidateAtT0) aggregates.candidateAtT0Count += 1;
+    if (t0FailReason === "no_fresh_1m_trigger") aggregates.noFreshTriggerCount += 1;
+    if (t0FailReason === "runtime_exit_policy_missing_for_phase_bucket") aggregates.exitPolicyMissingCount += 1;
+    if (t0FailReason === "runtime_family_bucket_missing") aggregates.familyBucketMissingCount += 1;
+    if (directionCompatible) aggregates.directionCompatibleCount += 1;
+    if (bucketCompatible) aggregates.bucketCompatibleCount += 1;
+    if (t0Transition === "bear_trap_reversal_up" || t0Transition === "failed_down_impulse_reclaim_up") aggregates.movesWithT0ReclaimTrigger += 1;
+    if (t0Transition === "crash_continuation_down") aggregates.movesWithT0CrashContinuationTrigger += 1;
+    const plusOne = evaluations["runtimeAtTPlus1Diagnostic"] as Record<string, unknown> | undefined;
+    if (!candidateAtT0 && Boolean(plusOne?.["candidateProduced"])) aggregates.movesWithOnlyTPlus1DiagnosticTrigger += 1;
+
+    rows.push({
+      moveId: move.id,
+      moveDirection: normalizeMoveDirection(move.direction),
+      movePct: move.movePct,
+      phaseDerivedFamily: phaseFamily,
+      phaseDerivedBucket: phaseBucket,
+      runtimeAtTMinus1: evaluations["runtimeAtTMinus1"],
+      runtimeAtT0: evaluations["runtimeAtT0"],
+      runtimeAtTPlus1Diagnostic: evaluations["runtimeAtTPlus1Diagnostic"],
+      candidateAtT0,
+      triggerTransitionAtT0: t0Transition,
+      triggerDirectionAtT0: t0Direction,
+      familyAtT0: t0Family,
+      bucketAtT0: t0Bucket,
+      failReasonAtT0: t0FailReason,
+    });
+  }
+
+  return {
+    symbol: SYMBOL,
+    generatedAt: new Date().toISOString(),
+    promotedModelRunId: runtimeModel.sourceRunId ?? null,
+    window: { startTs, endTs },
+    rows,
+    aggregates,
   };
 }

@@ -2,7 +2,35 @@ export type Crash300RuntimeFamily =
   | "drift_continuation_up"
   | "post_crash_recovery_up"
   | "failed_recovery_short"
-  | "crash_event_down";
+  | "crash_event_down"
+  | "bear_trap_reversal_up"
+  | "bull_trap_reversal_down";
+
+export type Crash300PhaseDerivedFamily = Crash300RuntimeFamily | "unknown";
+
+export type Crash300MoveSizeBucket =
+  | "5_to_6_pct"
+  | "6_to_8_pct"
+  | "8_to_10_pct"
+  | "10_plus_pct";
+
+export type Crash300PhaseBucketContext =
+  | "trending"
+  | "recovery"
+  | "compression"
+  | "failed_recovery"
+  | "crash_event"
+  | "reversal";
+
+export type Crash300PhaseDerivedBucket =
+  `${"up" | "down"}|${Crash300PhaseBucketContext}|${Crash300MoveSizeBucket}`;
+
+export type Crash300SemanticsMode = "runtime" | "diagnostic";
+
+export type Crash300ThresholdSource =
+  | "runtime_model"
+  | "runtime_model_recommended_gate"
+  | "phase_identifier_aggregate";
 
 export type Crash300TriggerTransition =
   | "none"
@@ -128,6 +156,16 @@ export interface Crash300TriggerSnapshot {
   confirmationBars: number;
   triggerDirection: "buy" | "sell" | "none";
   triggerStrengthScore: number;
+}
+
+export interface Crash300SemanticTriggerSnapshot extends Crash300TriggerSnapshot {
+  triggerDiagnosticOnly: boolean;
+  liveEligibleTrigger: boolean;
+  triggerConfirmationOffsetBars: number | null;
+  adverseImpulseBeforeTrigger: boolean;
+  adverseImpulseDirection: "up" | "down" | "none";
+  adverseImpulsePct: number;
+  reclaimConfirmed: boolean;
 }
 
 export interface Crash300FamilyCandidate {

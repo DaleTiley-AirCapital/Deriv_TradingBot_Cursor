@@ -81,7 +81,7 @@ import {
 } from "../core/calibration/backtestOptimiser.js";
 import { getSymbolService } from "../symbol-services/shared/SymbolServiceRegistry.js";
 import { loadCrash300RuntimeEnvelope } from "../symbol-services/CRASH300/model.js";
-import { runCrash300CalibrationParity } from "../symbol-services/CRASH300/calibration.js";
+import { runCrash300CalibrationParity, runCrash300RuntimeTriggerValidation } from "../symbol-services/CRASH300/calibration.js";
 import { buildCrash300PreMoveSnapshots, summarizeCrash300PreMoveSnapshots } from "../symbol-services/CRASH300/featureSnapshots.js";
 import { buildCrash300PhaseIdentifierReport } from "../symbol-services/CRASH300/phaseIdentifiers.js";
 
@@ -1754,6 +1754,32 @@ router.get("/calibration/runtime-model/:symbol/parity-report", async (req, res):
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Parity report generation failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/calibration/runtime-model/:symbol/runtime-trigger-validation", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  if (symbol !== "CRASH300") {
+    res.status(400).json({ error: "Runtime trigger validation is currently available for CRASH300 only." });
+    return;
+  }
+
+  try {
+    const endTs = Number(req.query.endTs ?? Math.floor(Date.now() / 1000));
+    const startTs = Number(
+      req.query.startTs ??
+        (Math.floor(Date.now() / 1000) - Math.max(30, Math.min(730, Number(req.query.windowDays ?? 30))) * 86400),
+    );
+    const report = await runCrash300RuntimeTriggerValidation({ startTs, endTs });
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, { ok: true, ...report }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Runtime trigger validation failed";
     res.status(500).json({ error: message });
   }
 });
