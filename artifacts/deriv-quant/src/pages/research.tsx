@@ -454,11 +454,13 @@ interface V3Summary {
   lossCount: number;
   winRate: number;
   avgPnlPct: number;
+  summedTradePnlPct: number;
   avgWinPct: number;
   avgLossPct: number;
   totalPnlPct: number;
   profitFactor: number;
   maxDrawdownPct: number;
+  summedTradeDrawdownPct: number;
   avgHoldBars: number;
   leg1HitRate: number;
   byEngine: Record<string, { count: number; wins: number; avgPnlPct: number }>;
@@ -474,6 +476,27 @@ interface V3Summary {
   slHitsBlocked?: number | null;
   resultingWinRate?: number | null;
   resultingTradeCount?: number | null;
+  capitalModel?: {
+    startingCapitalUsd: number;
+    allocationPct: number;
+    maxConcurrentTrades: number;
+    compoundingEnabled: boolean;
+    syntheticEquityUsd: number;
+    syntheticPositionSizeUsd: number;
+    equityCurveModel: string;
+    tradePnlBasis: string;
+  };
+  endingCapitalUsd?: number;
+  netProfitUsd?: number;
+  accountReturnPct?: number;
+  allocatedCapitalReturnPct?: number;
+  averageTradePnlPct?: number;
+  maxDrawdownUsd?: number;
+  accountMaxDrawdownPct?: number;
+  largestWinUsd?: number;
+  largestLossUsd?: number;
+  averageWinUsd?: number;
+  averageLossUsd?: number;
 }
 
 type BacktestTierMode = "A" | "AB" | "ABC" | "ALL";
@@ -800,6 +823,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
     result.symbol === "CRASH300" &&
     admissionPolicy &&
     admissionPolicy.config;
+  const startingCapitalUsd = s.capitalModel?.startingCapitalUsd ?? 600;
 
   return (
     <div className="space-y-4">
@@ -807,10 +831,12 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <SummaryCard label="Trades" value={String(s.tradeCount)} sub={`${s.winCount}W / ${s.lossCount}L`} />
         <SummaryCard label="Win rate" value={pct(s.winRate)} />
-        <SummaryCard label="Avg P&L" value={pct(s.avgPnlPct)} />
-        <SummaryCard label="Total P&L" value={pct(s.totalPnlPct)} />
+        <SummaryCard label="Avg Trade P&L" value={pct(s.averageTradePnlPct ?? s.avgPnlPct)} />
+        <SummaryCard label="Summed Trade P&L" value={pct(s.summedTradePnlPct ?? s.totalPnlPct)} />
+        <SummaryCard label="Account Return" value={pct(s.accountReturnPct ?? 0)} sub={`Estimated on $${startingCapitalUsd.toFixed(0)}`} />
+        <SummaryCard label="Estimated Profit" value={`$${Number(s.netProfitUsd ?? 0).toFixed(2)}`} sub={`Ending $${Number(s.endingCapitalUsd ?? startingCapitalUsd).toFixed(2)}`} />
         <SummaryCard label="Profit factor" value={isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : ""} />
-        <SummaryCard label="Max drawdown" value={pct(s.maxDrawdownPct)} />
+        <SummaryCard label="Account Drawdown" value={pct(s.accountMaxDrawdownPct ?? 0)} sub={`$${Number(s.maxDrawdownUsd ?? 0).toFixed(2)}`} />
         <SummaryCard label="Avg hold" value={holdLabel(s.avgHoldBars)} />
         <SummaryCard label="Leg1 hit rate" value={pct(s.leg1HitRate)} />
       </div>
@@ -833,6 +859,9 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
           <span><span className="text-muted-foreground">Run: </span>{runtime?.sourceRunId ?? "none"}</span>
           <span><span className="text-muted-foreground">Entry: </span>{runtime?.entryModel ?? "native"}</span>
           <span><span className="text-muted-foreground">Tier mode: </span>{result.tierMode ?? "ALL"}</span>
+          <span><span className="text-muted-foreground">Capital model: </span>${startingCapitalUsd.toFixed(0)} start @ {((s.capitalModel?.allocationPct ?? 0) * 100).toFixed(0)}% allocation</span>
+          <span><span className="text-muted-foreground">Synthetic size: </span>${Number(s.capitalModel?.syntheticPositionSizeUsd ?? 0).toFixed(0)}</span>
+          <span><span className="text-muted-foreground">Compounding: </span>{String(s.capitalModel?.compoundingEnabled ?? false)}</span>
           <span>
             <span className="text-muted-foreground">TP buckets: </span>
             <span className={runtime?.dynamicTpEnabled ? "text-emerald-300" : "text-amber-300"}>
@@ -1059,6 +1088,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
   const [latestPersistedRunIds, setLatestPersistedRunIds] = useState<Record<string, number>>({});
   const [historyRunLoadError, setHistoryRunLoadError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startingCapitalUsd = 600;
 
   useEffect(() => {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
@@ -1175,7 +1205,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
 
     try {
       const { startTs, endTs } = getWindowRange(windowDays);
-      const body: Record<string, unknown> = { symbol, startTs, endTs, tierMode };
+      const body: Record<string, unknown> = { symbol, startTs, endTs, tierMode, startingCapitalUsd };
       if (crash300PolicyRequest) body.crash300AdmissionPolicy = crash300PolicyRequest;
 
       const d = await apiFetch("backtest/v3/run", {
@@ -1213,7 +1243,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
       const sweep = {} as Record<BacktestTierMode, Record<string, V3Result>>;
 
       for (const mode of BACKTEST_TIER_MODES.map(item => item.value)) {
-        const body: Record<string, unknown> = { symbol, startTs, endTs, tierMode: mode };
+        const body: Record<string, unknown> = { symbol, startTs, endTs, tierMode: mode, startingCapitalUsd };
         if (crash300PolicyRequest) body.crash300AdmissionPolicy = crash300PolicyRequest;
         const d = await apiFetch("backtest/v3/run", {
           method: "POST",
@@ -1259,6 +1289,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
         tierMode,
         ...getWindowRange(windowDays),
         scoreGate: "runtime-platform-state",
+        startingCapitalUsd,
         crash300AdmissionPolicy: crash300PolicyRequest ?? null,
       },
       symbols: Object.fromEntries(
@@ -1266,6 +1297,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
           totalBars: r.totalBars,
           runtimeModel: r.runtimeModel ?? null,
           admissionPolicy: r.admissionPolicy ?? null,
+          summary: r.summary,
           totalTrades: r.trades.length,
           wins: r.trades.filter(t => t.pnlPct > 0).length,
           losses: r.trades.filter(t => t.pnlPct <= 0).length,
@@ -1303,10 +1335,14 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
         tierMode,
         ...getWindowRange(windowDays),
         scoreGate: "runtime-platform-state",
+        startingCapitalUsd,
         crash300AdmissionPolicy: crash300PolicyRequest ?? null,
       },
       admissionPolicyBySymbol: Object.fromEntries(
         Object.entries(results).map(([sym, r]) => [sym, r.admissionPolicy ?? null]),
+      ),
+      summaryBySymbol: Object.fromEntries(
+        Object.entries(results).map(([sym, r]) => [sym, r.summary]),
       ),
       total_trades: allTrades.length,
       trades: allTrades,
@@ -1606,7 +1642,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
                     <th className="text-left py-2 pr-3 font-medium">Mode</th>
                     <th className="text-right py-2 px-3 font-medium">Trades</th>
                     <th className="text-right py-2 px-3 font-medium">Win rate</th>
-                    <th className="text-right py-2 px-3 font-medium">Total P&L</th>
+                    <th className="text-right py-2 px-3 font-medium">Summed Trade P&L</th>
                     <th className="text-right py-2 px-3 font-medium">Drawdown</th>
                     <th className="text-right py-2 px-3 font-medium">PF</th>
                     <th className="text-right py-2 px-3 font-medium">Captured</th>

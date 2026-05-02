@@ -14,6 +14,7 @@ import {
   type V3BacktestResult,
 } from "../core/backtest/backtestRunner.js";
 import { buildCrash300TradeOutcomeAttributionReport } from "../core/backtest/tradeOutcomeAttribution.js";
+import { buildCrash300BacktestComparisonReport } from "../core/backtest/backtestComparison.js";
 import { ACTIVE_SYMBOLS } from "../core/engineTypes.js";
 
 const router: IRouter = Router();
@@ -453,6 +454,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
     endTs,
     tierMode = "ALL",
     crash300AdmissionPolicy = null,
+    startingCapitalUsd = 600,
   } = req.body ?? {};
 
   const validSymbols = [...ACTIVE_SYMBOLS, "all"];
@@ -499,6 +501,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
         mode,
         normalizedTierMode as "A" | "AB" | "ABC" | "ALL",
         crash300AdmissionPolicy,
+        Number(startingCapitalUsd),
       );
       results = multi as Record<string, unknown>;
     } else {
@@ -509,6 +512,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
         mode,
         tierMode: normalizedTierMode as "A" | "AB" | "ABC" | "ALL",
         crash300AdmissionPolicy,
+        startingCapitalUsd: Number(startingCapitalUsd),
       });
       results = { [symbol]: single };
     }
@@ -603,6 +607,60 @@ router.get("/backtest/v3/history", async (req, res): Promise<void> => {
     res.json({ ok: true, symbol, runs });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load V3 backtest history";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.get("/backtest/v3/history/compare", async (req, res): Promise<void> => {
+  const baselineRunId = Number(req.query.baselineRunId);
+  const policyRunId = Number(req.query.policyRunId);
+  const includeWindowStability = String(req.query.includeWindowStability ?? "false").toLowerCase() === "true";
+
+  if (!Number.isInteger(baselineRunId) || baselineRunId <= 0 || !Number.isInteger(policyRunId) || policyRunId <= 0) {
+    res.status(400).json({ error: "baselineRunId and policyRunId query parameters are required" });
+    return;
+  }
+
+  try {
+    await ensureV3BacktestRunsTable();
+    const rows = await db.execute(sql`
+      SELECT
+        id,
+        symbol,
+        start_ts AS "startTs",
+        end_ts AS "endTs",
+        mode,
+        tier_mode AS "tierMode",
+        runtime_model_run_id AS "runtimeModelRunId",
+        summary,
+        result,
+        created_at AS "createdAt"
+      FROM v3_backtest_runs
+      WHERE id IN (${baselineRunId}, ${policyRunId})
+    `);
+    const rowMap = new Map<number, PersistedV3RunRow>();
+    for (const row of rows.rows as PersistedV3RunRow[]) rowMap.set(Number(row.id), row);
+    const baselineRow = rowMap.get(baselineRunId);
+    const policyRow = rowMap.get(policyRunId);
+    if (!baselineRow || !policyRow) {
+      res.status(404).json({ error: "One or both V3 backtest runs were not found" });
+      return;
+    }
+    const baselineResult = asRecord(baselineRow.result) as unknown as V3BacktestResult;
+    const policyResult = asRecord(policyRow.result) as unknown as V3BacktestResult;
+    const report = await buildCrash300BacktestComparisonReport({
+      baselineRunId,
+      baselineResult,
+      baselineCreatedAt: baselineRow.createdAt,
+      policyRunId,
+      policyResult,
+      policyCreatedAt: policyRow.createdAt,
+      includeWindowStability,
+    });
+    res.json({ ok: true, report });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to compare V3 backtest runs";
+    console.error(`[backtest/v3/history/compare] error:`, message);
     res.status(500).json({ error: message });
   }
 });

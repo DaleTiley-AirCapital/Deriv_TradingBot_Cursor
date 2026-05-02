@@ -89,6 +89,7 @@ const SYNTHETIC_EQUITY = 10_000;
 const DEFAULT_ALLOCATION_PCT = 0.15;     // matches live portfolioAllocatorV3 default
 const SYNTHETIC_SIZE = SYNTHETIC_EQUITY * DEFAULT_ALLOCATION_PCT; // = 1500
 const HTF_AVERAGING_WINDOW = 60;         // 60 feature samples â‰ˆ 1 hour (matches live)
+const DEFAULT_REPORT_STARTING_CAPITAL_USD = 600;
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -213,11 +214,13 @@ export interface V3BacktestResult {
     lossCount: number;
     winRate: number;
     avgPnlPct: number;
+    summedTradePnlPct: number;
     avgWinPct: number;
     avgLossPct: number;
     totalPnlPct: number;
     profitFactor: number;
     maxDrawdownPct: number;
+    summedTradeDrawdownPct: number;
     avgHoldBars: number;
     avgMfePct: number;
     avgMaePct: number;
@@ -246,6 +249,27 @@ export interface V3BacktestResult {
     slHitsBlocked?: number | null;
     resultingWinRate?: number | null;
     resultingTradeCount?: number | null;
+    capitalModel: {
+      startingCapitalUsd: number;
+      allocationPct: number;
+      maxConcurrentTrades: number;
+      compoundingEnabled: boolean;
+      syntheticEquityUsd: number;
+      syntheticPositionSizeUsd: number;
+      equityCurveModel: string;
+      tradePnlBasis: string;
+    };
+    endingCapitalUsd: number;
+    netProfitUsd: number;
+    accountReturnPct: number;
+    allocatedCapitalReturnPct: number;
+    averageTradePnlPct: number;
+    maxDrawdownUsd: number;
+    accountMaxDrawdownPct: number;
+    largestWinUsd: number;
+    largestLossUsd: number;
+    averageWinUsd: number;
+    averageLossUsd: number;
   };
 }
 
@@ -257,6 +281,7 @@ export interface V3BacktestRequest {
   tierMode?: BacktestTierMode;
   runtimeCalibrationOverride?: LiveCalibrationProfile | null;
   crash300AdmissionPolicy?: Partial<Crash300AdmissionPolicyConfig> | null;
+  startingCapitalUsd?: number;
 }
 
 export type BacktestTierMode = "A" | "AB" | "ABC" | "ALL";
@@ -409,18 +434,38 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
+function avg(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
 // â”€â”€ Summary builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function computeSummary(
   trades: V3BacktestTrade[],
   blockedByEngine: Record<string, number>,
   admissionPolicyMeta?: V3BacktestResult["admissionPolicy"],
+  accountingInput?: {
+    startingCapitalUsd?: number;
+    allocationPct?: number;
+    maxConcurrentTrades?: number;
+    compoundingEnabled?: boolean;
+    syntheticEquityUsd?: number;
+    syntheticPositionSizeUsd?: number;
+  },
 ): V3BacktestResult["summary"] {
+  const startingCapitalUsd = Math.max(1, accountingInput?.startingCapitalUsd ?? DEFAULT_REPORT_STARTING_CAPITAL_USD);
+  const allocationPct = accountingInput?.allocationPct ?? DEFAULT_ALLOCATION_PCT;
+  const maxConcurrentTrades = accountingInput?.maxConcurrentTrades ?? 1;
+  const compoundingEnabled = accountingInput?.compoundingEnabled ?? false;
+  const syntheticEquityUsd = accountingInput?.syntheticEquityUsd ?? SYNTHETIC_EQUITY;
+  const syntheticPositionSizeUsd = accountingInput?.syntheticPositionSizeUsd ?? SYNTHETIC_SIZE;
+
   if (trades.length === 0) {
     return {
       tradeCount: 0, winCount: 0, lossCount: 0, winRate: 0,
-      avgPnlPct: 0, avgWinPct: 0, avgLossPct: 0, totalPnlPct: 0,
-      profitFactor: 0, maxDrawdownPct: 0, avgHoldBars: 0,
+      avgPnlPct: 0, summedTradePnlPct: 0, avgWinPct: 0, avgLossPct: 0, totalPnlPct: 0,
+      profitFactor: 0, maxDrawdownPct: 0, summedTradeDrawdownPct: 0, avgHoldBars: 0,
       avgMfePct: 0, avgMaePct: 0, extensionProbability: 0,
       mfePctP25: 0, mfePctP50: 0, mfePctP75: 0, mfePctP90: 0,
       maePctP25: 0, maePctP50: 0, maePctP75: 0, maePctP90: 0,
@@ -437,6 +482,27 @@ function computeSummary(
       slHitsBlocked: admissionPolicyMeta?.slHitsBlocked ?? null,
       resultingWinRate: admissionPolicyMeta?.resultingWinRate ?? 0,
       resultingTradeCount: admissionPolicyMeta?.resultingTradeCount ?? 0,
+      capitalModel: {
+        startingCapitalUsd,
+        allocationPct,
+        maxConcurrentTrades,
+        compoundingEnabled,
+        syntheticEquityUsd,
+        syntheticPositionSizeUsd,
+        equityCurveModel: "fixed-allocation-non-compounding-pnl-with-normalized-proxy-used-separately-for-risk-gates",
+        tradePnlBasis: "trade.pnlPct is per-trade return on the synthetic allocated position size",
+      },
+      endingCapitalUsd: startingCapitalUsd,
+      netProfitUsd: 0,
+      accountReturnPct: 0,
+      allocatedCapitalReturnPct: 0,
+      averageTradePnlPct: 0,
+      maxDrawdownUsd: 0,
+      accountMaxDrawdownPct: 0,
+      largestWinUsd: 0,
+      largestLossUsd: 0,
+      averageWinUsd: 0,
+      averageLossUsd: 0,
     };
   }
 
@@ -498,17 +564,34 @@ function computeSummary(
     byRegime[k].winRate = byRegime[k].count > 0 ? byRegime[k].wins / byRegime[k].count : 0;
   }
 
+  const summedTradePnlPct = trades.reduce((s, t) => s + t.pnlPct, 0);
+  const allocatedCapitalReturnPct = summedTradePnlPct;
+  const accountReturnPct = summedTradePnlPct * allocationPct;
+  const netProfitUsd = startingCapitalUsd * accountReturnPct;
+  const endingCapitalUsd = startingCapitalUsd + netProfitUsd;
+  const summedTradeDrawdownPct = maxDd;
+  const accountMaxDrawdownPct = maxDd * allocationPct;
+  const maxDrawdownUsd = startingCapitalUsd * accountMaxDrawdownPct;
+  const winUsdValues = wins.map((trade) => trade.pnlPct * startingCapitalUsd * allocationPct);
+  const lossUsdValues = losses.map((trade) => trade.pnlPct * startingCapitalUsd * allocationPct);
+  const largestWinUsd = winUsdValues.length > 0 ? Math.max(...winUsdValues) : 0;
+  const largestLossUsd = lossUsdValues.length > 0 ? Math.min(...lossUsdValues) : 0;
+  const averageWinUsd = avg(winUsdValues);
+  const averageLossUsd = avg(lossUsdValues);
+
   return {
     tradeCount: trades.length,
     winCount: wins.length,
     lossCount: losses.length,
     winRate: trades.length > 0 ? wins.length / trades.length : 0,
     avgPnlPct: trades.reduce((s, t) => s + t.pnlPct, 0) / trades.length,
+    summedTradePnlPct,
     avgWinPct: wins.length > 0 ? grossProfit / wins.length : 0,
     avgLossPct: losses.length > 0 ? -grossLoss / losses.length : 0,
-    totalPnlPct: trades.reduce((s, t) => s + t.pnlPct, 0),
+    totalPnlPct: summedTradePnlPct,
     profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0,
     maxDrawdownPct: maxDd,
+    summedTradeDrawdownPct,
     avgHoldBars: trades.reduce((s, t) => s + t.holdBars, 0) / trades.length,
     avgMfePct: trades.reduce((s, t) => s + t.mfePct, 0) / trades.length,
     avgMaePct: trades.reduce((s, t) => s + Math.abs(t.maePct), 0) / trades.length,
@@ -537,6 +620,27 @@ function computeSummary(
     slHitsBlocked: admissionPolicyMeta?.slHitsBlocked ?? null,
     resultingWinRate: admissionPolicyMeta?.resultingWinRate ?? (trades.length > 0 ? wins.length / trades.length : 0),
     resultingTradeCount: admissionPolicyMeta?.resultingTradeCount ?? trades.length,
+    capitalModel: {
+      startingCapitalUsd,
+      allocationPct,
+      maxConcurrentTrades,
+      compoundingEnabled,
+      syntheticEquityUsd,
+      syntheticPositionSizeUsd,
+      equityCurveModel: "fixed-allocation-non-compounding-pnl-with-normalized-proxy-used-separately-for-risk-gates",
+      tradePnlBasis: "trade.pnlPct is per-trade return on the synthetic allocated position size",
+    },
+    endingCapitalUsd,
+    netProfitUsd,
+    accountReturnPct,
+    allocatedCapitalReturnPct,
+    averageTradePnlPct: trades.reduce((s, t) => s + t.pnlPct, 0) / trades.length,
+    maxDrawdownUsd,
+    accountMaxDrawdownPct,
+    largestWinUsd,
+    largestLossUsd,
+    averageWinUsd,
+    averageLossUsd,
   };
 }
 
@@ -1001,6 +1105,7 @@ export async function runV3Backtest(
   const symbol = req.symbol;
   const mode = req.mode ?? "paper";
   const tierMode = normalizeBacktestTierMode(req.tierMode);
+  const startingCapitalUsd = Math.max(1, Number(req.startingCapitalUsd ?? DEFAULT_REPORT_STARTING_CAPITAL_USD));
   const runtimeQualityBands = allowedRuntimeQualityBands(tierMode);
   const detectedMoveTiers = allowedDetectedMoveTiers(tierMode);
   const crash300AdmissionPolicy = normalizeCrash300AdmissionPolicyConfig(req.crash300AdmissionPolicy);
@@ -1054,7 +1159,14 @@ export async function runV3Backtest(
         trades: [],
         blockedCandidateCount: 0,
         blockedReasonsCounts: {},
-      })),
+      }), {
+        startingCapitalUsd,
+        allocationPct: DEFAULT_ALLOCATION_PCT,
+        maxConcurrentTrades: 1,
+        compoundingEnabled: false,
+        syntheticEquityUsd: SYNTHETIC_EQUITY,
+        syntheticPositionSizeUsd: SYNTHETIC_SIZE,
+      }),
     };
   }
 
@@ -1928,7 +2040,14 @@ export async function runV3Backtest(
     trades,
     simulationGaps: runSimulationGaps,
     moveOverlap,
-    summary: computeSummary(trades, blockedByEngine, admissionPolicyMeta),
+    summary: computeSummary(trades, blockedByEngine, admissionPolicyMeta, {
+      startingCapitalUsd,
+      allocationPct: DEFAULT_ALLOCATION_PCT,
+      maxConcurrentTrades: maxOpenTrades,
+      compoundingEnabled: false,
+      syntheticEquityUsd: SYNTHETIC_EQUITY,
+      syntheticPositionSizeUsd: SYNTHETIC_SIZE,
+    }),
   };
 }
 
@@ -1959,11 +2078,13 @@ export async function runV3BacktestMulti(
   mode?: "paper" | "demo" | "real",
   tierModeRaw?: BacktestTierMode,
   crash300AdmissionPolicyRaw?: Partial<Crash300AdmissionPolicyConfig> | null,
+  startingCapitalUsdRaw?: number,
 ): Promise<Record<string, V3BacktestResult>> {
   const tierMode = normalizeBacktestTierMode(tierModeRaw);
   const runtimeQualityBands = allowedRuntimeQualityBands(tierMode);
   const detectedMoveTiers = allowedDetectedMoveTiers(tierMode);
   const crash300AdmissionPolicy = normalizeCrash300AdmissionPolicyConfig(crash300AdmissionPolicyRaw);
+  const startingCapitalUsd = Math.max(1, Number(startingCapitalUsdRaw ?? DEFAULT_REPORT_STARTING_CAPITAL_USD));
   if (symbols.length <= 1) {
     const result = await runV3Backtest({
       symbol: symbols[0] ?? "",
@@ -1972,6 +2093,7 @@ export async function runV3BacktestMulti(
       mode,
       tierMode,
       crash300AdmissionPolicy,
+      startingCapitalUsd,
     });
     return symbols[0] ? { [symbols[0]]: result } : {};
   }
@@ -2144,7 +2266,14 @@ export async function runV3BacktestMulti(
           trades: [],
           blockedCandidateCount: 0,
           blockedReasonsCounts: {},
-        })),
+        }), {
+          startingCapitalUsd,
+          allocationPct: DEFAULT_ALLOCATION_PCT,
+          maxConcurrentTrades: sharedMaxOpenTrades,
+          compoundingEnabled: false,
+          syntheticEquityUsd: SYNTHETIC_EQUITY,
+          syntheticPositionSizeUsd: SYNTHETIC_SIZE,
+        }),
       };
     }
     return out;
@@ -2727,7 +2856,14 @@ export async function runV3BacktestMulti(
       trades: ctx.trades,
       simulationGaps: [],
       moveOverlap,
-      summary: computeSummary(ctx.trades, ctx.blockedByEngine, admissionPolicyMeta),
+      summary: computeSummary(ctx.trades, ctx.blockedByEngine, admissionPolicyMeta, {
+        startingCapitalUsd,
+        allocationPct: DEFAULT_ALLOCATION_PCT,
+        maxConcurrentTrades: ctx.maxOpenTrades,
+        compoundingEnabled: false,
+        syntheticEquityUsd: SYNTHETIC_EQUITY,
+        syntheticPositionSizeUsd: SYNTHETIC_SIZE,
+      }),
     };
   }
 
@@ -2762,7 +2898,14 @@ export async function runV3BacktestMulti(
           trades: [],
           blockedCandidateCount: 0,
           blockedReasonsCounts: {},
-        })),
+        }), {
+          startingCapitalUsd,
+          allocationPct: DEFAULT_ALLOCATION_PCT,
+          maxConcurrentTrades: sharedMaxOpenTrades,
+          compoundingEnabled: false,
+          syntheticEquityUsd: SYNTHETIC_EQUITY,
+          syntheticPositionSizeUsd: SYNTHETIC_SIZE,
+        }),
       };
     }
   }
