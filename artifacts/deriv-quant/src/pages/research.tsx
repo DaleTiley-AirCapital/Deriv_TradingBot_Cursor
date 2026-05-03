@@ -8,6 +8,10 @@ import {
 import { cn } from "@/lib/utils";
 import { formatDurationCompact } from "@/lib/time";
 import {
+  ELITE_SYNTHESIS_STORAGE_KEY,
+  writeActiveEliteSynthesisJob,
+} from "@/lib/eliteSynthesis";
+import {
   ACTIVE_SERVICE_SYMBOLS,
   SERVICE_SELECTOR_OPTIONS,
   getSymbolLabel,
@@ -359,6 +363,25 @@ type V3BacktestJobStatus = {
   startedAt?: string | null;
   completedAt?: string | null;
   lastHeartbeatAt?: string | null;
+};
+
+type EliteSynthesisSearchProfileUi = "fast" | "balanced" | "deep";
+
+type EliteSynthesisJobStatusUi = {
+  id: number;
+  serviceId: string;
+  symbol: string;
+  status: string;
+  stage: string;
+  progressPct: number;
+  currentPass?: number;
+  maxPasses?: number;
+  message?: string | null;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  heartbeatAt?: string | null;
+  resultSummary?: Record<string, unknown> | null;
 };
 
 const BACKTEST_TIER_MODES: Array<{ value: BacktestTierMode; label: string }> = [
@@ -931,6 +954,7 @@ function BacktestTab({
   );
   const [running, setRunning] = useState(false);
   const [sweeping, setSweeping] = useState(false);
+  const [showAdvancedBacktestOptions, setShowAdvancedBacktestOptions] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [results, setResults] = useState<Record<string, V3Result> | null>(null);
   const [tierSweep, setTierSweep] = useState<Record<BacktestTierMode, Record<string, V3Result>> | null>(null);
@@ -1365,11 +1389,10 @@ function BacktestTab({
       {/* Controls */}
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
         <div>
-          <h3 className="text-sm font-semibold">V3 Isolated Backtest Engine</h3>
+          <h3 className="text-sm font-semibold">Validate Current Runtime Backtest</h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Replays historical 1m candles through the live V3 engines (CRASH300, BOOM300, R_75, R_100) with a hybrid exit model.
-            Spike hazard is set to neutral  a conservative assumption for backtesting. All scoring and engine logic is identical to live.
-            <strong className="text-foreground"> Running all symbols over {windowLabel(windowDays)} takes ~60s.</strong>
+            Backtest replays selected service runtime logic against historical candles.
+            Advanced diagnostics can test tiers and policies manually, but normal workflow uses Integrated Elite Synthesis to search combinations automatically.
           </p>
         </div>
 
@@ -1408,72 +1431,92 @@ function BacktestTab({
               {getWindowRange(windowDays).startDateStr}  {getWindowRange(windowDays).endDateStr}
             </div>
           </div>
-
-          <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">Tier mode</label>
-            <select
-              value={tierMode}
-              onChange={e => setTierMode(e.target.value as BacktestTierMode)}
-              className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-            >
-              {BACKTEST_TIER_MODES.map(mode => (
-                <option key={mode.value} value={mode.value}>{mode.label}</option>
-              ))}
-            </select>
+          <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
+            Heavy exports and trade-level artifacts live under <span className="text-foreground font-medium">Reports</span>.
           </div>
         </div>
 
-        {symbol === "CRASH300" && (
-          <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3">
+        <div className="rounded-lg border border-border/30 bg-muted/10 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowAdvancedBacktestOptions((value) => !value)}
+            className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left"
+          >
             <div>
-              <h4 className="text-xs font-semibold text-cyan-100">CRASH300 Admission Policy</h4>
+              <p className="text-xs font-semibold text-foreground">Advanced backtest options</p>
               <p className="text-[11px] text-muted-foreground mt-1">
-                Backtest-only admission filter presets for previewing or enforcing proven-bad trade blocks without changing strategy logic.
+                Diagnostics only. Integrated Elite Synthesis searches tiers, policies, triggers, buckets, entries, exits, and daily limits automatically.
               </p>
             </div>
-            <div className="space-y-1">
-              <label className="text-[11px] text-muted-foreground">Preset</label>
-              <select
-                value={admissionPolicyPreset}
-                onChange={(e) => setAdmissionPolicyPresetValue(e.target.value as Crash300AdmissionPolicyPreset)}
-                className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-              >
-                {CRASH300_ADMISSION_POLICY_PRESETS.map((preset) => (
-                  <option key={preset.value} value={preset.value}>{preset.label}</option>
-                ))}
-                <option value="custom">Custom</option>
-              </select>
+            {showAdvancedBacktestOptions ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          </button>
+          {showAdvancedBacktestOptions && (
+            <div className="border-t border-border/20 px-3 py-3 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[11px] text-muted-foreground">Tier mode</label>
+                  <select
+                    value={tierMode}
+                    onChange={e => setTierMode(e.target.value as BacktestTierMode)}
+                    className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+                  >
+                    {BACKTEST_TIER_MODES.map(mode => (
+                      <option key={mode.value} value={mode.value}>{mode.label}</option>
+                    ))}
+                  </select>
+                </div>
+                {symbol === "CRASH300" && (
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-muted-foreground">Admission policy preset</label>
+                    <select
+                      value={admissionPolicyPreset}
+                      onChange={(e) => setAdmissionPolicyPresetValue(e.target.value as Crash300AdmissionPolicyPreset)}
+                      className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+                    >
+                      {CRASH300_ADMISSION_POLICY_PRESETS.map((preset) => (
+                        <option key={preset.value} value={preset.value}>{preset.label}</option>
+                      ))}
+                      <option value="custom">Custom</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {symbol === "CRASH300" && (
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                    <span>Enabled: <span className="text-foreground">{String(admissionPolicyConfig.enabled)}</span></span>
+                    <span>Mode: <span className="text-foreground">{admissionPolicyConfig.mode}</span></span>
+                    <span>Preset: <span className="text-foreground">{admissionPolicyPreset === "custom" ? "Custom" : CRASH300_ADMISSION_POLICY_PRESETS.find((preset) => preset.value === admissionPolicyPreset)?.label ?? "Custom"}</span></span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {([
+                      ["blockWrongDirectionWithTrigger", "blockWrongDirectionWithTrigger"],
+                      ["blockPostCrashRecoveryUp", "blockPostCrashRecoveryUp"],
+                      ["blockUpRecovery10PlusPct", "blockUpRecovery10PlusPct"],
+                      ["blockRecoveryUpOnDownMove", "blockRecoveryUpOnDownMove"],
+                      ["blockCrashDownOnUpMove", "blockCrashDownOnUpMove"],
+                    ] as Array<[keyof Crash300AdmissionPolicyConfig, string]>).map(([key, label]) => (
+                      <label
+                        key={key}
+                        className="flex items-center gap-2 rounded border border-border/30 bg-muted/10 px-2 py-2 text-[11px] text-foreground"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={Boolean(admissionPolicyConfig[key])}
+                          onChange={(e) => updateAdmissionPolicyToggle(key, e.target.checked)}
+                          disabled={key === "enabled" || key === "mode"}
+                          className="rounded border-border/50 bg-background"
+                        />
+                        <span className="font-mono">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-              {([
-                ["blockWrongDirectionWithTrigger", "blockWrongDirectionWithTrigger"],
-                ["blockPostCrashRecoveryUp", "blockPostCrashRecoveryUp"],
-                ["blockUpRecovery10PlusPct", "blockUpRecovery10PlusPct"],
-                ["blockRecoveryUpOnDownMove", "blockRecoveryUpOnDownMove"],
-                ["blockCrashDownOnUpMove", "blockCrashDownOnUpMove"],
-              ] as Array<[keyof Crash300AdmissionPolicyConfig, string]>).map(([key, label]) => (
-                <label
-                  key={key}
-                  className="flex items-center gap-2 rounded border border-border/30 bg-muted/10 px-2 py-2 text-[11px] text-foreground"
-                >
-                  <input
-                    type="checkbox"
-                    checked={Boolean(admissionPolicyConfig[key])}
-                    onChange={(e) => updateAdmissionPolicyToggle(key, e.target.checked)}
-                    disabled={key === "enabled" || key === "mode"}
-                    className="rounded border-border/50 bg-background"
-                  />
-                  <span className="font-mono">{label}</span>
-                </label>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-              <span>Enabled: <span className="text-foreground">{String(admissionPolicyConfig.enabled)}</span></span>
-              <span>Mode: <span className="text-foreground">{admissionPolicyConfig.mode}</span></span>
-              <span>Preset: <span className="text-foreground">{admissionPolicyPreset === "custom" ? "Custom" : CRASH300_ADMISSION_POLICY_PRESETS.find((preset) => preset.value === admissionPolicyPreset)?.label ?? "Custom"}</span></span>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="space-y-1">
@@ -1529,19 +1572,21 @@ function BacktestTab({
             {running
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
               : <BarChart2 className="w-3.5 h-3.5" />}
-            {running ? `Running ${formatDurationCompact(elapsed)}` : "Run Backtest"}
+            {running ? `Running ${formatDurationCompact(elapsed)}` : "Run Backtest / Validate Current Runtime"}
           </button>
 
-          <button
-            onClick={runTierSweep}
-            disabled={running || sweeping}
-            className="flex items-center gap-1.5 px-4 py-2 rounded border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 text-xs font-medium hover:bg-cyan-500/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {sweeping
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <BarChart2 className="w-3.5 h-3.5" />}
-            {sweeping ? `Sweeping ${formatDurationCompact(elapsed)}` : "Run Tier Sweep"}
-          </button>
+          {showAdvancedBacktestOptions && (
+            <button
+              onClick={runTierSweep}
+              disabled={running || sweeping}
+              className="flex items-center gap-1.5 px-4 py-2 rounded border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 text-xs font-medium hover:bg-cyan-500/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {sweeping
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <BarChart2 className="w-3.5 h-3.5" />}
+              {sweeping ? `Sweeping ${formatDurationCompact(elapsed)}` : "Run Tier Sweep"}
+            </button>
+          )}
 
           {!hideReportsActions && results !== null && totalTrades !== null && totalTrades > 0 && (
             <>
@@ -3985,11 +4030,13 @@ function MoveCalibrationTab({
         </div>
       )}
 
+      <IntegratedEliteSynthesisCard service={symbol} windowDays={windowDays} />
+
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
             <Zap className="w-3.5 h-3.5 text-sky-400" />
-            Runtime Feeddown
+            Runtime Lifecycle
           </h3>
           <span
             className={cn(
@@ -4058,74 +4105,23 @@ function MoveCalibrationTab({
             {runtimeBusy === "promote" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
             Promote To Runtime
           </button>
-          <button
-            type="button"
-            onClick={() => void runParityReport()}
-            disabled={parityBusy || runtimeBusy !== null || !runtimeModel?.lifecycle?.hasPromotedModel}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-500/30 text-xs text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/15 disabled:opacity-50"
-            title="Run CRASH300 parity report with one verdict per calibrated move"
-          >
-            {parityBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-            Run Parity
-          </button>
           <p className="text-[11px] text-muted-foreground self-center">
-            Promotion is the explicit handoff from research into the model layer above the V3 engine.
+            Runtime lifecycle stays here: generate or stage the research model, then explicitly promote the selected runtime candidate for validation backtests.
           </p>
         </div>
 
-        {!hideReportsActions && symbol === "CRASH300" && (
-          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
-            <p className="text-[11px] font-semibold text-foreground">Phase Identifier Reports</p>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void exportPhaseIdentifiers("summary")}
-                disabled={!!exportBusy["phase-summary"]}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
-                title="Download aggregate-only CRASH300 phase identifier statistics for the current research window"
-              >
-                {exportBusy["phase-summary"] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                Export Phase Identifier Summary
-              </button>
-              <button
-                type="button"
-                onClick={() => void exportPhaseIdentifiers("sample")}
-                disabled={!!exportBusy["phase-sample"]}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
-                title="Download a small sample of five CRASH300 phase identifier move reports for the current research window"
-              >
-                {exportBusy["phase-sample"] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                Export Phase Identifier Sample
-              </button>
-              <button
-                type="button"
-                onClick={() => void exportPhaseIdentifiers("full")}
-                disabled={!!exportBusy["phase-full"]}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
-                title="Download the full CRASH300 phase identifier report for the current research window"
-              >
-                {exportBusy["phase-full"] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                Export Full 1-Month Phase Identifier Report
-              </button>
-            </div>
-            <p className="text-[11px] text-muted-foreground">
-              Uses the currently selected research window for CRASH300 and downloads JSON only.
-            </p>
-          </div>
-        )}
-
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3">
-          <p className="text-[11px] font-semibold text-foreground mb-2">CRASH300 workflow</p>
+          <p className="text-[11px] font-semibold text-foreground mb-2">Normal service workflow</p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-1 text-[11px] text-muted-foreground">
             <span>1. Run Full Calibration</span>
-            <span>2. Stage Research Model</span>
-            <span>3. Promote Staged Runtime Model</span>
-            <span>4. Run Parity</span>
-            <span>5. Run Backtest</span>
-            <span>6. Run Paper</span>
+            <span>2. Generate / Stage Research Model</span>
+            <span>3. Run Integrated Elite Synthesis</span>
+            <span>4. Review Candidate Runtime Policy</span>
+            <span>5. Promote Candidate Runtime</span>
+            <span>6. Validate Current Runtime Backtest</span>
           </div>
           <p className="text-[11px] text-muted-foreground mt-2">
-            Optimiser is optional and stays locked until parity reports at least one matched move.
+            Manual parity, tier sweeps, admission policies, and optimiser controls are advanced diagnostics only. Use Reports for exports.
           </p>
         </div>
 
@@ -4716,8 +4712,8 @@ function downloadJsonFile(data: unknown, filename: string) {
 
 function parseBucketLabel(input: string): number {
   const normalized = String(input).replace(/_/g, "-");
-  const match = normalized.match(/(\d+(?:\.\d+)?)/);
-  return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
+  const match = normalized.match(/(\d+(?:\.\d+)?)/g);
+  return match && match[0] ? Number(match[0]) : Number.POSITIVE_INFINITY;
 }
 
 function sortBucketEntries(entries: Array<[string, unknown]>) {
@@ -4725,6 +4721,38 @@ function sortBucketEntries(entries: Array<[string, unknown]>) {
     const diff = parseBucketLabel(a[0]) - parseBucketLabel(b[0]);
     return Number.isFinite(diff) && diff !== 0 ? diff : a[0].localeCompare(b[0]);
   });
+}
+
+function asUiRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function isCalibratedMoveBucketKey(key: string): boolean {
+  return /^\d+_to_\d+_pct$/i.test(key) || /^\d+[-_]\d+$/i.test(key) || /^\d+\|\d+$/i.test(key);
+}
+
+function formatCalibratedBucketLabel(key: string): string {
+  const lowerUpper = key.match(/(\d+)[^\d]+(\d+)/);
+  if (lowerUpper) return `${lowerUpper[1]}–${lowerUpper[2]}`;
+  return key.replace(/_/g, " ");
+}
+
+function extractCalibratedBucketEntries(model: RuntimeSymbolModelUi | Record<string, unknown> | null | undefined) {
+  const record = asUiRecord(model as unknown);
+  const tpModel = asUiRecord(record.tpModel);
+  const bucketMap = asUiRecord(tpModel.buckets);
+  return sortBucketEntries(
+    Object.entries(bucketMap).filter(([key]) => isCalibratedMoveBucketKey(key)),
+  );
+}
+
+function setActiveEliteSynthesisJob(job: { jobId: number; serviceId: string; symbol: string } | null) {
+  writeActiveEliteSynthesisJob(job);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(ELITE_SYNTHESIS_STORAGE_KEY));
+  }
 }
 
 function ServiceStatusSummary({ service, windowDays }: { service: string; windowDays: number }) {
@@ -4830,16 +4858,18 @@ function RuntimeModelTab({ service }: { service: string }) {
   }, [service]);
 
   const baseFamily = service === "CRASH300" ? "crash_expansion" : "service-specific";
-  const promotedBuckets = sortBucketEntries(Object.entries(runtime?.promotedModel?.tpModel ?? {}));
-  const stagedBuckets = sortBucketEntries(Object.entries(runtime?.stagedModel?.tpModel ?? {}));
+  const promotedBuckets = extractCalibratedBucketEntries(runtime?.promotedModel ?? null);
+  const stagedBuckets = extractCalibratedBucketEntries(runtime?.stagedModel ?? null);
+  const promotedTpModel = asUiRecord(runtime?.promotedModel?.tpModel);
+  const stagedTpModel = asUiRecord(runtime?.stagedModel?.tpModel);
   const runtimeArchetypes = Array.from(new Set([
-    ...promotedBuckets.map(([bucket]) => bucket.split("|")[1] ?? bucket),
-    ...stagedBuckets.map(([bucket]) => bucket.split("|")[1] ?? bucket),
+    ...Object.keys(asUiRecord(promotedTpModel.buckets)).filter((key) => key.includes("|")).map((bucket) => bucket.split("|")[1] ?? bucket),
+    ...Object.keys(asUiRecord(stagedTpModel.buckets)).filter((key) => key.includes("|")).map((bucket) => bucket.split("|")[1] ?? bucket),
   ])).filter(Boolean);
   const validationErrors: string[] = [];
   if (!runtime?.lifecycle?.hasPromotedModel) validationErrors.push("Promoted runtime model missing.");
   if (runtime?.lifecycle?.hasStagedModel && runtime?.lifecycle?.promotedMatchesStaged === false) validationErrors.push("Staged model is newer than promoted runtime.");
-  if (!promotedBuckets.length) validationErrors.push("No promoted TP/SL/trailing bucket model is available.");
+  if (!promotedBuckets.length) validationErrors.push("Calibrated bucket model unavailable.");
 
   return (
     <div className="space-y-4">
@@ -4853,6 +4883,7 @@ function RuntimeModelTab({ service }: { service: string }) {
           <StatRow label="Promoted runtime" value={runtime?.lifecycle?.promotedRunId ?? "none"} />
           <StatRow label="Calibrated move family" value={baseFamily} />
           <StatRow label="Runtime entry archetypes" value={runtimeArchetypes.join(", ") || "n/a"} />
+          <StatRow label="Promoted model source run" value={runtime?.promotedModel?.sourceRunId ?? "none"} />
         </div>
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
           <h3 className="text-sm font-semibold">Validation</h3>
@@ -4864,7 +4895,7 @@ function RuntimeModelTab({ service }: { service: string }) {
             </div>
           )}
           <p className="text-xs text-muted-foreground">
-            Stage and promote controls remain under Calibration & Research so the runtime lifecycle stays in sequence.
+            Runtime Model owns staged/promoted state, model source, calibrated bucket visibility, and validation status.
           </p>
         </div>
       </div>
@@ -4873,23 +4904,48 @@ function RuntimeModelTab({ service }: { service: string }) {
         <h3 className="text-sm font-semibold">Calibrated Move-Size Buckets</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
           <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Promoted bucket models</p>
-            {promotedBuckets.length === 0 ? <p className="text-muted-foreground">No promoted buckets.</p> : promotedBuckets.map(([bucket]) => (
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Promoted calibrated buckets</p>
+            {promotedBuckets.length === 0 ? <ErrorBox msg="Calibrated bucket model unavailable" /> : promotedBuckets.map(([bucket, value]) => (
               <div key={bucket} className="flex items-center justify-between gap-2 border-b border-border/20 last:border-0 py-1">
-                <span className="font-mono text-foreground">{bucket}</span>
-                <span className="text-muted-foreground">runtime bucket</span>
+                <span className="font-mono text-foreground">{formatCalibratedBucketLabel(bucket)}</span>
+                <span className="text-muted-foreground">{Number(asUiRecord(value).targetPct ?? 0).toFixed(2)}%</span>
               </div>
             ))}
           </div>
           <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Staged bucket models</p>
-            {stagedBuckets.length === 0 ? <p className="text-muted-foreground">No staged buckets.</p> : stagedBuckets.map(([bucket]) => (
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Staged calibrated buckets</p>
+            {stagedBuckets.length === 0 ? <p className="text-muted-foreground">No staged buckets.</p> : stagedBuckets.map(([bucket, value]) => (
               <div key={bucket} className="flex items-center justify-between gap-2 border-b border-border/20 last:border-0 py-1">
-                <span className="font-mono text-foreground">{bucket}</span>
-                <span className="text-muted-foreground">staged bucket</span>
+                <span className="font-mono text-foreground">{formatCalibratedBucketLabel(bucket)}</span>
+                <span className="text-muted-foreground">{Number(asUiRecord(value).targetPct ?? 0).toFixed(2)}%</span>
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2 text-xs">
+          <h3 className="text-sm font-semibold">Runtime Target Model</h3>
+          <StatRow label="Fallback target pct" value={Number(promotedTpModel.fallbackTargetPct ?? 0).toFixed(2)} />
+          <StatRow label="Bucket source" value={String(promotedTpModel.bucketSource ?? "n/a")} />
+          <StatRow label="Bucket selection" value={String(promotedTpModel.bucketSelection ?? "n/a")} />
+          <StatRow label="Dynamic target selection" value={String(promotedTpModel.dynamicByQualityLeadIn ?? false)} />
+          <StatRow label="Rationale" value={String(promotedTpModel.rationale ?? "n/a")} />
+        </div>
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2 text-xs">
+          <h3 className="text-sm font-semibold">Runtime Entry Archetypes</h3>
+          {runtimeArchetypes.length === 0 ? (
+            <p className="text-muted-foreground">No runtime archetypes inferred from the current promoted/staged bucket models.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {runtimeArchetypes.map((archetype) => (
+                <span key={archetype} className="rounded border border-border/40 bg-muted/10 px-2 py-1 font-mono text-foreground">
+                  {archetype}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -4899,7 +4955,7 @@ function RuntimeModelTab({ service }: { service: string }) {
 type ReportOption = {
   value: string;
   label: string;
-  runType: "none" | "backtest" | "comparison";
+  runType: "none" | "backtest" | "comparison" | "synthesis";
 };
 
 const REPORT_OPTIONS: ReportOption[] = [
@@ -4916,12 +4972,15 @@ const REPORT_OPTIONS: ReportOption[] = [
   { value: "backtest-attribution", label: "Backtest Attribution", runType: "backtest" },
   { value: "calibration-reconciliation", label: "Calibration Reconciliation", runType: "backtest" },
   { value: "policy-comparison", label: "Policy Comparison", runType: "comparison" },
+  { value: "elite-synthesis-result", label: "Elite Synthesis Result", runType: "synthesis" },
 ];
 
 function ReportsTab({ service, windowDays }: { service: string; windowDays: number }) {
   const [reportType, setReportType] = useState<string>("detected-moves");
   const [calibrationRuns, setCalibrationRuns] = useState<PassRun[]>([]);
   const [backtestRuns, setBacktestRuns] = useState<PersistedV3BacktestHistoryRun[]>([]);
+  const [synthesisJobs, setSynthesisJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
+  const [selectedSynthesisJobId, setSelectedSynthesisJobId] = useState<number | null>(null);
   const [selectedBacktestRunId, setSelectedBacktestRunId] = useState<number | null>(null);
   const [baselineRunId, setBaselineRunId] = useState<number | null>(null);
   const [policyRunId, setPolicyRunId] = useState<number | null>(null);
@@ -4932,18 +4991,24 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
     let cancelled = false;
     (async () => {
       try {
-        const [runsResp, backtestsResp] = await Promise.all([
+        const [runsResp, backtestsResp, synthesisResp] = await Promise.all([
           apiFetch(`calibration/runs/${service}`).catch(() => ({ runs: [] })),
           apiFetch(`backtest/v3/history?symbol=${encodeURIComponent(service)}&limit=30`).catch(() => ({ runs: [] })),
+          apiFetch(`research/${service}/elite-synthesis/jobs?limit=20`).catch(() => ({ jobs: [] })),
         ]);
         if (cancelled) return;
         const nextCalibrationRuns = Array.isArray((runsResp as { runs?: PassRun[] }).runs) ? (runsResp as { runs?: PassRun[] }).runs ?? [] : [];
         const nextBacktestRuns = Array.isArray((backtestsResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs) ? (backtestsResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs ?? [] : [];
+        const nextSynthesisJobs = Array.isArray((synthesisResp as { jobs?: EliteSynthesisJobStatusUi[] }).jobs)
+          ? (synthesisResp as { jobs?: EliteSynthesisJobStatusUi[] }).jobs ?? []
+          : [];
         setCalibrationRuns(nextCalibrationRuns);
         setBacktestRuns(nextBacktestRuns);
+        setSynthesisJobs(nextSynthesisJobs);
         setSelectedBacktestRunId((prev) => prev ?? nextBacktestRuns[0]?.id ?? null);
         setBaselineRunId((prev) => prev ?? nextBacktestRuns[1]?.id ?? nextBacktestRuns[0]?.id ?? null);
         setPolicyRunId((prev) => prev ?? nextBacktestRuns[0]?.id ?? null);
+        setSelectedSynthesisJobId((prev) => prev ?? nextSynthesisJobs[0]?.id ?? null);
       } catch (e: unknown) {
         if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load report history");
       }
@@ -5009,6 +5074,10 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
           if (!baselineRunId || !policyRunId) throw new Error("Select both baseline and policy runs.");
           endpoint = `backtest/v3/history/compare?baselineRunId=${baselineRunId}&policyRunId=${policyRunId}`;
           break;
+        case "elite-synthesis-result":
+          if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
+          endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/full`;
+          break;
       }
       const d = await apiFetch(endpoint);
       downloadJsonFile(d, filename);
@@ -5062,6 +5131,15 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
             </div>
           </>
         )}
+        {selectedOption.runType === "synthesis" && (
+          <div className="space-y-1">
+            <label className="text-[11px] text-muted-foreground">Elite synthesis job</label>
+            <select value={selectedSynthesisJobId ? String(selectedSynthesisJobId) : ""} onChange={(e) => setSelectedSynthesisJobId(Number(e.target.value) || null)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
+              <option value="">Select a synthesis job</option>
+              {synthesisJobs.map((job) => <option key={job.id} value={String(job.id)}>#{job.id}  {job.status}  {job.stage}</option>)}
+            </select>
+          </div>
+        )}
         {selectedOption.runType === "none" && (
           <div className="space-y-1">
             <label className="text-[11px] text-muted-foreground">Calibration runs</label>
@@ -5084,6 +5162,120 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
         {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
         Export / Download JSON
       </button>
+    </div>
+  );
+}
+
+function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string; windowDays: number }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
+  const [profile, setProfile] = useState<EliteSynthesisSearchProfileUi>("fast");
+
+  const loadJobs = useCallback(async (silent = false) => {
+    if (!silent) setErr(null);
+    try {
+      const data = await apiFetch(`research/${service}/elite-synthesis/jobs?limit=8`) as {
+        jobs?: EliteSynthesisJobStatusUi[];
+      };
+      setJobs(Array.isArray(data.jobs) ? data.jobs : []);
+    } catch (e: unknown) {
+      if (!silent) setErr(e instanceof Error ? e.message : "Failed to load elite synthesis jobs");
+    }
+  }, [service]);
+
+  useEffect(() => {
+    void loadJobs(true);
+  }, [loadJobs]);
+
+  const startJob = async () => {
+    setBusy(true);
+    setErr(null);
+    setNotice(null);
+    try {
+      const { startTs, endTs } = getWindowRange(windowDays);
+      const data = await apiFetch(`research/${service}/elite-synthesis/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          windowDays,
+          startTs,
+          endTs,
+          searchProfile: profile,
+        }),
+      }) as { jobId?: number; symbol?: string };
+      const jobId = Number(data.jobId ?? 0);
+      if (!Number.isInteger(jobId) || jobId <= 0) {
+        throw new Error("Integrated elite synthesis did not return a valid job id.");
+      }
+      setActiveEliteSynthesisJob({
+        jobId,
+        serviceId: service,
+        symbol: data.symbol ?? service,
+      });
+      setNotice(`Integrated elite synthesis started for ${getSymbolLabel(service)} (job #${jobId}).`);
+      await loadJobs(true);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Failed to start integrated elite synthesis");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const latestJob = jobs[0] ?? null;
+
+  return (
+    <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold text-cyan-100">Run Integrated Elite Synthesis</h3>
+          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+            Automatically searches tiers, admission policies, trigger timings, bucket combinations, entry archetypes, TP, SL, trailing, and daily trade limits.
+            It outputs a candidate runtime policy artifact only. No live trading changes happen until an explicit later promotion step.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={profile}
+            onChange={(e) => setProfile(e.target.value as EliteSynthesisSearchProfileUi)}
+            className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground"
+          >
+            <option value="fast">Fast smoke profile</option>
+            <option value="balanced">Balanced profile</option>
+            <option value="deep">Deep profile</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => void startJob()}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" />}
+            Run Integrated Elite Synthesis
+          </button>
+        </div>
+      </div>
+
+      {notice && <SuccessBox msg={notice} />}
+      {err && <ErrorBox msg={err} />}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+          <p className="text-muted-foreground uppercase tracking-wide">Normal workflow role</p>
+          <p className="mt-1 text-foreground">Owns the normal search over tiers, policies, triggers, exits, and daily selection rules.</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+          <p className="text-muted-foreground uppercase tracking-wide">Runtime safety</p>
+          <p className="mt-1 text-foreground">Live-safe feature rules only. Oracle labels remain evaluation-only and never become final live runtime inputs.</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+          <p className="text-muted-foreground uppercase tracking-wide">Current latest job</p>
+          <p className="mt-1 font-mono text-foreground">
+            {latestJob ? `#${latestJob.id} ${latestJob.status} ${latestJob.stage}` : "No synthesis jobs yet"}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -5201,18 +5393,6 @@ export default function Research() {
         <p className="text-sm text-muted-foreground mt-0.5">
           Selected symbol-service research, runtime lifecycle, backtests, and consolidated reports
         </p>
-        <div className="mt-2">
-          <a
-            href={`${BASE}reports/deep-research-report.md`}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-border/50 hover:border-primary/50 hover:text-primary transition-colors"
-            title="Open Deep Research Report"
-          >
-            <FileText className="w-3.5 h-3.5" />
-            Open Deep Research Report
-          </a>
-        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">

@@ -35,6 +35,31 @@ Research
     Advanced Diagnostics
 ```
 
+## Workflow Intent
+
+Normal workflow:
+
+1. Full Calibration
+2. Generate or Stage Research Model
+3. Run Integrated Elite Synthesis
+4. Review Candidate Runtime Policy
+5. Promote Candidate Runtime
+6. Validate Current Runtime Backtest
+7. Review Reports
+
+Advanced diagnostics:
+
+- parity
+- runtime-trigger validation
+- tier sweeps
+- manual admission-policy testing
+- optimiser
+- phase identifier exports
+- calibration reconciliation
+- policy comparison
+
+Manual tier and admission-policy experimentation must not be presented as the intended workflow for future services. Integrated Elite Synthesis owns the normal search path.
+
 ## Language Rules
 
 Do not present these as active decision concepts:
@@ -51,6 +76,24 @@ Preferred wording:
 - trade candidate
 - portfolio allocator
 - capital / exposure / risk gates
+- integrated elite synthesis
+- candidate runtime policy
+
+## Reports Placement
+
+Reports and heavy exports belong under the Reports tab. Other tabs may link to Reports, but should not duplicate export hubs.
+
+## Backtests Placement
+
+The normal Backtests tab should show:
+
+- selected service
+- window or range
+- validate current runtime
+- backtest history
+- compact summary
+
+Advanced backtest options should stay collapsed by default and hold tier mode, tier sweeps, and manual admission-policy controls.
 
 ## Decisions View
 

@@ -1,0 +1,273 @@
+export type EliteSynthesisJobStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type EliteSynthesisStage =
+  | "queued"
+  | "loading_data"
+  | "building_dataset"
+  | "evaluating_current_pool"
+  | "rebuilding_trigger_candidates"
+  | "feature_elimination"
+  | "generating_policies"
+  | "evaluating_policies"
+  | "optimising_entry_timing"
+  | "optimising_exits"
+  | "refining_candidates"
+  | "selecting_best"
+  | "writing_result"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type EliteSynthesisSearchProfile = "fast" | "balanced" | "deep";
+
+export type EliteSynthesisBottleneck =
+  | "none"
+  | "current_runtime_pool_insufficient"
+  | "rebuilt_trigger_pool_still_insufficient"
+  | "live_safe_features_do_not_separate_winners_from_sl_noise"
+  | "exit_policy_cannot_rescue_entries"
+  | "calibrated_bucket_archetype_mapping_too_noisy"
+  | "insufficient_data_quality"
+  | "search_exhausted";
+
+export type EliteSynthesisLeakageRule =
+  | "no_future_pnl"
+  | "no_future_mfe_mae"
+  | "no_actual_exit_reason"
+  | "no_realised_win_loss"
+  | "no_strict_oracle_relationship_label"
+  | "no_calibrated_move_outcome_label"
+  | "no_post_entry_candle_data"
+  | "no_legacy_diagnostic_score";
+
+export type EliteSynthesisObjectiveWeights = {
+  winRate?: number;
+  slHitRate?: number;
+  profitFactor?: number;
+  tradeCount?: number;
+  drawdown?: number;
+  moveCapture?: number;
+  phantomTrades?: number;
+  stability?: number;
+};
+
+export type EliteSynthesisParams = {
+  calibrationRunId?: number | null;
+  backtestRunId?: number | null;
+  windowDays?: number | null;
+  startTs?: number | null;
+  endTs?: number | null;
+  searchProfile?: EliteSynthesisSearchProfile;
+  maxPasses?: number | null;
+  patiencePasses?: number | null;
+  targetTradeCountMin?: number | null;
+  targetTradeCountMax?: number | null;
+  preferredTradeCount?: number | null;
+  maxTradesPerDay?: number | null;
+  allowCascade?: boolean | null;
+  objectiveWeights?: EliteSynthesisObjectiveWeights | null;
+};
+
+export type EliteSynthesisFeatureSummary = {
+  key: string;
+  positiveP50?: number | null;
+  negativeP50?: number | null;
+  overlapScore: number;
+  separationScore: number;
+  missingRate: number;
+  monthlyStabilityScore: number;
+  kept: boolean;
+  reasons: string[];
+};
+
+export type EliteSynthesisEntryTimingRule = {
+  preferredOffset: string;
+  earliestSafeOffset: string | null;
+  rejectEarlierThan?: string | null;
+  rejectLaterThan?: string | null;
+};
+
+export type EliteSynthesisExitRules = {
+  tpTargetPct: number;
+  slRiskPct: number;
+  trailingActivationPct: number;
+  trailingDistancePct: number;
+  minHoldBars: number;
+};
+
+export type EliteSynthesisPolicySummary = {
+  policyId: string;
+  passNumber: number;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  slHits: number;
+  slHitRate: number;
+  profitFactor: number;
+  accountReturnPct: number;
+  maxDrawdownPct: number;
+  phantomCount: number;
+  objectiveScore: number;
+  selectedFeaturesSummary: string[];
+  tpSlTrailingSummary: string[];
+  targetAchieved: boolean;
+};
+
+export type EliteSynthesisPolicyArtifact = {
+  policyId: string;
+  version: string;
+  generatedAt: string;
+  sourceCalibrationRunId: number | null;
+  sourceBacktestRunId: number | null;
+  calibratedBaseFamily: string;
+  selectedMoveSizeBuckets: string[];
+  selectedRuntimeArchetypes: string[];
+  selectedBuckets: string[];
+  selectedTriggerTransitions: string[];
+  selectedCoreFeatures: EliteSynthesisFeatureSummary[];
+  entryThresholds: Record<string, unknown>;
+  entryTimingRules: EliteSynthesisEntryTimingRule[];
+  noTradeRules: string[];
+  tpRules: Record<string, unknown>;
+  slRules: Record<string, unknown>;
+  trailingRules: Record<string, unknown>;
+  minHoldRules: Record<string, unknown>;
+  dailyTradeLimit: number;
+  cascadeRules: { enabled: boolean; notes: string[] };
+  liveSafeEliteScoreFormula: string;
+  expectedThreeMonthPerformance: Record<string, unknown>;
+  monthlyBreakdown: Array<Record<string, unknown>>;
+  passNumberSelected: number;
+  objectiveScore: number;
+  leakageAudit: EliteSynthesisLeakageAudit;
+  bottleneckAnalysis: EliteSynthesisBottleneckAnalysis;
+  implementationNotes: string[];
+};
+
+export type EliteSynthesisPassLog = {
+  passNumber: number;
+  stage: EliteSynthesisStage;
+  candidateCount: number;
+  evaluatedCount: number;
+  bestPolicyId: string | null;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  slHits: number;
+  slHitRate: number;
+  profitFactor: number;
+  accountReturnPct: number;
+  maxDrawdownPct: number;
+  phantomCount: number;
+  selectedFeatures: string[];
+  mutationSummary: string;
+  reasonBestImproved: string;
+  bestSoFar: boolean;
+};
+
+export type EliteSynthesisLeakageAudit = {
+  passed: boolean;
+  checkedRules: Array<{
+    rule: EliteSynthesisLeakageRule;
+    passed: boolean;
+    notes: string[];
+  }>;
+};
+
+export type EliteSynthesisBottleneckAnalysis = {
+  targetAchieved: boolean;
+  triggerRebuildAttempted: boolean;
+  classification: EliteSynthesisBottleneck;
+  reasons: string[];
+  futureImplementationRecommendation: string;
+};
+
+export type EliteSynthesisResult = {
+  jobId: number;
+  serviceId: string;
+  status: EliteSynthesisJobStatus;
+  targetAchieved: boolean;
+  bestPolicySummary: EliteSynthesisPolicySummary | null;
+  topPolicySummaries: EliteSynthesisPolicySummary[];
+  bestPolicyArtifact: EliteSynthesisPolicyArtifact | null;
+  passLogSummary: EliteSynthesisPassLog[];
+  fullPassLog: EliteSynthesisPassLog[];
+  featureDistributions: EliteSynthesisFeatureSummary[];
+  exitOptimisationTable: Array<Record<string, unknown>>;
+  triggerRebuildSummary: Record<string, unknown>;
+  bottleneckSummary: EliteSynthesisBottleneckAnalysis;
+  leakageAuditSummary: EliteSynthesisLeakageAudit;
+  windowSummary: Record<string, unknown>;
+  sourceRunIds: Record<string, number | null>;
+  datasetSummary: Record<string, unknown>;
+};
+
+export type EliteSynthesisProgressSnapshot = {
+  jobId: number;
+  serviceId: string;
+  symbol: string;
+  status: EliteSynthesisJobStatus;
+  stage: EliteSynthesisStage;
+  progressPct: number;
+  currentPass: number;
+  maxPasses: number;
+  currentPolicyCount: number;
+  evaluatedPolicyCount: number;
+  bestWinRate: number | null;
+  bestSlRate: number | null;
+  bestProfitFactor: number | null;
+  bestTradeCount: number | null;
+  bestObjectiveScore: number | null;
+  bestPolicyId: string | null;
+  heartbeatAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  errorSummary: Record<string, unknown> | null;
+  message: string;
+};
+
+export const ELITE_SYNTHESIS_STORAGE_KEY = "deriv_elite_synthesis_active_job";
+
+export function profileDefaults(profile: EliteSynthesisSearchProfile): Required<Pick<
+  EliteSynthesisParams,
+  "maxPasses" | "patiencePasses" | "targetTradeCountMin" | "targetTradeCountMax" | "preferredTradeCount" | "maxTradesPerDay" | "allowCascade"
+>> {
+  if (profile === "fast") {
+    return {
+      maxPasses: 6,
+      patiencePasses: 2,
+      targetTradeCountMin: 45,
+      targetTradeCountMax: 75,
+      preferredTradeCount: 60,
+      maxTradesPerDay: 1,
+      allowCascade: false,
+    };
+  }
+  if (profile === "deep") {
+    return {
+      maxPasses: 24,
+      patiencePasses: 6,
+      targetTradeCountMin: 45,
+      targetTradeCountMax: 75,
+      preferredTradeCount: 60,
+      maxTradesPerDay: 1,
+      allowCascade: false,
+    };
+  }
+  return {
+    maxPasses: 12,
+    patiencePasses: 4,
+    targetTradeCountMin: 45,
+    targetTradeCountMax: 75,
+    preferredTradeCount: 60,
+    maxTradesPerDay: 1,
+    allowCascade: false,
+  };
+}

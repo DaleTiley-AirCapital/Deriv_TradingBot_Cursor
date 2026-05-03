@@ -78,3 +78,35 @@ Code does not need to be fully moved into that shape in one pass, but new work s
 - `R_100`: scaffolded service
 
 Unsupported symbols should be displayed as unavailable or scaffoldable, not mixed with active services.
+
+## Research and Synthesis Ownership
+
+Each symbol service also owns its research-to-runtime preparation flow:
+
+1. calibration outputs
+2. staged research model
+3. integrated elite synthesis search
+4. candidate runtime policy artifact
+5. promoted runtime model
+6. service-specific backtest, parity, and reconciliation reports
+
+Integrated Elite Synthesis is the normal search engine for future services. It consumes service-owned research data, evaluates complete runtime-policy candidates, and returns a candidate runtime artifact. It does not auto-promote and it does not alter live runtime behavior by itself.
+
+## Reusable Service Synthesis Shape
+
+Symbol services that support integrated synthesis should provide an adapter with capabilities equivalent to:
+
+- load calibration runs
+- load calibrated moves
+- load runtime model
+- load backtest runs
+- load backtest trades
+- load phase snapshots
+- load calibration reconciliation
+- build live-safe feature vectors
+- derive move-size buckets
+- derive runtime archetypes
+- generate trigger candidates from move offsets
+- evaluate policy candidates on historical data
+- derive exit-policy candidates from elite subsets
+- validate no future leakage

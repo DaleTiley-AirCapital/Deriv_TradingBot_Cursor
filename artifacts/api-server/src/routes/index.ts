@@ -18,6 +18,7 @@ import deployStatusRouter from "./deployStatus";
 import behaviorRouter from "./behavior";
 import calibrationRouter from "./calibration";
 import aiContextRouter from "./aiContext.js";
+import eliteSynthesisRouter from "./eliteSynthesis.js";
 
 const router: IRouter = Router();
 
@@ -40,5 +41,6 @@ router.use(deployStatusRouter);
 router.use(behaviorRouter);
 router.use(calibrationRouter);
 router.use(aiContextRouter);
+router.use(eliteSynthesisRouter);
 
 export default router;

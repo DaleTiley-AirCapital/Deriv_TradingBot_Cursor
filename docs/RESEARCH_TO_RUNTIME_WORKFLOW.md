@@ -1,19 +1,23 @@
 # Research To Runtime Workflow
 
-## Service Workflow
+## Normal Service Workflow
 
-Every symbol service should follow the same ordered workflow:
+Every symbol service should follow the same normal workflow:
 
 1. Full Calibration
 2. Review calibration runs
-3. Stage Research Model
-4. Promote Runtime
-5. Run Parity / runtime-trigger validation
-6. Run Backtest
-7. Review Reports
-8. Run Paper
+3. Generate or Stage Research Model
+4. Run Integrated Elite Synthesis
+5. Review Candidate Runtime Policy
+6. Promote Candidate Runtime
+7. Validate Current Runtime Backtest
+8. Review Reports
+9. Paper validation
+10. Demo or Real escalation only after validation
 
-CRASH300 is the current production template for this workflow.
+CRASH300 is the current reference implementation for this workflow.
+
+Manual tier testing, admission-policy toggles, optimiser passes, and parity debugging are not the intended workflow for future symbol services. Integrated Elite Synthesis owns the normal search over tiers, policies, triggers, buckets, entry timing, exits, and daily trade selection.
 
 ## Research Page Structure
 
@@ -25,23 +29,37 @@ The Research page is service-specific. Selecting a service opens that service's 
 - Backtests
 - Advanced Diagnostics
 
+## Calibration & Research
+
+The normal workflow cards should appear in this order:
+
+1. Full Calibration
+2. Review calibration runs
+3. Generate or Stage Research Model
+4. Run Integrated Elite Synthesis
+5. Promote Runtime or Candidate Runtime
+6. Validate Current Runtime Backtest
+
+This tab should not present parity, optimiser controls, or export-heavy diagnostics as if they are normal lifecycle steps.
+
 ## Reports
 
-Reports are consolidated under the Reports tab. Heavy exports should not be scattered across runtime feeddown or backtest action rows.
+Reports are consolidated under the Reports tab. Heavy exports should not be scattered across runtime lifecycle cards or backtest action rows.
 
-Report types currently include:
+Current report families include:
 
 - detected moves
 - calibration profile
 - pass results
 - comparison summary
 - parity report
-- phase identifier summary/sample/full
+- phase identifier summary, sample, and full
 - backtest summary
 - backtest trades
 - backtest attribution
 - calibration reconciliation
 - policy comparison
+- elite synthesis result exports
 
 ## Runtime Model
 
@@ -57,7 +75,21 @@ The runtime model view should clearly distinguish:
 For CRASH300:
 
 - calibrated family: `crash_expansion`
-- runtime archetypes: service-specific archetypes such as `crash_event_down`, `post_crash_recovery_up`, `bear_trap_reversal_up`
+- runtime archetypes: service-specific archetypes such as `crash_event_down`, `post_crash_recovery_up`, and `bear_trap_reversal_up`
+
+Runtime feeddown or lifecycle state belongs here, not duplicated in the calibration workflow tab.
+
+## Backtests
+
+The normal Backtests tab should focus on:
+
+- selected service
+- research window or date range
+- Run Backtest or Validate Current Runtime
+- backtest history
+- compact summary
+
+Tier mode, tier sweep, and manual admission-policy presets are diagnostics only and should remain under collapsed advanced options instead of the primary validation flow.
 
 ## Advanced Diagnostics
 
@@ -65,7 +97,12 @@ Advanced diagnostics contain:
 
 - parity
 - runtime-trigger validation
-- deep/internal exports
+- tier sweeps
+- manual admission-policy diagnostics
 - optimiser controls, disabled by default unless specifically needed
+- phase identifier exports
+- calibration reconciliation exports
+- policy comparison exports
+- internal or legacy diagnostic snapshots where still useful
 
 Diagnostics must never be presented as the active trade-admission source.
