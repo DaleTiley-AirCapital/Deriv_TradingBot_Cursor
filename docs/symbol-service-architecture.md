@@ -4,6 +4,10 @@
 
 Define a clean ownership split between shared platform infrastructure and symbol-specific trading services.
 
+Canonical runtime wording:
+
+`Symbol Service -> Trade Candidate -> Portfolio Allocator -> Trade Execution/Manager`
+
 ## Shared Platform Responsibilities
 
 Shared platform owns:
@@ -17,6 +21,7 @@ Shared platform owns:
 - Shared orchestration flow adapters for live, backtest, and parity modes
 
 Shared platform must not encode symbol-specific strategy beliefs.
+It also must not present native-score or composite-score language as the active admission source.
 
 ## Symbol Service Responsibilities
 
@@ -29,6 +34,7 @@ Each symbol service owns:
 - TradeCandidate construction
 - Position management policy application for that symbol
 - Symbol parity/backtest adapters that use the same runtime evaluation flow
+- Service-specific research, reports, and runtime-model presentation
 
 Milestone 1 state:
 

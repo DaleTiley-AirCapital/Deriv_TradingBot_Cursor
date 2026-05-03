@@ -607,10 +607,10 @@ async function handleAnalyzeSignals(args: { days?: number; focus: string }): Pro
     }
 
     case "rejection_reasons": {
-      const rejected = signals.filter(s => !s.allowedFlag && s.rejectionReason);
+      const rejected = signals.filter(s => !s.allowedFlag && s.admissionReason);
       const reasons: Record<string, number> = {};
       for (const s of rejected) {
-        const reason = s.rejectionReason || "unknown";
+        const reason = s.admissionReason || "unknown";
         const normalized = reason.replace(/\([^)]*\)/g, "").replace(/[0-9.]+/g, "N").trim();
         reasons[normalized] = (reasons[normalized] || 0) + 1;
       }
@@ -636,7 +636,7 @@ async function handleAnalyzeSignals(args: { days?: number; focus: string }): Pro
     }
 
     case "score_distribution": {
-      const scores = signals.filter(s => s.compositeScore != null).map(s => s.compositeScore!);
+      const scores = signals.filter(s => s.runtimeEvidence != null).map(s => s.runtimeEvidence!);
       if (scores.length === 0) return JSON.stringify({ message: "No scored signals found." });
       const buckets: Record<string, number> = { "0-50": 0, "50-60": 0, "60-70": 0, "70-80": 0, "80-85": 0, "85-90": 0, "90-95": 0, "95-100": 0 };
       for (const s of scores) {
@@ -653,7 +653,7 @@ async function handleAnalyzeSignals(args: { days?: number; focus: string }): Pro
       return JSON.stringify({
         period: `Last ${days} days`,
         totalScored: scores.length,
-        avgCompositeScore: avg.toFixed(1),
+        avgRuntimeEvidence: avg.toFixed(1),
         distribution: buckets,
       });
     }
@@ -664,7 +664,7 @@ async function handleAnalyzeSignals(args: { days?: number; focus: string }): Pro
         if (!bySymbol[s.symbol]) bySymbol[s.symbol] = { total: 0, allowed: 0, avgScore: 0 };
         bySymbol[s.symbol].total++;
         if (s.allowedFlag) bySymbol[s.symbol].allowed++;
-        bySymbol[s.symbol].avgScore += s.compositeScore ?? 0;
+        bySymbol[s.symbol].avgScore += s.runtimeEvidence ?? 0;
       }
       const result: Record<string, any> = {};
       for (const [sym, data] of Object.entries(bySymbol)) {
@@ -672,7 +672,7 @@ async function handleAnalyzeSignals(args: { days?: number; focus: string }): Pro
           signals: data.total,
           allowed: data.allowed,
           hitRate: `${(data.allowed / data.total * 100).toFixed(1)}%`,
-          avgCompositeScore: (data.avgScore / data.total).toFixed(1),
+          avgRuntimeEvidence: (data.avgScore / data.total).toFixed(1),
         };
       }
       return JSON.stringify({ period: `Last ${days} days`, symbolBreakdown: result });

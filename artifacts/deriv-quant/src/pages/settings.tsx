@@ -1,22 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Settings2, Shield, Target, Radio, AlertTriangle, Power,
-  Brain, TrendingUp, Save, ChevronRight,
+  TrendingUp, Save, ChevronRight,
 } from "lucide-react";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { ACTIVE_SERVICE_SYMBOLS, getSymbolLabel } from "@/lib/symbolCatalog";
 
 const BASE = import.meta.env.BASE_URL || "/";
 type SettingsMap = Record<string, string>;
-const ACTIVE_SYMBOLS = ["CRASH300", "BOOM300", "R_75", "R_100"];
-const ALL_28_SYMBOLS = [
-  "CRASH300","BOOM300","R_75","R_100",
-  "BOOM1000","CRASH1000","BOOM900","CRASH900","BOOM600","CRASH600",
-  "BOOM500","CRASH500","R_10","R_25","R_50","RDBULL","RDBEAR",
-  "JD10","JD25","JD50","JD75","JD100",
-  "stpRNG","stpRNG2","stpRNG3","stpRNG5","RB100","RB200",
-];
 const ENGINE_PATH: Record<string, string> = {
   BOOM300: "boom_expansion_engine",
   CRASH300: "crash_expansion_engine",
@@ -67,7 +60,7 @@ function useSymbolWiring() {
     queryKey: ["/api/settings/symbol-wiring"],
     queryFn: async () => {
       const rows = await Promise.all(
-        ALL_28_SYMBOLS.map(async (symbol): Promise<SymbolWiringRow> => {
+        ACTIVE_SERVICE_SYMBOLS.map(async (symbol): Promise<SymbolWiringRow> => {
           const [rp, aggregate, run, runtime] = await Promise.all([
             fetch(`${BASE}api/calibration/research-profile/${symbol}`).then(async r => r.ok ? r.json() : null).catch(() => null),
             fetch(`${BASE}api/calibration/aggregate/${symbol}`).then(async r => r.ok ? r.json() : null).catch(() => null),
@@ -209,12 +202,9 @@ function ModeSection({
 }) {
   const isActive = bool(data[`${mode}_mode_active`]);
   const capital   = data[`${mode}_capital`] ?? "600";
-  const minScore  = data[`${mode}_min_composite_score`] ?? (mode === "paper" ? "60" : mode === "demo" ? "65" : "70");
   const eqPct     = data[`${mode}_equity_pct_per_trade`] ?? "20";
   const maxTrades = data[`${mode}_max_open_trades`] ?? "3";
   const maxDd     = data[`${mode}_max_drawdown_pct`] ?? "15";
-
-  const thresholdNote = mode === "paper" ? "≥60 required" : mode === "demo" ? "≥65 required" : "≥70 required";
 
   const borderColor = isActive
     ? mode === "paper" ? "border-amber-500/40" : mode === "demo" ? "border-blue-500/40" : "border-green-500/40"
@@ -247,10 +237,9 @@ function ModeSection({
       {/* Settings */}
       <div className="px-4 py-3 space-y-2.5 bg-card">
         <NumRow label="Capital ($)"           field={`${mode}_capital`}                value={capital}   onUpdate={onUpdate} min={0} />
-        <NumRow label="Min Score"             field={`${mode}_min_composite_score`}    value={minScore}  onUpdate={onUpdate} note={thresholdNote} min={0} max={100} />
-        <NumRow label="Equity % / trade"      field={`${mode}_equity_pct_per_trade`}   value={eqPct}     onUpdate={onUpdate} min={1} max={100} />
-        <NumRow label="Max open trades"       field={`${mode}_max_open_trades`}        value={maxTrades} onUpdate={onUpdate} min={1} max={20} />
-        <NumRow label="Max drawdown %"        field={`${mode}_max_drawdown_pct`}       value={maxDd}     onUpdate={onUpdate} min={1} max={100} />
+        <NumRow label="Max per-trade exposure %" field={`${mode}_equity_pct_per_trade`} value={eqPct} onUpdate={onUpdate} min={1} max={100} />
+        <NumRow label="Max open positions"    field={`${mode}_max_open_trades`}        value={maxTrades} onUpdate={onUpdate} min={1} max={20} />
+        <NumRow label="Max drawdown protection %" field={`${mode}_max_drawdown_pct`}   value={maxDd} onUpdate={onUpdate} min={1} max={100} />
       </div>
     </div>
   );
@@ -286,7 +275,6 @@ export default function Settings() {
   const onUpdate = (key: string, value: string) => updateMutation.mutate({ key, value });
 
   const killSwitch      = bool(data?.["kill_switch"]);
-  const aiVerification  = bool(data?.["ai_verification_enabled"]);
   const calibratedRuntimeProfiles = bool(data?.["use_calibrated_runtime_profiles"]);
   const withdrawalAlert = bool(data?.["suggest_withdrawal"]);
 
@@ -299,7 +287,7 @@ export default function Settings() {
           Settings
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          V3 system configuration — mode thresholds, capital, risk limits, trading controls
+          Global controls for mode activation, capital allocation, portfolio exposure, and runtime profile usage
         </p>
       </div>
 
@@ -346,53 +334,14 @@ export default function Settings() {
               />
               <div className="h-px bg-border/20" />
               <ToggleRow
-                label="AI Verification — require AI confirm before entry"
-                field="ai_verification_enabled"
-                value={aiVerification}
-                onUpdate={onUpdate}
-                variant="default"
-              />
-              <div className="h-px bg-border/20" />
-              <ToggleRow
-                label="Use promoted calibration runtime profiles"
+                label="Use promoted runtime profiles"
                 field="use_calibrated_runtime_profiles"
                 value={calibratedRuntimeProfiles}
                 onUpdate={onUpdate}
-                onLabel="ON — promoted model feeds paper runtime"
-                offLabel="OFF — native engine defaults only"
+                onLabel="ON — selected services read promoted runtime models"
+                offLabel="OFF — services fail loudly when runtime model data is required"
                 variant="success"
               />
-              <div className="h-px bg-border/20" />
-              <div className="flex items-center justify-between gap-4 py-0.5">
-                <div>
-                  <span className="text-xs text-muted-foreground">Min composite score (global)</span>
-                  <span className="text-[10px] text-muted-foreground/50 ml-1.5">(overridden per-mode)</span>
-                </div>
-                <NumRow
-                  label=""
-                  field="min_composite_score"
-                  value={data["min_composite_score"] ?? "80"}
-                  onUpdate={onUpdate}
-                  min={0} max={100}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Score Thresholds — non-negotiable */}
-          <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
-            <div className="flex items-start gap-3">
-              <Shield className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-              <div>
-                <p className="text-sm font-semibold text-primary">Score Thresholds — Non-Negotiable</p>
-                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                  Paper ≥ 60 · Demo ≥ 65 · Real ≥ 70 · TP target 50–200%+
-                </p>
-                <p className="text-[10px] text-muted-foreground/60 mt-1">
-                  Do not lower these thresholds. They are calibrated for high-confidence entries only.
-                  Lower thresholds produce more trades but deteriorate risk-adjusted outcomes.
-                </p>
-              </div>
             </div>
           </div>
 
@@ -428,17 +377,18 @@ export default function Settings() {
             <div className="px-4 py-3 border-b border-border/30 bg-muted/10">
               <h2 className="text-sm font-semibold">Per-Symbol Wiring Diagram</h2>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                Model → Engine → Native scoring → Coordinator → Allocator → Trade Manager.
-                Runtime calibration feed applies when <span className="font-mono">use_calibrated_runtime_profiles=true</span>.
+                Symbol Service → Trade Candidate → Portfolio Allocator → Trade Execution/Manager.
               </p>
             </div>
             <div className="p-4 space-y-3">
               <div className="rounded-lg border border-border/30 bg-background/40 p-3 text-[11px] text-muted-foreground">
                 <div className="font-mono text-foreground mb-1">
-                  Symbol model → symbol engine(s) → native score → coordinator → allocator → trade manager
+                  Symbol Service → Trade Candidate → Portfolio Allocator → Trade Execution/Manager
                 </div>
                 <p>
-                  BOOM300/CRASH300 use calibration-driven overrides when runtime calibration is enabled.
+                  Each symbol service owns calibration, runtime model, live-safe feature snapshot, trigger or archetype detection, candidate factory, and trade-management policy. The allocator only ranks approved candidates and applies capital, exposure, and risk limits.
+                </p>
+                <p className="mt-1.5">
                   Current runtime toggle:{" "}
                   <span className={cn("font-semibold", data["use_calibrated_runtime_profiles"] === "true" ? "text-green-400" : "text-amber-400")}>
                     {data["use_calibrated_runtime_profiles"] === "true" ? "ON" : "OFF"}
@@ -464,8 +414,11 @@ export default function Settings() {
                     </thead>
                     <tbody>
                       {wiringRows.map((r) => (
-                        <tr key={r.symbol} className={cn("border-b border-border/20", ACTIVE_SYMBOLS.includes(r.symbol) && "bg-primary/5")}>
-                          <td className="py-2 pr-3 font-mono text-foreground">{r.symbol}</td>
+                        <tr key={r.symbol} className={cn("border-b border-border/20", ACTIVE_SERVICE_SYMBOLS.includes(r.symbol as typeof ACTIVE_SERVICE_SYMBOLS[number]) && "bg-primary/5")}>
+                          <td className="py-2 pr-3">
+                            <div className="font-mono text-foreground">{r.symbol}</div>
+                            <div className="text-[10px] text-muted-foreground">{getSymbolLabel(r.symbol)}</div>
+                          </td>
                           <td className="py-2 pr-3 font-mono text-muted-foreground">{r.enginePath}</td>
                           <td className="py-2 pr-3 text-right font-mono">{r.moveCount.toLocaleString()}</td>
                           <td className="py-2 pr-3 text-center">{r.hasResearchProfile ? "yes" : "no"}</td>
@@ -491,35 +444,6 @@ export default function Settings() {
                     </tbody>
                   </table>
                 </div>
-              )}
-            </div>
-          </div>
-
-          {/* AI Settings */}
-          <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
-            <div className="px-4 py-3 border-b border-border/30 bg-muted/10 flex items-center gap-2">
-              <Brain className="w-4 h-4 text-primary" />
-              <h2 className="text-sm font-semibold">AI Verification Settings</h2>
-            </div>
-            <div className="px-4 py-3 space-y-2.5">
-              {data["ai_confidence_threshold"] !== undefined && (
-                <NumRow
-                  label="AI confidence threshold"
-                  field="ai_confidence_threshold"
-                  value={data["ai_confidence_threshold"]}
-                  onUpdate={onUpdate}
-                  note="0–1, e.g. 0.7"
-                  min={0} max={1}
-                />
-              )}
-              {data["ai_model"] && (
-                <div className="flex items-center justify-between gap-4 py-0.5">
-                  <span className="text-xs text-muted-foreground">AI model</span>
-                  <span className="text-xs font-mono">{data["ai_model"]}</span>
-                </div>
-              )}
-              {!aiVerification && (
-                <p className="text-xs text-muted-foreground/60 pt-1">AI Verification is disabled. Enable above to require AI consensus before entries.</p>
               )}
             </div>
           </div>

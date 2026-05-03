@@ -161,18 +161,18 @@ async function initDb(): Promise<void> {
       ts                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       symbol             TEXT NOT NULL,
       strategy_name      TEXT NOT NULL,
-      score              DOUBLE PRECISION NOT NULL,
+      legacy_diagnostic_score DOUBLE PRECISION,
+      runtime_evidence   DOUBLE PRECISION NOT NULL,
       expected_value     DOUBLE PRECISION NOT NULL,
       allowed_flag       BOOLEAN NOT NULL DEFAULT FALSE,
-      rejection_reason   TEXT,
+      admission_reason   TEXT,
       direction          TEXT,
       suggested_sl       DOUBLE PRECISION,
       suggested_tp       DOUBLE PRECISION,
       ai_verdict         TEXT,
       ai_reasoning       TEXT,
       ai_confidence_adj  DOUBLE PRECISION,
-      composite_score    DOUBLE PRECISION,
-      scoring_dimensions JSONB,
+      runtime_evidence_dimensions JSONB,
       mode               TEXT,
       regime             TEXT,
       regime_confidence  DOUBLE PRECISION,
@@ -187,6 +187,21 @@ async function initDb(): Promise<void> {
       created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_signals_ts ON signal_log (ts DESC);
+    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS legacy_diagnostic_score DOUBLE PRECISION;
+    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS runtime_evidence DOUBLE PRECISION;
+    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS admission_reason TEXT;
+    ALTER TABLE signal_log ADD COLUMN IF NOT EXISTS runtime_evidence_dimensions JSONB;
+    UPDATE signal_log
+    SET
+      runtime_evidence = COALESCE(runtime_evidence, composite_score, score),
+      legacy_diagnostic_score = COALESCE(legacy_diagnostic_score, score),
+      admission_reason = COALESCE(admission_reason, rejection_reason),
+      runtime_evidence_dimensions = COALESCE(runtime_evidence_dimensions, scoring_dimensions)
+    WHERE runtime_evidence IS NULL
+       OR legacy_diagnostic_score IS NULL
+       OR admission_reason IS NULL
+       OR runtime_evidence_dimensions IS NULL;
+    ALTER TABLE signal_log ALTER COLUMN runtime_evidence SET NOT NULL;
 
     CREATE TABLE IF NOT EXISTS ai_context_embeddings (
       id SERIAL PRIMARY KEY,

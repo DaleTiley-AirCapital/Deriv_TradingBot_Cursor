@@ -100,26 +100,6 @@ const API_KEY_KEYS = ["deriv_api_token_demo", "deriv_api_token_real", "openai_ap
 
 const ALL_SETTING_KEYS = Object.keys(SETTING_DEFAULTS);
 
-const MODE_PREFIXES = ["paper", "demo", "real"] as const;
-const INHERITABLE_SUFFIXES = [
-  "allocation_mode",
-  "equity_pct_per_trade", "max_open_trades",
-  "max_daily_loss_pct", "max_weekly_loss_pct", "max_drawdown_pct",
-  "enabled_symbols", "enabled_strategies",
-];
-
-function getLegacyFallbackKey(modeKey: string): string | null {
-  for (const prefix of MODE_PREFIXES) {
-    if (modeKey.startsWith(`${prefix}_`)) {
-      const suffix = modeKey.slice(prefix.length + 1);
-      if (INHERITABLE_SUFFIXES.includes(suffix)) {
-        return suffix;
-      }
-    }
-  }
-  return null;
-}
-
 function maskSecret(value: string): string {
   if (!value || value.length < 8) return value ? "****" : "";
   return value.substring(0, 4) + "****" + value.substring(value.length - 4);
@@ -135,12 +115,7 @@ router.get("/settings", async (_req, res): Promise<void> => {
     if (stateMap[key] !== undefined) {
       settings[key] = stateMap[key];
     } else {
-      const legacyKey = getLegacyFallbackKey(key);
-      if (legacyKey && stateMap[legacyKey] !== undefined) {
-        settings[key] = stateMap[legacyKey];
-      } else {
-        settings[key] = SETTING_DEFAULTS[key];
-      }
+      settings[key] = SETTING_DEFAULTS[key];
     }
   }
 

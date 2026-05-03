@@ -636,7 +636,7 @@ export async function buildCrash300TradeOutcomeAttributionReport(params: {
       promotedModelRunId: parity.runtimeModel.promotedModelRunId ?? params.result.runtimeModel.sourceRunId ?? null,
       stagedModelRunId: parity.runtimeModel.stagedModelRunId ?? null,
       scoringSource: params.result.runtimeModel.source ?? null,
-      scoringSourceCounts: params.result.runtimeModel.scoringSourceCounts ?? {},
+      modelSourceCounts: params.result.runtimeModel.modelSourceCounts ?? {},
     },
     parity: {
       totals: parity.totals,

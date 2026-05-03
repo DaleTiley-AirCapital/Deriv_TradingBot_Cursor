@@ -219,10 +219,67 @@ function toIsoString(raw: string | Date | null | undefined): string | null {
   return Number.isNaN(d.getTime()) ? String(raw) : d.toISOString();
 }
 
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function normalizeV3TradeForResponse(trade: Record<string, unknown>) {
+  const runtimeEvidenceRaw = trade.runtimeEvidence ?? trade.nativeScore;
+  const runtimeEvidence = Number(runtimeEvidenceRaw);
+  const modelSource = typeof trade.modelSource === "string"
+    ? trade.modelSource
+    : typeof trade.scoringSource === "string"
+      ? trade.scoringSource
+      : null;
+  const { nativeScore: _nativeScore, scoringSource: _scoringSource, legacyDiagnosticScore: _legacyDiagnosticScore, ...rest } = trade;
+  return {
+    ...rest,
+    runtimeEvidence: Number.isFinite(runtimeEvidence) ? runtimeEvidence : null,
+    modelSource,
+  };
+}
+
+function normalizeV3SummaryForResponse(summary: Record<string, unknown>) {
+  const { scoreGate: _scoreGate, ...rest } = summary;
+  return { ...rest, decisionGate: "runtime-platform-state" };
+}
+
+function normalizeV3BacktestResultForResponse(result: Record<string, unknown>) {
+  const runtimeModel = asRecord(result.runtimeModel);
+  const { scoringSourceCounts: _scoringSourceCounts, ...runtimeModelRest } = runtimeModel;
+  const modelSourceCounts = asRecord(runtimeModel.modelSourceCounts);
+  const legacyModelSourceCounts = asRecord(runtimeModel.scoringSourceCounts);
+  const summary = asRecord(result.summary);
+  const trades = asArray(result.trades).map((trade) => normalizeV3TradeForResponse(asRecord(trade)));
+  return {
+    ...result,
+    runtimeModel: {
+      ...runtimeModelRest,
+      modelSourceCounts: Object.keys(modelSourceCounts).length > 0 ? modelSourceCounts : legacyModelSourceCounts,
+    },
+    summary: normalizeV3SummaryForResponse(summary),
+    trades,
+  };
+}
+
+function normalizePersistedV3RunForResponse(row: PersistedV3RunRow) {
+  return {
+    ...row,
+    summary: normalizeV3SummaryForResponse(asRecord(row.summary)),
+    result: normalizeV3BacktestResultForResponse(asRecord(row.result)),
+    createdAt: (() => {
+      const raw = (row as unknown as { createdAt?: string | Date }).createdAt;
+      if (!raw) return "";
+      const d = raw instanceof Date ? raw : new Date(raw);
+      return Number.isNaN(d.getTime()) ? String(raw) : d.toISOString();
+    })(),
+  };
+}
+
 function summarizeV3Results(results: Record<string, unknown>) {
   return Object.fromEntries(
     Object.entries(results).map(([sym, raw]) => {
-      const result = raw as V3BacktestResult;
+      const result = normalizeV3BacktestResultForResponse(asRecord(raw)) as unknown as V3BacktestResult;
       return [sym, {
         symbol: sym,
         startTs: result.startTs,
@@ -239,6 +296,7 @@ function summarizeV3Results(results: Record<string, unknown>) {
         maxDrawdownPct: result.summary.accountMaxDrawdownPct ?? result.summary.maxDrawdownPct,
         profitFactor: result.summary.profitFactor,
         moveCapture: result.moveOverlap,
+        decisionGate: "runtime-platform-state",
         runtimeModel: result.runtimeModel,
         admissionPolicy: result.admissionPolicy,
         exits: result.summary.byExitReason,
@@ -834,6 +892,10 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
       results = { [symbol]: single };
     }
 
+    const normalizedResults = Object.fromEntries(
+      Object.entries(results).map(([sym, raw]) => [sym, normalizeV3BacktestResultForResponse(asRecord(raw))]),
+    );
+
     const persisted = await persistV3BacktestResults({
       results,
       normalizedTierMode: normalizedTierMode as "A" | "AB" | "ABC" | "ALL",
@@ -846,7 +908,7 @@ router.post("/backtest/v3/run", async (req, res): Promise<void> => {
       ok: true,
       symbol,
       totalTrades: persisted.totalTrades,
-      results,
+      results: normalizedResults,
       persistedRunIds: persisted.persistedRunIds,
     });
   } catch (err) {
@@ -936,6 +998,7 @@ router.get("/backtest/v3/history", async (req, res): Promise<void> => {
     `);
     const runs = rows.rows.map((row) => ({
       ...row,
+      summary: normalizeV3SummaryForResponse(asRecord((row as PersistedV3RunRow).summary)),
       createdAt: (() => {
         const raw = (row as { createdAt?: string | Date }).createdAt;
         if (!raw) return "";
@@ -1135,7 +1198,9 @@ router.get("/backtest/v3/jobs/:id/result", async (req, res): Promise<void> => {
         phase: row.phase,
         completedAt: toIsoString(row.completedAt),
         persistedRunIds: row.persistedRunIds ?? {},
-        summaryBySymbol: row.resultSummary ?? {},
+        summaryBySymbol: Object.fromEntries(
+          Object.entries(asRecord(row.resultSummary)).map(([sym, summary]) => [sym, normalizeV3SummaryForResponse(asRecord(summary))]),
+        ),
       },
     });
   } catch (err) {
@@ -1175,15 +1240,7 @@ router.get("/backtest/v3/history/:id", async (req, res): Promise<void> => {
     }
     res.json({
       ok: true,
-      run: {
-        ...row,
-        createdAt: (() => {
-          const raw = (row as unknown as { createdAt?: string | Date }).createdAt;
-          if (!raw) return "";
-          const d = raw instanceof Date ? raw : new Date(raw);
-          return Number.isNaN(d.getTime()) ? String(raw) : d.toISOString();
-        })(),
-      },
+      run: normalizePersistedV3RunForResponse(row),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load V3 backtest run";

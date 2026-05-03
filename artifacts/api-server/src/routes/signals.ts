@@ -38,6 +38,66 @@ function optionalBoolean(value: unknown): boolean | null {
   return null;
 }
 
+function toCanonicalSignalPayload(row: {
+  id: number;
+  ts: Date;
+  symbol: string;
+  strategyName: string | null;
+  strategyFamily: string | null;
+  subStrategy: string | null;
+  legacyDiagnosticScore: number | null;
+  expectedValue: number | null;
+  allowedFlag: boolean;
+  admissionReason: string | null;
+  direction: string | null;
+  suggestedSl: number | null;
+  suggestedTp: number | null;
+  aiVerdict: string | null;
+  aiReasoning: string | null;
+  aiConfidenceAdj: number | null;
+  runtimeEvidence: number | null;
+  runtimeEvidenceDimensions: unknown;
+  mode: string | null;
+  regime: string | null;
+  regimeConfidence: number | null;
+  allocationPct: number | null;
+  executionStatus: string | null;
+  expectedMovePct: number | null;
+  expectedHoldDays: number | null;
+  captureRate: number | null;
+  empiricalWinRate: number | null;
+}) {
+  return {
+    id: row.id,
+    ts: row.ts.toISOString(),
+    symbol: row.symbol,
+    strategyName: row.strategyName,
+    strategyFamily: row.strategyFamily ?? null,
+    subStrategy: row.subStrategy ?? null,
+    runtimeEvidence: row.runtimeEvidence ?? null,
+    legacyDiagnosticScore: row.legacyDiagnosticScore ?? null,
+    admissionReason: row.admissionReason ?? null,
+    expectedValue: row.expectedValue,
+    allowedFlag: row.allowedFlag,
+    direction: row.direction,
+    suggestedSl: row.suggestedSl,
+    suggestedTp: row.suggestedTp,
+    aiVerdict: row.aiVerdict ?? null,
+    aiReasoning: row.aiReasoning ?? null,
+    aiConfidenceAdj: row.aiConfidenceAdj ?? null,
+    runtimeEvidenceDimensions: row.runtimeEvidenceDimensions ?? null,
+    mode: row.mode ?? null,
+    regime: row.regime ?? null,
+    regimeConfidence: row.regimeConfidence ?? null,
+    allocationPct: row.allocationPct ?? null,
+    executionStatus: row.executionStatus ?? null,
+    expectedMovePct: row.expectedMovePct ?? null,
+    expectedHoldDays: row.expectedHoldDays ?? null,
+    captureRate: row.captureRate ?? null,
+    empiricalWinRate: row.empiricalWinRate ?? null,
+  };
+}
+
 async function loadRecentCrash300Candles(): Promise<CandleRow[]> {
   const rows = await db
     .select({
@@ -80,10 +140,10 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
 
   const visibilityCondition = sql`(
     ${signalLogTable.allowedFlag} = true
-    OR COALESCE(${signalLogTable.compositeScore}, 0) >= ${visibilityThreshold}
+    OR COALESCE(${signalLogTable.runtimeEvidence}, 0) >= ${visibilityThreshold}
     OR ${signalLogTable.executionStatus} = 'blocked'
     OR ${signalLogTable.executionStatus} = 'rejected'
-    OR ${signalLogTable.rejectionReason} IS NOT NULL
+    OR ${signalLogTable.admissionReason} IS NOT NULL
   )`;
   conditions.push(visibilityCondition);
 
@@ -109,18 +169,18 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
     ts: signalLogTable.ts,
     symbol: signalLogTable.symbol,
     strategyName: signalLogTable.strategyName,
-    score: signalLogTable.score,
+    legacyDiagnosticScore: signalLogTable.legacyDiagnosticScore,
     expectedValue: signalLogTable.expectedValue,
     allowedFlag: signalLogTable.allowedFlag,
-    rejectionReason: signalLogTable.rejectionReason,
+    admissionReason: signalLogTable.admissionReason,
     direction: signalLogTable.direction,
     suggestedSl: signalLogTable.suggestedSl,
     suggestedTp: signalLogTable.suggestedTp,
     aiVerdict: signalLogTable.aiVerdict,
     aiReasoning: signalLogTable.aiReasoning,
     aiConfidenceAdj: signalLogTable.aiConfidenceAdj,
-    compositeScore: signalLogTable.compositeScore,
-    scoringDimensions: signalLogTable.scoringDimensions,
+    runtimeEvidence: signalLogTable.runtimeEvidence,
+    runtimeEvidenceDimensions: signalLogTable.runtimeEvidenceDimensions,
     mode: signalLogTable.mode,
     regime: signalLogTable.regime,
     regimeConfidence: signalLogTable.regimeConfidence,
@@ -139,37 +199,10 @@ router.get("/signals/latest", async (req, res): Promise<void> => {
     .offset(offset);
 
   res.json({
-    signals: rows.map(r => ({
-      id: r.id,
-      ts: r.ts.toISOString(),
-      symbol: r.symbol,
-      strategyName: r.strategyName,
-      strategyFamily: r.strategyFamily ?? null,
-      subStrategy: r.subStrategy ?? null,
-      score: r.score,
-      expectedValue: r.expectedValue,
-      allowedFlag: r.allowedFlag,
-      rejectionReason: r.rejectionReason,
-      direction: r.direction,
-      suggestedSl: r.suggestedSl,
-      suggestedTp: r.suggestedTp,
-      aiVerdict: r.aiVerdict ?? null,
-      aiReasoning: r.aiReasoning ?? null,
-      aiConfidenceAdj: r.aiConfidenceAdj ?? null,
-      compositeScore: r.compositeScore ?? null,
-      scoringDimensions: r.scoringDimensions ?? null,
-      mode: r.mode ?? null,
-      regime: r.regime ?? null,
-      regimeConfidence: r.regimeConfidence ?? null,
-      allocationPct: r.allocationPct ?? null,
-      executionStatus: r.executionStatus ?? null,
-      expectedMovePct: r.expectedMovePct ?? null,
-      expectedHoldDays: r.expectedHoldDays ?? null,
-      captureRate: r.captureRate ?? null,
-      empiricalWinRate: r.empiricalWinRate ?? null,
-    })),
+    signals: rows.map(toCanonicalSignalPayload),
     total: totalCount,
     visibilityThreshold,
+    runtimeDecisionVisibilityThreshold: visibilityThreshold,
   });
 });
 
@@ -360,16 +393,16 @@ router.get("/signals/export", async (req, res): Promise<void> => {
       symbol: signalLogTable.symbol,
       strategyName: signalLogTable.strategyName,
       direction: signalLogTable.direction,
-      score: signalLogTable.score,
+      legacyDiagnosticScore: signalLogTable.legacyDiagnosticScore,
       allowedFlag: signalLogTable.allowedFlag,
-      rejectionReason: signalLogTable.rejectionReason,
+      admissionReason: signalLogTable.admissionReason,
       executionStatus: signalLogTable.executionStatus,
       mode: signalLogTable.mode,
       aiVerdict: signalLogTable.aiVerdict,
       aiReasoning: signalLogTable.aiReasoning,
       regime: signalLogTable.regime,
       regimeConfidence: signalLogTable.regimeConfidence,
-      compositeScore: signalLogTable.compositeScore,
+      runtimeEvidence: signalLogTable.runtimeEvidence,
       expectedMovePct: signalLogTable.expectedMovePct,
       suggestedTp: signalLogTable.suggestedTp,
       suggestedSl: signalLogTable.suggestedSl,
@@ -399,11 +432,10 @@ router.get("/signals/export", async (req, res): Promise<void> => {
         symbol:           r.symbol,
         strategy:         r.strategyName,
         direction:        r.direction,
-        score:            r.score,
-        composite_score:  r.compositeScore ?? null,
-        native_score:     r.score ?? null,
+        runtimeEvidence:  r.runtimeEvidence ?? null,
+        legacyDiagnosticScore: r.legacyDiagnosticScore ?? null,
         allowed_flag:     r.allowedFlag,
-        rejection_reason: r.rejectionReason ?? null,
+        admissionReason:  r.admissionReason ?? null,
         execution_status: r.executionStatus ?? null,
         mode:             r.mode ?? null,
         ai_verdict:       r.aiVerdict ?? null,

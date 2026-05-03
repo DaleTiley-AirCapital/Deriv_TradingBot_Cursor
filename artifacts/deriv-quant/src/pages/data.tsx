@@ -16,6 +16,7 @@ import {
   TrendingUp, Layers, CheckCircle, XCircle, AlertTriangle, Eye, EyeOff, Wrench,
   Download, ChevronRight, Cpu, Sparkles, ChevronDown,
 } from "lucide-react";
+import { ACTIVE_SERVICE_SYMBOLS, getGroupedSymbols, getSymbolLabel } from "@/lib/symbolCatalog";
 
 const BASE = import.meta.env.BASE_URL || "/";
 function apiFetch<T = any>(path: string, opts?: RequestInit): Promise<T> {
@@ -31,30 +32,9 @@ function apiFetch<T = any>(path: string, opts?: RequestInit): Promise<T> {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const ACTIVE_SYMBOLS = ["CRASH300", "BOOM300", "R_75", "R_100"];
-
-const ALL_28_SYMBOLS = [
-  "CRASH300","BOOM300","R_75","R_100",
-  "BOOM1000","CRASH1000","BOOM900","CRASH900","BOOM600","CRASH600",
-  "BOOM500","CRASH500","R_10","R_25","R_50","RDBULL","RDBEAR",
-  "JD10","JD25","JD50","JD75","JD100",
-  "stpRNG","stpRNG2","stpRNG3","stpRNG5","RB100","RB200",
-];
-
-const SYMBOL_LABELS: Record<string, string> = {
-  BOOM1000: "Boom 1000",  CRASH1000: "Crash 1000",
-  BOOM900:  "Boom 900",   CRASH900:  "Crash 900",
-  BOOM600:  "Boom 600",   CRASH600:  "Crash 600",
-  BOOM500:  "Boom 500",   CRASH500:  "Crash 500",
-  BOOM300:  "Boom 300",   CRASH300:  "Crash 300",
-  R_75:     "Vol 75",     R_100:     "Vol 100",
-  R_10:     "Vol 10",     R_25:      "Vol 25",     R_50: "Vol 50",
-  RDBULL:   "RD Bull",    RDBEAR:    "RD Bear",
-  JD10:     "Jump 10",    JD25:      "Jump 25",    JD50: "Jump 50",
-  JD75:     "Jump 75",    JD100:     "Jump 100",
-  stpRNG:   "Step",       stpRNG2:   "Step 2",     stpRNG3: "Step 3", stpRNG5: "Step 5",
-  RB100:    "Range 100",  RB200:     "Range 200",
-};
+const ACTIVE_SYMBOLS: string[] = [...ACTIVE_SERVICE_SYMBOLS];
+const ALL_28_SYMBOLS = getGroupedSymbols().flatMap((section) => section.entries.map((entry) => entry.symbol));
+const GROUPED_ALL_SYMBOLS = getGroupedSymbols(ALL_28_SYMBOLS);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -173,8 +153,14 @@ function SymbolSelectFull({ value, onChange }: { value: string; onChange: (s: st
   return (
     <select value={value} onChange={e => onChange(e.target.value)}
       className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50">
-      {ALL_28_SYMBOLS.map(s => (
-        <option key={s} value={s}>{s}{ACTIVE_SYMBOLS.includes(s) ? " ●" : ""}</option>
+      {GROUPED_ALL_SYMBOLS.map((section) => (
+        <optgroup key={section.group} label={section.group}>
+          {section.entries.map((entry) => (
+            <option key={entry.symbol} value={entry.symbol}>
+              {entry.symbol} — {entry.label}{ACTIVE_SYMBOLS.includes(entry.symbol) ? " ●" : ""}
+            </option>
+          ))}
+        </optgroup>
       ))}
     </select>
   );
@@ -260,7 +246,7 @@ function SymbolStreamRow({ sym, diag, coverage, onToggle }: {
         <div className="flex items-center gap-2">
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
           <span className="font-mono font-semibold text-sm text-foreground">{sym}</span>
-          {SYMBOL_LABELS[sym] && <span className="text-[11px] text-muted-foreground">{SYMBOL_LABELS[sym]}</span>}
+          <span className="text-[11px] text-muted-foreground">{getSymbolLabel(sym)}</span>
         </div>
       </td>
       <td className="py-2.5 px-3">
@@ -332,9 +318,7 @@ function CoverageTable({ data, tier }: { data: DataStatusSymbol[]; tier?: string
                   <div className="flex items-center gap-2">
                     {isActive && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
                     <span className="font-mono font-semibold text-foreground">{sym.symbol}</span>
-                    {SYMBOL_LABELS[sym.symbol] && (
-                      <span className="text-[11px] text-muted-foreground">{SYMBOL_LABELS[sym.symbol]}</span>
-                    )}
+                    <span className="text-[11px] text-muted-foreground">{getSymbolLabel(sym.symbol)}</span>
                   </div>
                 </td>
                 <td className="py-2.5 px-3">
@@ -1062,17 +1046,16 @@ function RuntimeTab() {
 
   return (
     <div className="space-y-4">
-      <RuntimePanel title="V3 Engine Features — Live State" icon={Cpu}
+      <RuntimePanel title="Legacy V3 Feature Snapshot" icon={Cpu}
         badge={<span className="text-[10px] text-muted-foreground">Active symbols only</span>}>
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground bg-muted/20 rounded p-3">
-            Computed feature vectors that the V3 coordinator sees on each scan cycle. Click a symbol to load its latest features.
+            Legacy feature vectors from the older V3 engine path. These are diagnostic-only and are not the current symbol-service decision source.
           </p>
           <div className="rounded border border-border/30 bg-background/30 p-3 text-[11px] text-muted-foreground">
             <p className="font-medium text-foreground mb-1">How to read this</p>
             <p>
-              These are normalized model inputs, not profits or scores. They feed:
-              feature vector → engine formula → native score → coordinator → allocator → trade manager.
+              These normalized values are retained for historical diagnostics only. Current CRASH300 runtime decisions come from live-safe service context + fresh 1m trigger + promoted runtime model.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -1109,7 +1092,7 @@ function RuntimeTab() {
           ))}
           {Object.keys(features).length === 0 && (
             <p className="text-xs text-muted-foreground/60 text-center py-4">
-              Click a symbol above to load its feature vector
+              Click a service symbol above to load the legacy diagnostic snapshot
             </p>
           )}
         </div>
@@ -1312,7 +1295,7 @@ export default function DataManager() {
           <Database className="w-6 h-6 text-primary" /> Data Console
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          All 28 symbols · V3 engine features · multi-timeframe coverage · clean canonical data · export
+          Global data streaming, coverage, exports, and service diagnostics across all tracked symbols
         </p>
       </div>
 
@@ -1441,8 +1424,14 @@ export default function DataManager() {
               <label className="text-xs text-muted-foreground font-medium">Symbol:</label>
               <select className="bg-card border border-border/50 rounded-md px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none h-8 w-52"
                 value={symbol} onChange={e => setSymbol(e.target.value)}>
-                {ALL_28_SYMBOLS.map(s => (
-                  <option key={s} value={s}>{s}{SYMBOL_LABELS[s] ? ` — ${SYMBOL_LABELS[s]}` : ""}</option>
+                {GROUPED_ALL_SYMBOLS.map((section) => (
+                  <optgroup key={section.group} label={section.group}>
+                    {section.entries.map((entry) => (
+                      <option key={entry.symbol} value={entry.symbol}>
+                        {entry.symbol} — {entry.label}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </div>

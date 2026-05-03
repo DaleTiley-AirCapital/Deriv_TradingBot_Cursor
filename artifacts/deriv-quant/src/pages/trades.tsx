@@ -5,6 +5,7 @@ import {
   TrendingUp, TrendingDown, Activity, CircleSlash, ChevronDown, ChevronUp,
   Zap, Timer, AlertTriangle, RotateCcw, Loader2,
 } from "lucide-react";
+import { ACTIVE_SERVICE_SYMBOLS, getSymbolLabel } from "@/lib/symbolCatalog";
 
 const BASE = import.meta.env.BASE_URL || "/";
 function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -550,7 +551,7 @@ export default function Trades() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>("open");
   const [modeFilter, setModeFilter] = useState("");
-  const [symbolFilter, setSymbolFilter] = useState("");
+  const [serviceFilter, setServiceFilter] = useState("all");
   const [resetBusy, setResetBusy] = useState(false);
   const [resetMsg, setResetMsg] = useState<string | null>(null);
   const [resetErr, setResetErr] = useState<string | null>(null);
@@ -563,11 +564,10 @@ export default function Trades() {
   });
 
   const { data: closedTrades = [], isLoading: closedLoading } = useQuery<ClosedTrade[]>({
-    queryKey: ["api/trade/history", modeFilter, symbolFilter],
+    queryKey: ["api/trade/history", modeFilter],
     queryFn: () => {
       const params = new URLSearchParams({ limit: "100" });
       if (modeFilter) params.set("mode", modeFilter);
-      if (symbolFilter) params.set("symbol", symbolFilter);
       return apiFetch(`api/trade/history?${params}`);
     },
     refetchInterval: 30_000,
@@ -589,10 +589,12 @@ export default function Trades() {
   const avgLoss = losers.length > 0 ? losers.reduce((s, t) => s + (t.pnl ?? 0), 0) / losers.length : null;
 
   const floatingPnl = openPositions.reduce((s, p) => s + p.floatingPnl, 0);
+  const filteredOpenPositions = openPositions.filter((position) => serviceFilter === "all" || position.symbol === serviceFilter);
+  const filteredClosedTrades = closedTrades.filter((trade) => serviceFilter === "all" || trade.symbol === serviceFilter);
 
   const tabs: { id: Tab; label: string; count?: number }[] = [
-    { id: "open", label: "Open Positions", count: openPositions.length },
-    { id: "closed", label: "Closed Trades", count: closedTrades.length },
+    { id: "open", label: "Open Positions", count: filteredOpenPositions.length },
+    { id: "closed", label: "Closed Trades", count: filteredClosedTrades.length },
     { id: "attribution", label: "Attribution" },
   ];
 
@@ -625,7 +627,7 @@ export default function Trades() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Trade Lifecycle</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Open positions, closed trade history, exit reasons, and engine attribution
+            Service-filtered positions, closed trades, allocator outcomes, and symbol-service attribution
           </p>
         </div>
         {overview?.mode === "paper" && (
@@ -706,18 +708,27 @@ export default function Trades() {
       {/* Open Positions */}
       {tab === "open" && (
         <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <select value={serviceFilter} onChange={e => setServiceFilter(e.target.value)}
+              className="bg-card border border-border/50 rounded-md px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
+              <option value="all">All Services</option>
+              {ACTIVE_SERVICE_SYMBOLS.map((symbol) => (
+                <option key={symbol} value={symbol}>{symbol} — {getSymbolLabel(symbol)}</option>
+              ))}
+            </select>
+          </div>
           {openLoading ? (
             <p className="text-sm text-muted-foreground text-center py-8">Loading positions…</p>
-          ) : openPositions.length === 0 ? (
+          ) : filteredOpenPositions.length === 0 ? (
             <div className="text-center py-14">
               <CircleSlash className="w-10 h-10 text-muted-foreground/15 mx-auto mb-3" />
               <p className="text-sm text-muted-foreground">No open positions</p>
               <p className="text-xs text-muted-foreground/60 mt-1">
-                Paper requires score ≥60 · Demo ≥65 · Real ≥70
+                No selected service positions are currently open.
               </p>
             </div>
           ) : (
-            openPositions.map(pos => <OpenPositionRow key={pos.id} pos={pos} />)
+            filteredOpenPositions.map(pos => <OpenPositionRow key={pos.id} pos={pos} />)
           )}
         </div>
       )}
@@ -726,11 +737,11 @@ export default function Trades() {
       {tab === "closed" && (
         <div className="space-y-4">
           <div className="flex items-center gap-3">
-            <select value={symbolFilter} onChange={e => setSymbolFilter(e.target.value)}
+            <select value={serviceFilter} onChange={e => setServiceFilter(e.target.value)}
               className="bg-card border border-border/50 rounded-md px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
-              <option value="">All Symbols</option>
-              {["BOOM300", "CRASH300", "R_75", "R_100", "BOOM1000", "CRASH1000"].map(s => (
-                <option key={s} value={s}>{s}</option>
+              <option value="all">All Services</option>
+              {ACTIVE_SERVICE_SYMBOLS.map((symbol) => (
+                <option key={symbol} value={symbol}>{symbol} — {getSymbolLabel(symbol)}</option>
               ))}
             </select>
             <select value={modeFilter} onChange={e => setModeFilter(e.target.value)}
@@ -744,11 +755,11 @@ export default function Trades() {
 
           {closedLoading ? (
             <p className="text-sm text-muted-foreground text-center py-8">Loading trade history…</p>
-          ) : closedTrades.length === 0 ? (
+          ) : filteredClosedTrades.length === 0 ? (
             <div className="text-center py-14">
               <BarChart2 className="w-10 h-10 text-muted-foreground/15 mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground">No closed trades{modeFilter || symbolFilter ? " matching filters" : ""}</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">Closed trades show entry, exit, hold time, and P&L</p>
+              <p className="text-sm text-muted-foreground">No closed trades{modeFilter || serviceFilter !== "all" ? " matching filters" : ""}</p>
+              <p className="text-xs text-muted-foreground/60 mt-1">Closed trades show symbol-service decision fields separately from portfolio execution results.</p>
             </div>
           ) : (
             <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
@@ -766,7 +777,7 @@ export default function Trades() {
                     </tr>
                   </thead>
                   <tbody>
-                    {closedTrades.map(t => <ClosedTradeRow key={t.id} t={t} />)}
+                    {filteredClosedTrades.map(t => <ClosedTradeRow key={t.id} t={t} />)}
                   </tbody>
                 </table>
               </div>
@@ -776,7 +787,7 @@ export default function Trades() {
       )}
 
       {/* Attribution */}
-      {tab === "attribution" && <AttributionSection closed={closedTrades} />}
+      {tab === "attribution" && <AttributionSection closed={filteredClosedTrades} />}
     </div>
   );
 }

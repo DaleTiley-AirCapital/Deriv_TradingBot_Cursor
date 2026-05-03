@@ -1,12 +1,19 @@
 import { useState, useRef, useEffect, useCallback, createContext, useContext, type ReactNode } from "react";
 import {
-  FlaskConical, Brain, Play, RefreshCw,
+  FlaskConical, RefreshCw,
   Loader2, CheckCircle, XCircle,
   FileText, Clock, BarChart2, ChevronRight, Download, Activity,
   Target, Zap, TrendingUp, TrendingDown, Search, ChevronDown, ChevronUp, Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDurationCompact } from "@/lib/time";
+import {
+  ACTIVE_SERVICE_SYMBOLS,
+  SERVICE_SELECTOR_OPTIONS,
+  getSymbolLabel,
+  isEnabledService,
+  isScaffoldedService,
+} from "@/lib/symbolCatalog";
 
 const BASE = import.meta.env.BASE_URL || "/";
 
@@ -60,7 +67,7 @@ function useCalibrationRun(): CalibrationRunContextValue {
   return v;
 }
 
-/** Keeps pass-run polling alive while viewing any Research tab (AI / Backtest / Move Calibration). */
+/** Keeps pass-run polling alive while viewing the symbol-service research workspace. */
 function CalibrationRunProvider({ children }: { children: ReactNode }) {
   const [runId, setRunId] = useState<number | null>(null);
   const [symbol, setSymbol] = useState<string | null>(null);
@@ -163,18 +170,10 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
   );
 }
 
-const ALL_SYMBOLS = [
-  "BOOM300","CRASH300","R_75","R_100",
-  "BOOM1000","CRASH1000","BOOM900","CRASH900","BOOM600","CRASH600","BOOM500","CRASH500",
-  "R_10","R_25","R_50","RDBULL","RDBEAR",
-  "JD10","JD25","JD50","JD75","JD100",
-  "stpRNG","stpRNG2","stpRNG3","stpRNG5","RB100","RB200",
-];
-const ACTIVE_SYMBOLS = ["CRASH300", "BOOM300", "R_75", "R_100"];
-const RESEARCH_ONLY_SYMBOLS = ALL_SYMBOLS.filter((s) => !ACTIVE_SYMBOLS.includes(s));
+const ACTIVE_SYMBOLS: string[] = [...ACTIVE_SERVICE_SYMBOLS];
 const BACKTEST_ACTIVE_SYMBOLS = ["all", ...ACTIVE_SYMBOLS];
-const BACKTEST_RESEARCH_SYMBOLS = ["all", ...RESEARCH_ONLY_SYMBOLS];
-type DomainId = "active" | "research";
+type DomainId = "active";
+type ResearchTabId = "calibration" | "reports" | "runtime" | "backtests" | "diagnostics";
 const RESEARCH_WINDOWS = [
   { days: 30, label: "1 month" },
   { days: 90, label: "3 months" },
@@ -230,188 +229,6 @@ function SuccessBox({ msg }: { msg: string }) {
   );
 }
 
-function SymbolSelect({
-  value,
-  onChange,
-  label,
-  symbols = ALL_SYMBOLS,
-}: {
-  value: string;
-  onChange: (s: string) => void;
-  label?: string;
-  symbols?: string[];
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      {label && <span className="text-xs text-muted-foreground">{label}</span>}
-      <select
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-      >
-        {symbols.map(s => (
-          <option key={s} value={s}>{s}{ACTIVE_SYMBOLS.includes(s) ? " " : ""}</option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-//  AI Analysis Tab 
-
-function AiAnalysisTab({ domain, windowDays }: { domain: DomainId; windowDays: number }) {
-  const domainSymbols = domain === "active" ? ACTIVE_SYMBOLS : RESEARCH_ONLY_SYMBOLS;
-  const [symbol, setSymbol] = useState(domainSymbols[0] ?? "CRASH300");
-  const [running, setRunning] = useState(false);
-  const [bgStarted, setBgStarted] = useState(false);
-  const [result, setResult] = useState<any | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [status, setStatus] = useState<any | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const loadStatus = async () => {
-    try {
-      const d = await apiFetch("research/ai-analyze/status");
-      setStatus(d);
-    } catch {}
-  };
-
-  useEffect(() => {
-    loadStatus();
-    intervalRef.current = setInterval(loadStatus, 5000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, []);
-
-  useEffect(() => {
-    if (!domainSymbols.includes(symbol)) {
-      setSymbol(domainSymbols[0] ?? "CRASH300");
-      setResult(null);
-    }
-  }, [domain, domainSymbols, symbol]);
-
-  const runSync = async () => {
-    setRunning(true); setErr(null); setResult(null);
-    try {
-      const d = await apiFetch("research/ai-analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, windowDays }),
-      });
-      setResult(d.report ?? d);
-    } catch (e: any) { setErr(e.message); }
-    finally { setRunning(false); }
-  };
-
-  const runBackground = async () => {
-    setErr(null); setBgStarted(false);
-    try {
-      await apiFetch("research/ai-analyze/background", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, windowDays }),
-      });
-      setBgStarted(true);
-    } catch (e: any) { setErr(e.message); }
-  };
-
-  const displayResult = result ?? (status?.lastResult?.[symbol] ?? null);
-
-  return (
-    <div className="space-y-5">
-      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
-        <div>
-          <h3 className="text-sm font-semibold">AI Research Analysis</h3>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Runs a structured analysis on stored candle data for the selected symbol.
-            Extracts swing patterns, move size distribution, frequency, and behavioral drift.
-            Produces a research report. <strong className="text-foreground">Sync mode blocks until complete (~10-30s).</strong>
-          </p>
-        </div>
-        <div className="flex items-center gap-4 flex-wrap">
-          <SymbolSelect
-            value={symbol}
-            symbols={domainSymbols}
-            onChange={s => { setSymbol(s); setResult(null); }}
-            label="Symbol:"
-          />
-          <div className="flex items-center gap-1.5 text-xs">
-            <span className="text-muted-foreground">Window:</span>
-            <span className="px-2 py-1 rounded border border-primary/30 bg-primary/10 text-primary">
-              {windowLabel(windowDays)} (shared)
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <button
-            onClick={runSync}
-            disabled={running}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-            {running ? "Analyzing" : "Run Sync Analysis"}
-          </button>
-          <button
-            onClick={runBackground}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-border/50 text-foreground text-xs font-medium hover:border-border hover:bg-muted/30 transition-colors"
-          >
-            <Clock className="w-3.5 h-3.5" /> Start Background Job
-          </button>
-          <button onClick={loadStatus}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-border/40 text-muted-foreground text-xs hover:border-border transition-colors">
-            <RefreshCw className="w-3 h-3" /> Status
-          </button>
-        </div>
-        {err && <ErrorBox msg={err} />}
-        {bgStarted && <SuccessBox msg={`Background analysis started for ${symbol} (${windowDays}d window). Check status panel.`} />}
-      </div>
-
-      {status && (
-        <div className="rounded-xl border border-border/50 bg-card p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold">Background Job Status</h3>
-            <StatusPill ok={!status.running} yes="Idle" no="Running" />
-          </div>
-          {Object.keys(status.lastRun ?? {}).length === 0 ? (
-            <p className="text-xs text-muted-foreground">No jobs run yet this session.</p>
-          ) : (
-            <div className="space-y-1">
-              {Object.entries(status.lastRun ?? {}).map(([sym, ts]) => (
-                <div key={sym} className="flex items-center justify-between text-xs">
-                  <span className="font-mono text-muted-foreground">{sym}</span>
-                  <span className="text-foreground">{String(ts)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {displayResult && (
-        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-primary" />
-            <h3 className="text-sm font-semibold">Research Report  {symbol}</h3>
-          </div>
-          {typeof displayResult === "string" ? (
-            <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap bg-muted/20 rounded p-3 leading-relaxed max-h-96 overflow-y-auto">
-              {displayResult}
-            </pre>
-          ) : (
-            <div className="space-y-2">
-              {Object.entries(displayResult).map(([k, v]) => (
-                <div key={k} className="flex items-start gap-3 py-1.5 border-b border-border/20 last:border-0">
-                  <span className="text-xs text-muted-foreground w-40 shrink-0">{k}</span>
-                  <span className="text-xs font-mono text-foreground break-all">{JSON.stringify(v)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 //  Backtest Tab 
 
 interface V3Trade {
@@ -425,8 +242,8 @@ interface V3Trade {
   exitPrice: number;
   exitReason: string;
   projectedMovePct: number;
-  nativeScore: number;
-  scoringSource?: string;
+  runtimeEvidence: number | null;
+  modelSource?: string | null;
   runtimeModelRunId?: number | null;
   runtimeFamily?: string | null;
   selectedBucket?: string | null;
@@ -447,6 +264,9 @@ interface V3Trade {
   admissionPolicyBlockedReasons?: string[] | null;
   admissionPolicyMode?: "off" | "preview" | "enforce" | null;
 }
+
+type V3TradeExport = V3Trade & {
+};
 
 interface V3Summary {
   tradeCount: number;
@@ -671,7 +491,7 @@ interface V3Result {
     entryModel?: string | null;
     tpBucketCount?: number;
     dynamicTpEnabled?: boolean;
-    scoringSourceCounts?: Record<string, number>;
+    modelSourceCounts?: Record<string, number>;
   };
   trades: V3Trade[];
   moveOverlap?: {
@@ -835,7 +655,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
   const [showAll, setShowAll] = useState(false);
   const displayTrades = showAll ? trades : trades.slice(0, 30);
   const runtime = result.runtimeModel;
-  const scoringCounts = runtime?.scoringSourceCounts ?? {};
+    const scoringCounts = runtime?.modelSourceCounts ?? {};
   const runtimeApplied = runtime?.applied ?? runtime?.enabled ?? false;
   const runtimeReason = runtime?.reason ?? "unknown";
   const overlap = result.moveOverlap;
@@ -878,7 +698,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
             </span>
           </span>
           <span><span className="text-muted-foreground">Run: </span>{runtime?.sourceRunId ?? "none"}</span>
-          <span><span className="text-muted-foreground">Entry: </span>{runtime?.entryModel ?? "native"}</span>
+          <span><span className="text-muted-foreground">Entry: </span>{runtime?.entryModel ?? "service_default"}</span>
           <span><span className="text-muted-foreground">Tier mode: </span>{result.tierMode ?? "ALL"}</span>
           <span><span className="text-muted-foreground">Capital model: </span>${startingCapitalUsd.toFixed(0)} start @ {((s.capitalModel?.allocationPct ?? 0) * 100).toFixed(0)}% allocation</span>
           <span><span className="text-muted-foreground">Synthetic size: </span>${Number(s.capitalModel?.syntheticPositionSizeUsd ?? 0).toFixed(0)}</span>
@@ -890,7 +710,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
             </span>
           </span>
           <span>
-            <span className="text-muted-foreground">Scoring: </span>
+            <span className="text-muted-foreground">Decision source: </span>
             {Object.keys(scoringCounts).length > 0
               ? Object.entries(scoringCounts).map(([k, v]) => `${k}=${v}`).join(", ")
               : "no signals"}
@@ -898,7 +718,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
         </div>
         {!runtimeApplied && (
           <div className="mt-2 rounded-md border border-red-500/25 bg-red-500/10 px-2 py-1.5 text-red-200">
-            This run is not testing the promoted calibration model. Results are legacy/native until the runtime reason is "applied".
+            This run is not using promoted runtime evidence yet. Results remain outside the promoted symbol-service runtime path until the runtime reason is "applied".
           </div>
         )}
       </div>
@@ -1037,7 +857,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
                 <tr className="border-b border-border/20 bg-muted/5 text-muted-foreground">
                   <th className="px-2 py-1.5 text-left font-medium">Dir</th>
                   <th className="px-2 py-1.5 text-left font-medium">Engine</th>
-                  <th className="px-2 py-1.5 text-left font-medium">Scoring</th>
+                  <th className="px-2 py-1.5 text-left font-medium">Model Source</th>
                   <th className="px-2 py-1.5 text-left font-medium">Entry</th>
                   <th className="px-2 py-1.5 text-left font-medium">Exit</th>
                   <th className="px-2 py-1.5 text-right font-medium">Hold</th>
@@ -1061,8 +881,8 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
                     <td className="px-2 py-1.5 text-muted-foreground max-w-[120px] truncate" title={t.engineName}>
                       {t.engineName.replace(/_engine$/, "").replace(/_/g, " ")}
                     </td>
-                    <td className="px-2 py-1.5 text-muted-foreground max-w-[140px] truncate" title={t.scoringSource ?? "native_engine"}>
-                      {(t.scoringSource ?? "native_engine").replace(/_/g, " ")}
+                    <td className="px-2 py-1.5 text-muted-foreground max-w-[140px] truncate" title={t.modelSource ?? "unknown"}>
+                      {(t.modelSource ?? "unknown").replace(/_/g, " ")}
                     </td>
                     <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">{formatTs(t.entryTs)}</td>
                     <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">{formatTs(t.exitTs)}</td>
@@ -1087,10 +907,22 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
   );
 }
 
-function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: number }) {
-  const backtestSymbols = domain === "active" ? BACKTEST_ACTIVE_SYMBOLS : BACKTEST_RESEARCH_SYMBOLS;
+function BacktestTab({
+  domain,
+  windowDays,
+  lockedSymbol,
+  hideReportsActions = false,
+  onOpenReports,
+}: {
+  domain: DomainId;
+  windowDays: number;
+  lockedSymbol?: string;
+  hideReportsActions?: boolean;
+  onOpenReports?: () => void;
+}) {
+  const backtestSymbols = BACKTEST_ACTIVE_SYMBOLS;
 
-  const [symbol, setSymbol] = useState(backtestSymbols[0] ?? "all");
+  const [symbol, setSymbol] = useState(lockedSymbol ?? backtestSymbols[0] ?? "all");
   const [tierMode, setTierMode] = useState<BacktestTierMode>("ALL");
   const [admissionPolicyPreset, setAdmissionPolicyPreset] =
     useState<Crash300AdmissionPolicyPreset>("off");
@@ -1139,6 +971,12 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     symbol === "CRASH300"
       ? cloneCrash300AdmissionPolicy(admissionPolicyConfig)
       : undefined;
+
+  useEffect(() => {
+    if (lockedSymbol && symbol !== lockedSymbol) {
+      setSymbol(lockedSymbol);
+    }
+  }, [lockedSymbol, symbol]);
 
   const setAdmissionPolicyPresetValue = (presetValue: Crash300AdmissionPolicyPreset) => {
     setAdmissionPolicyPreset(presetValue);
@@ -1385,6 +1223,13 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
     URL.revokeObjectURL(url);
   }
 
+  function toTradeExportShape(trade: V3Trade, exportSymbol: string): V3TradeExport & { symbol: string } {
+    return {
+      ...trade,
+      symbol: exportSymbol,
+    };
+  }
+
   function exportSummary() {
     if (!results) return;
     const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
@@ -1394,7 +1239,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
         symbol,
         tierMode,
         ...getWindowRange(windowDays),
-        scoreGate: "runtime-platform-state",
+        decisionGate: "runtime-platform-state",
         startingCapitalUsd,
         crash300AdmissionPolicy: crash300PolicyRequest ?? null,
       },
@@ -1413,8 +1258,8 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
           avgPnlPct: r.trades.length > 0
             ? +(r.trades.reduce((s, t) => s + t.pnlPct, 0) / r.trades.length).toFixed(2)
             : 0,
-          avgScore: r.trades.length > 0
-            ? +(r.trades.reduce((s, t) => s + (t.nativeScore ?? 0), 0) / r.trades.length).toFixed(1)
+          avgRuntimeEvidence: r.trades.length > 0
+            ? +(r.trades.reduce((s, t) => s + (t.runtimeEvidence ?? 0), 0) / r.trades.length).toFixed(1)
             : 0,
           bestTrade: r.trades.length > 0
             ? +(Math.max(...r.trades.map(t => t.pnlPct))).toFixed(2)
@@ -1440,7 +1285,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
         symbol,
         tierMode,
         ...getWindowRange(windowDays),
-        scoreGate: "runtime-platform-state",
+        decisionGate: "runtime-platform-state",
         startingCapitalUsd,
         crash300AdmissionPolicy: crash300PolicyRequest ?? null,
       },
@@ -1451,7 +1296,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
         Object.entries(results).map(([sym, r]) => [sym, r.summary]),
       ),
       total_trades: allTrades.length,
-      trades: allTrades,
+      trades: allTrades.map(trade => toTradeExportShape(trade, trade.symbol)),
     }, `bt-trades-${timestamp}.json`);
   }
 
@@ -1530,20 +1375,24 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
 
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">Symbol</label>
-            <select
-              value={symbol}
-              onChange={e => setSymbol(e.target.value)}
-              className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-            >
-              {backtestSymbols.map(s => (
-                <option key={s} value={s}>
-                  {s === "all"
-                    ? `All (${domain === "active" ? "active symbols" : "new symbols"})`
-                    : s}
-                </option>
-              ))}
-            </select>
+            <label className="text-[11px] text-muted-foreground">{lockedSymbol ? "Service" : "Symbol"}</label>
+            {lockedSymbol ? (
+              <div className="w-full text-xs bg-background border border-primary/30 rounded px-2 py-1.5 text-primary">
+                {getSymbolLabel(lockedSymbol)}
+              </div>
+            ) : (
+              <select
+                value={symbol}
+                onChange={e => setSymbol(e.target.value)}
+                className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+              >
+                {backtestSymbols.map(s => (
+                  <option key={s} value={s}>
+                    {s === "all" ? "All active services" : getSymbolLabel(s)}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div className="space-y-1">
@@ -1694,7 +1543,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
             {sweeping ? `Sweeping ${formatDurationCompact(elapsed)}` : "Run Tier Sweep"}
           </button>
 
-          {results !== null && totalTrades !== null && totalTrades > 0 && (
+          {!hideReportsActions && results !== null && totalTrades !== null && totalTrades > 0 && (
             <>
               <button
                 onClick={exportSummary}
@@ -1734,7 +1583,7 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
           )}
 
           {/* Signals export is gated only on valid date inputs  includes blocked + allowed, not just executed trades */}
-          {windowDays > 0 && (
+          {!hideReportsActions && windowDays > 0 && (
             <button
               onClick={exportSignals}
               className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
@@ -1751,6 +1600,17 @@ function BacktestTab({ domain, windowDays }: { domain: DomainId; windowDays: num
                 ? "Queued long-window backtest. The UI will poll progress and load the persisted run when it completes."
                 : "Loading candles and replaying bars  this may take up to 2 minutes for all symbols."}
             </p>
+          )}
+
+          {hideReportsActions && onOpenReports && (
+            <button
+              type="button"
+              onClick={onOpenReports}
+              className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              Open Reports
+            </button>
           )}
         </div>
 
@@ -2052,8 +1912,7 @@ interface ParityReportUi {
 
 //  Move Calibration Tab 
 
-const CALIB_ACTIVE_SYMBOLS = [...ACTIVE_SYMBOLS];
-const CALIB_RESEARCH_SYMBOLS = [...RESEARCH_ONLY_SYMBOLS];
+const CALIB_ACTIVE_SYMBOLS: string[] = [...ACTIVE_SYMBOLS];
 const PASS_NAMES = ["all", "enrichment", "family_inference", "model_synthesis"];
 const MOVE_TYPES_FILTER_GENERIC = [
   "all",
@@ -2305,10 +2164,24 @@ interface DetectedMove {
   startTs: number;
 }
 
-function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDays: number }) {
+function MoveCalibrationTab({
+  domain,
+  windowDays,
+  lockedSymbol,
+  hideReportsActions = false,
+  onOpenReports,
+  showAdvancedDiagnostics = false,
+}: {
+  domain: DomainId;
+  windowDays: number;
+  lockedSymbol?: string;
+  hideReportsActions?: boolean;
+  onOpenReports?: () => void;
+  showAdvancedDiagnostics?: boolean;
+}) {
   const calibRun = useCalibrationRun();
-  const calibrationSymbols = domain === "active" ? CALIB_ACTIVE_SYMBOLS : CALIB_RESEARCH_SYMBOLS;
-  const [symbol, setSymbol] = useState(calibrationSymbols[0] ?? "BOOM300");
+  const calibrationSymbols = CALIB_ACTIVE_SYMBOLS;
+  const [symbol, setSymbol] = useState(lockedSymbol ?? calibrationSymbols[0] ?? "BOOM300");
   const [minMovePct, setMinMovePct] = useState(0.05);
   const [clearExisting, setClearExisting] = useState(true);
   const [strategyFamily, setStrategyFamily] = useState("all");
@@ -2512,6 +2385,14 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   }, []);
 
   useEffect(() => {
+    if (lockedSymbol && symbol !== lockedSymbol) {
+      setSymbol(lockedSymbol);
+      setDetectResult(null);
+      setDetectErr(null);
+      setStrategyFamily("all");
+      setMoveTypeFilter("all");
+      return;
+    }
     if (!calibrationSymbols.includes(symbol)) {
       setSymbol(calibrationSymbols[0] ?? "BOOM300");
       setDetectResult(null);
@@ -2519,7 +2400,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       setStrategyFamily("all");
       setMoveTypeFilter("all");
     }
-  }, [domain, calibrationSymbols, symbol]);
+  }, [domain, calibrationSymbols, lockedSymbol, symbol]);
 
   useEffect(() => {
     setOptimiserRunId(null);
@@ -2590,7 +2471,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   const resetCalibration = async (): Promise<void> => {
     if (
       !window.confirm(
-        `Clear all move calibration for ${symbol}? This deletes detected moves, AI pass rows, profiles, and run history for this symbol.`,
+        `Clear all move calibration for ${symbol}? This deletes detected moves, pass rows, profiles, and run history for this symbol.`,
       )
     ) {
       return;
@@ -3005,7 +2886,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
       }
     : aggregate?.overall
       ? {
-          source: "Current engine replay aggregate",
+          source: "Current service replay aggregate",
           targetMoves: aggregate.overall.targetMoves,
           capturedMoves: aggregate.overall.capturedMoves,
           missedMoves: aggregate.overall.missedMoves,
@@ -3094,21 +2975,27 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
         {/* Shared controls */}
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Symbol</span>
-            <select
-              value={symbol}
-              onChange={e => {
-                const s = e.target.value;
-                setSymbol(s);
-                setDetectResult(null);
-                setDetectErr(null);
-                setStrategyFamily("all");
-                setMoveTypeFilter("all");
-              }}
-              className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-            >
-              {calibrationSymbols.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{lockedSymbol ? "Service" : "Symbol"}</span>
+            {lockedSymbol ? (
+              <div className="text-xs bg-background border border-primary/30 rounded px-2 py-1.5 text-primary">
+                {getSymbolLabel(lockedSymbol)}
+              </div>
+            ) : (
+              <select
+                value={symbol}
+                onChange={e => {
+                  const s = e.target.value;
+                  setSymbol(s);
+                  setDetectResult(null);
+                  setDetectErr(null);
+                  setStrategyFamily("all");
+                  setMoveTypeFilter("all");
+                }}
+                className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
+              >
+                {calibrationSymbols.map(s => <option key={s} value={s}>{getSymbolLabel(s)}</option>)}
+              </select>
+            )}
           </div>
 
           <div className="flex flex-col gap-1">
@@ -3586,7 +3473,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
               )}
             </DomainCard>
 
-            {/* Domain C  Recommended Calibration (from stored profile, post AI passes) */}
+            {/* Domain C  Recommended Calibration (from stored profile and pass results) */}
             <DomainCard title="Recommended Calibration" icon={<Zap className="w-3.5 h-3.5 text-sky-400" />}>
               {!calibProfile && !researchProfile ? (
                 <p className="text-[11px] text-muted-foreground">No calibration profile yet. Detect moves then run the calibration pipeline to populate.</p>
@@ -3950,7 +3837,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
                   <StatRow label="Holdability score" value={calibrationCoverage.avgHoldabilityScore.toFixed(2)} />
                   {calibProfile && aggregate?.overall && aggregate.overall.capturedMoves !== calibProfile.capturedMoves && (
                     <p className="text-[10px] text-amber-300/90 pt-1">
-                      Current engine replay is {aggregate.overall.capturedMoves}/{aggregate.overall.targetMoves}; synthesized calibration is shown above.
+                      Current service replay is {aggregate.overall.capturedMoves}/{aggregate.overall.targetMoves}; synthesized calibration is shown above.
                     </p>
                   )}
                   {behaviorProfile && (
@@ -3975,7 +3862,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             <div className="space-y-0.5">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">Profitability Paths</p>
               {!calibProfile?.profitabilitySummary ? (
-                <p className="text-[11px] text-muted-foreground">Run AI passes (extraction) to generate profitability estimates.</p>
+                <p className="text-[11px] text-muted-foreground">Generate stored pass results to populate profitability estimates.</p>
               ) : (
                 <>
                   <StatRow label="Top path" value={calibProfile.profitabilitySummary.topPath ?? ""} />
@@ -4186,7 +4073,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           </p>
         </div>
 
-        {symbol === "CRASH300" && (
+        {!hideReportsActions && symbol === "CRASH300" && (
           <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
             <p className="text-[11px] font-semibold text-foreground">Phase Identifier Reports</p>
             <div className="flex flex-wrap gap-2">
@@ -4242,8 +4129,8 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           </p>
         </div>
 
-        {parityErr && <ErrorBox msg={parityErr} />}
-        {parityReport && (
+        {parityErr && showAdvancedDiagnostics && <ErrorBox msg={parityErr} />}
+        {showAdvancedDiagnostics && parityReport && (
           <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 space-y-3">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <p className="text-xs font-semibold text-indigo-200">CRASH300 Parity Diagnostics</p>
@@ -4289,6 +4176,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           </div>
         )}
 
+        {showAdvancedDiagnostics && (
         <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
@@ -4406,6 +4294,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/*  Detected Moves List  */}
@@ -4516,7 +4405,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
         )}
       </div>
 
-      {/*  Export Buttons  */}
+      {!hideReportsActions ? (
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
         <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Export Calibration Data</h3>
         <div className="flex flex-wrap gap-2">
@@ -4534,7 +4423,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             onClick={() => doExport("passes", `calibration/export/${symbol}?type=passes`, `calibration_passes_${symbol}_${new Date().toISOString().slice(0,10)}.json`)}
             disabled={!!exportBusy["passes"]}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
-            title="Export all AI pass run records for this symbol"
+            title="Export all calibration pass run records for this symbol"
           >
             {exportBusy["passes"] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
             Export Pass Results
@@ -4621,6 +4510,22 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
           {importError && <ErrorBox msg={importError} />}
         </div>
       </div>
+      ) : onOpenReports ? (
+      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Reports</h3>
+        <p className="text-xs text-muted-foreground">
+          Calibration exports, parity reports, phase identifiers, and backtest artifacts now live under the selected service reports workspace.
+        </p>
+        <button
+          type="button"
+          onClick={onOpenReports}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border"
+        >
+          <FileText className="w-3.5 h-3.5" />
+          Open Reports
+        </button>
+      </div>
+      ) : null}
 
       {/*  Run History  */}
       <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
@@ -4650,7 +4555,7 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
             )}
             {!runsLoading && runs.length === 0 && (
               <div className="px-4 py-6 text-center">
-                <p className="text-xs text-muted-foreground">No AI pass runs recorded yet for {symbol}.</p>
+                <p className="text-xs text-muted-foreground">No calibration pass runs recorded yet for {symbol}.</p>
               </div>
             )}
             {!runsLoading && runs.length > 0 && (
@@ -4799,27 +4704,491 @@ function MoveCalibrationTab({ domain, windowDays }: { domain: DomainId; windowDa
   );
 }
 
-//  Tab Navigation 
+function downloadJsonFile(data: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
-type TabId = "ai" | "backtest" | "calibration";
-type DomainTabId = "active" | "research";
+function parseBucketLabel(input: string): number {
+  const normalized = String(input).replace(/_/g, "-");
+  const match = normalized.match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
+}
 
-const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
-  { id: "ai",          label: "AI Analysis",       icon: <Brain     className="w-3.5 h-3.5" /> },
-  { id: "backtest",    label: "Backtest",           icon: <BarChart2 className="w-3.5 h-3.5" /> },
-  { id: "calibration", label: "Move Calibration",   icon: <Target    className="w-3.5 h-3.5" /> },
+function sortBucketEntries(entries: Array<[string, unknown]>) {
+  return [...entries].sort((a, b) => {
+    const diff = parseBucketLabel(a[0]) - parseBucketLabel(b[0]);
+    return Number.isFinite(diff) && diff !== 0 ? diff : a[0].localeCompare(b[0]);
+  });
+}
+
+function ServiceStatusSummary({ service, windowDays }: { service: string; windowDays: number }) {
+  const [runtime, setRuntime] = useState<RuntimeModelStateUi | null>(null);
+  const [runs, setRuns] = useState<PassRun[]>([]);
+  const [backtests, setBacktests] = useState<PersistedV3BacktestHistoryRun[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setErr(null);
+      try {
+        const [runtimeResp, runResp, backtestResp] = await Promise.all([
+          apiFetch(`calibration/runtime-model/${service}`).catch(() => null),
+          apiFetch(`calibration/runs/${service}`).catch(() => ({ runs: [] })),
+          apiFetch(`backtest/v3/history?symbol=${encodeURIComponent(service)}&limit=5`).catch(() => ({ runs: [] })),
+        ]);
+        if (cancelled) return;
+        setRuntime(runtimeResp as RuntimeModelStateUi | null);
+        setRuns(Array.isArray((runResp as { runs?: PassRun[] } | null)?.runs) ? (runResp as { runs?: PassRun[] }).runs ?? [] : []);
+        setBacktests(Array.isArray((backtestResp as { runs?: PersistedV3BacktestHistoryRun[] } | null)?.runs) ? (backtestResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs ?? [] : []);
+      } catch (e: unknown) {
+        if (cancelled) return;
+        setErr(e instanceof Error ? e.message : "Failed to load service status");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [service, windowDays]);
+
+  const latestRun = runs[0] ?? null;
+  const latestBacktest = backtests[0] ?? null;
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold">{getSymbolLabel(service)} Service Status</h3>
+          <p className="text-xs text-muted-foreground mt-1">
+            Symbol-service research, runtime promotion, backtests, and reports for the selected service.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap text-[11px]">
+          <span className={cn("px-2 py-0.5 rounded border", isEnabledService(service)
+            ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+            : isScaffoldedService(service)
+              ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+              : "text-slate-300 border-border/40 bg-muted/20")}>
+            {isEnabledService(service) ? "Enabled service" : isScaffoldedService(service) ? "Scaffolded service" : "Unavailable"}
+          </span>
+          <span className="px-2 py-0.5 rounded border border-border/40 bg-muted/20 text-muted-foreground">
+            Window {windowLabel(windowDays)}
+          </span>
+        </div>
+      </div>
+      {err && <ErrorBox msg={err} />}
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3 text-[11px]">
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-muted-foreground uppercase tracking-wide">Calibration status</p>
+          <p className="font-mono text-foreground">{latestRun?.status ?? "not run"}</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-muted-foreground uppercase tracking-wide">Latest research run</p>
+          <p className="font-mono text-foreground">{runtime?.lifecycle?.latestRunId ?? latestRun?.id ?? "none"}</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-muted-foreground uppercase tracking-wide">Staged model</p>
+          <p className="font-mono text-foreground">{runtime?.lifecycle?.stagedRunId ?? "none"}</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-muted-foreground uppercase tracking-wide">Promoted runtime</p>
+          <p className="font-mono text-foreground">{runtime?.lifecycle?.promotedRunId ?? "none"}</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-muted-foreground uppercase tracking-wide">Latest backtest</p>
+          <p className="font-mono text-foreground">{latestBacktest?.id ? `#${latestBacktest.id}` : "none"}</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-muted-foreground uppercase tracking-wide">Latest reports</p>
+          <p className="font-mono text-foreground">{service === "CRASH300" ? "parity, phase, attribution" : "service reports"}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RuntimeModelTab({ service }: { service: string }) {
+  const [runtime, setRuntime] = useState<RuntimeModelStateUi | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setErr(null);
+      try {
+        const d = await apiFetch(`calibration/runtime-model/${service}`) as RuntimeModelStateUi;
+        if (!cancelled) setRuntime(d);
+      } catch (e: unknown) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load runtime model");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [service]);
+
+  const baseFamily = service === "CRASH300" ? "crash_expansion" : "service-specific";
+  const promotedBuckets = sortBucketEntries(Object.entries(runtime?.promotedModel?.tpModel ?? {}));
+  const stagedBuckets = sortBucketEntries(Object.entries(runtime?.stagedModel?.tpModel ?? {}));
+  const runtimeArchetypes = Array.from(new Set([
+    ...promotedBuckets.map(([bucket]) => bucket.split("|")[1] ?? bucket),
+    ...stagedBuckets.map(([bucket]) => bucket.split("|")[1] ?? bucket),
+  ])).filter(Boolean);
+  const validationErrors: string[] = [];
+  if (!runtime?.lifecycle?.hasPromotedModel) validationErrors.push("Promoted runtime model missing.");
+  if (runtime?.lifecycle?.hasStagedModel && runtime?.lifecycle?.promotedMatchesStaged === false) validationErrors.push("Staged model is newer than promoted runtime.");
+  if (!promotedBuckets.length) validationErrors.push("No promoted TP/SL/trailing bucket model is available.");
+
+  return (
+    <div className="space-y-4">
+      {err && <ErrorBox msg={err} />}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
+          <h3 className="text-sm font-semibold">Runtime Model</h3>
+          <StatRow label="Service" value={getSymbolLabel(service)} />
+          <StatRow label="Model source" value={runtime?.lifecycle?.runtimeSource ?? "none"} />
+          <StatRow label="Staged runtime" value={runtime?.lifecycle?.stagedRunId ?? "none"} />
+          <StatRow label="Promoted runtime" value={runtime?.lifecycle?.promotedRunId ?? "none"} />
+          <StatRow label="Calibrated move family" value={baseFamily} />
+          <StatRow label="Runtime entry archetypes" value={runtimeArchetypes.join(", ") || "n/a"} />
+        </div>
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
+          <h3 className="text-sm font-semibold">Validation</h3>
+          {validationErrors.length === 0 ? (
+            <StatusPill ok yes="Model validated" no="Validation failed" />
+          ) : (
+            <div className="space-y-2">
+              {validationErrors.map((message) => <ErrorBox key={message} msg={message} />)}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Stage and promote controls remain under Calibration & Research so the runtime lifecycle stays in sequence.
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+        <h3 className="text-sm font-semibold">Calibrated Move-Size Buckets</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Promoted bucket models</p>
+            {promotedBuckets.length === 0 ? <p className="text-muted-foreground">No promoted buckets.</p> : promotedBuckets.map(([bucket]) => (
+              <div key={bucket} className="flex items-center justify-between gap-2 border-b border-border/20 last:border-0 py-1">
+                <span className="font-mono text-foreground">{bucket}</span>
+                <span className="text-muted-foreground">runtime bucket</span>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Staged bucket models</p>
+            {stagedBuckets.length === 0 ? <p className="text-muted-foreground">No staged buckets.</p> : stagedBuckets.map(([bucket]) => (
+              <div key={bucket} className="flex items-center justify-between gap-2 border-b border-border/20 last:border-0 py-1">
+                <span className="font-mono text-foreground">{bucket}</span>
+                <span className="text-muted-foreground">staged bucket</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type ReportOption = {
+  value: string;
+  label: string;
+  runType: "none" | "backtest" | "comparison";
+};
+
+const REPORT_OPTIONS: ReportOption[] = [
+  { value: "detected-moves", label: "Detected Moves", runType: "none" },
+  { value: "calibration-profile", label: "Calibration Profile", runType: "none" },
+  { value: "pass-results", label: "Pass Results", runType: "none" },
+  { value: "comparison-summary", label: "Comparison Summary", runType: "none" },
+  { value: "parity-report", label: "Parity Report", runType: "none" },
+  { value: "phase-summary", label: "Phase Identifier Summary", runType: "none" },
+  { value: "phase-sample", label: "Phase Identifier Sample", runType: "none" },
+  { value: "phase-full", label: "Full Phase Identifier Report", runType: "none" },
+  { value: "backtest-summary", label: "Backtest Summary", runType: "backtest" },
+  { value: "backtest-trades", label: "Backtest Trades", runType: "backtest" },
+  { value: "backtest-attribution", label: "Backtest Attribution", runType: "backtest" },
+  { value: "calibration-reconciliation", label: "Calibration Reconciliation", runType: "backtest" },
+  { value: "policy-comparison", label: "Policy Comparison", runType: "comparison" },
 ];
-const DOMAIN_TABS: { id: DomainTabId; label: string }[] = [
-  { id: "active", label: "Active Symbols" },
-  { id: "research", label: "New Symbols" },
-];
+
+function ReportsTab({ service, windowDays }: { service: string; windowDays: number }) {
+  const [reportType, setReportType] = useState<string>("detected-moves");
+  const [calibrationRuns, setCalibrationRuns] = useState<PassRun[]>([]);
+  const [backtestRuns, setBacktestRuns] = useState<PersistedV3BacktestHistoryRun[]>([]);
+  const [selectedBacktestRunId, setSelectedBacktestRunId] = useState<number | null>(null);
+  const [baselineRunId, setBaselineRunId] = useState<number | null>(null);
+  const [policyRunId, setPolicyRunId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [runsResp, backtestsResp] = await Promise.all([
+          apiFetch(`calibration/runs/${service}`).catch(() => ({ runs: [] })),
+          apiFetch(`backtest/v3/history?symbol=${encodeURIComponent(service)}&limit=30`).catch(() => ({ runs: [] })),
+        ]);
+        if (cancelled) return;
+        const nextCalibrationRuns = Array.isArray((runsResp as { runs?: PassRun[] }).runs) ? (runsResp as { runs?: PassRun[] }).runs ?? [] : [];
+        const nextBacktestRuns = Array.isArray((backtestsResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs) ? (backtestsResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs ?? [] : [];
+        setCalibrationRuns(nextCalibrationRuns);
+        setBacktestRuns(nextBacktestRuns);
+        setSelectedBacktestRunId((prev) => prev ?? nextBacktestRuns[0]?.id ?? null);
+        setBaselineRunId((prev) => prev ?? nextBacktestRuns[1]?.id ?? nextBacktestRuns[0]?.id ?? null);
+        setPolicyRunId((prev) => prev ?? nextBacktestRuns[0]?.id ?? null);
+      } catch (e: unknown) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load report history");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [service]);
+
+  const selectedOption = REPORT_OPTIONS.find((option) => option.value === reportType) ?? REPORT_OPTIONS[0];
+
+  const exportReport = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      let endpoint = "";
+      let filename = `${service}-${reportType}-${stamp}.json`;
+      switch (reportType) {
+        case "detected-moves":
+          endpoint = `calibration/export/${service}?type=moves`;
+          break;
+        case "calibration-profile":
+          endpoint = `calibration/export/${service}?type=profile`;
+          break;
+        case "pass-results":
+          endpoint = `calibration/export/${service}?type=passes`;
+          break;
+        case "comparison-summary":
+          endpoint = `calibration/export/${service}?type=comparison`;
+          break;
+        case "parity-report":
+          endpoint = `calibration/runtime-model/${service}/parity-report?windowDays=${windowDays}`;
+          break;
+        case "phase-summary":
+          endpoint = `calibration/runtime-model/${service}/phase-identifiers/summary?windowDays=${windowDays}`;
+          break;
+        case "phase-sample":
+          endpoint = `calibration/runtime-model/${service}/phase-identifiers?windowDays=${windowDays}&limit=5`;
+          break;
+        case "phase-full":
+          endpoint = `calibration/runtime-model/${service}/phase-identifiers?windowDays=${windowDays}`;
+          break;
+        case "backtest-summary": {
+          if (!selectedBacktestRunId) throw new Error("Select a backtest run first.");
+          const d = await apiFetch(`backtest/v3/history/${selectedBacktestRunId}`) as { run?: PersistedV3BacktestHistoryRun & { result?: V3Result } };
+          downloadJsonFile(d.run?.result?.summary ?? d.run ?? d, filename);
+          return;
+        }
+        case "backtest-trades": {
+          if (!selectedBacktestRunId) throw new Error("Select a backtest run first.");
+          const d = await apiFetch(`backtest/v3/history/${selectedBacktestRunId}`) as { run?: PersistedV3BacktestHistoryRun & { result?: V3Result } };
+          downloadJsonFile(d.run?.result?.trades ?? d.run ?? d, filename);
+          return;
+        }
+        case "backtest-attribution":
+          if (!selectedBacktestRunId) throw new Error("Select a backtest run first.");
+          endpoint = `backtest/v3/history/${selectedBacktestRunId}/attribution`;
+          break;
+        case "calibration-reconciliation":
+          if (!selectedBacktestRunId) throw new Error("Select a backtest run first.");
+          endpoint = `backtest/v3/history/${selectedBacktestRunId}/calibration-reconciliation`;
+          break;
+        case "policy-comparison":
+          if (!baselineRunId || !policyRunId) throw new Error("Select both baseline and policy runs.");
+          endpoint = `backtest/v3/history/compare?baselineRunId=${baselineRunId}&policyRunId=${policyRunId}`;
+          break;
+      }
+      const d = await apiFetch(endpoint);
+      downloadJsonFile(d, filename);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Report export failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold">Reports</h3>
+        <p className="text-xs text-muted-foreground mt-1">
+          Consolidated read-only exports for the selected symbol service. Backtest-heavy artifacts stay here instead of being scattered through calibration and runtime cards.
+        </p>
+      </div>
+      {err && <ErrorBox msg={err} />}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="space-y-1">
+          <label className="text-[11px] text-muted-foreground">Report type</label>
+          <select value={reportType} onChange={(e) => setReportType(e.target.value)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
+            {REPORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </div>
+        {selectedOption.runType === "backtest" && (
+          <div className="space-y-1">
+            <label className="text-[11px] text-muted-foreground">Backtest run</label>
+            <select value={selectedBacktestRunId ? String(selectedBacktestRunId) : ""} onChange={(e) => setSelectedBacktestRunId(Number(e.target.value) || null)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
+              <option value="">Select a backtest run</option>
+              {backtestRuns.map((run) => <option key={run.id} value={String(run.id)}>#{run.id}  {new Date(run.createdAt).toLocaleString()}</option>)}
+            </select>
+          </div>
+        )}
+        {selectedOption.runType === "comparison" && (
+          <>
+            <div className="space-y-1">
+              <label className="text-[11px] text-muted-foreground">Baseline run</label>
+              <select value={baselineRunId ? String(baselineRunId) : ""} onChange={(e) => setBaselineRunId(Number(e.target.value) || null)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
+                <option value="">Select baseline run</option>
+                {backtestRuns.map((run) => <option key={run.id} value={String(run.id)}>#{run.id}  {new Date(run.createdAt).toLocaleString()}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-[11px] text-muted-foreground">Policy run</label>
+              <select value={policyRunId ? String(policyRunId) : ""} onChange={(e) => setPolicyRunId(Number(e.target.value) || null)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
+                <option value="">Select policy run</option>
+                {backtestRuns.map((run) => <option key={run.id} value={String(run.id)}>#{run.id}  {new Date(run.createdAt).toLocaleString()}</option>)}
+              </select>
+            </div>
+          </>
+        )}
+        {selectedOption.runType === "none" && (
+          <div className="space-y-1">
+            <label className="text-[11px] text-muted-foreground">Calibration runs</label>
+            <div className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
+              {calibrationRuns.length ? `${calibrationRuns.length} stored run(s)` : "No stored run history required"}
+            </div>
+          </div>
+        )}
+        <div className="space-y-1">
+          <label className="text-[11px] text-muted-foreground">Window</label>
+          <div className="w-full text-xs bg-background border border-primary/30 rounded px-2 py-1.5 text-primary">{windowLabel(windowDays)} (shared)</div>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => void exportReport()}
+        disabled={busy}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
+      >
+        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+        Export / Download JSON
+      </button>
+    </div>
+  );
+}
+
+function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; windowDays: number }) {
+  const [validation, setValidation] = useState<Record<string, unknown> | null>(null);
+  const [parity, setParity] = useState<ParityReportUi | null>(null);
+  const [busy, setBusy] = useState<"validation" | "parity" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const loadValidation = async () => {
+    setBusy("validation");
+    setErr(null);
+    try {
+      const d = await apiFetch(`calibration/runtime-model/${service}/runtime-trigger-validation?windowDays=${windowDays}`);
+      setValidation(d as Record<string, unknown>);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Runtime trigger validation failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const loadParity = async () => {
+    setBusy("parity");
+    setErr(null);
+    try {
+      const d = await apiFetch(`calibration/runtime-model/${service}/parity-report?windowDays=${windowDays}`) as ParityReportUi;
+      setParity(d);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Parity report failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const validationAggregates = (validation?.aggregates ?? null) as Record<string, unknown> | null;
+
+  return (
+    <div className="space-y-4">
+      {err && <ErrorBox msg={err} />}
+      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold">Advanced Diagnostics</h3>
+          <p className="text-xs text-muted-foreground mt-1">
+            Parity and runtime-trigger validation live here. Optimiser remains disabled by default and is not part of the normal service workflow.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => void loadParity()} disabled={busy !== null} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-500/30 text-xs text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/15 disabled:opacity-50">
+            {busy === "parity" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+            Run Parity
+          </button>
+          <button type="button" onClick={() => void loadValidation()} disabled={busy !== null} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50">
+            {busy === "validation" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+            Runtime Trigger Validation
+          </button>
+        </div>
+        <ErrorBox msg="Optimiser is disabled by default in this cleanup pass. Use it only after parity and runtime validation are healthy." />
+      </div>
+
+      {parity && (
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3 text-xs">
+          <h3 className="text-sm font-semibold">Parity</h3>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            <StatRow label="Total moves" value={parity.totals?.totalMoves ?? 0} />
+            <StatRow label="Matched moves" value={parity.totals?.matchedMoves ?? 0} />
+            <StatRow label="No candidate" value={parity.totals?.noCandidate ?? 0} />
+            <StatRow label="Direction mismatch" value={parity.totals?.directionMismatch ?? 0} />
+            <StatRow label="Bucket mismatch" value={parity.totals?.bucketMismatch ?? 0} />
+          </div>
+        </div>
+      )}
+
+      {validationAggregates && (
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3 text-xs">
+          <h3 className="text-sm font-semibold">Runtime Trigger Validation</h3>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            {Object.entries(validationAggregates).slice(0, 10).map(([key, value]) => (
+              <div key={key} className="rounded border border-border/30 bg-muted/10 p-2">
+                <p className="text-muted-foreground">{key}</p>
+                <p className="font-mono text-foreground">{String(value)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 //  Main Page 
 
 export default function Research() {
-  const [activeDomain, setActiveDomain] = useState<DomainTabId>("active");
-  const [activeTab, setActiveTab] = useState<TabId>("ai");
+  const [selectedService, setSelectedService] = useState<string>("CRASH300");
+  const [activeTab, setActiveTab] = useState<ResearchTabId>("calibration");
   const [sharedWindowDays, setSharedWindowDays] = useState<number>(365);
+
+  const tabs: { id: ResearchTabId; label: string; icon: React.ReactNode }[] = [
+    { id: "calibration", label: "Calibration & Research", icon: <Target className="w-3.5 h-3.5" /> },
+    { id: "reports", label: "Reports", icon: <FileText className="w-3.5 h-3.5" /> },
+    { id: "runtime", label: "Runtime Model", icon: <Zap className="w-3.5 h-3.5" /> },
+    { id: "backtests", label: "Backtests", icon: <BarChart2 className="w-3.5 h-3.5" /> },
+    { id: "diagnostics", label: "Advanced Diagnostics", icon: <Search className="w-3.5 h-3.5" /> },
+  ];
 
   return (
     <CalibrationRunProvider>
@@ -4830,7 +5199,7 @@ export default function Research() {
           Research
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Active and new-symbol research domains with full-calibration workflow
+          Selected symbol-service research, runtime lifecycle, backtests, and consolidated reports
         </p>
         <div className="mt-2">
           <a
@@ -4846,37 +5215,37 @@ export default function Research() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 border-b border-border/30 pb-2">
-        {DOMAIN_TABS.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveDomain(tab.id)}
-            className={cn(
-              "px-3 py-1.5 text-xs rounded-md border transition-colors",
-              activeDomain === tab.id
-                ? "border-primary/50 bg-primary/10 text-primary"
-                : "border-border/40 text-muted-foreground hover:text-foreground hover:border-border/60"
-            )}
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
+        <div className="space-y-1">
+          <span className="text-xs text-muted-foreground uppercase tracking-wide">Service Selector</span>
+          <select
+            value={selectedService}
+            onChange={(e) => setSelectedService(e.target.value)}
+            className="w-full text-xs bg-background border border-border/50 rounded px-2 py-2 text-foreground focus:outline-none focus:border-primary/50"
           >
-            {tab.label}
-          </button>
-        ))}
+            {SERVICE_SELECTOR_OPTIONS.map((option) => (
+              <option key={option.symbol} value={option.symbol}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <span className="text-xs text-muted-foreground uppercase tracking-wide">Research Window</span>
+          <select
+            value={sharedWindowDays}
+            onChange={e => setSharedWindowDays(Number(e.target.value))}
+            className="text-xs bg-background border border-primary/30 rounded px-2 py-2 text-primary focus:outline-none focus:border-primary/60"
+          >
+            {RESEARCH_WINDOWS.map(w => <option key={w.days} value={w.days}>{w.label}</option>)}
+          </select>
+        </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-muted-foreground uppercase tracking-wide">Research Window</span>
-        <select
-          value={sharedWindowDays}
-          onChange={e => setSharedWindowDays(Number(e.target.value))}
-          className="text-xs bg-background border border-primary/30 rounded px-2 py-1.5 text-primary focus:outline-none focus:border-primary/60"
-        >
-          {RESEARCH_WINDOWS.map(w => <option key={w.days} value={w.days}>{w.label}</option>)}
-        </select>
-      </div>
+      <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
 
-      {/* Nested task tabs */}
       <div className="flex items-center gap-0.5 border-b border-border/30">
-        {TABS.map(tab => (
+        {tabs.map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
@@ -4893,9 +5262,34 @@ export default function Research() {
         ))}
       </div>
 
-      {activeTab === "ai"          && <AiAnalysisTab domain={activeDomain} windowDays={sharedWindowDays} />}
-      {activeTab === "backtest"    && <BacktestTab domain={activeDomain} windowDays={sharedWindowDays} />}
-      {activeTab === "calibration" && <MoveCalibrationTab domain={activeDomain} windowDays={sharedWindowDays} />}
+      {activeTab === "calibration" && (
+        <MoveCalibrationTab
+          domain="active"
+          windowDays={sharedWindowDays}
+          lockedSymbol={selectedService}
+          hideReportsActions
+          onOpenReports={() => setActiveTab("reports")}
+          showAdvancedDiagnostics={false}
+        />
+      )}
+      {activeTab === "reports" && (
+        <ReportsTab service={selectedService} windowDays={sharedWindowDays} />
+      )}
+      {activeTab === "runtime" && (
+        <RuntimeModelTab service={selectedService} />
+      )}
+      {activeTab === "backtests" && (
+        <BacktestTab
+          domain="active"
+          windowDays={sharedWindowDays}
+          lockedSymbol={selectedService}
+          hideReportsActions
+          onOpenReports={() => setActiveTab("reports")}
+        />
+      )}
+      {activeTab === "diagnostics" && (
+        <AdvancedDiagnosticsTab service={selectedService} windowDays={sharedWindowDays} />
+      )}
     </div>
     </CalibrationRunProvider>
   );

@@ -105,7 +105,7 @@ export interface V3BacktestTrade {
   exitReason: "tp_hit" | "sl_hit" | "trailing_stop" | "max_duration";
   slStage: 1 | 2 | 3;
   projectedMovePct: number;
-  nativeScore: number;
+  runtimeEvidence: number;
   regimeAtEntry: string;
   regimeConfidence: number;
   holdBars: number;
@@ -118,7 +118,7 @@ export interface V3BacktestTrade {
   slPct: number;
   conflictResolution: string;
   modeGateApplied: number;
-  scoringSource?: string;
+  modelSource?: string;
   runtimeModelRunId?: number | null;
   runtimeFamily?: string | null;
   selectedBucket?: string | null;
@@ -175,7 +175,7 @@ export interface V3BacktestResult {
     entryModel: string | null;
     tpBucketCount: number;
     dynamicTpEnabled: boolean;
-    scoringSourceCounts: Record<string, number>;
+    modelSourceCounts: Record<string, number>;
   };
   admissionPolicy: {
     enabled: boolean;
@@ -798,7 +798,7 @@ function runtimeModelDiagnostics(
     entryModel: runtimeCalibration?.entryModel ?? null,
     tpBucketCount,
     dynamicTpEnabled: runtimeCalibration?.tpModel?.["dynamicByQualityLeadIn"] === true && tpBucketCount > 0,
-    scoringSourceCounts,
+    modelSourceCounts: scoringSourceCounts,
   };
 }
 
@@ -1429,7 +1429,7 @@ export async function runV3Backtest(
           exitReason,
           slStage: openTrade.stage,
           projectedMovePct: openTrade.runtimeProjectedMovePct ?? openTrade.winner.projectedMovePct,
-          nativeScore: openTrade.nativeScore,
+          runtimeEvidence: openTrade.nativeScore,
           regimeAtEntry: openTrade.regimeAtEntry,
           regimeConfidence: openTrade.regimeConfidence,
           holdBars,
@@ -1442,7 +1442,7 @@ export async function runV3Backtest(
           slPct: openTrade.slOriginalPct,
           conflictResolution: openTrade.conflictResolution,
           modeGateApplied: modeGate,
-          scoringSource: openTrade.scoringSource,
+          modelSource: openTrade.scoringSource,
           runtimeModelRunId: openTrade.runtimeModelRunId,
           runtimeFamily: openTrade.runtimeFamily ?? null,
           selectedBucket: openTrade.selectedBucket ?? null,
@@ -2387,12 +2387,12 @@ export async function runV3BacktestMulti(
           entryTs: ot.entryTs, exitTs: bar.closeTs, symbol: ctx.sym,
           direction: dir, engineName: ot.winner.engineName, entryType: ot.winner.entryType,
           entryPrice: ep, exitPrice, exitReason, slStage: ot.stage,
-          projectedMovePct: ot.runtimeProjectedMovePct ?? ot.winner.projectedMovePct, nativeScore: ot.nativeScore,
+          projectedMovePct: ot.runtimeProjectedMovePct ?? ot.winner.projectedMovePct, runtimeEvidence: ot.nativeScore,
           regimeAtEntry: ot.regimeAtEntry, regimeConfidence: ot.regimeConfidence,
           holdBars, barsToMfe, barsToBreakeven, pnlPct: finalPnl,
           mfePct: ot.mfePct, maePct: ot.maePct, tpPct: ot.tpPct, slPct: ot.slOriginalPct,
           conflictResolution: ot.conflictResolution, modeGateApplied: ctx.modeGate,
-          scoringSource: ot.scoringSource,
+          modelSource: ot.scoringSource,
           runtimeModelRunId: ot.runtimeModelRunId,
           runtimeFamily: ot.runtimeFamily ?? null,
           selectedBucket: ot.selectedBucket ?? null,

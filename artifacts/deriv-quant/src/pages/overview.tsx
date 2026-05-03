@@ -4,6 +4,7 @@ import {
   CheckCircle, Clock, BarChart2, Database, Scan, Target, XCircle,
   ArrowUpRight, ArrowDownRight, Cpu,
 } from "lucide-react";
+import { ACTIVE_SERVICE_SYMBOLS, getSymbolLabel } from "@/lib/symbolCatalog";
 
 const BASE = import.meta.env.BASE_URL || "/";
 function apiFetch<T>(path: string): Promise<T> {
@@ -165,8 +166,6 @@ function StatusRow({ label, ok, detail, loading }: { label: string; ok: boolean;
   );
 }
 
-const ACTIVE_SYMBOLS = ["CRASH300", "BOOM300", "R_75", "R_100"];
-
 export default function Overview() {
   const { data: ov, isLoading: ovLoading } = useQuery<OverviewAPI>({
     queryKey: ["api/overview"],
@@ -194,7 +193,7 @@ export default function Overview() {
   const demo = ov?.perMode?.demo;
   const real = ov?.perMode?.real;
 
-  const activeSymbolData = dataStatus?.symbols.filter(s => ACTIVE_SYMBOLS.includes(s.symbol)) ?? [];
+  const activeSymbolData = dataStatus?.symbols.filter(s => ACTIVE_SERVICE_SYMBOLS.includes(s.symbol as typeof ACTIVE_SERVICE_SYMBOLS[number])) ?? [];
   const staleSymbols = activeSymbolData.filter(s => s.status === "stale" || s.status === "no_data");
 
   const warnings: string[] = [];
@@ -217,7 +216,7 @@ export default function Overview() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Operations Overview</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Live system state — V3 multi-engine · {new Date().toLocaleTimeString()}
+            Live system state — shared platform plus symbol-service runtime status · {new Date().toLocaleTimeString()}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -438,21 +437,6 @@ export default function Overview() {
                     </div>
                   )}
                 </div>
-                {m === "paper" && isActive && (
-                  <div className="mt-2.5 pt-2 border-t border-border/20 text-[10px] text-muted-foreground/70">
-                    Score threshold: ≥60 for approval
-                  </div>
-                )}
-                {m === "demo" && isActive && (
-                  <div className="mt-2.5 pt-2 border-t border-border/20 text-[10px] text-muted-foreground/70">
-                    Score threshold: ≥65 for approval
-                  </div>
-                )}
-                {m === "real" && isActive && (
-                  <div className="mt-2.5 pt-2 border-t border-border/20 text-[10px] text-muted-foreground/70">
-                    Score threshold: ≥70 for approval
-                  </div>
-                )}
               </div>
             );
           })}
@@ -517,10 +501,10 @@ export default function Overview() {
         <SectionHeader icon={Zap} title="Engine Configuration" sub="Active engines and covered symbols" />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { symbol: "BOOM300", engines: ["Boom Expansion"], dir: "buy" },
-            { symbol: "CRASH300", engines: ["Crash Expansion"], dir: "sell" },
-            { symbol: "R_75", engines: ["R75 Continuation", "R75 Reversal", "R75 Breakout"], dir: "both" },
-            { symbol: "R_100", engines: ["R100 Continuation", "R100 Reversal", "R100 Breakout"], dir: "both" },
+            { symbol: "BOOM300", engines: ["Trade candidate emission service"], dir: "buy" },
+            { symbol: "CRASH300", engines: ["Trade candidate emission service"], dir: "sell" },
+            { symbol: "R_75", engines: ["Scaffolded symbol service"], dir: "both" },
+            { symbol: "R_100", engines: ["Scaffolded symbol service"], dir: "both" },
           ].map(({ symbol, engines, dir }) => (
             <div key={symbol} className="rounded-lg border border-border/40 bg-muted/10 p-3">
               <div className="flex items-center gap-1.5 mb-1.5">
@@ -531,6 +515,7 @@ export default function Overview() {
                     : <Activity className="w-3.5 h-3.5 text-primary" />}
                 <span className="text-xs font-mono font-bold text-foreground">{symbol}</span>
               </div>
+              <div className="text-[10px] text-muted-foreground mb-1.5">{getSymbolLabel(symbol)}</div>
               <div className="space-y-0.5">
                 {engines.map(e => (
                   <div key={e} className="text-[10px] text-muted-foreground">{e}</div>
@@ -541,10 +526,9 @@ export default function Overview() {
         </div>
         <div className="mt-3 pt-3 border-t border-border/20 flex flex-wrap gap-4 text-[11px] text-muted-foreground">
           <span>Active strategies: <span className="text-foreground font-medium">{ov?.activeStrategies ?? 8}</span></span>
-          <span>Paper threshold: <span className="text-amber-400 font-medium">≥60</span></span>
-          <span>Demo threshold: <span className="text-blue-400 font-medium">≥65</span></span>
-          <span>Real threshold: <span className="text-green-400 font-medium">≥70</span></span>
-          <span>Target: <span className="text-foreground font-medium">50–200%+ moves, long hold</span></span>
+          <span>Admission source: <span className="text-foreground font-medium">symbol service runtime candidate</span></span>
+          <span>Allocator role: <span className="text-foreground font-medium">capital and exposure gatekeeper</span></span>
+          <span>Target: <span className="text-foreground font-medium">service-specific runtime models and calibrated buckets</span></span>
         </div>
       </div>
 

@@ -358,18 +358,18 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
               strategyName: winner.engineName,
               strategyFamily: "v3_engine",
               direction: coordinatorOutput.resolvedDirection,
-              score: coordinatorOutput.coordinatorConfidence,
-              compositeScore: candidateNativeScore,
+              legacyDiagnosticScore: coordinatorOutput.coordinatorConfidence,
+              runtimeEvidence: candidateNativeScore,
               expectedValue: winner.projectedMovePct,
               allowedFlag: false,
-              rejectionReason: rejReason,
+              admissionReason: rejReason,
               mode: effectiveMode,
               aiVerdict: "skipped",
               aiReasoning: `lifecycle:${lcResult.logReason} | lifecycle_state:${lcStatus}`,
               regime: operationalRegime,
               regimeConfidence,
               executionStatus: "blocked",
-              scoringDimensions: signalScoringDimensions,
+              runtimeEvidenceDimensions: signalScoringDimensions,
             });
             totalDecisionsLogged++;
           } catch (logErr) {
@@ -413,18 +413,18 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
               strategyName: winner.engineName,
               strategyFamily: "v3_engine",
               direction: coordinatorOutput.resolvedDirection,
-              score: coordinatorOutput.coordinatorConfidence,
-              compositeScore: candidateNativeScore,
+              legacyDiagnosticScore: coordinatorOutput.coordinatorConfidence,
+              runtimeEvidence: candidateNativeScore,
               expectedValue: winner.projectedMovePct,
               allowedFlag: false,
-              rejectionReason: setupRejectReason,
+              admissionReason: setupRejectReason,
               mode: effectiveMode,
               aiVerdict: "skipped",
               aiReasoning: `lifecycle:${lcResult.logReason || "setup_evidence"} | lifecycle_state:${lcResult.candidate.status} | setup:${setupSignature}`,
               regime: operationalRegime,
               regimeConfidence,
               executionStatus: "blocked",
-              scoringDimensions: signalScoringDimensions,
+              runtimeEvidenceDimensions: signalScoringDimensions,
             });
             totalDecisionsLogged++;
           } catch (logErr) {
@@ -469,18 +469,18 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
               strategyName: winner.engineName,
               strategyFamily: "v3_engine",
               direction: coordinatorOutput.resolvedDirection,
-              score: coordinatorOutput.coordinatorConfidence,
-              compositeScore: candidateNativeScore,
+              legacyDiagnosticScore: coordinatorOutput.coordinatorConfidence,
+              runtimeEvidence: candidateNativeScore,
               expectedValue: winner.projectedMovePct,
               allowedFlag: false,
-              rejectionReason: `runtime_candidate_window:${allowedLifecycle.candidate.status}`,
+              admissionReason: `runtime_candidate_window:${allowedLifecycle.candidate.status}`,
               mode: effectiveMode,
               aiVerdict: "skipped",
               aiReasoning: `lifecycle:${allowedLifecycle.logReason || "monitoring"} | lifecycle_state:${allowedLifecycle.candidate.status} | tradeable_after:${readyAt}`,
               regime: operationalRegime,
               regimeConfidence,
               executionStatus: "blocked",
-              scoringDimensions: signalScoringDimensions,
+              runtimeEvidenceDimensions: signalScoringDimensions,
             });
             totalDecisionsLogged++;
           } catch (logErr) {
@@ -572,8 +572,8 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         strategyName: winner.engineName,
         strategyFamily: "v3_engine",
         direction: coordinatorOutput.resolvedDirection,
-        score: coordinatorOutput.coordinatorConfidence,
-        compositeScore: candidateNativeScore,
+        legacyDiagnosticScore: coordinatorOutput.coordinatorConfidence,
+        runtimeEvidence: candidateNativeScore,
         expectedValue: winner.projectedMovePct,
         allowedFlag: true,
         allocationPct: v3Decision.capitalAllocationPct,
@@ -583,7 +583,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
         regime: operationalRegime,
         regimeConfidence,
         executionStatus: "executed",
-        scoringDimensions: signalScoringDimensions,
+        runtimeEvidenceDimensions: signalScoringDimensions,
       });
       totalDecisionsLogged++;
     } catch (logErr) {

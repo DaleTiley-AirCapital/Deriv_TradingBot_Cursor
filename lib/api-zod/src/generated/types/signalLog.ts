@@ -16,11 +16,13 @@ export interface SignalLog {
   strategyFamily: string | null;
   /** @nullable */
   subStrategy: string | null;
-  score: number;
+  /** @nullable */
+  legacyDiagnosticScore: number | null;
+  runtimeEvidence: number | null;
   expectedValue: number;
   allowedFlag: boolean;
   /** @nullable */
-  rejectionReason: string | null;
+  admissionReason: string | null;
   /** @nullable */
   direction: string | null;
   /** @nullable */
@@ -33,9 +35,7 @@ export interface SignalLog {
   aiReasoning: string | null;
   /** @nullable */
   aiConfidenceAdj: number | null;
-  /** @nullable */
-  compositeScore: number | null;
-  scoringDimensions: ScoringDimensions | null;
+  runtimeEvidenceDimensions: ScoringDimensions | null;
   /** @nullable */
   mode: string | null;
   /** @nullable */

@@ -2,11 +2,11 @@
 
 This document locks the trading architecture to a single ownership chain:
 
-`Symbol Model -> Engine -> Coordinator -> Allocator`
+`Symbol Service -> Trade Candidate -> Portfolio Allocator -> Trade Execution/Manager`
 
 ## Core Rule
 
-Calibration, AI analysis, and backtest runs may generate **suggestions**.
+Calibration, research analysis, and backtest runs may generate **suggestions**.
 They must not automatically change the live or paper runtime.
 
 Runtime behavior may only change when a symbol model is explicitly **promoted**.
@@ -15,7 +15,7 @@ Runtime behavior may only change when a symbol model is explicitly **promoted**.
 
 ### 1. Suggested
 
-- Produced by move calibration, AI passes, research profiling, or backtest diagnostics.
+- Produced by move calibration, stored pass results, research profiling, or backtest diagnostics.
 - Can recommend:
   - scoring bands
   - entry maturity windows

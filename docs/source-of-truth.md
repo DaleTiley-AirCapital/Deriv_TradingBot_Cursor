@@ -10,6 +10,12 @@ Use this map to avoid doc and implementation drift.
   - `docs/runtime-model-lifecycle.md`
 - Symbol-service architecture and ownership boundaries:
   - `docs/symbol-service-architecture.md`
+  - `docs/SYMBOL_SERVICE_ARCHITECTURE.md`
+- Service UI structure and selected-service research workflow:
+  - `docs/SERVICE_UI_STRUCTURE.md`
+  - `docs/RESEARCH_TO_RUNTIME_WORKFLOW.md`
+- CRASH300 service-specific implementation notes:
+  - `docs/CRASH300_SERVICE_README.md`
 - Runtime feeddown contract and validation:
   - `docs/runtime-feeddown-contract.md`
 - Deep strategy doctrine:
@@ -66,8 +72,9 @@ When changing behavior:
 
 1. Update code owner file first.
 2. Update relevant source-of-truth doc.
-3. Update parity/runbook docs if externally visible behavior changed.
-4. Do not leave conflicting threshold statements unresolved.
+3. Update service workflow/UI docs if the selected-service research flow changes.
+4. Update parity/runbook docs if externally visible behavior changed.
+5. Do not leave conflicting threshold statements unresolved.
 
 ## Milestone 1 Note
 

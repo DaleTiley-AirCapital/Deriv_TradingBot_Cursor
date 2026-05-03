@@ -20,6 +20,7 @@ import {
   Download, ShieldAlert, Target, BarChart3, Clock, Layers, CheckCircle, XCircle,
   AlertTriangle, Activity, ChevronLeft, ChevronRight, Info,
 } from "lucide-react";
+import { ACTIVE_SERVICE_SYMBOLS, getSymbolLabel } from "@/lib/symbolCatalog";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ function classifyDecision(sig: SignalLog): DecisionState {
   if (sig.executionStatus === "open") return "traded";
   if (sig.executionStatus === "pending") return "pending";
   if (!sig.allowedFlag) {
-    const r = sig.rejectionReason?.toLowerCase() ?? "";
+    const r = sig.admissionReason?.toLowerCase() ?? "";
     // Distinguish score-based rejection vs gate/mode blocking
     if (r.includes("composite") && r.includes("<")) return "rejected";
     if (r.includes("score") && r.includes("below")) return "rejected";
@@ -220,8 +221,8 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const native = nativeMatch ? nativeMatch[1] : "?";
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
-      gate: "BOOM300 Score Gate",
-      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      gate: "BOOM300 Runtime Admission Gate",
+      detail: `Runtime evidence ${native}/100 < admission threshold ${modeMin}`,
       raw: r,
     };
   }
@@ -234,7 +235,7 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
       gate: "CRASH300 Runtime Evidence Gate",
-      detail: `Runtime evidence ${native}/100 < mode threshold ${modeMin}`,
+      detail: `Runtime evidence ${native}/100 < admission threshold ${modeMin}`,
       raw: r,
     };
   }
@@ -245,8 +246,8 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const native = nativeMatch ? nativeMatch[1] : "?";
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
-      gate: "CRASH300 Legacy Score Gate",
-      detail: `Legacy score ${native}/100 < mode threshold ${modeMin}`,
+      gate: "CRASH300 Legacy Diagnostic Gate",
+      detail: `Legacy diagnostic evidence ${native}/100 < admission threshold ${modeMin}`,
       raw: r,
     };
   }
@@ -258,8 +259,8 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const native = nativeMatch ? nativeMatch[1] : "?";
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
-      gate: "R75 Reversal Score Gate",
-      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      gate: "R75 Reversal Admission Gate",
+      detail: `Runtime evidence ${native}/100 < admission threshold ${modeMin}`,
       raw: r,
     };
   }
@@ -271,8 +272,8 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const native = nativeMatch ? nativeMatch[1] : "?";
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
-      gate: "R75 Continuation Score Gate",
-      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      gate: "R75 Continuation Admission Gate",
+      detail: `Runtime evidence ${native}/100 < admission threshold ${modeMin}`,
       raw: r,
     };
   }
@@ -284,8 +285,8 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const native = nativeMatch ? nativeMatch[1] : "?";
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
-      gate: "R75 Breakout Score Gate",
-      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      gate: "R75 Breakout Admission Gate",
+      detail: `Runtime evidence ${native}/100 < admission threshold ${modeMin}`,
       raw: r,
     };
   }
@@ -297,8 +298,8 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const native = nativeMatch ? nativeMatch[1] : "?";
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
-      gate: "R100 Reversal Score Gate",
-      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      gate: "R100 Reversal Admission Gate",
+      detail: `Runtime evidence ${native}/100 < admission threshold ${modeMin}`,
       raw: r,
     };
   }
@@ -310,8 +311,8 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const native = nativeMatch ? nativeMatch[1] : "?";
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
-      gate: "R100 Breakout Score Gate",
-      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      gate: "R100 Breakout Admission Gate",
+      detail: `Runtime evidence ${native}/100 < admission threshold ${modeMin}`,
       raw: r,
     };
   }
@@ -323,16 +324,16 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
     const native = nativeMatch ? nativeMatch[1] : "?";
     const modeMin = modeMinMatch ? modeMinMatch[1] : "?";
     return {
-      gate: "R100 Continuation Score Gate",
-      detail: `Native score ${native}/100 < mode threshold ${modeMin}`,
+      gate: "R100 Continuation Admission Gate",
+      detail: `Runtime evidence ${native}/100 < admission threshold ${modeMin}`,
       raw: r,
     };
   }
 
   const patterns: { test: RegExp; gate: string; detail: (m: RegExpMatchArray) => string }[] = [
-    { test: /composite.*?(\d+).*?[<below].*?(\d+)/i,     gate: "Score Below Threshold", detail: m => `Score ${m[1]} < required ${m[2]}` },
-    { test: /composite.*?(\d+\.?\d*).*?<.*?(\d+\.?\d*)/i,gate: "Score Below Threshold", detail: m => `Score ${m[1]} < required ${m[2]}` },
-    { test: /confidence.*?(\d+\.?\d*).*?<.*?(\d+\.?\d*)/i,gate:"Score Below Threshold", detail: m => `Confidence ${m[1]} < required ${m[2]}` },
+    { test: /composite.*?(\d+).*?[<below].*?(\d+)/i,     gate: "Evidence Below Threshold", detail: m => `Runtime evidence ${m[1]} < required ${m[2]}` },
+    { test: /composite.*?(\d+\.?\d*).*?<.*?(\d+\.?\d*)/i,gate: "Evidence Below Threshold", detail: m => `Runtime evidence ${m[1]} < required ${m[2]}` },
+    { test: /confidence.*?(\d+\.?\d*).*?<.*?(\d+\.?\d*)/i,gate:"Evidence Below Threshold", detail: m => `Confidence ${m[1]} < required ${m[2]}` },
     { test: /RR.*?(\d+\.?\d*).*?below.*?(\d+\.?\d*)/i,   gate: "R:R Ratio",             detail: m => `RR ${m[1]} < minimum ${m[2]}` },
     { test: /EV.*?(-?\d+\.?\d*).*?below.*?(-?\d+\.?\d*)/i,gate:"Expected Value",         detail: m => `EV ${m[1]} < minimum ${m[2]}` },
     { test: /kill.?switch/i,          gate: "Kill Switch",       detail: () => "Trading halted by kill switch" },
@@ -357,8 +358,8 @@ function parseBlockingGate(reason: string | null | undefined): GateInfo | null {
 }
 
 function extractRuntimeEvidence(sig: SignalLog, crashPromotedRunId?: number | null): RuntimeEvidenceView {
-  const dims = (sig.scoringDimensions && typeof sig.scoringDimensions === "object")
-    ? (sig.scoringDimensions as unknown as Record<string, unknown>)
+  const dims = (sig.runtimeEvidenceDimensions && typeof sig.runtimeEvidenceDimensions === "object")
+    ? (sig.runtimeEvidenceDimensions as unknown as Record<string, unknown>)
     : {};
   const promotedModelRunId = Number(
     dims.promotedModelRunId ??
@@ -507,7 +508,7 @@ const DIMENSION_LABELS: Record<string, string> = {
   directionalConfirmation: "Directional Confirm",
 };
 
-// BOOM300-native 6-component dimension labels
+// BOOM300 legacy diagnostic dimension labels
 const BOOM300_DIMENSION_LABELS: Record<string, string> = {
   spikeClusterPressure:    "Spike Cluster Pressure",
   upsideDisplacement:      "Upside Displacement",
@@ -533,7 +534,7 @@ function isBoom300Breakdown(dims: unknown): dims is Record<string, number> {
   return "spikeClusterPressure" in d || "upsideDisplacement" in d || "driftResumption" in d;
 }
 
-// CRASH300-native 6-component dimension labels
+// CRASH300 legacy diagnostic dimension labels
 const CRASH300_DIMENSION_LABELS: Record<string, string> = {
   crashSpikeClusterPressure:  "Crash Spike Cluster Pressure",
   downsideDisplacement:       "Downside Displacement",
@@ -559,7 +560,7 @@ function isCrash300Breakdown(dims: unknown): dims is Record<string, number> {
   return "crashSpikeClusterPressure" in d || "downsideDisplacement" in d || "exhaustionReversalEvidence" in d;
 }
 
-// ── R_75 Reversal native 6-component dimension labels ────────────────────────
+// ── R_75 Reversal legacy diagnostic dimension labels ─────────────────────────
 const R75_REVERSAL_DIMENSION_LABELS: Record<string, string> = {
   rangeExtremity:          "Range Extremity",
   reversalConfirmation:    "Reversal Confirmation",
@@ -584,7 +585,7 @@ function isR75ReversalBreakdown(dims: unknown): dims is Record<string, number> {
   return "rangeExtremity" in d && "reversalConfirmation" in d && "stretchDeviationQuality" in d;
 }
 
-// ── R_75 Continuation native 6-component dimension labels ────────────────────
+// ── R_75 Continuation legacy diagnostic dimension labels ─────────────────────
 const R75_CONTINUATION_DIMENSION_LABELS: Record<string, string> = {
   trendQuality:            "Trend Quality",
   pullbackQuality:         "Pullback Quality",
@@ -609,7 +610,7 @@ function isR75ContinuationBreakdown(dims: unknown): dims is Record<string, numbe
   return "trendQuality" in d && "pullbackQuality" in d && "slopeAlignment" in d;
 }
 
-// ── R_75 Breakout native 6-component dimension labels ────────────────────────
+// ── R_75 Breakout legacy diagnostic dimension labels ─────────────────────────
 const R75_BREAKOUT_DIMENSION_LABELS: Record<string, string> = {
   boundaryPressure:        "Boundary Pressure",
   breakStrength:           "Break Strength",
@@ -634,7 +635,7 @@ function isR75BreakoutBreakdown(dims: unknown): dims is Record<string, number> {
   return "boundaryPressure" in d && "breakStrength" in d && "expansionQuality" in d && !("acceptanceQuality" in d);
 }
 
-// ── R_100 Reversal native 6-component dimension labels ────────────────────────
+// ── R_100 Reversal legacy diagnostic dimension labels ────────────────────────
 // Key "stretchDeviation" (not "stretchDeviationQuality") distinguishes from R_75
 const R100_REVERSAL_DIMENSION_LABELS: Record<string, string> = {
   rangeExtremity:          "Range Extremity",
@@ -660,7 +661,7 @@ function isR100ReversalBreakdown(dims: unknown): dims is Record<string, number> 
   return "rangeExtremity" in d && "reversalConfirmation" in d && "stretchDeviation" in d;
 }
 
-// ── R_100 Breakout native 6-component dimension labels ────────────────────────
+// ── R_100 Breakout legacy diagnostic dimension labels ────────────────────────
 // Key "acceptanceQuality" (not "retestAcceptanceQuality") distinguishes from R_75
 const R100_BREAKOUT_DIMENSION_LABELS: Record<string, string> = {
   breakStrength:           "Break Strength",
@@ -686,7 +687,7 @@ function isR100BreakoutBreakdown(dims: unknown): dims is Record<string, number> 
   return "boundaryPressure" in d && "breakStrength" in d && "acceptanceQuality" in d;
 }
 
-// ── R_100 Continuation native 6-component dimension labels ────────────────────
+// ── R_100 Continuation legacy diagnostic dimension labels ────────────────────
 // Key "trendStrength" (not "trendQuality") distinguishes from R_75
 const R100_CONTINUATION_DIMENSION_LABELS: Record<string, string> = {
   trendStrength:           "Trend Strength",
@@ -753,7 +754,7 @@ function DecisionDetailPanel({
   const tp = sig.suggestedTp != null ? Math.abs(sig.suggestedTp) : null;
   const sl = sig.suggestedSl != null ? Math.abs(sig.suggestedSl) : null;
   const rr = sl && sl > 0 && tp ? (tp / sl) : null;
-  const gate = parseBlockingGate(sig.rejectionReason);
+  const gate = parseBlockingGate(sig.admissionReason);
   const isCrash = sig.symbol === "CRASH300";
   const runtimeEvidence = extractRuntimeEvidence(sig, crashPromotedRunId);
   const isStaleCrashRuntime = isCrashDecisionStale(sig, crashPromotedAt);
@@ -771,15 +772,15 @@ function DecisionDetailPanel({
         <h4 className="text-xs font-semibold flex items-center gap-1.5">
           <BarChart3 className="w-3.5 h-3.5 text-primary" />
           {isCrash ? "CRASH300 Runtime Model Evidence"
-            : isCrash300Breakdown(sig.scoringDimensions) ? "CRASH300 Legacy Diagnostic"
-            : isBoom300Breakdown(sig.scoringDimensions) ? "BOOM300 Native Score"
-            : isR75ReversalBreakdown(sig.scoringDimensions) ? "R75 Reversal Score"
-            : isR75ContinuationBreakdown(sig.scoringDimensions) ? "R75 Continuation Score"
-            : isR75BreakoutBreakdown(sig.scoringDimensions) ? "R75 Breakout Score"
-            : isR100ReversalBreakdown(sig.scoringDimensions) ? "R100 Reversal Score"
-            : isR100BreakoutBreakdown(sig.scoringDimensions) ? "R100 Breakout Score"
-            : isR100ContinuationBreakdown(sig.scoringDimensions) ? "R100 Continuation Score"
-            : "Score Breakdown"}
+            : isCrash300Breakdown(sig.runtimeEvidenceDimensions) ? "CRASH300 Legacy Diagnostic"
+            : isBoom300Breakdown(sig.runtimeEvidenceDimensions) ? "BOOM300 Runtime Evidence"
+            : isR75ReversalBreakdown(sig.runtimeEvidenceDimensions) ? "R75 Reversal Runtime Evidence"
+            : isR75ContinuationBreakdown(sig.runtimeEvidenceDimensions) ? "R75 Continuation Runtime Evidence"
+            : isR75BreakoutBreakdown(sig.runtimeEvidenceDimensions) ? "R75 Breakout Runtime Evidence"
+            : isR100ReversalBreakdown(sig.runtimeEvidenceDimensions) ? "R100 Reversal Runtime Evidence"
+            : isR100BreakoutBreakdown(sig.runtimeEvidenceDimensions) ? "R100 Breakout Runtime Evidence"
+            : isR100ContinuationBreakdown(sig.runtimeEvidenceDimensions) ? "R100 Continuation Runtime Evidence"
+            : "Decision Evidence"}
         </h4>
         {isCrash && (
           <div className="rounded-md border border-sky-500/20 bg-sky-500/5 p-2.5 space-y-1.5">
@@ -800,14 +801,14 @@ function DecisionDetailPanel({
             <DR label="Runtime source status" value={isStaleCrashRuntime ? "stale decision vs promoted runtime" : "current runtime epoch"} />
           </div>
         )}
-        {sig.scoringDimensions ? (
-          isCrash300Breakdown(sig.scoringDimensions) ? (
+        {sig.runtimeEvidenceDimensions ? (
+          isCrash300Breakdown(sig.runtimeEvidenceDimensions) ? (
             <div className="space-y-1.5">
               <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">
-                {isCrash ? "Legacy diagnostic only · 6-component score" : "6-Component Engine Score"}
+                {isCrash ? "Legacy diagnostic only · dimension breakdown" : "Runtime Evidence Dimensions"}
               </p>
               {CRASH300_DIMENSION_ORDER.map(key => {
-                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+              const val = (sig.runtimeEvidenceDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
                 return <DimBar key={key} label={CRASH300_DIMENSION_LABELS[key]} value={val} />;
               })}
@@ -817,11 +818,11 @@ function DecisionDetailPanel({
                 </p>
               </div>
             </div>
-          ) : isBoom300Breakdown(sig.scoringDimensions) ? (
+          ) : isBoom300Breakdown(sig.runtimeEvidenceDimensions) ? (
             <div className="space-y-1.5">
-              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score</p>
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">Runtime Evidence Dimensions</p>
               {BOOM300_DIMENSION_ORDER.map(key => {
-                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+              const val = (sig.runtimeEvidenceDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
                 return <DimBar key={key} label={BOOM300_DIMENSION_LABELS[key]} value={val} />;
               })}
@@ -831,11 +832,11 @@ function DecisionDetailPanel({
                 </p>
               </div>
             </div>
-          ) : isR75ReversalBreakdown(sig.scoringDimensions) ? (
+          ) : isR75ReversalBreakdown(sig.runtimeEvidenceDimensions) ? (
             <div className="space-y-1.5">
-              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score · Reversal</p>
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">Runtime Evidence Dimensions · Reversal</p>
               {R75_REVERSAL_DIMENSION_ORDER.map(key => {
-                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+              const val = (sig.runtimeEvidenceDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
                 return <DimBar key={key} label={R75_REVERSAL_DIMENSION_LABELS[key]} value={val} />;
               })}
@@ -845,11 +846,11 @@ function DecisionDetailPanel({
                 </p>
               </div>
             </div>
-          ) : isR75ContinuationBreakdown(sig.scoringDimensions) ? (
+          ) : isR75ContinuationBreakdown(sig.runtimeEvidenceDimensions) ? (
             <div className="space-y-1.5">
-              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score · Continuation</p>
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">Runtime Evidence Dimensions · Continuation</p>
               {R75_CONTINUATION_DIMENSION_ORDER.map(key => {
-                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+              const val = (sig.runtimeEvidenceDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
                 return <DimBar key={key} label={R75_CONTINUATION_DIMENSION_LABELS[key]} value={val} />;
               })}
@@ -859,11 +860,11 @@ function DecisionDetailPanel({
                 </p>
               </div>
             </div>
-          ) : isR75BreakoutBreakdown(sig.scoringDimensions) ? (
+          ) : isR75BreakoutBreakdown(sig.runtimeEvidenceDimensions) ? (
             <div className="space-y-1.5">
-              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score · Breakout</p>
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">Runtime Evidence Dimensions · Breakout</p>
               {R75_BREAKOUT_DIMENSION_ORDER.map(key => {
-                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+              const val = (sig.runtimeEvidenceDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
                 return <DimBar key={key} label={R75_BREAKOUT_DIMENSION_LABELS[key]} value={val} />;
               })}
@@ -873,11 +874,11 @@ function DecisionDetailPanel({
                 </p>
               </div>
             </div>
-          ) : isR100ReversalBreakdown(sig.scoringDimensions) ? (
+          ) : isR100ReversalBreakdown(sig.runtimeEvidenceDimensions) ? (
             <div className="space-y-1.5">
-              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score · R100 Reversal</p>
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">Runtime Evidence Dimensions · R100 Reversal</p>
               {R100_REVERSAL_DIMENSION_ORDER.map(key => {
-                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+              const val = (sig.runtimeEvidenceDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
                 return <DimBar key={key} label={R100_REVERSAL_DIMENSION_LABELS[key]} value={val} />;
               })}
@@ -887,11 +888,11 @@ function DecisionDetailPanel({
                 </p>
               </div>
             </div>
-          ) : isR100BreakoutBreakdown(sig.scoringDimensions) ? (
+          ) : isR100BreakoutBreakdown(sig.runtimeEvidenceDimensions) ? (
             <div className="space-y-1.5">
-              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score · R100 Breakout</p>
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">Runtime Evidence Dimensions · R100 Breakout</p>
               {R100_BREAKOUT_DIMENSION_ORDER.map(key => {
-                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+              const val = (sig.runtimeEvidenceDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
                 return <DimBar key={key} label={R100_BREAKOUT_DIMENSION_LABELS[key]} value={val} />;
               })}
@@ -901,11 +902,11 @@ function DecisionDetailPanel({
                 </p>
               </div>
             </div>
-          ) : isR100ContinuationBreakdown(sig.scoringDimensions) ? (
+          ) : isR100ContinuationBreakdown(sig.runtimeEvidenceDimensions) ? (
             <div className="space-y-1.5">
-              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">6-Component Engine Score · R100 Continuation</p>
+              <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider mb-1.5">Runtime Evidence Dimensions · R100 Continuation</p>
               {R100_CONTINUATION_DIMENSION_ORDER.map(key => {
-                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+              const val = (sig.runtimeEvidenceDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
                 return <DimBar key={key} label={R100_CONTINUATION_DIMENSION_LABELS[key]} value={val} />;
               })}
@@ -918,7 +919,7 @@ function DecisionDetailPanel({
           ) : (
             <div className="space-y-1.5">
               {Object.keys(DIMENSION_LABELS).map(key => {
-                const val = (sig.scoringDimensions as unknown as Record<string, number>)[key];
+                const val = (sig.runtimeEvidenceDimensions as unknown as Record<string, number>)[key];
                 if (val == null) return null;
                 return <DimBar key={key} label={DIMENSION_LABELS[key]} value={val} />;
               })}
@@ -929,13 +930,13 @@ function DecisionDetailPanel({
         )}
         <div className="pt-2 border-t border-border/20 space-y-1">
           <DR label={
-            isCrash ? "Legacy Diagnostic Score" :
-            isCrash300Breakdown(sig.scoringDimensions) || isBoom300Breakdown(sig.scoringDimensions) ||
-            isR75ReversalBreakdown(sig.scoringDimensions) || isR75ContinuationBreakdown(sig.scoringDimensions) || isR75BreakoutBreakdown(sig.scoringDimensions) ||
-            isR100ReversalBreakdown(sig.scoringDimensions) || isR100BreakoutBreakdown(sig.scoringDimensions) || isR100ContinuationBreakdown(sig.scoringDimensions)
-              ? "Native Score" : "Composite Score"
-          } value={sig.compositeScore != null ? Math.round(sig.compositeScore).toString() : "—"} />
-          <DR label="Raw Score" value={formatNumber(sig.score, 3)} />
+            isCrash ? "Legacy Diagnostic Evidence" :
+            isCrash300Breakdown(sig.runtimeEvidenceDimensions) || isBoom300Breakdown(sig.runtimeEvidenceDimensions) ||
+            isR75ReversalBreakdown(sig.runtimeEvidenceDimensions) || isR75ContinuationBreakdown(sig.runtimeEvidenceDimensions) || isR75BreakoutBreakdown(sig.runtimeEvidenceDimensions) ||
+            isR100ReversalBreakdown(sig.runtimeEvidenceDimensions) || isR100BreakoutBreakdown(sig.runtimeEvidenceDimensions) || isR100ContinuationBreakdown(sig.runtimeEvidenceDimensions)
+              ? "Runtime Evidence" : "Legacy Diagnostic Evidence"
+          } value={sig.runtimeEvidence != null ? Math.round(sig.runtimeEvidence).toString() : "—"} />
+          <DR label="Legacy Diagnostic Value" value={formatNumber(sig.legacyDiagnosticScore, 3)} />
           <DR label="Expected Value" value={formatNumber(sig.expectedValue, 4)} highlight={sig.expectedValue > 0 ? "green" : "red"} />
         </div>
       </div>
@@ -1016,9 +1017,9 @@ function DecisionDetailPanel({
         {/* Why it passed */}
         {sig.allowedFlag && (
           <div className="rounded-md bg-green-500/6 border border-green-500/20 p-2.5">
-            <p className="text-[10px] font-semibold text-green-400/80 mb-1">Why It Passed</p>
+            <p className="text-[10px] font-semibold text-green-400/80 mb-1">Why It Advanced</p>
             <div className="space-y-0.5 text-[10px] text-green-400/70">
-              {sig.compositeScore != null && <p>Score {Math.round(sig.compositeScore)} ≥ mode threshold</p>}
+              {sig.runtimeEvidence != null && <p>Runtime evidence {Math.round(sig.runtimeEvidence)} met the current admission gate</p>}
               {sig.expectedValue != null && sig.expectedValue > 0 && <p>Positive expected value: {sig.expectedValue.toFixed(4)}</p>}
               {rr != null && rr >= 1.5 && <p>R:R ratio {rr.toFixed(2)}:1 ≥ minimum</p>}
             </div>
@@ -1040,7 +1041,7 @@ function DecisionDetailPanel({
             <p className="text-[10px] text-slate-400/70 italic">Signal blocked before reaching AI verification step.</p>
           )}
           {sig.aiConfidenceAdj != null && sig.aiConfidenceAdj !== 0 && (
-            <DR label="AI Score Adjustment" value={`${sig.aiConfidenceAdj > 0 ? "+" : ""}${sig.aiConfidenceAdj}`} />
+            <DR label="AI Confidence Adjustment" value={`${sig.aiConfidenceAdj > 0 ? "+" : ""}${sig.aiConfidenceAdj}`} />
           )}
         </div>
       </div>
@@ -1330,16 +1331,16 @@ export default function Decisions() {
             CRASH300 runtime evidence source: promoted model run {crashPromotedRunId ?? "none"} at {compactDateTime(crashPromotedAt)}.
           </p>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Every signal decision — why it passed, why it failed, what the AI said
+            Selected service decisions, candidate outcomes, rejection reasons, allocator results, and runtime evidence
           </p>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={() => downloadCSV(dateFiltered.map(s => ({
             time: new Date(s.ts).toISOString(), symbol: s.symbol,
             engine: ENGINE_LABELS[s.strategyFamily ?? ""] ?? s.strategyFamily,
-            direction: s.direction, compositeScore: s.compositeScore, score: s.score,
+            direction: s.direction, runtimeEvidence: s.runtimeEvidence, legacyDiagnosticScore: s.legacyDiagnosticScore,
             expectedValue: s.expectedValue, regime: s.regime, state: classifyDecision(s),
-            rejectionReason: s.rejectionReason, aiVerdict: s.aiVerdict, mode: s.mode,
+            admissionReason: s.admissionReason, aiVerdict: s.aiVerdict, mode: s.mode,
           })), "decisions_log")}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground border border-border/50 hover:border-border transition-colors">
             <Download className="w-3 h-3" /> CSV
@@ -1389,8 +1390,8 @@ export default function Decisions() {
         <div className="flex flex-wrap items-center gap-2">
           <Filter className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
           <FilterSelect value={symbolFilter} onChange={v => { setSymbolFilter(v); setPage(0); }}
-            options={symbolOptions.length > 0 ? symbolOptions : ["BOOM300", "CRASH300", "R_75", "R_100"]}
-            placeholder="All Symbols" />
+            options={symbolOptions.length > 0 ? symbolOptions : [...ACTIVE_SERVICE_SYMBOLS]}
+            placeholder="All Services" />
           <FilterSelect value={engineFilter} onChange={v => { setEngineFilter(v); setPage(0); }}
             options={ENGINES} placeholder="All Engines" />
           <FilterSelect value={statusFilter} onChange={v => { setStatusFilter(v); setPage(0); }}
@@ -1410,7 +1411,7 @@ export default function Decisions() {
             </button>
           )}
           <span className="ml-auto text-[11px] text-muted-foreground">
-            Score visibility threshold: ≥{visThreshold}
+            Runtime decision log visibility: ≥{visThreshold}
           </span>
         </div>
       </div>
@@ -1439,7 +1440,7 @@ export default function Decisions() {
               text-[11px] text-muted-foreground uppercase tracking-wide font-medium">
               <span>Symbol / Engine</span>
               <span className="w-16 text-center">Dir</span>
-              <span className="w-16 text-right">Score</span>
+              <span className="w-16 text-right">Evidence</span>
               <span className="w-24 text-center">State</span>
               <span className="w-20 text-center">AI</span>
               <span className="w-36 text-right">Time</span>
@@ -1479,9 +1480,9 @@ export default function Decisions() {
                         <DirectionChip direction={sig.direction} />
                       </div>
 
-                      {/* Score */}
+                      {/* Evidence */}
                       <div className="w-16 flex justify-end">
-                        <ScorePill score={sig.compositeScore} />
+                        <ScorePill score={sig.runtimeEvidence} />
                       </div>
 
                       {/* State */}
