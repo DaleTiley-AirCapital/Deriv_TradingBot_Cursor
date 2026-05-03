@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { buildUnifiedCrash300Dataset } from "../core/synthesis/crash300Adapter.js";
-import { runEliteSynthesisJob, getSynthesisAdapter } from "../core/synthesis/engine.js";
+import { scheduleEliteSynthesisJob, getSynthesisAdapter } from "../core/synthesis/engine.js";
 import {
   createEliteSynthesisJob,
   ensureEliteSynthesisJobsTable,
@@ -14,7 +14,6 @@ import type { EliteSynthesisParams } from "../core/synthesis/types.js";
 import { profileDefaults } from "../core/synthesis/types.js";
 
 const router: IRouter = Router();
-const activeEliteSynthesisJobs = new Map<number, Promise<void>>();
 
 function parseParams(input: unknown): EliteSynthesisParams {
   const record = input && typeof input === "object" && !Array.isArray(input)
@@ -121,14 +120,7 @@ router.post("/research/:serviceId/elite-synthesis/jobs", async (req, res): Promi
       jobParams: params,
       maxPasses,
     });
-    const running = runEliteSynthesisJob({ jobId, serviceId, request: params })
-      .catch((err) => {
-        console.error(`[elite-synthesis] job ${jobId} failed:`, err instanceof Error ? err.message : err);
-      })
-      .finally(() => {
-        activeEliteSynthesisJobs.delete(jobId);
-      });
-    activeEliteSynthesisJobs.set(jobId, running.then(() => undefined));
+    await scheduleEliteSynthesisJob({ jobId, serviceId, request: params });
     res.status(202).json({
       jobId,
       serviceId,

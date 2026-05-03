@@ -9,14 +9,27 @@ interface ChatMessage {
   content: string;
 }
 
-export function AiChat() {
-  const [open, setOpen] = useState(false);
+type AiChatProps = {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideTrigger?: boolean;
+  panelClassName?: string;
+};
+
+export function AiChat({ open: openProp, onOpenChange, hideTrigger = false, panelClassName }: AiChatProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
+  const controlled = openProp != null;
+  const open = controlled ? Boolean(openProp) : internalOpen;
+  const setOpen = (next: boolean) => {
+    if (!controlled) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
 
   useEffect(() => {
     if (open && inputRef.current) {
@@ -71,23 +84,30 @@ export function AiChat() {
 
   return (
     <>
-      <button
-        onClick={() => setOpen(!open)}
-        className={cn(
-          "fixed bottom-[84px] md:bottom-6 right-6 z-50 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-all",
-          "bg-primary text-primary-foreground hover:scale-105 active:scale-95",
-          open && "bg-muted text-foreground"
-        )}
-      >
-        {open ? <X className="w-5 h-5" /> : <Bot className="w-6 h-6" />}
-      </button>
+      {!hideTrigger && (
+        <button
+          onClick={() => setOpen(!open)}
+          className={cn(
+            "fixed bottom-[84px] md:bottom-6 right-6 z-50 w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-all",
+            "bg-primary text-primary-foreground hover:scale-105 active:scale-95",
+            open && "bg-muted text-foreground"
+          )}
+        >
+          {open ? <X className="w-5 h-5" /> : <Bot className="w-6 h-6" />}
+        </button>
+      )}
 
       {open && (
-        <div className="fixed bottom-[156px] md:bottom-24 right-6 z-50 w-[380px] max-h-[520px] rounded-2xl border border-border/60 bg-[#1a2035] shadow-2xl flex flex-col overflow-hidden">
+        <div className={cn("fixed bottom-[156px] md:bottom-24 right-6 z-50 w-[380px] max-h-[520px] rounded-2xl border border-border/60 bg-[#1a2035] shadow-2xl flex flex-col overflow-hidden", panelClassName)}>
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border/30 bg-[#0e1120]">
             <Bot className="w-4 h-4 text-primary" />
             <span className="text-sm font-semibold text-foreground">AI Assistant</span>
             <span className="text-[10px] text-muted-foreground ml-auto">GPT-5.1</span>
+            {hideTrigger && (
+              <button type="button" onClick={() => setOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[200px] max-h-[360px]">

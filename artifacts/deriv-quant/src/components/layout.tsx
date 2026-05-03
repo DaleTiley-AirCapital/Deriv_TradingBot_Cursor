@@ -5,6 +5,7 @@ import { APP_VERSION } from "@/lib/version";
 import {
   Activity,
   BarChart2,
+  Bot,
   Zap,
   History,
   Database,
@@ -32,6 +33,7 @@ import {
 import type { ToggleTradingModeRequestMode } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AiChat } from "./AiChat";
+import { EliteSynthesisMonitor } from "./EliteSynthesisMonitor";
 
 const NAV_ITEMS = [
   { name: "Overview",         href: "/",          icon: Activity  },
@@ -208,6 +210,7 @@ function BalanceDisplay({ controls }: { controls: TradingControls }) {
 /* ─── Desktop: full labeled sidebar ─────────────────────────────────────── */
 function DesktopLayout({ children, location, tradingControls }: { children: React.ReactNode; location: string; tradingControls: TradingControls }) {
   const { mode, isLive, isPaper, isActive, modeColor, modeDot, logoAccent, sidebarBorder } = useModeInfo();
+  const [chatOpen, setChatOpen] = useState(false);
 
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
@@ -229,6 +232,8 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
             </div>
           </div>
         </div>
+
+        <EliteSynthesisMonitor variant="sidebar" />
 
         <div className="px-4 py-3 border-b border-border/40 space-y-2.5">
           <div className="flex items-center justify-between">
@@ -265,6 +270,21 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
           })}
         </nav>
 
+        <div className="px-3 pb-3">
+          <button
+            type="button"
+            onClick={() => setChatOpen((value) => !value)}
+            className={cn(
+              "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 group relative",
+              chatOpen ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+            )}
+          >
+            {chatOpen && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-primary rounded-r-full" />}
+            <Bot className={cn("w-4 h-4 flex-shrink-0", chatOpen ? "text-primary" : "text-muted-foreground group-hover:text-foreground")} />
+            <span>Chat</span>
+          </button>
+        </div>
+
         <div className="px-4 py-3 border-t border-border/40">
           <p className="text-[10px] text-muted-foreground/50 font-mono">v{APP_VERSION}</p>
         </div>
@@ -274,6 +294,12 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
         <TradingBanner isLive={isLive} isPaper={isPaper} />
         <div className="flex-1 overflow-y-auto p-6 md:p-8 relative bg-background">{children}</div>
       </main>
+      <AiChat
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        hideTrigger
+        panelClassName="left-[252px] right-auto bottom-6 md:bottom-6"
+      />
     </div>
   );
 }
@@ -281,6 +307,7 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
 
 /* ─── Tablet: icon rail + top bar ───────────────────────────────────────── */
 function TabletLayout({ children, location, tradingControls }: { children: React.ReactNode; location: string; tradingControls: TradingControls }) {
+  const [chatOpen, setChatOpen] = useState(false);
   const { isLive, isPaper, isScanning, isActive, modeColor, modeDot, logoAccent, sidebarBorder } = useModeInfo();
 
   const modeLabel  = isLive ? "LIVE" : isPaper ? "PAPER" : isScanning ? "SCANNING" : isActive ? "ON" : "IDLE";
@@ -321,6 +348,17 @@ function TabletLayout({ children, location, tradingControls }: { children: React
 
         <div className="flex items-center gap-2 mr-3 shrink-0">
           <ModeToggleButtons compact controls={tradingControls} />
+          <button
+            type="button"
+            onClick={() => setChatOpen((value) => !value)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-semibold transition-colors",
+              chatOpen ? "border-primary/40 bg-primary/15 text-primary" : "border-border/50 text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Bot className="w-3.5 h-3.5" />
+            Chat
+          </button>
         </div>
 
         <div className="border-l border-border/50 px-4 py-2 text-right shrink-0">
@@ -370,6 +408,12 @@ function TabletLayout({ children, location, tradingControls }: { children: React
           <div className="flex-1 overflow-y-auto p-5 relative bg-background">{children}</div>
         </main>
       </div>
+      <AiChat
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        hideTrigger
+        panelClassName="left-[84px] right-auto bottom-6 md:bottom-6"
+      />
     </div>
   );
 }
@@ -378,6 +422,7 @@ function TabletLayout({ children, location, tradingControls }: { children: React
 /* ─── Mobile: header + bottom tabs ──────────────────────────────────────── */
 function MobileLayout({ children, location, tradingControls }: { children: React.ReactNode; location: string; tradingControls: TradingControls }) {
   const [showMore, setShowMore] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const { isLive, isPaper, isScanning, isActive, logoAccent, sidebarBorder, modeDot } = useModeInfo();
 
   const modeLabel = isLive ? "LIVE" : isPaper ? "PAPER" : isScanning ? "SCANNING" : isActive ? "ON" : "IDLE";
@@ -458,6 +503,17 @@ function MobileLayout({ children, location, tradingControls }: { children: React
                 </Link>
               );
             })}
+            <button
+              type="button"
+              onClick={() => {
+                setChatOpen(true);
+                setShowMore(false);
+              }}
+              className="flex items-center gap-4 w-full px-5 py-3.5 text-left text-foreground hover:bg-muted/30"
+            >
+              <Bot className="w-5 h-5 text-muted-foreground" />
+              <span className="text-[15px] font-medium">Chat</span>
+            </button>
             <div className="h-4" />
           </div>
         </>
@@ -497,6 +553,12 @@ function MobileLayout({ children, location, tradingControls }: { children: React
           </span>
         </button>
       </nav>
+      <AiChat
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        hideTrigger
+        panelClassName="right-3 left-3 w-auto bottom-[72px] md:bottom-24"
+      />
     </div>
   );
 }
@@ -532,10 +594,5 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       ? <TabletLayout location={location} tradingControls={tradingControls}>{children}</TabletLayout>
       : <DesktopLayout location={location} tradingControls={tradingControls}>{children}</DesktopLayout>;
 
-  return (
-    <>
-      {layout}
-      <AiChat />
-    </>
-  );
+  return layout;
 }

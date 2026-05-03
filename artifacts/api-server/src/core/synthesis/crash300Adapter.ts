@@ -30,9 +30,18 @@ import type {
   EliteSynthesisFeatureSummary,
   EliteSynthesisParams,
   EliteSynthesisPolicyArtifact,
+  EliteSynthesisStage,
 } from "./types.js";
 
 const SYMBOL = "CRASH300";
+const MAX_CONTROL_SAMPLES = 60;
+const LOOP_YIELD_INTERVAL = 24;
+
+type DatasetBuildProgress = {
+  stage: EliteSynthesisStage;
+  progressPct: number;
+  message: string;
+};
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -55,6 +64,12 @@ function percentile(values: number[], p: number): number {
 function average(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+async function yieldToEventLoop() {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 function objectiveFromMetrics(params: {
@@ -233,30 +248,273 @@ async function loadPersistedBacktestRun(runId: number | null) {
   };
 }
 
+async function emitDatasetBuildProgress(
+  cb: ((update: DatasetBuildProgress) => Promise<void> | void) | undefined,
+  update: DatasetBuildProgress,
+) {
+  if (!cb) return;
+  await cb(update);
+}
+
+async function buildPhaseReport(params: { startTs: number; endTs: number }) {
+  return buildCrash300PhaseIdentifierReport({
+    startTs: params.startTs,
+    endTs: params.endTs,
+    includeMoves: true,
+    includeAggregates: true,
+  });
+}
+
+async function mapMovesToSynthesisRecords(params: {
+  rows: Array<Record<string, unknown>>;
+  runtimeModel: PromotedSymbolRuntimeModel;
+  candles: CandleRow[];
+  phaseMoves: Array<Record<string, unknown>>;
+  onProgress?: (update: DatasetBuildProgress) => Promise<void> | void;
+}): Promise<SynthesisMoveRecord[]> {
+  const { rows, runtimeModel, candles, phaseMoves, onProgress } = params;
+  const candleByCloseTs = new Map<number, number>();
+  candles.forEach((candle, index) => candleByCloseTs.set(candle.closeTs, index));
+  const phaseByMoveId = new Map<number, Record<string, unknown>>(
+    phaseMoves.map((row) => [Number(row.moveId ?? 0), row]),
+  );
+  const detectedMoves = rows.map((row) => ({
+    id: Number(row.id ?? 0),
+    startTs: Number(row.startTs ?? 0),
+    endTs: Number(row.endTs ?? 0),
+    direction: inferMoveDirection(row.direction),
+    movePct: Number(row.movePct ?? 0),
+  }));
+
+  const mapped: SynthesisMoveRecord[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    const move = rows[index] ?? {};
+    const phase = phaseByMoveId.get(Number(move.id ?? 0)) ?? {};
+    const startIndex = candleByCloseTs.get(Number(move.startTs ?? 0)) ?? candleByCloseTs.get(Number(move.endTs ?? 0)) ?? -1;
+    const slice = startIndex > 240 ? candles.slice(startIndex - 240, startIndex + 1) : candles.slice(0, Math.max(0, startIndex) + 1);
+    const ts = slice[slice.length - 1]?.closeTs ?? Number(move.startTs ?? 0);
+    const built = slice.length > 10
+      ? buildFeatureVectorFromContextTrigger({
+          candles: slice,
+          ts,
+          runtimeModel,
+          detectedMoves,
+        })
+      : null;
+    mapped.push({
+      kind: "calibrated_move",
+      moveId: Number(move.id ?? 0),
+      startTs: Number(move.startTs ?? 0),
+      endTs: Number(move.endTs ?? 0),
+      direction: inferMoveDirection(move.direction),
+      movePct: Number(move.movePct ?? 0),
+      qualityTier: String(move.qualityTier ?? "unknown"),
+      calibratedBaseFamily: "crash_expansion",
+      calibratedMoveSizeBucket: bucketLabelFromPct(Number(move.movePct ?? 0)),
+      phaseDerivedFamily: String(phase.phaseDerivedFamilyFinal ?? phase.phaseDerivedFamily ?? "unknown"),
+      phaseDerivedBucket: String(phase.phaseDerivedBucket ?? "unknown"),
+      earliestValidLiveSafeTriggerOffset: (phase.trigger as Record<string, unknown> | undefined)?.firstValidTriggerOffset == null ? null : `T${Number((phase.trigger as Record<string, unknown>).firstValidTriggerOffset) >= 0 ? "+" : ""}${Number((phase.trigger as Record<string, unknown>).firstValidTriggerOffset)}`,
+      bestTheoreticalLiveSafeTriggerOffset: (phase.trigger as Record<string, unknown> | undefined)?.strongestTriggerOffset == null ? null : `T${Number((phase.trigger as Record<string, unknown>).strongestTriggerOffset) >= 0 ? "+" : ""}${Number((phase.trigger as Record<string, unknown>).strongestTriggerOffset)}`,
+      normalMaeBeforeSuccess: asNumber((phase.during as Record<string, unknown> | undefined)?.maePct, 0),
+      realisticMfeAfterEntry: asNumber((phase.during as Record<string, unknown> | undefined)?.mfePct, 0),
+      barsToMfe: asNumber((phase.during as Record<string, unknown> | undefined)?.barsToMfe, 0),
+      pullbackAfterMfe: asNumber((phase.after as Record<string, unknown> | undefined)?.pullbackPct, 0),
+      liveSafeFeatures: built?.liveSafeFeatures ?? {},
+      triggerOffsets: Array.isArray((phase.trigger as Record<string, unknown> | undefined)?.snapshots)
+        ? (((phase.trigger as Record<string, unknown>).snapshots as unknown[]) as Array<Record<string, unknown>>)
+        : [],
+    });
+
+    if ((index + 1) % LOOP_YIELD_INTERVAL === 0) {
+      await emitDatasetBuildProgress(onProgress, {
+        stage: "building_dataset",
+        progressPct: 14,
+        message: `Mapped ${index + 1}/${rows.length} calibrated moves into synthesis records`,
+      });
+      await yieldToEventLoop();
+    }
+  }
+  return mapped;
+}
+
+function buildTradeRecordsFromRun(params: {
+  run: { id: number; result: Record<string, unknown> };
+  reconciliation: Record<string, unknown> | null;
+}): SynthesisTradeRecord[] {
+  const reconTrades = Array.isArray((params.reconciliation as Record<string, unknown> | null)?.trades)
+    ? ((params.reconciliation as Record<string, unknown>).trades as Array<Record<string, unknown>>)
+    : [];
+  const reconByTradeId = new Map<string, Record<string, unknown>>(reconTrades.map((trade) => [String(trade.tradeId), trade]));
+  const trades = Array.isArray(params.run.result.trades) ? (params.run.result.trades as Array<Record<string, unknown>>) : [];
+  return trades.map((trade, idx) => {
+    const tradeId = String(trade.tradeId ?? `${params.run.id}-${idx + 1}`);
+    const recon = reconByTradeId.get(tradeId) ?? {};
+    return {
+      kind: "runtime_trade",
+      tradeId,
+      entryTs: asNumber(trade.entryTs),
+      exitTs: trade.exitTs == null ? null : asNumber(trade.exitTs),
+      direction: String(trade.direction ?? "buy") === "sell" ? "sell" : "buy",
+      runtimeFamily: trade.runtimeFamily == null ? null : String(trade.runtimeFamily),
+      selectedBucket: trade.selectedBucket == null ? null : String(trade.selectedBucket),
+      triggerTransition: trade.triggerTransition == null ? null : String(trade.triggerTransition),
+      setupMatch: trade.setupMatch == null ? null : asNumber(trade.setupMatch),
+      confidence: trade.confidence == null ? null : asNumber(trade.confidence),
+      triggerStrengthScore: trade.triggerStrengthScore == null ? null : asNumber(trade.triggerStrengthScore),
+      qualityTier: trade.qualityTier == null ? null : String(trade.qualityTier),
+      regimeAtEntry: trade.regimeAtEntry == null ? null : String(trade.regimeAtEntry),
+      contextAgeBars: trade.contextAgeBars == null ? null : asNumber(trade.contextAgeBars),
+      triggerAgeBars: trade.triggerAgeBars == null ? null : asNumber(trade.triggerAgeBars),
+      epochAgeBars: trade.epochAgeBars == null ? null : asNumber(trade.epochAgeBars),
+      projectedMovePct: trade.projectedMovePct == null ? null : asNumber(trade.projectedMovePct),
+      slPct: trade.slPct == null ? null : asNumber(trade.slPct),
+      trailingActivationPct: trade.trailingActivationPct == null ? null : asNumber(trade.trailingActivationPct),
+      trailingDistancePct: trade.trailingDistancePct == null ? null : asNumber(trade.trailingDistancePct),
+      pnlPct: asNumber(trade.pnlPct),
+      mfePct: trade.mfePct == null ? null : asNumber(trade.mfePct),
+      maePct: trade.maePct == null ? null : asNumber(trade.maePct),
+      exitReason: trade.exitReason == null ? null : String(trade.exitReason),
+      matchedMoveIdStrict: recon.matchedMoveId == null ? null : asNumber(recon.matchedMoveId),
+      strictRelationshipLabel: recon.relationToMove == null ? null : String(recon.relationToMove),
+      phantomNoiseLabel: Boolean(recon.wasNoiseTrade) ? "noise_trade" : null,
+      enteredTooEarly: String(recon.tradeOutcomeClassification ?? "") === "entered_too_early",
+      enteredTooLate: String(recon.tradeOutcomeClassification ?? "") === "entered_too_late",
+      targetUnrealisticForBucket: String(recon.tradeOutcomeClassification ?? "") === "target_unrealistic_for_bucket",
+      trailingTooEarly: String(recon.tradeOutcomeClassification ?? "") === "good_entry_trailing_too_early",
+      slTooTight: String(recon.tradeOutcomeClassification ?? "") === "good_entry_sl_too_tight",
+      liveSafeFeatures: {
+        runtimeFamily: trade.runtimeFamily == null ? null : String(trade.runtimeFamily),
+        selectedBucket: trade.selectedBucket == null ? null : String(trade.selectedBucket),
+        triggerTransition: trade.triggerTransition == null ? null : String(trade.triggerTransition),
+        triggerDirection: trade.direction == null ? null : String(trade.direction),
+        setupMatch: trade.setupMatch == null ? null : asNumber(trade.setupMatch),
+        confidence: trade.confidence == null ? null : asNumber(trade.confidence),
+        triggerStrengthScore: trade.triggerStrengthScore == null ? null : asNumber(trade.triggerStrengthScore),
+        qualityTier: trade.qualityTier == null ? null : String(trade.qualityTier),
+        regimeAtEntry: trade.regimeAtEntry == null ? null : String(trade.regimeAtEntry),
+        contextAgeBars: trade.contextAgeBars == null ? null : asNumber(trade.contextAgeBars),
+        triggerAgeBars: trade.triggerAgeBars == null ? null : asNumber(trade.triggerAgeBars),
+        epochAgeBars: trade.epochAgeBars == null ? null : asNumber(trade.epochAgeBars),
+        projectedMovePct: trade.projectedMovePct == null ? null : asNumber(trade.projectedMovePct),
+        slPct: trade.slPct == null ? null : asNumber(trade.slPct),
+        projectedMoveToSlRatio: trade.projectedMovePct != null && trade.slPct != null && asNumber(trade.slPct) > 0
+          ? asNumber(trade.projectedMovePct) / asNumber(trade.slPct)
+          : null,
+        projectedMoveToTrailingActivationRatio: trade.projectedMovePct != null && trade.trailingActivationPct != null && asNumber(trade.trailingActivationPct) > 0
+          ? asNumber(trade.projectedMovePct) / asNumber(trade.trailingActivationPct)
+          : null,
+      },
+    };
+  });
+}
+
 export async function buildUnifiedCrash300Dataset(params: {
   calibrationRunId: number | null;
   backtestRunId: number | null;
   startTs: number;
   endTs: number;
   windowDays: number;
+  onProgress?: (update: DatasetBuildProgress) => Promise<void> | void;
 }): Promise<UnifiedSynthesisDataset> {
   const adapter = new Crash300SynthesisAdapter();
-  const [moves, trades, phaseSnapshots, reconciliation, calibrationRuns, backtestRuns, runtimeModel, candles] = await Promise.all([
-    adapter.loadCalibratedMoves({ startTs: params.startTs, endTs: params.endTs }),
-    adapter.loadBacktestTrades(params.backtestRunId),
-    adapter.loadPhaseSnapshots({ windowDays: params.windowDays }),
-    adapter.loadCalibrationReconciliation(params.backtestRunId),
-    adapter.loadCalibrationRuns(),
-    adapter.loadBacktestRuns(),
-    adapter.loadRuntimeModel(),
-    loadWindowCandles(params.startTs, params.endTs),
-  ]);
-
+  await emitDatasetBuildProgress(params.onProgress, {
+    stage: "loading_data",
+    progressPct: 3,
+    message: "Loading CRASH300 runtime model",
+  });
   const runtimeEnvelope = await loadCrash300RuntimeEnvelope();
   const promoted = runtimeEnvelope.promotedModel;
   if (!promoted) {
     throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
   }
+  await yieldToEventLoop();
+
+  await emitDatasetBuildProgress(params.onProgress, {
+    stage: "loading_data",
+    progressPct: 4,
+    message: "Loading persisted CRASH300 backtest run",
+  });
+  const persistedRun = await loadPersistedBacktestRun(params.backtestRunId);
+  await yieldToEventLoop();
+
+  await emitDatasetBuildProgress(params.onProgress, {
+    stage: "building_dataset",
+    progressPct: 6,
+    message: "Loading 1m candle window once for synthesis dataset",
+  });
+  const candles = await loadWindowCandles(params.startTs - 240 * 60, params.endTs + 10 * 60);
+  await yieldToEventLoop();
+
+  await emitDatasetBuildProgress(params.onProgress, {
+    stage: "building_dataset",
+    progressPct: 8,
+    message: "Loading calibrated move rows",
+  });
+  const moveRows = await db
+    .select()
+    .from(detectedMovesTable)
+    .where(and(
+      eq(detectedMovesTable.symbol, SYMBOL),
+      between(detectedMovesTable.startTs, params.startTs, params.endTs),
+    ))
+    .orderBy(asc(detectedMovesTable.startTs));
+  await yieldToEventLoop();
+
+  await emitDatasetBuildProgress(params.onProgress, {
+    stage: "building_dataset",
+    progressPct: 10,
+    message: "Building CRASH300 phase identifier report once for synthesis",
+  });
+  const phaseReport = await buildPhaseReport({
+    startTs: params.startTs,
+    endTs: params.endTs,
+  });
+  const phaseSnapshots = ((phaseReport.moves ?? []) as unknown as Array<Record<string, unknown>>) ?? [];
+  await yieldToEventLoop();
+
+  const moves = await mapMovesToSynthesisRecords({
+    rows: moveRows as unknown as Array<Record<string, unknown>>,
+    runtimeModel: promoted,
+    candles,
+    phaseMoves: phaseSnapshots,
+    onProgress: params.onProgress,
+  });
+  await yieldToEventLoop();
+
+  await emitDatasetBuildProgress(params.onProgress, {
+    stage: "building_dataset",
+    progressPct: 15,
+    message: "Building calibration reconciliation once for trade linkage",
+  });
+  const reconciliation = await buildCrash300CalibrationReconciliationReport({
+    runId: persistedRun.id,
+    createdAt: persistedRun.createdAt,
+    result: persistedRun.result as unknown as Parameters<typeof buildCrash300CalibrationReconciliationReport>[0]["result"],
+  });
+  await yieldToEventLoop();
+
+  await emitDatasetBuildProgress(params.onProgress, {
+    stage: "building_dataset",
+    progressPct: 17,
+    message: "Mapping runtime trades into synthesis records",
+  });
+  const trades = buildTradeRecordsFromRun({
+    run: persistedRun,
+    reconciliation,
+  });
+  await yieldToEventLoop();
+
+  await emitDatasetBuildProgress(params.onProgress, {
+    stage: "building_dataset",
+    progressPct: 18,
+    message: "Loading run summaries for dataset provenance",
+  });
+  const [calibrationRuns, backtestRuns] = await Promise.all([
+    adapter.loadCalibrationRuns(),
+    adapter.loadBacktestRuns(),
+  ]);
+  await yieldToEventLoop();
+
   const detectedMoveRefs = moves.map((move) => ({
     id: move.moveId,
     startTs: move.startTs,
@@ -273,9 +531,11 @@ export async function buildUnifiedCrash300Dataset(params: {
     const ts = candles[i]?.closeTs ?? 0;
     const nearMove = moveRanges.some((range) => ts >= range.startTs && ts <= range.endTs);
     if (!nearMove) controlIndices.push(i);
-    if (controlIndices.length >= 60) break;
+    if (controlIndices.length >= MAX_CONTROL_SAMPLES) break;
   }
-  const controls: SynthesisControlRecord[] = controlIndices.map((index, idx) => {
+  const controls: SynthesisControlRecord[] = [];
+  for (let idx = 0; idx < controlIndices.length; idx += 1) {
+    const index = controlIndices[idx] ?? 0;
     const slice = candles.slice(Math.max(0, index - 240), index + 1);
     const ts = slice[slice.length - 1]?.closeTs ?? 0;
     const built = buildFeatureVectorFromContextTrigger({
@@ -284,14 +544,22 @@ export async function buildUnifiedCrash300Dataset(params: {
       runtimeModel: promoted,
       detectedMoves: detectedMoveRefs,
     });
-    return {
+    controls.push({
       kind: "non_move_control",
       controlId: `control-${idx + 1}-${ts}`,
       ts,
       label: "non_move_control",
       liveSafeFeatures: built.liveSafeFeatures,
-    };
-  });
+    });
+    if ((idx + 1) % LOOP_YIELD_INTERVAL === 0) {
+      await emitDatasetBuildProgress(params.onProgress, {
+        stage: "building_dataset",
+        progressPct: 19,
+        message: `Built ${idx + 1}/${controlIndices.length} non-move control samples`,
+      });
+      await yieldToEventLoop();
+    }
+  }
 
   return {
     serviceId: SYMBOL,
@@ -300,7 +568,7 @@ export async function buildUnifiedCrash300Dataset(params: {
     sourceRunIds: {
       calibrationRunId: params.calibrationRunId ?? null,
       backtestRunId: params.backtestRunId ?? (backtestRuns[0] ? Number(backtestRuns[0].id ?? 0) : null),
-      runtimeModelRunId: Number((runtimeModel.sourceRunId as number | undefined) ?? 0) || null,
+      runtimeModelRunId: Number((promoted.sourceRunId as number | undefined) ?? 0) || null,
       phaseReportRunId: Number((phaseSnapshots[0]?.phaseReportRunId as number | undefined) ?? 0) || null,
     },
     moves,
@@ -360,61 +628,16 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
       throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
     }
     const candles = await loadWindowCandles(params.startTs - 240 * 60, params.endTs + 10 * 60);
-    const candleByCloseTs = new Map<number, number>();
-    candles.forEach((candle, index) => candleByCloseTs.set(candle.closeTs, index));
-    const phaseReport = await buildCrash300PhaseIdentifierReport({
+    const phaseReport = await buildPhaseReport({
       startTs: params.startTs,
       endTs: params.endTs,
-      includeMoves: true,
-      includeAggregates: false,
     });
     const phaseMoves = ((phaseReport.moves ?? []) as unknown as Array<Record<string, unknown>>) ?? [];
-    const phaseByMoveId = new Map<number, Record<string, unknown>>(
-      phaseMoves.map((row) => [Number(row.moveId ?? 0), row]),
-    );
-    return rows.map((move) => {
-      const phase = phaseByMoveId.get(Number(move.id)) ?? {};
-      const startIndex = candleByCloseTs.get(Number(move.startTs)) ?? candleByCloseTs.get(Number(move.endTs)) ?? -1;
-      const slice = startIndex > 240 ? candles.slice(startIndex - 240, startIndex + 1) : candles.slice(0, Math.max(0, startIndex) + 1);
-      const ts = slice[slice.length - 1]?.closeTs ?? Number(move.startTs);
-      const detectedMoves = rows.map((row) => ({
-        id: Number(row.id),
-        startTs: Number(row.startTs),
-        endTs: Number(row.endTs),
-        direction: inferMoveDirection(row.direction),
-        movePct: Number(row.movePct),
-      }));
-      const built = slice.length > 10
-        ? buildFeatureVectorFromContextTrigger({
-            candles: slice,
-            ts,
-            runtimeModel: runtimeEnvelope.promotedModel!,
-            detectedMoves,
-          })
-        : null;
-      return {
-        kind: "calibrated_move",
-        moveId: Number(move.id),
-        startTs: Number(move.startTs),
-        endTs: Number(move.endTs),
-        direction: inferMoveDirection(move.direction),
-        movePct: Number(move.movePct),
-        qualityTier: String(move.qualityTier ?? "unknown"),
-        calibratedBaseFamily: "crash_expansion",
-        calibratedMoveSizeBucket: this.deriveMoveSizeBucket(Number(move.movePct)),
-        phaseDerivedFamily: String(phase.phaseDerivedFamilyFinal ?? phase.phaseDerivedFamily ?? "unknown"),
-        phaseDerivedBucket: String(phase.phaseDerivedBucket ?? "unknown"),
-        earliestValidLiveSafeTriggerOffset: (phase.trigger as Record<string, unknown> | undefined)?.firstValidTriggerOffset == null ? null : `T${Number((phase.trigger as Record<string, unknown>).firstValidTriggerOffset) >= 0 ? "+" : ""}${Number((phase.trigger as Record<string, unknown>).firstValidTriggerOffset)}`,
-        bestTheoreticalLiveSafeTriggerOffset: (phase.trigger as Record<string, unknown> | undefined)?.strongestTriggerOffset == null ? null : `T${Number((phase.trigger as Record<string, unknown>).strongestTriggerOffset) >= 0 ? "+" : ""}${Number((phase.trigger as Record<string, unknown>).strongestTriggerOffset)}`,
-        normalMaeBeforeSuccess: asNumber((phase.during as Record<string, unknown> | undefined)?.maePct, 0),
-        realisticMfeAfterEntry: asNumber((phase.during as Record<string, unknown> | undefined)?.mfePct, 0),
-        barsToMfe: asNumber((phase.during as Record<string, unknown> | undefined)?.barsToMfe, 0),
-        pullbackAfterMfe: asNumber((phase.after as Record<string, unknown> | undefined)?.pullbackPct, 0),
-        liveSafeFeatures: built?.liveSafeFeatures ?? {},
-        triggerOffsets: Array.isArray((phase.trigger as Record<string, unknown> | undefined)?.snapshots)
-          ? (((phase.trigger as Record<string, unknown>).snapshots as unknown[]) as Array<Record<string, unknown>>)
-          : [],
-      } satisfies SynthesisMoveRecord;
+    return mapMovesToSynthesisRecords({
+      rows: rows as unknown as Array<Record<string, unknown>>,
+      runtimeModel: runtimeEnvelope.promotedModel,
+      candles,
+      phaseMoves,
     });
   }
 
@@ -440,80 +663,17 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
   async loadBacktestTrades(backtestRunId: number | null): Promise<SynthesisTradeRecord[]> {
     const run = await loadPersistedBacktestRun(backtestRunId);
     const reconciliation = await this.loadCalibrationReconciliation(run.id);
-    const reconTrades = Array.isArray((reconciliation as Record<string, unknown> | null)?.trades)
-      ? ((reconciliation as Record<string, unknown>).trades as Array<Record<string, unknown>>)
-      : [];
-    const reconByTradeId = new Map<string, Record<string, unknown>>(reconTrades.map((trade) => [String(trade.tradeId), trade]));
-    const trades = Array.isArray(run.result.trades) ? (run.result.trades as Array<Record<string, unknown>>) : [];
-    return trades.map((trade, idx) => {
-      const tradeId = String(trade.tradeId ?? `${run.id}-${idx + 1}`);
-      const recon = reconByTradeId.get(tradeId) ?? {};
-      return {
-        kind: "runtime_trade",
-        tradeId,
-        entryTs: asNumber(trade.entryTs),
-        exitTs: trade.exitTs == null ? null : asNumber(trade.exitTs),
-        direction: String(trade.direction ?? "buy") === "sell" ? "sell" : "buy",
-        runtimeFamily: trade.runtimeFamily == null ? null : String(trade.runtimeFamily),
-        selectedBucket: trade.selectedBucket == null ? null : String(trade.selectedBucket),
-        triggerTransition: trade.triggerTransition == null ? null : String(trade.triggerTransition),
-        setupMatch: trade.setupMatch == null ? null : asNumber(trade.setupMatch),
-        confidence: trade.confidence == null ? null : asNumber(trade.confidence),
-        triggerStrengthScore: trade.triggerStrengthScore == null ? null : asNumber(trade.triggerStrengthScore),
-        qualityTier: trade.qualityTier == null ? null : String(trade.qualityTier),
-        regimeAtEntry: trade.regimeAtEntry == null ? null : String(trade.regimeAtEntry),
-        contextAgeBars: trade.contextAgeBars == null ? null : asNumber(trade.contextAgeBars),
-        triggerAgeBars: trade.triggerAgeBars == null ? null : asNumber(trade.triggerAgeBars),
-        epochAgeBars: trade.epochAgeBars == null ? null : asNumber(trade.epochAgeBars),
-        projectedMovePct: trade.projectedMovePct == null ? null : asNumber(trade.projectedMovePct),
-        slPct: trade.slPct == null ? null : asNumber(trade.slPct),
-        trailingActivationPct: trade.trailingActivationPct == null ? null : asNumber(trade.trailingActivationPct),
-        trailingDistancePct: trade.trailingDistancePct == null ? null : asNumber(trade.trailingDistancePct),
-        pnlPct: asNumber(trade.pnlPct),
-        mfePct: trade.mfePct == null ? null : asNumber(trade.mfePct),
-        maePct: trade.maePct == null ? null : asNumber(trade.maePct),
-        exitReason: trade.exitReason == null ? null : String(trade.exitReason),
-        matchedMoveIdStrict: recon.matchedMoveId == null ? null : asNumber(recon.matchedMoveId),
-        strictRelationshipLabel: recon.relationToMove == null ? null : String(recon.relationToMove),
-        phantomNoiseLabel: Boolean(recon.wasNoiseTrade) ? "noise_trade" : null,
-        enteredTooEarly: String(recon.tradeOutcomeClassification ?? "") === "entered_too_early",
-        enteredTooLate: String(recon.tradeOutcomeClassification ?? "") === "entered_too_late",
-        targetUnrealisticForBucket: String(recon.tradeOutcomeClassification ?? "") === "target_unrealistic_for_bucket",
-        trailingTooEarly: String(recon.tradeOutcomeClassification ?? "") === "good_entry_trailing_too_early",
-        slTooTight: String(recon.tradeOutcomeClassification ?? "") === "good_entry_sl_too_tight",
-        liveSafeFeatures: {
-          runtimeFamily: trade.runtimeFamily == null ? null : String(trade.runtimeFamily),
-          selectedBucket: trade.selectedBucket == null ? null : String(trade.selectedBucket),
-          triggerTransition: trade.triggerTransition == null ? null : String(trade.triggerTransition),
-          triggerDirection: trade.direction == null ? null : String(trade.direction),
-          setupMatch: trade.setupMatch == null ? null : asNumber(trade.setupMatch),
-          confidence: trade.confidence == null ? null : asNumber(trade.confidence),
-          triggerStrengthScore: trade.triggerStrengthScore == null ? null : asNumber(trade.triggerStrengthScore),
-          qualityTier: trade.qualityTier == null ? null : String(trade.qualityTier),
-          regimeAtEntry: trade.regimeAtEntry == null ? null : String(trade.regimeAtEntry),
-          contextAgeBars: trade.contextAgeBars == null ? null : asNumber(trade.contextAgeBars),
-          triggerAgeBars: trade.triggerAgeBars == null ? null : asNumber(trade.triggerAgeBars),
-          epochAgeBars: trade.epochAgeBars == null ? null : asNumber(trade.epochAgeBars),
-          projectedMovePct: trade.projectedMovePct == null ? null : asNumber(trade.projectedMovePct),
-          slPct: trade.slPct == null ? null : asNumber(trade.slPct),
-          projectedMoveToSlRatio: trade.projectedMovePct != null && trade.slPct != null && asNumber(trade.slPct) > 0
-            ? asNumber(trade.projectedMovePct) / asNumber(trade.slPct)
-            : null,
-          projectedMoveToTrailingActivationRatio: trade.projectedMovePct != null && trade.trailingActivationPct != null && asNumber(trade.trailingActivationPct) > 0
-            ? asNumber(trade.projectedMovePct) / asNumber(trade.trailingActivationPct)
-            : null,
-        },
-      };
+    return buildTradeRecordsFromRun({
+      run,
+      reconciliation,
     });
   }
 
   async loadPhaseSnapshots(params: { windowDays: number }) {
     const now = Math.floor(Date.now() / 1000);
-    const report = await buildCrash300PhaseIdentifierReport({
+    const report = await buildPhaseReport({
       startTs: now - params.windowDays * 86400,
       endTs: now,
-      includeMoves: true,
-      includeAggregates: true,
     });
     return ((report.moves ?? []) as unknown as Array<Record<string, unknown>>) ?? [];
   }

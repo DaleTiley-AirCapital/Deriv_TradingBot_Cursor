@@ -15,7 +15,6 @@ import DataManager from "@/pages/data";
 import Settings from "@/pages/settings";
 import Help from "@/pages/help";
 import Diagnostics from "@/pages/diagnostics";
-import { EliteSynthesisMonitor } from "@/components/EliteSynthesisMonitor";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -103,7 +102,6 @@ function App() {
             <Router />
           </SetupGate>
         </WouterRouter>
-        <EliteSynthesisMonitor />
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>

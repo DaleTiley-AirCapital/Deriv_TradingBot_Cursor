@@ -17,8 +17,28 @@ import type {
 } from "./types.js";
 import { profileDefaults } from "./types.js";
 
+const eliteSynthesisQueue: Array<{
+  jobId: number;
+  serviceId: string;
+  request: EliteSynthesisParams;
+}> = [];
+const queuedJobIds = new Set<number>();
+let activeEliteSynthesisJobId: number | null = null;
+let drainingEliteSynthesisQueue = false;
+
 function nowIso() {
   return new Date().toISOString();
+}
+
+async function yieldToEventLoop() {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+async function claimQueuedEliteSynthesisJob(jobId: number): Promise<boolean> {
+  const job = await getEliteSynthesisJob(jobId);
+  return Boolean(job && job.status === "queued");
 }
 
 function uniqueStrings(values: Array<string | null | undefined>) {
@@ -271,9 +291,78 @@ function targetAchieved(policy: EliteSynthesisPolicySummary | null) {
   );
 }
 
+async function markEliteSynthesisJobFailed(jobId: number, error: unknown) {
+  await updateEliteSynthesisJob(jobId, {
+    status: "failed",
+    stage: "failed",
+    progressPct: 100,
+    message: error instanceof Error ? error.message : "Integrated elite synthesis failed",
+    heartbeatAt: nowIso(),
+    completedAt: nowIso(),
+    errorSummary: {
+      message: error instanceof Error ? error.message : String(error),
+    },
+  });
+}
+
 export function getSynthesisAdapter(serviceId: string): SymbolSynthesisAdapter {
   if (serviceId === "CRASH300") return new Crash300SynthesisAdapter();
   throw new Error(`Elite synthesis adapter missing for service ${serviceId}.`);
+}
+
+async function drainEliteSynthesisQueue(): Promise<void> {
+  if (drainingEliteSynthesisQueue || activeEliteSynthesisJobId != null) return;
+  drainingEliteSynthesisQueue = true;
+  try {
+    while (activeEliteSynthesisJobId == null && eliteSynthesisQueue.length > 0) {
+      const next = eliteSynthesisQueue.shift();
+      if (!next) break;
+      queuedJobIds.delete(next.jobId);
+      const canRun = await claimQueuedEliteSynthesisJob(next.jobId);
+      if (!canRun) {
+        continue;
+      }
+      activeEliteSynthesisJobId = next.jobId;
+      setTimeout(() => {
+        void runEliteSynthesisJob(next)
+          .catch(async (error) => {
+            console.error(`[elite-synthesis] job ${next.jobId} failed:`, error instanceof Error ? error.message : error);
+            await markEliteSynthesisJobFailed(next.jobId, error);
+          })
+          .finally(() => {
+            activeEliteSynthesisJobId = null;
+            setTimeout(() => {
+              void drainEliteSynthesisQueue();
+            }, 0);
+          });
+      }, 0);
+      break;
+    }
+  } finally {
+    drainingEliteSynthesisQueue = false;
+  }
+}
+
+export async function scheduleEliteSynthesisJob(params: {
+  jobId: number;
+  serviceId: string;
+  request: EliteSynthesisParams;
+}): Promise<void> {
+  if (queuedJobIds.has(params.jobId) || activeEliteSynthesisJobId === params.jobId) return;
+  queuedJobIds.add(params.jobId);
+  eliteSynthesisQueue.push(params);
+  await updateEliteSynthesisJob(params.jobId, {
+    status: "queued",
+    stage: "queued",
+    progressPct: 0,
+    message: activeEliteSynthesisJobId == null
+      ? "Queued for integrated elite synthesis"
+      : `Queued behind running synthesis job #${activeEliteSynthesisJobId}`,
+    heartbeatAt: nowIso(),
+  });
+  setTimeout(() => {
+    void drainEliteSynthesisQueue();
+  }, 0);
 }
 
 export async function runEliteSynthesisJob(params: {
@@ -303,6 +392,7 @@ export async function runEliteSynthesisJob(params: {
     heartbeatAt: nowIso(),
     startedAt: nowIso(),
   });
+  await yieldToEventLoop();
 
   const dataset = await buildUnifiedCrash300Dataset({
     calibrationRunId: params.request.calibrationRunId ?? null,
@@ -310,22 +400,32 @@ export async function runEliteSynthesisJob(params: {
     startTs: effectiveStartTs,
     endTs: effectiveEndTs,
     windowDays: effectiveWindowDays,
+    onProgress: async (update) => {
+      await updateEliteSynthesisJob(params.jobId, {
+        stage: update.stage,
+        progressPct: update.progressPct,
+        message: update.message,
+        heartbeatAt: nowIso(),
+      });
+    },
   });
   await updateEliteSynthesisJob(params.jobId, {
     stage: "building_dataset",
-    progressPct: 10,
+    progressPct: 20,
     message: `Built unified dataset with ${dataset.moves.length} calibrated moves, ${dataset.trades.length} runtime trades, and ${dataset.controls.length} controls`,
     heartbeatAt: nowIso(),
     resultSummary: { datasetSummary: dataset.summary },
   });
+  await yieldToEventLoop();
 
   const features = featureSummaryFromDataset(dataset);
   await updateEliteSynthesisJob(params.jobId, {
     stage: "feature_elimination",
-    progressPct: 18,
+    progressPct: 26,
     message: `Computed live-safe feature separability for ${features.length} features`,
     heartbeatAt: nowIso(),
   });
+  await yieldToEventLoop();
 
   let passLog: EliteSynthesisPassLog[] = [];
   let bestPolicySummary: EliteSynthesisPolicySummary | null = null;
@@ -339,7 +439,7 @@ export async function runEliteSynthesisJob(params: {
   let policySeeds = generateInitialPolicies(dataset, features);
   await updateEliteSynthesisJob(params.jobId, {
     stage: "evaluating_current_pool",
-    progressPct: 24,
+    progressPct: 32,
     message: `Evaluating ${policySeeds.length} policies from the current runtime candidate pool`,
     heartbeatAt: nowIso(),
     bestSummary: bestSummaryFromPolicy(bestPolicySummary, evaluatedPolicyCount, policySeeds.length),
@@ -400,7 +500,7 @@ export async function runEliteSynthesisJob(params: {
       policySeeds = generatePoliciesFromTriggerRebuild(dataset, rebuilt, features);
       await updateEliteSynthesisJob(params.jobId, {
         stage: "generating_policies",
-        progressPct: 36,
+        progressPct: 42,
         currentPass: passNumber,
         message: `Generated ${policySeeds.length} policies from rebuilt trigger candidates`,
         heartbeatAt: nowIso(),
@@ -410,7 +510,7 @@ export async function runEliteSynthesisJob(params: {
 
     await updateEliteSynthesisJob(params.jobId, {
       stage: "evaluating_policies",
-      progressPct: Math.min(92, 36 + Math.round((passNumber / Math.max(1, maxPasses)) * 46)),
+      progressPct: Math.min(92, 42 + Math.round((passNumber / Math.max(1, maxPasses)) * 42)),
       currentPass: passNumber,
       message: `Evaluating policy pass ${passNumber}/${maxPasses}`,
       heartbeatAt: nowIso(),
@@ -419,7 +519,8 @@ export async function runEliteSynthesisJob(params: {
 
     let passBest: EliteSynthesisPolicySummary | null = null;
     let passBestArtifact: EliteSynthesisPolicyArtifact | null = null;
-    for (const seed of policySeeds) {
+    for (let seedIndex = 0; seedIndex < policySeeds.length; seedIndex += 1) {
+      const seed = policySeeds[seedIndex]!;
       const artifact = buildPolicyArtifact({
         adapter,
         dataset,
@@ -451,6 +552,17 @@ export async function runEliteSynthesisJob(params: {
         passBestArtifact = artifact;
       }
       topPolicies.push(evaluation);
+      if ((seedIndex + 1) % 4 === 0 || seedIndex === policySeeds.length - 1) {
+        await updateEliteSynthesisJob(params.jobId, {
+          stage: "evaluating_policies",
+          progressPct: Math.min(93, 42 + Math.round((passNumber / Math.max(1, maxPasses)) * 42)),
+          currentPass: passNumber,
+          message: `Evaluating policy pass ${passNumber}/${maxPasses} (${seedIndex + 1}/${policySeeds.length})`,
+          heartbeatAt: nowIso(),
+          bestSummary: bestSummaryFromPolicy(bestPolicySummary ?? passBest, evaluatedPolicyCount, policySeeds.length),
+        });
+        await yieldToEventLoop();
+      }
     }
 
     const improved = Boolean(passBest && (!bestPolicySummary || passBest.objectiveScore > bestPolicySummary.objectiveScore));
@@ -506,7 +618,7 @@ export async function runEliteSynthesisJob(params: {
       bottleneck = "current_runtime_pool_insufficient";
       await updateEliteSynthesisJob(params.jobId, {
         stage: "rebuilding_trigger_candidates",
-        progressPct: Math.min(70, 46 + Math.round((passNumber / Math.max(1, maxPasses)) * 18)),
+        progressPct: Math.min(78, 52 + Math.round((passNumber / Math.max(1, maxPasses)) * 18)),
         currentPass: passNumber,
         message: "Current runtime pool remains insufficient; rebuilding trigger candidates from calibrated move offsets",
         heartbeatAt: nowIso(),
@@ -536,7 +648,7 @@ export async function runEliteSynthesisJob(params: {
 
   await updateEliteSynthesisJob(params.jobId, {
     stage: "selecting_best",
-    progressPct: 96,
+    progressPct: 94,
     message: "Selecting best synthesis pass",
     heartbeatAt: nowIso(),
   });
