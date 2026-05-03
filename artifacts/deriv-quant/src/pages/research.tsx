@@ -934,14 +934,10 @@ function BacktestTab({
   domain,
   windowDays,
   lockedSymbol,
-  hideReportsActions = false,
-  onOpenReports,
 }: {
   domain: DomainId;
   windowDays: number;
   lockedSymbol?: string;
-  hideReportsActions?: boolean;
-  onOpenReports?: () => void;
 }) {
   const backtestSymbols = BACKTEST_ACTIVE_SYMBOLS;
 
@@ -954,7 +950,6 @@ function BacktestTab({
   );
   const [running, setRunning] = useState(false);
   const [sweeping, setSweeping] = useState(false);
-  const [showAdvancedBacktestOptions, setShowAdvancedBacktestOptions] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [results, setResults] = useState<Record<string, V3Result> | null>(null);
   const [tierSweep, setTierSweep] = useState<Record<BacktestTierMode, Record<string, V3Result>> | null>(null);
@@ -1436,86 +1431,8 @@ function BacktestTab({
           </div>
         </div>
 
-        <div className="rounded-lg border border-border/30 bg-muted/10 overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setShowAdvancedBacktestOptions((value) => !value)}
-            className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left"
-          >
-            <div>
-              <p className="text-xs font-semibold text-foreground">Advanced backtest options</p>
-              <p className="text-[11px] text-muted-foreground mt-1">
-                Diagnostics only. Integrated Elite Synthesis searches tiers, policies, triggers, buckets, entries, exits, and daily limits automatically.
-              </p>
-            </div>
-            {showAdvancedBacktestOptions ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-          </button>
-          {showAdvancedBacktestOptions && (
-            <div className="border-t border-border/20 px-3 py-3 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="text-[11px] text-muted-foreground">Tier mode</label>
-                  <select
-                    value={tierMode}
-                    onChange={e => setTierMode(e.target.value as BacktestTierMode)}
-                    className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-                  >
-                    {BACKTEST_TIER_MODES.map(mode => (
-                      <option key={mode.value} value={mode.value}>{mode.label}</option>
-                    ))}
-                  </select>
-                </div>
-                {symbol === "CRASH300" && (
-                  <div className="space-y-1">
-                    <label className="text-[11px] text-muted-foreground">Admission policy preset</label>
-                    <select
-                      value={admissionPolicyPreset}
-                      onChange={(e) => setAdmissionPolicyPresetValue(e.target.value as Crash300AdmissionPolicyPreset)}
-                      className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50"
-                    >
-                      {CRASH300_ADMISSION_POLICY_PRESETS.map((preset) => (
-                        <option key={preset.value} value={preset.value}>{preset.label}</option>
-                      ))}
-                      <option value="custom">Custom</option>
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              {symbol === "CRASH300" && (
-                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3">
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-                    <span>Enabled: <span className="text-foreground">{String(admissionPolicyConfig.enabled)}</span></span>
-                    <span>Mode: <span className="text-foreground">{admissionPolicyConfig.mode}</span></span>
-                    <span>Preset: <span className="text-foreground">{admissionPolicyPreset === "custom" ? "Custom" : CRASH300_ADMISSION_POLICY_PRESETS.find((preset) => preset.value === admissionPolicyPreset)?.label ?? "Custom"}</span></span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {([
-                      ["blockWrongDirectionWithTrigger", "blockWrongDirectionWithTrigger"],
-                      ["blockPostCrashRecoveryUp", "blockPostCrashRecoveryUp"],
-                      ["blockUpRecovery10PlusPct", "blockUpRecovery10PlusPct"],
-                      ["blockRecoveryUpOnDownMove", "blockRecoveryUpOnDownMove"],
-                      ["blockCrashDownOnUpMove", "blockCrashDownOnUpMove"],
-                    ] as Array<[keyof Crash300AdmissionPolicyConfig, string]>).map(([key, label]) => (
-                      <label
-                        key={key}
-                        className="flex items-center gap-2 rounded border border-border/30 bg-muted/10 px-2 py-2 text-[11px] text-foreground"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={Boolean(admissionPolicyConfig[key])}
-                          onChange={(e) => updateAdmissionPolicyToggle(key, e.target.checked)}
-                          disabled={key === "enabled" || key === "mode"}
-                          className="rounded border-border/50 bg-background"
-                        />
-                        <span className="font-mono">{label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+        <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
+          Manual tier sweeps and admission-policy diagnostics now live under <span className="text-foreground font-medium">Advanced Diagnostics</span>.
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1575,20 +1492,7 @@ function BacktestTab({
             {running ? `Running ${formatDurationCompact(elapsed)}` : "Run Backtest / Validate Current Runtime"}
           </button>
 
-          {showAdvancedBacktestOptions && (
-            <button
-              onClick={runTierSweep}
-              disabled={running || sweeping}
-              className="flex items-center gap-1.5 px-4 py-2 rounded border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 text-xs font-medium hover:bg-cyan-500/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {sweeping
-                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                : <BarChart2 className="w-3.5 h-3.5" />}
-              {sweeping ? `Sweeping ${formatDurationCompact(elapsed)}` : "Run Tier Sweep"}
-            </button>
-          )}
-
-          {!hideReportsActions && results !== null && totalTrades !== null && totalTrades > 0 && (
+          {results !== null && totalTrades !== null && totalTrades > 0 && (
             <>
               <button
                 onClick={exportSummary}
@@ -1628,7 +1532,7 @@ function BacktestTab({
           )}
 
           {/* Signals export is gated only on valid date inputs  includes blocked + allowed, not just executed trades */}
-          {!hideReportsActions && windowDays > 0 && (
+          {windowDays > 0 && (
             <button
               onClick={exportSignals}
               className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
@@ -1647,16 +1551,6 @@ function BacktestTab({
             </p>
           )}
 
-          {hideReportsActions && onOpenReports && (
-            <button
-              type="button"
-              onClick={onOpenReports}
-              className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
-            >
-              <FileText className="w-3.5 h-3.5" />
-              Open Reports
-            </button>
-          )}
         </div>
 
         {activeJob && (
@@ -2214,14 +2108,12 @@ function MoveCalibrationTab({
   windowDays,
   lockedSymbol,
   hideReportsActions = false,
-  onOpenReports,
   showAdvancedDiagnostics = false,
 }: {
   domain: DomainId;
   windowDays: number;
   lockedSymbol?: string;
   hideReportsActions?: boolean;
-  onOpenReports?: () => void;
   showAdvancedDiagnostics?: boolean;
 }) {
   const calibRun = useCalibrationRun();
@@ -3371,7 +3263,102 @@ function MoveCalibrationTab({
             )}
           </div>
         )}
+
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="text-xs font-semibold text-foreground">Run History</span>
+              {runs.length > 0 && (
+                <span className="text-[11px] text-muted-foreground">({runs.length} runs)</span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (!runsExpanded) loadRuns(symbol);
+                setRunsExpanded(v => !v);
+              }}
+              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              {runsExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              {runsExpanded ? "Hide history" : "Show history"}
+            </button>
+          </div>
+
+          {runsExpanded && (
+            <div className="space-y-2">
+              {runsLoading && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin" />Loading run history
+                </div>
+              )}
+              {!runsLoading && runs.length === 0 && (
+                <p className="text-xs text-muted-foreground">No calibration pass runs recorded yet for {symbol}.</p>
+              )}
+              {!runsLoading && runs.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className="border-b border-border/30 text-muted-foreground">
+                        <th className="text-left py-2 pr-3 font-medium">ID</th>
+                        <th className="text-left px-3 py-2 font-medium">Pass</th>
+                        <th className="text-left px-3 py-2 font-medium">Status</th>
+                        <th className="text-left px-3 py-2 font-medium">Moves</th>
+                        <th className="text-left px-3 py-2 font-medium">Processed</th>
+                        <th className="text-left px-3 py-2 font-medium">Failed</th>
+                        <th className="text-left px-3 py-2 font-medium">Started</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runs.slice(0, 8).map((run) => (
+                        <tr
+                          key={run.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => void openRunHistoryDetail(run.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              void openRunHistoryDetail(run.id);
+                            }
+                          }}
+                          className={cn(
+                            "border-b border-border/20 transition-colors cursor-pointer",
+                            historyDetailId === run.id ? "bg-muted/30" : "hover:bg-muted/20",
+                          )}
+                        >
+                          <td className="py-1.5 pr-3 font-mono text-muted-foreground">#{run.id}</td>
+                          <td className="px-3 py-1.5 font-mono text-foreground">{run.passName}</td>
+                          <td className="px-3 py-1.5">
+                            <span className={cn(
+                              "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border",
+                              run.status === "completed" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/25" :
+                              run.status === "partial"   ? "text-amber-400 bg-amber-500/10 border-amber-500/25" :
+                              run.status === "failed"    ? "text-red-400 bg-red-500/10 border-red-500/25" :
+                              "text-sky-400 bg-sky-500/10 border-sky-500/25"
+                            )}>
+                              {run.status}
+                            </span>
+                          </td>
+                          <td className="px-3 py-1.5 font-mono text-foreground">{run.totalMoves ?? ""}</td>
+                          <td className="px-3 py-1.5 font-mono text-foreground">{run.processedMoves ?? ""}</td>
+                          <td className="px-3 py-1.5 font-mono text-foreground">{run.failedMoves ?? ""}</td>
+                          <td className="px-3 py-1.5 text-muted-foreground">
+                            {run.startedAt ? new Date(run.startedAt).toLocaleString() : ""}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
+
+      <IntegratedEliteSynthesisCard service={symbol} windowDays={windowDays} />
 
       {/*  3-Domain Comparison  */}
       <div>
@@ -4031,100 +4018,6 @@ function MoveCalibrationTab({
       )}
 
       <IntegratedEliteSynthesisCard service={symbol} windowDays={windowDays} />
-
-      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-2">
-            <Zap className="w-3.5 h-3.5 text-sky-400" />
-            Runtime Lifecycle
-          </h3>
-          <span
-            className={cn(
-              "text-[11px] px-2 py-0.5 rounded border font-medium",
-              runtimeModel?.lifecycle?.hasPromotedModel
-                ? runtimeModel.lifecycle.driftPendingPromotion
-                  ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
-                  : "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
-                : "text-slate-300 border-border/40 bg-muted/20"
-            )}
-          >
-            {runtimeModel?.lifecycle?.hasPromotedModel
-              ? runtimeModel.lifecycle.driftPendingPromotion
-                ? "Promotion stale"
-                : "Runtime promoted"
-              : "Research only"}
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Latest Research</p>
-            <StatRow label="Run" value={runtimeModel?.lifecycle?.latestRunId ?? researchProfile?.lastRunId ?? "n/a"} />
-            <StatRow label="Entry model" value={runtimeModel?.researchProfile?.recommendedEntryModel ?? researchProfile?.recommendedEntryModel ?? "n/a"} />
-          </div>
-          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Staged Model</p>
-            <StatRow label="Run" value={runtimeModel?.lifecycle?.stagedRunId ?? "none"} />
-            <StatRow label="Entry model" value={runtimeModel?.stagedModel?.entryModel ?? "n/a"} />
-            <StatRow label="Staged at" value={formatRuntimeDate(runtimeModel?.lifecycle?.stagedAt ?? runtimeModel?.stagedModel?.promotedAt)} />
-            <StatRow label="TP buckets" value={runtimeModel?.lifecycle?.stagedTpBucketCount ?? 0} />
-          </div>
-          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Promoted Runtime</p>
-            <StatRow label="Run" value={runtimeModel?.lifecycle?.promotedRunId ?? "none"} />
-            <StatRow label="Source" value={runtimeModel?.lifecycle?.runtimeSource ?? "none"} />
-            <StatRow label="Promoted at" value={formatRuntimeDate(runtimeModel?.lifecycle?.promotedAt ?? runtimeModel?.promotedModel?.promotedAt)} />
-            <StatRow label="TP buckets" value={runtimeModel?.lifecycle?.promotedTpBucketCount ?? 0} />
-          </div>
-        </div>
-
-        {runtimeErr && <ErrorBox msg={runtimeErr} />}
-        {runtimeNotice && <SuccessBox msg={runtimeNotice} />}
-        {runtimeModel?.lifecycle?.hasStagedModel && runtimeModel?.lifecycle?.hasPromotedModel && runtimeModel.lifecycle.promotedMatchesStaged === false && (
-          <ErrorBox msg="Staged model is newer than promoted runtime. Backtest/live is not using the staged model until you click Promote To Runtime." />
-        )}
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => updateRuntimeModel("stage")}
-            disabled={runtimeBusy !== null || !researchProfile}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-sky-500/30 text-xs text-sky-200 bg-sky-500/10 hover:bg-sky-500/15 disabled:opacity-50"
-            title="Compile the latest research profile into a staged runtime model without changing live runtime ownership"
-          >
-            {runtimeBusy === "stage" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
-            Stage Research Model
-          </button>
-          <button
-            type="button"
-            onClick={() => updateRuntimeModel("promote")}
-            disabled={runtimeBusy !== null || !researchProfile}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
-            title="Promote the currently staged runtime model into the runtime store used by backtest/live"
-          >
-            {runtimeBusy === "promote" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            Promote To Runtime
-          </button>
-          <p className="text-[11px] text-muted-foreground self-center">
-            Runtime lifecycle stays here: generate or stage the research model, then explicitly promote the selected runtime candidate for validation backtests.
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3">
-          <p className="text-[11px] font-semibold text-foreground mb-2">Normal service workflow</p>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-1 text-[11px] text-muted-foreground">
-            <span>1. Run Full Calibration</span>
-            <span>2. Generate / Stage Research Model</span>
-            <span>3. Run Integrated Elite Synthesis</span>
-            <span>4. Review Candidate Runtime Policy</span>
-            <span>5. Promote Candidate Runtime</span>
-            <span>6. Validate Current Runtime Backtest</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-2">
-            Manual parity, tier sweeps, admission policies, and optimiser controls are advanced diagnostics only. Use Reports for exports.
-          </p>
-        </div>
-
         {parityErr && showAdvancedDiagnostics && <ErrorBox msg={parityErr} />}
         {showAdvancedDiagnostics && parityReport && (
           <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 space-y-3">
@@ -4291,7 +4184,6 @@ function MoveCalibrationTab({
           )}
         </div>
         )}
-      </div>
 
       {/*  Detected Moves List  */}
       <div className="rounded-xl border border-border/50 bg-card">
@@ -4506,195 +4398,7 @@ function MoveCalibrationTab({
           {importError && <ErrorBox msg={importError} />}
         </div>
       </div>
-      ) : onOpenReports ? (
-      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Reports</h3>
-        <p className="text-xs text-muted-foreground">
-          Calibration exports, parity reports, phase identifiers, and backtest artifacts now live under the selected service reports workspace.
-        </p>
-        <button
-          type="button"
-          onClick={onOpenReports}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border"
-        >
-          <FileText className="w-3.5 h-3.5" />
-          Open Reports
-        </button>
-      </div>
       ) : null}
-
-      {/*  Run History  */}
-      <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
-        <button
-          onClick={() => {
-            if (!runsExpanded) loadRuns(symbol);
-            setRunsExpanded(v => !v);
-          }}
-          className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-muted/10 transition-colors"
-        >
-          <div className="flex items-center gap-2">
-            <Clock className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-xs font-semibold text-foreground">Run History</span>
-            {runs.length > 0 && (
-              <span className="text-[11px] text-muted-foreground">({runs.length} runs)</span>
-            )}
-          </div>
-          <ChevronDown className={cn("w-3.5 h-3.5 text-muted-foreground transition-transform", runsExpanded && "rotate-180")} />
-        </button>
-
-        {runsExpanded && (
-          <div className="border-t border-border/30">
-            {runsLoading && (
-              <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground">
-                <Loader2 className="w-4 h-4 animate-spin" />Loading run history
-              </div>
-            )}
-            {!runsLoading && runs.length === 0 && (
-              <div className="px-4 py-6 text-center">
-                <p className="text-xs text-muted-foreground">No calibration pass runs recorded yet for {symbol}.</p>
-              </div>
-            )}
-            {!runsLoading && runs.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-[11px]">
-                  <thead>
-                    <tr className="border-b border-border/30 text-muted-foreground">
-                      <th className="text-left px-4 py-2 font-medium">ID</th>
-                      <th className="text-left px-3 py-2 font-medium">Pass</th>
-                      <th className="text-left px-3 py-2 font-medium">Status</th>
-                      <th className="text-left px-3 py-2 font-medium">Moves</th>
-                      <th className="text-left px-3 py-2 font-medium">Processed</th>
-                      <th className="text-left px-3 py-2 font-medium">Failed</th>
-                      <th className="text-left px-3 py-2 font-medium">Elapsed</th>
-                      <th className="text-left px-3 py-2 font-medium">Window</th>
-                      <th className="text-left px-3 py-2 font-medium">Started</th>
-                      <th className="text-left px-3 py-2 font-medium"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {runs.slice(0, 20).map((run) => {
-                      const elapsedSec = run.startedAt && run.completedAt
-                        ? Math.round((new Date(run.completedAt).getTime() - new Date(run.startedAt).getTime()) / 1000)
-                        : null;
-                      return (
-                      <tr
-                        key={run.id}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => void openRunHistoryDetail(run.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            void openRunHistoryDetail(run.id);
-                          }
-                        }}
-                        className={cn(
-                          "border-b border-border/20 transition-colors cursor-pointer",
-                          historyDetailId === run.id ? "bg-muted/30" : "hover:bg-muted/20",
-                        )}
-                      >
-                        <td className="px-4 py-1.5 font-mono text-muted-foreground">#{run.id}</td>
-                        <td className="px-3 py-1.5 font-mono text-foreground">{run.passName}</td>
-                        <td className="px-3 py-1.5">
-                          <span className={cn(
-                            "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border",
-                            run.status === "completed" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/25" :
-                            run.status === "partial"   ? "text-amber-400 bg-amber-500/10 border-amber-500/25" :
-                            run.status === "failed"    ? "text-red-400 bg-red-500/10 border-red-500/25" :
-                            "text-sky-400 bg-sky-500/10 border-sky-500/25"
-                          )}>
-                            {run.status}
-                          </span>
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-foreground">{run.totalMoves ?? ""}</td>
-                        <td className="px-3 py-1.5 font-mono text-foreground">{run.processedMoves ?? ""}</td>
-                        <td className="px-3 py-1.5 font-mono text-foreground">{run.failedMoves ?? ""}</td>
-                        <td className="px-3 py-1.5 font-mono text-muted-foreground">
-                          {elapsedSec !== null ? formatDurationCompact(elapsedSec) : ""}
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{run.windowDays}d</td>
-                        <td className="px-3 py-1.5 text-muted-foreground">
-                          {run.startedAt ? new Date(run.startedAt).toLocaleString() : ""}
-                        </td>
-                        <td className="px-3 py-1.5">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setPassName(run.passName);
-                              setShowDebugTools(true);
-                              setScope("passes");
-                              void runPasses(run.passName);
-                            }}
-                            disabled={passForThisSymbol || detecting}
-                            className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-border/50 text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-40 transition-colors"
-                            title={`Rerun pass "${run.passName}"`}
-                          >
-                            <RefreshCw className="w-3 h-3" />
-                            Rerun
-                          </button>
-                        </td>
-                      </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                {historyDetailId != null && (
-                  <div className="border-t border-border/30 px-4 py-3 space-y-2 bg-muted/5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-foreground">Selected run #{historyDetailId}</span>
-                      <button
-                        type="button"
-                        className="text-[10px] text-muted-foreground hover:text-foreground"
-                        onClick={() => { setHistoryDetailId(null); setHistoryDetail(null); }}
-                      >
-                        Close
-                      </button>
-                    </div>
-                    {historyDetailLoading && (
-                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading run details
-                      </div>
-                    )}
-                    {!historyDetailLoading && historyDetail && (
-                      <div className="space-y-2 text-[11px]">
-                        <div className="flex flex-wrap gap-3 text-muted-foreground">
-                          <span>Status: <strong className="text-foreground">{historyDetail.status}</strong></span>
-                          {historyDetail.passName != null && (
-                            <span>Pass: <strong className="text-foreground">{String(historyDetail.passName)}</strong></span>
-                          )}
-                          {historyDetail.totalMoves != null && (
-                            <span>Moves: <strong className="text-foreground">{historyDetail.totalMoves}</strong></span>
-                          )}
-                          {historyDetail.processedMoves != null && (
-                            <span>Processed: <strong className="text-foreground">{historyDetail.processedMoves}</strong></span>
-                          )}
-                          {historyDetail.failedMoves != null && (
-                            <span>Failed: <strong className="text-foreground">{historyDetail.failedMoves}</strong></span>
-                          )}
-                        </div>
-                        {historyDetail.errorSummary != null && (
-                          <p className="text-red-400 font-mono break-all">
-                            {typeof historyDetail.errorSummary === "string"
-                              ? historyDetail.errorSummary
-                              : JSON.stringify(historyDetail.errorSummary)}
-                          </p>
-                        )}
-                        <div>
-                          <span className="text-muted-foreground block mb-1">meta_json (progress, model, etc.)</span>
-                          <pre className="text-[10px] overflow-x-auto p-2 rounded bg-background/80 border border-border/40 max-h-56 overflow-y-auto whitespace-pre-wrap">
-                            {JSON.stringify(historyDetail.metaJson ?? {}, null, 2)}
-                          </pre>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
 
     </div>
   );
@@ -4874,6 +4578,7 @@ function RuntimeModelTab({ service }: { service: string }) {
   return (
     <div className="space-y-4">
       {err && <ErrorBox msg={err} />}
+      <RuntimeLifecyclePanel service={service} />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
           <h3 className="text-sm font-semibold">Runtime Model</h3>
@@ -4956,6 +4661,12 @@ type ReportOption = {
   value: string;
   label: string;
   runType: "none" | "backtest" | "comparison" | "synthesis";
+};
+
+const ELITE_SYNTHESIS_PROFILE_DESCRIPTIONS: Record<EliteSynthesisSearchProfileUi, string> = {
+  fast: "Fast smoke profile: quickest sanity run. Uses 6 passes with 2 patience passes to confirm the dataset, job flow, and first candidate search.",
+  balanced: "Balanced profile: default wider search. Uses 12 passes with 4 patience passes for a stronger candidate policy review without the longest runtime.",
+  deep: "Deep profile: broadest search. Uses 24 passes with 6 patience passes for the heaviest refinement and bottleneck discovery.",
 };
 
 const REPORT_OPTIONS: ReportOption[] = [
@@ -5260,6 +4971,10 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
       {notice && <SuccessBox msg={notice} />}
       {err && <ErrorBox msg={err} />}
 
+      <div className="rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+        {ELITE_SYNTHESIS_PROFILE_DESCRIPTIONS[profile]}
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
         <div className="rounded-lg border border-border/30 bg-background/40 p-3">
           <p className="text-muted-foreground uppercase tracking-wide">Normal workflow role</p>
@@ -5274,6 +4989,129 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
           <p className="mt-1 font-mono text-foreground">
             {latestJob ? `#${latestJob.id} ${latestJob.status} ${latestJob.stage}` : "No synthesis jobs yet"}
           </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RuntimeLifecyclePanel({ service }: { service: string }) {
+  const [runtime, setRuntime] = useState<RuntimeModelStateUi | null>(null);
+  const [researchProfile, setResearchProfile] = useState<SymbolResearchProfileUi | null>(null);
+  const [runtimeBusy, setRuntimeBusy] = useState<"stage" | "promote" | null>(null);
+  const [runtimeErr, setRuntimeErr] = useState<string | null>(null);
+  const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
+
+  const loadRuntimeState = useCallback(async () => {
+    const [runtimeResp, researchResp] = await Promise.all([
+      apiFetch(`calibration/runtime-model/${service}`).catch(() => null),
+      apiFetch(`calibration/research-profile/${service}`).catch(() => null),
+    ]);
+    setRuntime((runtimeResp as RuntimeModelStateUi | null) ?? null);
+    setResearchProfile((researchResp as SymbolResearchProfileUi | null) ?? null);
+  }, [service]);
+
+  useEffect(() => {
+    void loadRuntimeState();
+  }, [loadRuntimeState]);
+
+  const updateRuntimeModel = async (action: "stage" | "promote") => {
+    setRuntimeBusy(action);
+    setRuntimeErr(null);
+    setRuntimeNotice(null);
+    try {
+      const result = await apiFetch(`calibration/runtime-model/${service}/${action}`, { method: "POST" }) as {
+        model?: RuntimeSymbolModelUi;
+      };
+      const runtimeResp = await apiFetch(`calibration/runtime-model/${service}`).catch(() => null) as RuntimeModelStateUi | null;
+      setRuntime(runtimeResp ?? null);
+      const model = result?.model;
+      const runId = model?.sourceRunId ?? runtimeResp?.lifecycle?.[action === "stage" ? "stagedRunId" : "promotedRunId"] ?? "n/a";
+      const actionTime = model?.promotedAt ?? runtimeResp?.lifecycle?.[action === "stage" ? "stagedAt" : "promotedAt"] ?? null;
+      const bucketCount = action === "stage"
+        ? runtimeResp?.lifecycle?.stagedTpBucketCount
+        : runtimeResp?.lifecycle?.promotedTpBucketCount;
+      setRuntimeNotice(
+        `${action === "stage" ? "Staged" : "Promoted"} ${service} runtime model from run ${runId} at ${formatRuntimeDate(actionTime)}. ` +
+        `Dynamic TP buckets: ${bucketCount ?? 0}.`,
+      );
+    } catch (e: unknown) {
+      setRuntimeErr(e instanceof Error ? e.message : `Runtime ${action} failed`);
+    } finally {
+      setRuntimeBusy(null);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h3 className="text-sm font-semibold">Runtime Lifecycle</h3>
+        <span
+          className={cn(
+            "text-[11px] px-2 py-0.5 rounded border font-medium",
+            runtime?.lifecycle?.hasPromotedModel
+              ? runtime.lifecycle.driftPendingPromotion
+                ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
+                : "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
+              : "text-slate-300 border-border/40 bg-muted/20",
+          )}
+        >
+          {runtime?.lifecycle?.hasPromotedModel
+            ? runtime.lifecycle.driftPendingPromotion
+              ? "Promotion stale"
+              : "Runtime promoted"
+            : "Research only"}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => void updateRuntimeModel("stage")}
+          disabled={runtimeBusy !== null || !researchProfile}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-sky-500/30 text-xs text-sky-200 bg-sky-500/10 hover:bg-sky-500/15 disabled:opacity-50"
+          title="Compile the latest research profile into a staged runtime model without changing live runtime ownership"
+        >
+          {runtimeBusy === "stage" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+          Stage Research Model
+        </button>
+        <button
+          type="button"
+          onClick={() => void updateRuntimeModel("promote")}
+          disabled={runtimeBusy !== null || !researchProfile}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
+          title="Promote the currently staged runtime model into the runtime store used by backtest/live"
+        >
+          {runtimeBusy === "promote" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+          Promote To Runtime
+        </button>
+      </div>
+
+      {runtimeErr && <ErrorBox msg={runtimeErr} />}
+      {runtimeNotice && <SuccessBox msg={runtimeNotice} />}
+      {runtime?.lifecycle?.hasStagedModel && runtime?.lifecycle?.hasPromotedModel && runtime.lifecycle.promotedMatchesStaged === false && (
+        <ErrorBox msg="Staged model is newer than promoted runtime. Backtest/live is not using the staged model until you click Promote To Runtime." />
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Latest Research</p>
+          <StatRow label="Run" value={runtime?.lifecycle?.latestRunId ?? researchProfile?.lastRunId ?? "n/a"} />
+          <StatRow label="Entry model" value={runtime?.researchProfile?.recommendedEntryModel ?? researchProfile?.recommendedEntryModel ?? "n/a"} />
+        </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Staged Model</p>
+          <StatRow label="Run" value={runtime?.lifecycle?.stagedRunId ?? "none"} />
+          <StatRow label="Entry model" value={runtime?.stagedModel?.entryModel ?? "n/a"} />
+          <StatRow label="Staged at" value={formatRuntimeDate(runtime?.lifecycle?.stagedAt ?? runtime?.stagedModel?.promotedAt)} />
+          <StatRow label="TP buckets" value={runtime?.lifecycle?.stagedTpBucketCount ?? 0} />
+        </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Promoted Runtime</p>
+          <StatRow label="Run" value={runtime?.lifecycle?.promotedRunId ?? "none"} />
+          <StatRow label="Source" value={runtime?.lifecycle?.runtimeSource ?? "none"} />
+          <StatRow label="Promoted at" value={formatRuntimeDate(runtime?.lifecycle?.promotedAt ?? runtime?.promotedModel?.promotedAt)} />
+          <StatRow label="TP buckets" value={runtime?.lifecycle?.promotedTpBucketCount ?? 0} />
         </div>
       </div>
     </div>
@@ -5334,6 +5172,9 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
             Runtime Trigger Validation
           </button>
         </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
+          Manual tier sweeps and admission-policy backtest experiments are diagnostics-only and have been removed from the normal Backtests tab. Use this area and the Reports tab for investigative work.
+        </div>
         <ErrorBox msg="Optimiser is disabled by default in this cleanup pass. Use it only after parity and runtime validation are healthy." />
       </div>
 
@@ -5376,10 +5217,10 @@ export default function Research() {
 
   const tabs: { id: ResearchTabId; label: string; icon: React.ReactNode }[] = [
     { id: "calibration", label: "Calibration & Research", icon: <Target className="w-3.5 h-3.5" /> },
-    { id: "reports", label: "Reports", icon: <FileText className="w-3.5 h-3.5" /> },
     { id: "runtime", label: "Runtime Model", icon: <Zap className="w-3.5 h-3.5" /> },
     { id: "backtests", label: "Backtests", icon: <BarChart2 className="w-3.5 h-3.5" /> },
     { id: "diagnostics", label: "Advanced Diagnostics", icon: <Search className="w-3.5 h-3.5" /> },
+    { id: "reports", label: "Reports", icon: <FileText className="w-3.5 h-3.5" /> },
   ];
 
   return (
@@ -5448,12 +5289,8 @@ export default function Research() {
           windowDays={sharedWindowDays}
           lockedSymbol={selectedService}
           hideReportsActions
-          onOpenReports={() => setActiveTab("reports")}
           showAdvancedDiagnostics={false}
         />
-      )}
-      {activeTab === "reports" && (
-        <ReportsTab service={selectedService} windowDays={sharedWindowDays} />
       )}
       {activeTab === "runtime" && (
         <RuntimeModelTab service={selectedService} />
@@ -5463,12 +5300,13 @@ export default function Research() {
           domain="active"
           windowDays={sharedWindowDays}
           lockedSymbol={selectedService}
-          hideReportsActions
-          onOpenReports={() => setActiveTab("reports")}
         />
       )}
       {activeTab === "diagnostics" && (
         <AdvancedDiagnosticsTab service={selectedService} windowDays={sharedWindowDays} />
+      )}
+      {activeTab === "reports" && (
+        <ReportsTab service={selectedService} windowDays={sharedWindowDays} />
       )}
     </div>
     </CalibrationRunProvider>
