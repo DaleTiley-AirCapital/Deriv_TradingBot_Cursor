@@ -1,9 +1,12 @@
 import type {
+  EliteSynthesisDataAvailability,
   EliteSynthesisExitRules,
   EliteSynthesisFeatureSummary,
   EliteSynthesisParams,
   EliteSynthesisPolicyArtifact,
   EliteSynthesisPolicySummary,
+  EliteSynthesisUnitValidation,
+  EliteSynthesisValidationError,
 } from "./types.js";
 
 export type SynthesisMoveRecord = {
@@ -53,6 +56,8 @@ export type SynthesisTradeRecord = {
   mfePct: number | null;
   maePct: number | null;
   exitReason: string | null;
+  modelSource: string | null;
+  runtimeEvidence: number | null;
   matchedMoveIdStrict: number | null;
   strictRelationshipLabel: string | null;
   phantomNoiseLabel: string | null;
@@ -61,6 +66,37 @@ export type SynthesisTradeRecord = {
   targetUnrealisticForBucket: boolean;
   trailingTooEarly: boolean;
   slTooTight: boolean;
+  liveSafeFeatures: Record<string, number | string | boolean | null>;
+};
+
+export type SynthesisRebuiltTriggerCandidateRecord = {
+  kind: "rebuilt_trigger_candidate";
+  candidateId: string;
+  moveId: number;
+  entryTs: number;
+  exitTs: number | null;
+  offsetLabel: string;
+  offsetBars: number;
+  direction: "buy" | "sell";
+  runtimeFamily: string | null;
+  selectedBucket: string | null;
+  triggerTransition: string | null;
+  triggerDirection: string | null;
+  qualityTier: string | null;
+  setupMatch: number | null;
+  confidence: number | null;
+  triggerStrengthScore: number | null;
+  projectedMovePct: number | null;
+  slPct: number | null;
+  trailingActivationPct: number | null;
+  trailingDistancePct: number | null;
+  minHoldBars: number | null;
+  pnlPct: number;
+  mfePct: number | null;
+  maePct: number | null;
+  exitReason: string | null;
+  eligible: boolean;
+  rejectReason: string | null;
   liveSafeFeatures: Record<string, number | string | boolean | null>;
 };
 
@@ -80,6 +116,12 @@ export type UnifiedSynthesisDataset = {
   moves: SynthesisMoveRecord[];
   trades: SynthesisTradeRecord[];
   controls: SynthesisControlRecord[];
+  rebuiltTriggerCandidates: SynthesisRebuiltTriggerCandidateRecord[];
+  validationErrors: EliteSynthesisValidationError[];
+  dataAvailability: EliteSynthesisDataAvailability;
+  unitValidation: EliteSynthesisUnitValidation;
+  missingFeatureImplementations: string[];
+  reconciliation: Record<string, unknown> | null;
   summary: Record<string, unknown>;
 };
 
@@ -96,6 +138,7 @@ export type PolicyEvaluationResult = EliteSynthesisPolicySummary & {
   leakagePassed: boolean;
   monthlyBreakdown: Array<Record<string, unknown>>;
   reasons: string[];
+  sourcePool: "runtime_trades" | "rebuilt_trigger_candidates";
 };
 
 export interface SymbolSynthesisAdapter {
@@ -112,7 +155,7 @@ export interface SymbolSynthesisAdapter {
   buildLiveSafeFeatureVector(record: Record<string, unknown>): Record<string, number | string | boolean | null>;
   deriveMoveSizeBucket(movePct: number): string;
   deriveRuntimeArchetype(record: Record<string, unknown>): string;
-  generateTriggerCandidatesFromMoveOffsets(dataset: UnifiedSynthesisDataset): Promise<Array<Record<string, unknown>>>;
+  generateTriggerCandidatesFromMoveOffsets(dataset: UnifiedSynthesisDataset): Promise<SynthesisRebuiltTriggerCandidateRecord[]>;
   evaluatePolicyOnHistoricalData(dataset: UnifiedSynthesisDataset, policy: EliteSynthesisPolicyArtifact): Promise<PolicyEvaluationResult>;
   deriveExitPolicyFromSubset(dataset: UnifiedSynthesisDataset, subset: SynthesisTradeRecord[]): EliteSynthesisExitRules;
   validateNoFutureLeakage(policy: EliteSynthesisPolicyArtifact): { passed: boolean; notes: string[] };

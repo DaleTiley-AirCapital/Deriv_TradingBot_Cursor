@@ -19,6 +19,7 @@ import type { Crash300MoveSizeBucket } from "../../symbol-services/CRASH300/feat
 import type { PromotedSymbolRuntimeModel } from "../calibration/promotedSymbolModel.js";
 import type {
   PolicyEvaluationResult,
+  SynthesisRebuiltTriggerCandidateRecord,
   SymbolSynthesisAdapter,
   SynthesisControlRecord,
   SynthesisMoveRecord,
@@ -26,11 +27,15 @@ import type {
   UnifiedSynthesisDataset,
 } from "./adapter.js";
 import type {
+  EliteSynthesisDataAvailability,
+  EliteSynthesisDataAvailabilityMetric,
   EliteSynthesisExitRules,
   EliteSynthesisFeatureSummary,
   EliteSynthesisParams,
   EliteSynthesisPolicyArtifact,
   EliteSynthesisStage,
+  EliteSynthesisUnitValidation,
+  EliteSynthesisValidationError,
 } from "./types.js";
 
 const SYMBOL = "CRASH300";
@@ -52,6 +57,52 @@ function asRecord(value: unknown): Record<string, unknown> {
 function asNumber(value: unknown, fallback = 0): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function optionalNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function inferPercentUnit(values: Array<number | null | undefined>): "percentage_points" | "fraction" | "mixed" {
+  const finite = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (finite.length === 0) return "percentage_points";
+  const small = finite.filter((value) => Math.abs(value) <= 1.2).length;
+  const large = finite.filter((value) => Math.abs(value) > 1.2).length;
+  if (small === finite.length) return "fraction";
+  if (large === finite.length) return "percentage_points";
+  return "mixed";
+}
+
+function toPercentagePoints(value: number | null | undefined, unit: "percentage_points" | "fraction" | "mixed"): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (unit === "fraction") return value * 100;
+  if (unit === "mixed") return Math.abs(value) <= 1.2 ? value * 100 : value;
+  return value;
+}
+
+function metricFromPresence(total: number, present: number, nullableAllowed: boolean, notes: string[] = []): EliteSynthesisDataAvailabilityMetric {
+  const safeTotal = Math.max(total, 0);
+  const safePresent = Math.max(0, Math.min(safeTotal, present));
+  const missing = Math.max(0, safeTotal - safePresent);
+  return {
+    total: safeTotal,
+    present: safePresent,
+    missing,
+    missingRate: safeTotal > 0 ? Number((missing / safeTotal).toFixed(4)) : 1,
+    nullableAllowed,
+    notes,
+  };
+}
+
+function rangeOf(values: Array<number | null | undefined>) {
+  const finite = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (finite.length === 0) return { min: null, max: null };
+  return { min: Math.min(...finite), max: Math.max(...finite) };
 }
 
 function percentile(values: number[], p: number): number {
@@ -232,6 +283,37 @@ async function loadWindowCandles(startTs: number, endTs: number): Promise<Candle
   return rows.map(toCandleRow);
 }
 
+function normalizePersistedTrade(trade: Record<string, unknown>) {
+  const runtimeEvidence = optionalNumber(trade.runtimeEvidence ?? trade.nativeScore);
+  const modelSource = optionalString(trade.modelSource ?? trade.scoringSource);
+  return {
+    ...trade,
+    runtimeEvidence,
+    modelSource,
+    triggerTransition: optionalString(trade.triggerTransition ?? trade.selectedTriggerTransition),
+  };
+}
+
+function normalizePersistedBacktestResult(result: Record<string, unknown>) {
+  const trades = Array.isArray(result.trades)
+    ? result.trades.map((trade) => normalizePersistedTrade(asRecord(trade)))
+    : [];
+  const runtimeModel = asRecord(result.runtimeModel);
+  const summary = asRecord(result.summary);
+  return {
+    ...result,
+    runtimeModel: {
+      ...runtimeModel,
+      modelSourceCounts: asRecord(runtimeModel.modelSourceCounts),
+    },
+    summary: {
+      ...summary,
+      decisionGate: "runtime-platform-state",
+    },
+    trades,
+  };
+}
+
 async function loadPersistedBacktestRun(runId: number | null) {
   const baseSql = runId == null
     ? sql`SELECT id, result, created_at FROM v3_backtest_runs WHERE symbol = ${SYMBOL} ORDER BY created_at DESC LIMIT 1`
@@ -244,7 +326,7 @@ async function loadPersistedBacktestRun(runId: number | null) {
   return {
     id: Number(row.id ?? 0),
     createdAt: row.created_at == null ? null : String(row.created_at),
-    result: asRecord(row.result),
+    result: normalizePersistedBacktestResult(asRecord(row.result)),
   };
 }
 
@@ -307,7 +389,7 @@ async function mapMovesToSynthesisRecords(params: {
       startTs: Number(move.startTs ?? 0),
       endTs: Number(move.endTs ?? 0),
       direction: inferMoveDirection(move.direction),
-      movePct: Number(move.movePct ?? 0),
+      movePct: toPercentagePoints(optionalNumber(move.movePct), "fraction") ?? 0,
       qualityTier: String(move.qualityTier ?? "unknown"),
       calibratedBaseFamily: "crash_expansion",
       calibratedMoveSizeBucket: bucketLabelFromPct(Number(move.movePct ?? 0)),
@@ -315,10 +397,10 @@ async function mapMovesToSynthesisRecords(params: {
       phaseDerivedBucket: String(phase.phaseDerivedBucket ?? "unknown"),
       earliestValidLiveSafeTriggerOffset: (phase.trigger as Record<string, unknown> | undefined)?.firstValidTriggerOffset == null ? null : `T${Number((phase.trigger as Record<string, unknown>).firstValidTriggerOffset) >= 0 ? "+" : ""}${Number((phase.trigger as Record<string, unknown>).firstValidTriggerOffset)}`,
       bestTheoreticalLiveSafeTriggerOffset: (phase.trigger as Record<string, unknown> | undefined)?.strongestTriggerOffset == null ? null : `T${Number((phase.trigger as Record<string, unknown>).strongestTriggerOffset) >= 0 ? "+" : ""}${Number((phase.trigger as Record<string, unknown>).strongestTriggerOffset)}`,
-      normalMaeBeforeSuccess: asNumber((phase.during as Record<string, unknown> | undefined)?.maePct, 0),
-      realisticMfeAfterEntry: asNumber((phase.during as Record<string, unknown> | undefined)?.mfePct, 0),
+      normalMaeBeforeSuccess: toPercentagePoints(optionalNumber((phase.during as Record<string, unknown> | undefined)?.maePct), "fraction"),
+      realisticMfeAfterEntry: toPercentagePoints(optionalNumber((phase.during as Record<string, unknown> | undefined)?.mfePct), "fraction"),
       barsToMfe: asNumber((phase.during as Record<string, unknown> | undefined)?.barsToMfe, 0),
-      pullbackAfterMfe: asNumber((phase.after as Record<string, unknown> | undefined)?.pullbackPct, 0),
+      pullbackAfterMfe: toPercentagePoints(optionalNumber((phase.after as Record<string, unknown> | undefined)?.pullbackPct), "fraction"),
       liveSafeFeatures: built?.liveSafeFeatures ?? {},
       triggerOffsets: Array.isArray((phase.trigger as Record<string, unknown> | undefined)?.snapshots)
         ? (((phase.trigger as Record<string, unknown>).snapshots as unknown[]) as Array<Record<string, unknown>>)
@@ -346,34 +428,63 @@ function buildTradeRecordsFromRun(params: {
     : [];
   const reconByTradeId = new Map<string, Record<string, unknown>>(reconTrades.map((trade) => [String(trade.tradeId), trade]));
   const trades = Array.isArray(params.run.result.trades) ? (params.run.result.trades as Array<Record<string, unknown>>) : [];
+  const tradeUnit = inferPercentUnit(trades.flatMap((trade) => [
+    optionalNumber(trade.pnlPct),
+    optionalNumber(trade.mfePct),
+    optionalNumber(trade.maePct),
+    optionalNumber(trade.projectedMovePct),
+    optionalNumber(trade.slPct),
+    optionalNumber(trade.trailingActivationPct),
+    optionalNumber(trade.trailingDistancePct),
+  ]));
+
   return trades.map((trade, idx) => {
     const tradeId = String(trade.tradeId ?? `${params.run.id}-${idx + 1}`);
     const recon = reconByTradeId.get(tradeId) ?? {};
+    const contextSnapshot = asRecord(trade.contextSnapshotAtEntry);
+    const triggerSnapshot = asRecord(trade.triggerSnapshotAtEntry);
+    const runtimeFamily = optionalString(trade.runtimeFamily);
+    const selectedBucket = optionalString(trade.selectedBucket);
+    const triggerTransition = optionalString(trade.triggerTransition ?? trade.selectedTriggerTransition);
+    const triggerDirection = optionalString(trade.triggerDirection)
+      ?? (String(trade.direction ?? "").toLowerCase() === "sell" ? "sell" : String(trade.direction ?? "").toLowerCase() === "buy" ? "buy" : null);
+    const projectedMovePct = toPercentagePoints(optionalNumber(trade.projectedMovePct), tradeUnit);
+    const slPct = toPercentagePoints(optionalNumber(trade.slPct), tradeUnit);
+    const trailingActivationPct = toPercentagePoints(optionalNumber(trade.trailingActivationPct), tradeUnit);
+    const trailingDistancePct = toPercentagePoints(optionalNumber(trade.trailingDistancePct), tradeUnit);
+    const mfePct = toPercentagePoints(optionalNumber(trade.mfePct), tradeUnit);
+    const maePct = toPercentagePoints(optionalNumber(trade.maePct), tradeUnit);
+    const pnlPct = toPercentagePoints(optionalNumber(trade.pnlPct), tradeUnit) ?? 0;
+    const setupMatch = optionalNumber(trade.setupMatch);
+    const confidence = optionalNumber(trade.confidence);
+    const triggerStrengthScore = optionalNumber(trade.triggerStrengthScore);
     return {
       kind: "runtime_trade",
       tradeId,
       entryTs: asNumber(trade.entryTs),
       exitTs: trade.exitTs == null ? null : asNumber(trade.exitTs),
       direction: String(trade.direction ?? "buy") === "sell" ? "sell" : "buy",
-      runtimeFamily: trade.runtimeFamily == null ? null : String(trade.runtimeFamily),
-      selectedBucket: trade.selectedBucket == null ? null : String(trade.selectedBucket),
-      triggerTransition: trade.triggerTransition == null ? null : String(trade.triggerTransition),
-      setupMatch: trade.setupMatch == null ? null : asNumber(trade.setupMatch),
-      confidence: trade.confidence == null ? null : asNumber(trade.confidence),
-      triggerStrengthScore: trade.triggerStrengthScore == null ? null : asNumber(trade.triggerStrengthScore),
-      qualityTier: trade.qualityTier == null ? null : String(trade.qualityTier),
-      regimeAtEntry: trade.regimeAtEntry == null ? null : String(trade.regimeAtEntry),
-      contextAgeBars: trade.contextAgeBars == null ? null : asNumber(trade.contextAgeBars),
-      triggerAgeBars: trade.triggerAgeBars == null ? null : asNumber(trade.triggerAgeBars),
-      epochAgeBars: trade.epochAgeBars == null ? null : asNumber(trade.epochAgeBars),
-      projectedMovePct: trade.projectedMovePct == null ? null : asNumber(trade.projectedMovePct),
-      slPct: trade.slPct == null ? null : asNumber(trade.slPct),
-      trailingActivationPct: trade.trailingActivationPct == null ? null : asNumber(trade.trailingActivationPct),
-      trailingDistancePct: trade.trailingDistancePct == null ? null : asNumber(trade.trailingDistancePct),
-      pnlPct: asNumber(trade.pnlPct),
-      mfePct: trade.mfePct == null ? null : asNumber(trade.mfePct),
-      maePct: trade.maePct == null ? null : asNumber(trade.maePct),
-      exitReason: trade.exitReason == null ? null : String(trade.exitReason),
+      runtimeFamily,
+      selectedBucket,
+      triggerTransition,
+      setupMatch,
+      confidence,
+      triggerStrengthScore,
+      qualityTier: optionalString(trade.qualityTier),
+      regimeAtEntry: optionalString(trade.regimeAtEntry),
+      contextAgeBars: optionalNumber(trade.contextAgeBars),
+      triggerAgeBars: optionalNumber(trade.triggerAgeBars),
+      epochAgeBars: optionalNumber(trade.epochAgeBars),
+      projectedMovePct,
+      slPct,
+      trailingActivationPct,
+      trailingDistancePct,
+      pnlPct,
+      mfePct,
+      maePct,
+      exitReason: optionalString(trade.exitReason),
+      modelSource: optionalString(trade.modelSource),
+      runtimeEvidence: optionalNumber(trade.runtimeEvidence),
       matchedMoveIdStrict: recon.matchedMoveId == null ? null : asNumber(recon.matchedMoveId),
       strictRelationshipLabel: recon.relationToMove == null ? null : String(recon.relationToMove),
       phantomNoiseLabel: Boolean(recon.wasNoiseTrade) ? "noise_trade" : null,
@@ -383,29 +494,181 @@ function buildTradeRecordsFromRun(params: {
       trailingTooEarly: String(recon.tradeOutcomeClassification ?? "") === "good_entry_trailing_too_early",
       slTooTight: String(recon.tradeOutcomeClassification ?? "") === "good_entry_sl_too_tight",
       liveSafeFeatures: {
-        runtimeFamily: trade.runtimeFamily == null ? null : String(trade.runtimeFamily),
-        selectedBucket: trade.selectedBucket == null ? null : String(trade.selectedBucket),
-        triggerTransition: trade.triggerTransition == null ? null : String(trade.triggerTransition),
-        triggerDirection: trade.direction == null ? null : String(trade.direction),
-        setupMatch: trade.setupMatch == null ? null : asNumber(trade.setupMatch),
-        confidence: trade.confidence == null ? null : asNumber(trade.confidence),
-        triggerStrengthScore: trade.triggerStrengthScore == null ? null : asNumber(trade.triggerStrengthScore),
-        qualityTier: trade.qualityTier == null ? null : String(trade.qualityTier),
-        regimeAtEntry: trade.regimeAtEntry == null ? null : String(trade.regimeAtEntry),
-        contextAgeBars: trade.contextAgeBars == null ? null : asNumber(trade.contextAgeBars),
-        triggerAgeBars: trade.triggerAgeBars == null ? null : asNumber(trade.triggerAgeBars),
-        epochAgeBars: trade.epochAgeBars == null ? null : asNumber(trade.epochAgeBars),
-        projectedMovePct: trade.projectedMovePct == null ? null : asNumber(trade.projectedMovePct),
-        slPct: trade.slPct == null ? null : asNumber(trade.slPct),
-        projectedMoveToSlRatio: trade.projectedMovePct != null && trade.slPct != null && asNumber(trade.slPct) > 0
-          ? asNumber(trade.projectedMovePct) / asNumber(trade.slPct)
+        runtimeFamily,
+        selectedBucket,
+        triggerTransition,
+        triggerDirection,
+        setupMatch,
+        confidence,
+        triggerStrengthScore,
+        qualityTier: optionalString(trade.qualityTier),
+        regimeAtEntry: optionalString(trade.regimeAtEntry),
+        contextAgeBars: optionalNumber(trade.contextAgeBars),
+        triggerAgeBars: optionalNumber(trade.triggerAgeBars),
+        epochAgeBars: optionalNumber(trade.epochAgeBars),
+        projectedMovePct,
+        slPct,
+        trailingActivationPct,
+        trailingDistancePct,
+        runtimeEvidence: optionalNumber(trade.runtimeEvidence),
+        modelSource: optionalString(trade.modelSource),
+        trendPersistenceScore: optionalNumber(contextSnapshot.trendPersistenceScore),
+        driftPersistence60: optionalNumber(contextSnapshot.driftPersistence60),
+        driftPersistence240: optionalNumber(contextSnapshot.driftPersistence240),
+        positiveCloseRatio60: optionalNumber(contextSnapshot.positiveCloseRatio60),
+        positiveCloseRatio240: optionalNumber(contextSnapshot.positiveCloseRatio240),
+        recoveryQualityScore: optionalNumber(contextSnapshot.recoveryQualityScore),
+        recoverySlope60: optionalNumber(contextSnapshot.recoverySlope60),
+        recoverySlope240: optionalNumber(contextSnapshot.recoverySlope240),
+        crashRecencyScore: optionalNumber(contextSnapshot.crashRecencyScore),
+        barsSinceLastCrash: optionalNumber(contextSnapshot.barsSinceLastCrash),
+        recoveryFromLastCrashPct: optionalNumber(contextSnapshot.recoveryFromLastCrashPct),
+        priceDistanceFromLastCrashLowPct: optionalNumber(contextSnapshot.priceDistanceFromLastCrashLowPct),
+        rangeCompressionScore60: optionalNumber(contextSnapshot.rangeCompressionScore60),
+        rangeCompressionScore240: optionalNumber(contextSnapshot.rangeCompressionScore240),
+        rangeExpansionScore15: optionalNumber(contextSnapshot.rangeExpansionScore15),
+        rangeExpansionScore60: optionalNumber(contextSnapshot.rangeExpansionScore60),
+        compressionToExpansionScore: optionalNumber(contextSnapshot.compressionToExpansionScore),
+        atrRank60: optionalNumber(contextSnapshot.atrRank60),
+        atrRank240: optionalNumber(contextSnapshot.atrRank240),
+        bbWidthRank60: optionalNumber(contextSnapshot.bbWidthRank60),
+        bbWidthRank240: optionalNumber(contextSnapshot.bbWidthRank240),
+        priceVsEma20Pct: optionalNumber(contextSnapshot.priceVsEma20Pct),
+        priceVsEma50Pct: optionalNumber(contextSnapshot.priceVsEma50Pct),
+        priceVsEma200Pct: optionalNumber(contextSnapshot.priceVsEma200Pct),
+        oneBarReturnPct: optionalNumber(triggerSnapshot.oneBarReturnPct),
+        threeBarReturnPct: optionalNumber(triggerSnapshot.threeBarReturnPct),
+        fiveBarReturnPct: optionalNumber(triggerSnapshot.fiveBarReturnPct),
+        impulseScore: optionalNumber(triggerSnapshot.impulseScore),
+        rejectionScore: optionalNumber(triggerSnapshot.rejectionScore),
+        closeLocationInRangePct: optionalNumber(triggerSnapshot.closeLocationInRangePct),
+        microBreakDirection: optionalString(triggerSnapshot.microBreakDirection),
+        microBreakStrengthPct: optionalNumber(triggerSnapshot.microBreakStrengthPct),
+        reclaimConfirmed: typeof triggerSnapshot.reclaimConfirmed === "boolean" ? triggerSnapshot.reclaimConfirmed : null,
+        adverseImpulseBeforeTrigger: typeof triggerSnapshot.adverseImpulseBeforeTrigger === "boolean" ? triggerSnapshot.adverseImpulseBeforeTrigger : null,
+        projectedMoveToSlRatio: projectedMovePct != null && slPct != null && slPct > 0
+          ? projectedMovePct / slPct
           : null,
-        projectedMoveToTrailingActivationRatio: trade.projectedMovePct != null && trade.trailingActivationPct != null && asNumber(trade.trailingActivationPct) > 0
-          ? asNumber(trade.projectedMovePct) / asNumber(trade.trailingActivationPct)
+        projectedMoveToTrailingActivationRatio: projectedMovePct != null && trailingActivationPct != null && trailingActivationPct > 0
+          ? projectedMovePct / trailingActivationPct
           : null,
       },
     };
   });
+}
+
+function buildDataAvailability(params: {
+  moves: SynthesisMoveRecord[];
+  trades: SynthesisTradeRecord[];
+  phaseSnapshots: Array<Record<string, unknown>>;
+  reconciliation: Record<string, unknown> | null;
+}): EliteSynthesisDataAvailability {
+  const totalTrades = params.trades.length;
+  const reconMoves = Array.isArray((params.reconciliation as Record<string, unknown> | null)?.calibratedMoves)
+    ? (((params.reconciliation as Record<string, unknown>).calibratedMoves as unknown[])?.length ?? 0)
+    : Array.isArray((params.reconciliation as Record<string, unknown> | null)?.moves)
+      ? (((params.reconciliation as Record<string, unknown>).moves as unknown[])?.length ?? 0)
+      : Number(asRecord(params.reconciliation?.aggregates).calibratedMovesTotal ?? 0);
+
+  const countPresent = <T,>(items: T[], picker: (item: T) => unknown) =>
+    items.filter((item) => {
+      const value = picker(item);
+      if (value == null) return false;
+      if (typeof value === "string") return value.trim().length > 0;
+      return true;
+    }).length;
+
+  return {
+    counts: {
+      calibratedMoves: params.moves.length,
+      phaseSnapshots: params.phaseSnapshots.length,
+      runtimeTrades: totalTrades,
+      reconciliationMoves: reconMoves,
+    },
+    metrics: {
+      runtimeFamily: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.runtimeFamily), false),
+      selectedBucket: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.selectedBucket), false),
+      triggerTransition: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.triggerTransition), false),
+      triggerDirection: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.liveSafeFeatures.triggerDirection), false),
+      qualityTier: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.qualityTier), true, ["Null is allowed only when the originating trade artifact truly lacks quality tier evidence."]),
+      regimeAtEntry: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.regimeAtEntry), true, ["Null is allowed only when the originating trade artifact truly lacks regime evidence."]),
+      mfePct: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.mfePct), false),
+      maePct: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.maePct), false),
+      runtimeEvidence: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.runtimeEvidence), true),
+      modelSource: metricFromPresence(totalTrades, countPresent(params.trades, (trade) => trade.modelSource), true),
+    },
+  };
+}
+
+function buildUnitValidation(params: {
+  moves: SynthesisMoveRecord[];
+  trades: SynthesisTradeRecord[];
+}): EliteSynthesisUnitValidation {
+  const unit = inferPercentUnit([
+    ...params.moves.map((move) => move.movePct),
+    ...params.trades.flatMap((trade) => [
+      trade.pnlPct,
+      trade.mfePct,
+      trade.maePct,
+      trade.projectedMovePct,
+      trade.slPct,
+      trade.trailingActivationPct,
+      trade.trailingDistancePct,
+    ]),
+  ]);
+  const tpImpossibleTrades = params.trades.filter((trade) =>
+    trade.projectedMovePct != null &&
+    trade.trailingActivationPct != null &&
+    trade.projectedMovePct > 0 &&
+    trade.trailingActivationPct > trade.projectedMovePct * 1.5,
+  ).length;
+  return {
+    passed: unit !== "mixed" && tpImpossibleTrades === 0,
+    unit,
+    notes: [
+      unit === "mixed"
+        ? "Detected mixed fraction and percentage-point values across move/trade fields."
+        : `Detected ${unit} inputs and standardised synthesis internals to percentage points.`,
+      ...(tpImpossibleTrades > 0 ? [`Detected ${tpImpossibleTrades} trades with trailing activation materially larger than projected move.`] : []),
+    ],
+    sampledRanges: {
+      movePct: rangeOf(params.moves.map((move) => move.movePct)),
+      pnlPct: rangeOf(params.trades.map((trade) => trade.pnlPct)),
+      mfePct: rangeOf(params.trades.map((trade) => trade.mfePct)),
+      maePct: rangeOf(params.trades.map((trade) => trade.maePct)),
+      projectedMovePct: rangeOf(params.trades.map((trade) => trade.projectedMovePct)),
+      slPct: rangeOf(params.trades.map((trade) => trade.slPct)),
+      trailingActivationPct: rangeOf(params.trades.map((trade) => trade.trailingActivationPct)),
+      trailingDistancePct: rangeOf(params.trades.map((trade) => trade.trailingDistancePct)),
+    },
+  };
+}
+
+function buildValidationErrors(params: {
+  moves: SynthesisMoveRecord[];
+  trades: SynthesisTradeRecord[];
+  phaseSnapshots: Array<Record<string, unknown>>;
+  reconciliation: Record<string, unknown> | null;
+  dataAvailability: EliteSynthesisDataAvailability;
+  unitValidation: EliteSynthesisUnitValidation;
+}): EliteSynthesisValidationError[] {
+  const errors: EliteSynthesisValidationError[] = [];
+  if (params.moves.length <= 0) errors.push("missing_calibrated_moves");
+  if (params.phaseSnapshots.length <= 0) errors.push("missing_phase_snapshots");
+  if (params.trades.length <= 0) errors.push("missing_runtime_or_rebuilt_candidates");
+  const reconMoves = params.dataAvailability.counts.reconciliationMoves ?? 0;
+  if (reconMoves <= 0) errors.push("missing_reconciliation_moves");
+  if ((params.dataAvailability.metrics.runtimeFamily?.missingRate ?? 1) >= 1) errors.push("missing_runtime_family");
+  if ((params.dataAvailability.metrics.selectedBucket?.missingRate ?? 1) >= 1) errors.push("missing_selected_bucket");
+  if ((params.dataAvailability.metrics.triggerTransition?.missingRate ?? 1) >= 1) errors.push("missing_trigger_transition");
+  if ((params.dataAvailability.metrics.triggerDirection?.missingRate ?? 1) >= 1) errors.push("missing_trigger_direction");
+  if ((params.dataAvailability.metrics.qualityTier?.missingRate ?? 1) >= 1) errors.push("missing_quality_tier");
+  if ((params.dataAvailability.metrics.regimeAtEntry?.missingRate ?? 1) >= 1) errors.push("missing_regime");
+  if ((params.dataAvailability.metrics.mfePct?.missingRate ?? 1) >= 1 || (params.dataAvailability.metrics.maePct?.missingRate ?? 1) >= 1) {
+    errors.push("missing_mfe_mae");
+  }
+  if (!params.unitValidation.passed) errors.push("unit_validation_failed");
+  return Array.from(new Set(errors));
 }
 
 export async function buildUnifiedCrash300Dataset(params: {
@@ -504,6 +767,28 @@ export async function buildUnifiedCrash300Dataset(params: {
   });
   await yieldToEventLoop();
 
+  const dataAvailability = buildDataAvailability({
+    moves,
+    trades,
+    phaseSnapshots,
+    reconciliation,
+  });
+  const unitValidation = buildUnitValidation({
+    moves,
+    trades,
+  });
+  const validationErrors = buildValidationErrors({
+    moves,
+    trades,
+    phaseSnapshots,
+    reconciliation,
+    dataAvailability,
+    unitValidation,
+  });
+  const missingFeatureImplementations = [
+    "projectedMovePct_trailingActivationPct_ratio_from_runtime_snapshot",
+  ];
+
   await emitDatasetBuildProgress(params.onProgress, {
     stage: "building_dataset",
     progressPct: 18,
@@ -574,6 +859,12 @@ export async function buildUnifiedCrash300Dataset(params: {
     moves,
     trades,
     controls,
+    rebuiltTriggerCandidates: [],
+    validationErrors,
+    dataAvailability,
+    unitValidation,
+    missingFeatureImplementations,
+    reconciliation,
     summary: {
       calibrationRuns: calibrationRuns.length,
       backtestRuns: backtestRuns.length,
@@ -581,7 +872,11 @@ export async function buildUnifiedCrash300Dataset(params: {
       runtimeTrades: trades.length,
       nonMoveControls: controls.length,
       phaseSnapshots: phaseSnapshots.length,
-      reconciliationMoves: Array.isArray((reconciliation as Record<string, unknown> | null)?.moves) ? ((reconciliation as Record<string, unknown>).moves as unknown[]).length : 0,
+      reconciliationMoves: dataAvailability.counts.reconciliationMoves,
+      validationErrors,
+      dataAvailability,
+      unitValidation,
+      missingFeatureImplementations,
       dateCoverage: {
         startTs: params.startTs,
         endTs: params.endTs,
@@ -702,23 +997,125 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
   }
 
   async generateTriggerCandidatesFromMoveOffsets(dataset: UnifiedSynthesisDataset) {
-    const candidates: Array<Record<string, unknown>> = [];
+    const candidates: SynthesisRebuiltTriggerCandidateRecord[] = [];
     for (const move of dataset.moves) {
-      const snapshots = move.triggerOffsets;
+      const snapshots = move.triggerOffsets
+        .map((snapshot) => asRecord(snapshot))
+        .filter((snapshot) => Number.isFinite(Number(snapshot.offsetBars)));
+      if (snapshots.length === 0) {
+        candidates.push({
+          kind: "rebuilt_trigger_candidate",
+          candidateId: `move-${move.moveId}-no-snapshots`,
+          moveId: move.moveId,
+          entryTs: move.startTs,
+          exitTs: null,
+          offsetLabel: "none",
+          offsetBars: 0,
+          direction: move.direction === "down" ? "sell" : "buy",
+          runtimeFamily: null,
+          selectedBucket: null,
+          triggerTransition: null,
+          triggerDirection: null,
+          qualityTier: move.qualityTier,
+          setupMatch: null,
+          confidence: null,
+          triggerStrengthScore: null,
+          projectedMovePct: Math.abs(move.movePct),
+          slPct: null,
+          trailingActivationPct: null,
+          trailingDistancePct: null,
+          minHoldBars: null,
+          pnlPct: 0,
+          mfePct: null,
+          maePct: null,
+          exitReason: null,
+          eligible: false,
+          rejectReason: "no_phase_trigger_snapshots",
+          liveSafeFeatures: { ...move.liveSafeFeatures },
+        });
+        continue;
+      }
       for (const snapshot of snapshots) {
         const offsetBars = asNumber(snapshot.offsetBars, 0);
-        const triggerTransition = String(snapshot.triggerTransition ?? "none");
-        const triggerDirection = String(snapshot.triggerDirection ?? "none");
-        if (triggerDirection === "none" || triggerTransition === "none") continue;
+        const triggerTransition = optionalString(snapshot.triggerTransition);
+        const triggerDirection = optionalString(snapshot.triggerDirection);
+        const runtimeFamily = optionalString(snapshot.runtimeFamily ?? move.phaseDerivedFamily);
+        const selectedBucket = optionalString(snapshot.selectedBucket ?? move.phaseDerivedBucket ?? move.calibratedMoveSizeBucket);
+        const triggerStrengthScore = optionalNumber(snapshot.triggerStrengthScore);
+        const projectedMovePct = Math.abs(move.realisticMfeAfterEntry ?? move.movePct ?? 0);
+        const maePct = Math.abs(move.normalMaeBeforeSuccess ?? 0);
+        const offsetPenalty = Math.max(0, 1 - Math.min(0.75, Math.abs(offsetBars) * 0.06));
+        const effectiveMfePct = Number((projectedMovePct * offsetPenalty).toFixed(4));
+        const effectiveMaePct = Number((Math.max(maePct, projectedMovePct * 0.18) * (1 + Math.abs(offsetBars) * 0.04)).toFixed(4));
+        const slPct = Number(Math.max(0.35, Math.min(effectiveMaePct * 1.15, projectedMovePct * 0.55)).toFixed(4));
+        const trailingActivationPct = Number(Math.max(0.5, effectiveMfePct * 0.45).toFixed(4));
+        const trailingDistancePct = Number(Math.max(0.25, Math.min(slPct, effectiveMaePct * 0.8)).toFixed(4));
+        const minHoldBars = Math.max(3, Number(move.barsToMfe ?? 6));
+        const eligible =
+          Boolean(runtimeFamily) &&
+          runtimeFamily !== "unknown" &&
+          Boolean(selectedBucket) &&
+          selectedBucket !== "unknown" &&
+          Boolean(triggerTransition) &&
+          triggerTransition !== "none" &&
+          Boolean(triggerDirection) &&
+          triggerDirection !== "none";
+        const reason =
+          !runtimeFamily || runtimeFamily === "unknown"
+            ? "no_runtime_family_from_offset"
+            : !selectedBucket || selectedBucket === "unknown"
+              ? "no_selected_bucket_from_offset"
+              : !triggerTransition || triggerTransition === "none"
+                ? "no_trigger_transition_from_offset"
+                : !triggerDirection || triggerDirection === "none"
+                  ? "no_trigger_direction_from_offset"
+                  : null;
+        const winLike = eligible && effectiveMfePct > slPct * 1.05 && (triggerStrengthScore ?? 0) > 0;
         candidates.push({
+          kind: "rebuilt_trigger_candidate",
+          candidateId: `move-${move.moveId}-offset-${offsetBars}`,
           moveId: move.moveId,
+          entryTs: move.startTs + offsetBars * 60,
+          exitTs: move.endTs,
+          offsetLabel: `T${offsetBars >= 0 ? "+" : ""}${offsetBars}`,
           offsetBars,
+          direction: triggerDirection === "sell" ? "sell" : "buy",
+          runtimeFamily,
+          selectedBucket,
           triggerTransition,
           triggerDirection,
-          runtimeFamily: move.phaseDerivedFamily ?? "unknown",
-          selectedBucket: move.phaseDerivedBucket ?? move.calibratedMoveSizeBucket,
           qualityTier: move.qualityTier,
-          direction: move.direction,
+          setupMatch: optionalNumber(snapshot.setupMatch) ?? Math.max(0, Math.min(1, (triggerStrengthScore ?? 0) * 0.9)),
+          confidence: optionalNumber(snapshot.confidence) ?? Math.max(0, Math.min(1, (triggerStrengthScore ?? 0) * 0.95)),
+          triggerStrengthScore,
+          projectedMovePct,
+          slPct,
+          trailingActivationPct,
+          trailingDistancePct,
+          minHoldBars,
+          pnlPct: winLike ? Number(Math.min(projectedMovePct * 0.55, effectiveMfePct * 0.7).toFixed(4)) : Number((-Math.min(slPct, effectiveMaePct)).toFixed(4)),
+          mfePct: effectiveMfePct,
+          maePct: effectiveMaePct,
+          exitReason: !eligible ? null : winLike ? "tp_hit" : "sl_hit",
+          eligible,
+          rejectReason: reason,
+          liveSafeFeatures: {
+            ...move.liveSafeFeatures,
+            ...Object.fromEntries(
+              Object.entries(snapshot).filter(([, value]) => ["string", "number", "boolean"].includes(typeof value)),
+            ),
+            runtimeFamily,
+            selectedBucket,
+            triggerTransition,
+            triggerDirection,
+            qualityTier: move.qualityTier,
+            projectedMovePct,
+            slPct,
+            trailingActivationPct,
+            trailingDistancePct,
+            projectedMoveToSlRatio: slPct > 0 ? projectedMovePct / slPct : null,
+            projectedMoveToTrailingActivationRatio: trailingActivationPct > 0 ? projectedMovePct / trailingActivationPct : null,
+          },
         });
       }
     }
@@ -726,7 +1123,13 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
   }
 
   async evaluatePolicyOnHistoricalData(dataset: UnifiedSynthesisDataset, policy: EliteSynthesisPolicyArtifact): Promise<PolicyEvaluationResult> {
-    const eligible = dataset.trades.filter((trade) => {
+    const sourcePool = String(policy.entryThresholds.sourcePool ?? "runtime_trades") === "rebuilt_trigger_candidates"
+      ? "rebuilt_trigger_candidates"
+      : "runtime_trades";
+    const pool = sourcePool === "rebuilt_trigger_candidates"
+      ? dataset.rebuiltTriggerCandidates.filter((candidate) => candidate.eligible)
+      : dataset.trades;
+    const eligible = pool.filter((trade) => {
       const familyOk = policy.selectedRuntimeArchetypes.length === 0 || policy.selectedRuntimeArchetypes.includes(trade.runtimeFamily ?? "unknown");
       const bucketOk = policy.selectedBuckets.length === 0 || policy.selectedBuckets.includes(trade.selectedBucket ?? "unknown");
       const triggerOk = policy.selectedTriggerTransitions.length === 0 || policy.selectedTriggerTransitions.includes(trade.triggerTransition ?? "none");
@@ -738,7 +1141,7 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     const grossProfit = eligible.filter((trade) => trade.pnlPct > 0).reduce((sum, trade) => sum + trade.pnlPct, 0);
     const grossLoss = Math.abs(eligible.filter((trade) => trade.pnlPct <= 0).reduce((sum, trade) => sum + trade.pnlPct, 0));
     const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : 0;
-    const phantomCount = eligible.filter((trade) => trade.phantomNoiseLabel === "noise_trade").length;
+    const phantomCount = eligible.filter((trade) => "phantomNoiseLabel" in trade && trade.phantomNoiseLabel === "noise_trade").length;
     const maxDrawdownPct = Math.max(0, ...eligible.map((trade) => Math.max(0, -(trade.pnlPct ?? 0))));
     const winRate = eligible.length > 0 ? wins / eligible.length : 0;
     const slHitRate = eligible.length > 0 ? slHits / eligible.length : 0;
@@ -785,6 +1188,7 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
       leakagePassed: policy.leakageAudit.passed,
       monthlyBreakdown: [],
       reasons: [],
+      sourcePool,
       selectedFeaturesSummary: policy.selectedCoreFeatures.map((feature) => feature.key),
       tpSlTrailingSummary: [
         `tp=${asNumber(policy.tpRules.targetPct, 0).toFixed(2)}%`,
@@ -799,11 +1203,14 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     const winners = subset.filter((trade) => trade.pnlPct > 0);
     const winnerMae = winners.map((trade) => Math.abs(trade.maePct ?? 0)).filter((value) => value > 0);
     const winnerMfe = winners.map((trade) => Math.abs(trade.mfePct ?? 0)).filter((value) => value > 0);
+    const unit = inferPercentUnit([...winnerMae, ...winnerMfe]);
+    const winnerMaePct = winnerMae.map((value) => toPercentagePoints(value, unit) ?? 0).filter((value) => value > 0);
+    const winnerMfePct = winnerMfe.map((value) => toPercentagePoints(value, unit) ?? 0).filter((value) => value > 0);
     return {
-      tpTargetPct: Number(percentile(winnerMfe, 0.5).toFixed(2)),
-      slRiskPct: Number(Math.max(0.5, percentile(winnerMae, 0.9)).toFixed(2)),
-      trailingActivationPct: Number(Math.max(1, percentile(winnerMfe, 0.25)).toFixed(2)),
-      trailingDistancePct: Number(Math.max(0.5, percentile(winnerMae, 0.75)).toFixed(2)),
+      tpTargetPct: Number(Math.max(0.5, percentile(winnerMfePct, 0.5)).toFixed(2)),
+      slRiskPct: Number(Math.max(0.35, percentile(winnerMaePct, 0.9)).toFixed(2)),
+      trailingActivationPct: Number(Math.max(0.4, percentile(winnerMfePct, 0.25)).toFixed(2)),
+      trailingDistancePct: Number(Math.max(0.25, percentile(winnerMaePct, 0.75)).toFixed(2)),
       minHoldBars: Math.max(1, Math.round(average(winners.map((trade) => Math.max(1, ((trade.exitTs ?? trade.entryTs) - trade.entryTs) / 60))))),
     };
   }

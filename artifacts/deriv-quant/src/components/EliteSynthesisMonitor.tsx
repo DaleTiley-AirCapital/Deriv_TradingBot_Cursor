@@ -177,10 +177,10 @@ export function EliteSynthesisMonitor({ variant = "sidebar", className }: EliteS
 
   if (variant === "sidebar") {
     return (
-      <div className="px-4 pt-3">
+      <div className="px-4 pt-3 relative">
         {summary}
         {expanded && (
-          <div className="mt-2 rounded-xl border border-cyan-500/25 bg-slate-950/95 p-3 shadow-2xl space-y-3">
+          <div className="absolute left-[calc(100%-8px)] top-3 z-[70] w-[340px] rounded-xl border border-cyan-500/25 bg-slate-950/95 p-3 shadow-2xl space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold text-cyan-100">Integrated Elite Synthesis</p>

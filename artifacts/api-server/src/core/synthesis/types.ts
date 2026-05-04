@@ -5,6 +5,14 @@ export type EliteSynthesisJobStatus =
   | "failed"
   | "cancelled";
 
+export type EliteSynthesisResultState =
+  | "completed_target_achieved"
+  | "completed_exhausted_no_target"
+  | "completed_foundation_incomplete"
+  | "failed_validation"
+  | "failed_error"
+  | "cancelled";
+
 export type EliteSynthesisStage =
   | "queued"
   | "loading_data"
@@ -45,6 +53,20 @@ export type EliteSynthesisLeakageRule =
   | "no_post_entry_candle_data"
   | "no_legacy_diagnostic_score";
 
+export type EliteSynthesisValidationError =
+  | "missing_reconciliation_moves"
+  | "missing_runtime_family"
+  | "missing_selected_bucket"
+  | "missing_trigger_transition"
+  | "missing_trigger_direction"
+  | "missing_quality_tier"
+  | "missing_regime"
+  | "missing_mfe_mae"
+  | "missing_runtime_or_rebuilt_candidates"
+  | "missing_calibrated_moves"
+  | "missing_phase_snapshots"
+  | "unit_validation_failed";
+
 export type EliteSynthesisObjectiveWeights = {
   winRate?: number;
   slHitRate?: number;
@@ -83,6 +105,27 @@ export type EliteSynthesisFeatureSummary = {
   monthlyStabilityScore: number;
   kept: boolean;
   reasons: string[];
+};
+
+export type EliteSynthesisDataAvailabilityMetric = {
+  total: number;
+  present: number;
+  missing: number;
+  missingRate: number;
+  nullableAllowed: boolean;
+  notes: string[];
+};
+
+export type EliteSynthesisDataAvailability = {
+  counts: Record<string, number>;
+  metrics: Record<string, EliteSynthesisDataAvailabilityMetric>;
+};
+
+export type EliteSynthesisUnitValidation = {
+  passed: boolean;
+  unit: "percentage_points" | "fraction" | "mixed";
+  notes: string[];
+  sampledRanges: Record<string, { min: number | null; max: number | null }>;
 };
 
 export type EliteSynthesisEntryTimingRule = {
@@ -155,6 +198,7 @@ export type EliteSynthesisPassLog = {
   stage: EliteSynthesisStage;
   candidateCount: number;
   evaluatedCount: number;
+  searchSpaceRemaining: number;
   bestPolicyId: string | null;
   trades: number;
   wins: number;
@@ -168,8 +212,10 @@ export type EliteSynthesisPassLog = {
   phantomCount: number;
   selectedFeatures: string[];
   mutationSummary: string;
+  changedParameters: string[];
   reasonBestImproved: string;
   bestSoFar: boolean;
+  reasonStopped?: string | null;
 };
 
 export type EliteSynthesisLeakageAudit = {
@@ -193,6 +239,7 @@ export type EliteSynthesisResult = {
   jobId: number;
   serviceId: string;
   status: EliteSynthesisJobStatus;
+  resultState: EliteSynthesisResultState;
   targetAchieved: boolean;
   bestPolicySummary: EliteSynthesisPolicySummary | null;
   topPolicySummaries: EliteSynthesisPolicySummary[];
@@ -204,6 +251,10 @@ export type EliteSynthesisResult = {
   triggerRebuildSummary: Record<string, unknown>;
   bottleneckSummary: EliteSynthesisBottleneckAnalysis;
   leakageAuditSummary: EliteSynthesisLeakageAudit;
+  validationErrors: EliteSynthesisValidationError[];
+  dataAvailability: EliteSynthesisDataAvailability;
+  unitValidation: EliteSynthesisUnitValidation;
+  missingFeatureImplementations: string[];
   windowSummary: Record<string, unknown>;
   sourceRunIds: Record<string, number | null>;
   datasetSummary: Record<string, unknown>;

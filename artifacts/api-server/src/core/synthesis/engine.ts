@@ -6,14 +6,18 @@ import {
 } from "./jobs.js";
 import type {
   EliteSynthesisBottleneck,
+  EliteSynthesisDataAvailability,
   EliteSynthesisFeatureSummary,
   EliteSynthesisLeakageAudit,
   EliteSynthesisParams,
   EliteSynthesisPassLog,
   EliteSynthesisPolicyArtifact,
   EliteSynthesisPolicySummary,
+  EliteSynthesisResultState,
   EliteSynthesisResult,
   EliteSynthesisSearchProfile,
+  EliteSynthesisUnitValidation,
+  EliteSynthesisValidationError,
 } from "./types.js";
 import { profileDefaults } from "./types.js";
 
@@ -127,6 +131,30 @@ function bestSummaryFromPolicy(policy: EliteSynthesisPolicySummary | null, evalu
   };
 }
 
+type PolicySeed = {
+  passNumber: number;
+  sourcePool: "runtime_trades" | "rebuilt_trigger_candidates";
+  selectedRuntimeArchetypes: string[];
+  selectedBuckets: string[];
+  selectedMoveSizeBuckets: string[];
+  selectedTriggerTransitions: string[];
+  featureSet: EliteSynthesisFeatureSummary[];
+  mutationSummary: string;
+};
+
+function emptyDataAvailability(): EliteSynthesisDataAvailability {
+  return { counts: {}, metrics: {} };
+}
+
+function emptyUnitValidation(): EliteSynthesisUnitValidation {
+  return {
+    passed: false,
+    unit: "mixed",
+    notes: ["Unit validation not available."],
+    sampledRanges: {},
+  };
+}
+
 function buildPolicyArtifact(params: {
   adapter: SymbolSynthesisAdapter;
   dataset: UnifiedSynthesisDataset;
@@ -137,13 +165,22 @@ function buildPolicyArtifact(params: {
   selectedMoveSizeBuckets: string[];
   selectedTriggerTransitions: string[];
   mutationSummary: string;
+  sourcePool: "runtime_trades" | "rebuilt_trigger_candidates";
 }) {
-  const exitSubset = params.dataset.trades.filter((trade) =>
+  const exitSubset = (params.sourcePool === "rebuilt_trigger_candidates"
+    ? params.dataset.rebuiltTriggerCandidates
+    : params.dataset.trades).filter((trade) =>
     params.selectedRuntimeArchetypes.includes(trade.runtimeFamily ?? "unknown")
     && params.selectedBuckets.includes(trade.selectedBucket ?? "unknown")
     && params.selectedTriggerTransitions.includes(trade.triggerTransition ?? "none"),
   );
-  const exitRules = params.adapter.deriveExitPolicyFromSubset(params.dataset, exitSubset);
+  const exitRules = params.adapter.deriveExitPolicyFromSubset(params.dataset, exitSubset as never);
+  const subsetConfidence = exitSubset
+    .map((trade) => Number((trade as Record<string, unknown>).confidence))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const subsetSetupMatch = exitSubset
+    .map((trade) => Number((trade as Record<string, unknown>).setupMatch))
+    .filter((value) => Number.isFinite(value) && value > 0);
   const policy: EliteSynthesisPolicyArtifact = {
     policyId: `crash300-elite-pass-${params.passNumber}`,
     version: "0.1.0-foundation",
@@ -157,9 +194,10 @@ function buildPolicyArtifact(params: {
     selectedTriggerTransitions: params.selectedTriggerTransitions,
     selectedCoreFeatures: params.featureSet,
     entryThresholds: {
+      sourcePool: params.sourcePool,
       mutationSummary: params.mutationSummary,
-      minConfidence: 0,
-      minSetupMatch: 0,
+      minConfidence: subsetConfidence.length > 0 ? Number(median(subsetConfidence).toFixed(4)) : 0.45,
+      minSetupMatch: subsetSetupMatch.length > 0 ? Number(median(subsetSetupMatch).toFixed(4)) : 0.45,
     },
     entryTimingRules: [
       {
@@ -214,7 +252,7 @@ function buildPolicyArtifact(params: {
   return policy;
 }
 
-function generateInitialPolicies(dataset: UnifiedSynthesisDataset, features: EliteSynthesisFeatureSummary[]) {
+function generateInitialPolicies(dataset: UnifiedSynthesisDataset, features: EliteSynthesisFeatureSummary[]): PolicySeed[] {
   const groups = new Map<string, {
     family: string;
     bucket: string;
@@ -234,11 +272,12 @@ function generateInitialPolicies(dataset: UnifiedSynthesisDataset, features: Eli
     groups.set(key, group);
   }
   return [...groups.values()]
-    .filter((group) => group.trades >= 2)
+    .filter((group) => group.trades >= 2 && group.family !== "unknown" && group.bucket !== "unknown" && group.trigger !== "none")
     .sort((a, b) => (b.wins / Math.max(1, b.trades)) - (a.wins / Math.max(1, a.trades)))
     .slice(0, 20)
     .map((group, index) => ({
       passNumber: 1,
+      sourcePool: "runtime_trades" as const,
       selectedRuntimeArchetypes: [group.family],
       selectedBuckets: [group.bucket],
       selectedMoveSizeBuckets: dataset.moves
@@ -251,9 +290,10 @@ function generateInitialPolicies(dataset: UnifiedSynthesisDataset, features: Eli
     }));
 }
 
-function generatePoliciesFromTriggerRebuild(dataset: UnifiedSynthesisDataset, rebuiltCandidates: Array<Record<string, unknown>>, features: EliteSynthesisFeatureSummary[]) {
+function generatePoliciesFromTriggerRebuild(dataset: UnifiedSynthesisDataset, rebuiltCandidates: UnifiedSynthesisDataset["rebuiltTriggerCandidates"], features: EliteSynthesisFeatureSummary[]): PolicySeed[] {
   const groups = new Map<string, number>();
   for (const candidate of rebuiltCandidates) {
+    if (!candidate.eligible) continue;
     const family = String(candidate.runtimeFamily ?? "unknown");
     const bucket = String(candidate.selectedBucket ?? "unknown");
     const trigger = String(candidate.triggerTransition ?? "none");
@@ -267,14 +307,15 @@ function generatePoliciesFromTriggerRebuild(dataset: UnifiedSynthesisDataset, re
       const [family, bucket, trigger] = key.split("|");
       return {
         passNumber: 2,
+        sourcePool: "rebuilt_trigger_candidates" as const,
         selectedRuntimeArchetypes: [family ?? "unknown"],
         selectedBuckets: [bucket ?? "unknown"],
         selectedMoveSizeBuckets: dataset.moves
-          .filter((move) => (move.phaseDerivedFamily ?? "unknown") === family)
+          .filter((move) => (move.phaseDerivedFamily ?? "unknown") === family || (move.phaseDerivedBucket ?? move.calibratedMoveSizeBucket) === bucket)
           .map((move) => move.calibratedMoveSizeBucket)
           .slice(0, 5),
         selectedTriggerTransitions: [trigger ?? "none"],
-        featureSet: features.filter((feature) => feature.kept).slice(0, 8 + index % 4),
+        featureSet: features.filter((feature) => feature.kept).slice(0, Math.max(4, 8 + index % 4)),
         mutationSummary: index === 0 ? "rebuilt_from_calibrated_move_offsets" : `rebuilt_trigger_cluster_${index + 1}`,
       };
     });
@@ -418,6 +459,70 @@ export async function runEliteSynthesisJob(params: {
   });
   await yieldToEventLoop();
 
+  const validationErrors = dataset.validationErrors ?? [];
+  if (validationErrors.length > 0) {
+    const resultState: EliteSynthesisResultState = validationErrors.includes("missing_calibrated_moves")
+      || validationErrors.includes("missing_phase_snapshots")
+      || validationErrors.includes("missing_runtime_or_rebuilt_candidates")
+      ? "completed_foundation_incomplete"
+      : "failed_validation";
+    const validationResult: EliteSynthesisResult = {
+      jobId: params.jobId,
+      serviceId: params.serviceId,
+      status: "completed",
+      resultState,
+      targetAchieved: false,
+      bestPolicySummary: null,
+      topPolicySummaries: [],
+      bestPolicyArtifact: null,
+      passLogSummary: [],
+      fullPassLog: [],
+      featureDistributions: [],
+      exitOptimisationTable: [],
+      triggerRebuildSummary: { attempted: false, candidateCount: 0, eligibleCount: 0 },
+      bottleneckSummary: {
+        targetAchieved: false,
+        triggerRebuildAttempted: false,
+        classification: "insufficient_data_quality",
+        reasons: validationErrors,
+        futureImplementationRecommendation: "Repair synthesis dataset inputs before running search again.",
+      },
+      leakageAuditSummary: defaultLeakageAudit(),
+      validationErrors,
+      dataAvailability: dataset.dataAvailability ?? emptyDataAvailability(),
+      unitValidation: dataset.unitValidation ?? emptyUnitValidation(),
+      missingFeatureImplementations: dataset.missingFeatureImplementations ?? [],
+      windowSummary: {
+        startTs: effectiveStartTs,
+        endTs: effectiveEndTs,
+        windowDays: effectiveWindowDays,
+        searchProfile,
+        maxPasses,
+        patiencePasses,
+        jobGrade: searchProfile === "fast" ? "smoke_plumbing_only" : "strategy_grade_review",
+      },
+      sourceRunIds: dataset.sourceRunIds,
+      datasetSummary: dataset.summary,
+    };
+    await updateEliteSynthesisJob(params.jobId, {
+      status: "completed",
+      stage: "completed",
+      progressPct: 100,
+      message: `Integrated elite synthesis stopped: ${resultState}`,
+      heartbeatAt: nowIso(),
+      completedAt: nowIso(),
+      errorSummary: {
+        validationErrors,
+      },
+      resultSummary: {
+        resultState,
+        validationErrors,
+      },
+      resultArtifact: validationResult,
+    });
+    return validationResult;
+  }
+
   const features = featureSummaryFromDataset(dataset);
   await updateEliteSynthesisJob(params.jobId, {
     stage: "feature_elimination",
@@ -435,8 +540,11 @@ export async function runEliteSynthesisJob(params: {
   let bottleneck: EliteSynthesisBottleneck = "current_runtime_pool_insufficient";
   let noImprovementPasses = 0;
   let evaluatedPolicyCount = 0;
+  let searchSpaceRemaining = 0;
+  let stopReason: string | null = null;
 
   let policySeeds = generateInitialPolicies(dataset, features);
+  searchSpaceRemaining = policySeeds.length;
   await updateEliteSynthesisJob(params.jobId, {
     stage: "evaluating_current_pool",
     progressPct: 32,
@@ -452,6 +560,7 @@ export async function runEliteSynthesisJob(params: {
         jobId: params.jobId,
         serviceId: params.serviceId,
         status: "cancelled",
+        resultState: "cancelled",
         targetAchieved: false,
         bestPolicySummary,
         topPolicySummaries: topPolicies.slice(0, 20),
@@ -469,6 +578,10 @@ export async function runEliteSynthesisJob(params: {
           futureImplementationRecommendation: "Restart synthesis if a full search is still required.",
         },
         leakageAuditSummary: bestPolicyArtifact?.leakageAudit ?? defaultLeakageAudit(),
+        validationErrors: dataset.validationErrors ?? [],
+        dataAvailability: dataset.dataAvailability ?? emptyDataAvailability(),
+        unitValidation: dataset.unitValidation ?? emptyUnitValidation(),
+        missingFeatureImplementations: dataset.missingFeatureImplementations ?? [],
         windowSummary: { startTs: effectiveStartTs, endTs: effectiveEndTs, windowDays: effectiveWindowDays },
         sourceRunIds: dataset.sourceRunIds,
         datasetSummary: dataset.summary,
@@ -497,15 +610,22 @@ export async function runEliteSynthesisJob(params: {
         heartbeatAt: nowIso(),
       });
       const rebuilt = await adapter.generateTriggerCandidatesFromMoveOffsets(dataset);
+      dataset.rebuiltTriggerCandidates = rebuilt;
       policySeeds = generatePoliciesFromTriggerRebuild(dataset, rebuilt, features);
+      searchSpaceRemaining = policySeeds.length;
       await updateEliteSynthesisJob(params.jobId, {
         stage: "generating_policies",
         progressPct: 42,
         currentPass: passNumber,
-        message: `Generated ${policySeeds.length} policies from rebuilt trigger candidates`,
+        message: `Generated ${policySeeds.length} policies from ${rebuilt.filter((candidate) => candidate.eligible).length} eligible rebuilt trigger candidates`,
         heartbeatAt: nowIso(),
       });
       continue;
+    }
+
+    if (policySeeds.length === 0 && rebuiltTriggerAttempted) {
+      stopReason = "search_space_exhausted:no_policy_seeds";
+      break;
     }
 
     await updateEliteSynthesisJob(params.jobId, {
@@ -531,6 +651,7 @@ export async function runEliteSynthesisJob(params: {
         selectedMoveSizeBuckets: seed.selectedMoveSizeBuckets,
         selectedTriggerTransitions: seed.selectedTriggerTransitions,
         mutationSummary: seed.mutationSummary,
+        sourcePool: seed.sourcePool,
       });
       const evaluation = await adapter.evaluatePolicyOnHistoricalData(dataset, artifact);
       artifact.objectiveScore = evaluation.objectiveScore;
@@ -592,8 +713,16 @@ export async function runEliteSynthesisJob(params: {
       phantomCount: passBest?.phantomCount ?? 0,
       selectedFeatures: passBest?.selectedFeaturesSummary ?? [],
       mutationSummary: policySeeds[0]?.mutationSummary ?? "none",
+      changedParameters: [
+        `source_pool:${policySeeds[0]?.sourcePool ?? "runtime_trades"}`,
+        `archetypes:${(policySeeds[0]?.selectedRuntimeArchetypes ?? []).join(",")}`,
+        `buckets:${(policySeeds[0]?.selectedBuckets ?? []).join(",")}`,
+        `triggers:${(policySeeds[0]?.selectedTriggerTransitions ?? []).join(",")}`,
+      ],
       reasonBestImproved: improved ? "objective_score_improved" : "no_improvement_this_pass",
       bestSoFar: improved,
+      searchSpaceRemaining,
+      reasonStopped: null,
     });
 
     await updateEliteSynthesisJob(params.jobId, {
@@ -610,7 +739,10 @@ export async function runEliteSynthesisJob(params: {
 
     if (targetAchieved(bestPolicySummary)) {
       bottleneck = "none";
-      if (noImprovementPasses >= patiencePasses) break;
+      if (noImprovementPasses >= patiencePasses) {
+        stopReason = "target_achieved_and_patience_exhausted";
+        break;
+      }
     }
 
     if (!targetAchieved(bestPolicySummary) && !rebuiltTriggerAttempted && passNumber >= Math.max(2, Math.floor(maxPasses / 3))) {
@@ -624,26 +756,35 @@ export async function runEliteSynthesisJob(params: {
         heartbeatAt: nowIso(),
       });
       const rebuilt = await adapter.generateTriggerCandidatesFromMoveOffsets(dataset);
+      dataset.rebuiltTriggerCandidates = rebuilt;
       policySeeds = generatePoliciesFromTriggerRebuild(dataset, rebuilt, features);
+      searchSpaceRemaining = policySeeds.length;
       continue;
-    }
-
-    if (noImprovementPasses >= patiencePasses && passNumber >= 2) {
-      break;
     }
 
     policySeeds = policySeeds.map((seed, index) => ({
       ...seed,
       passNumber: passNumber + 1,
-      featureSet: seed.featureSet.slice(0, Math.max(4, seed.featureSet.length - (index % 2 === 0 ? 1 : 0))),
+      featureSet: seed.featureSet.slice(
+        index % 2 === 0 ? 0 : 1,
+        Math.max(4, seed.featureSet.length - (index % 2 === 0 ? 1 : 0)),
+      ),
+      selectedTriggerTransitions: index % 3 === 0 ? [...seed.selectedTriggerTransitions].reverse() : seed.selectedTriggerTransitions,
       mutationSummary: `mutated_from_pass_${passNumber}_candidate_${index + 1}`,
     }));
+    searchSpaceRemaining = policySeeds.length;
+    if (passNumber >= maxPasses) {
+      stopReason = "max_passes_reached";
+    }
   }
 
   if (!targetAchieved(bestPolicySummary)) {
     bottleneck = rebuiltTriggerAttempted
       ? "rebuilt_trigger_pool_still_insufficient"
       : "current_runtime_pool_insufficient";
+  }
+  if (!stopReason) {
+    stopReason = targetAchieved(bestPolicySummary) ? "target_achieved" : "search_space_exhausted";
   }
 
   await updateEliteSynthesisJob(params.jobId, {
@@ -662,6 +803,11 @@ export async function runEliteSynthesisJob(params: {
     jobId: params.jobId,
     serviceId: params.serviceId,
     status: "completed",
+    resultState: targetAchieved(bestPolicySummary)
+      ? "completed_target_achieved"
+      : rebuiltTriggerAttempted || passLog.length >= maxPasses
+        ? "completed_exhausted_no_target"
+        : "completed_foundation_incomplete",
     targetAchieved: targetAchieved(bestPolicySummary),
     bestPolicySummary,
     topPolicySummaries,
@@ -693,7 +839,15 @@ export async function runEliteSynthesisJob(params: {
     exitOptimisationTable: bestPolicyArtifact ? [bestPolicyArtifact.tpRules, bestPolicyArtifact.slRules, bestPolicyArtifact.trailingRules] : [],
     triggerRebuildSummary: {
       attempted: rebuiltTriggerAttempted,
+      candidateCount: dataset.rebuiltTriggerCandidates.length,
+      eligibleCount: dataset.rebuiltTriggerCandidates.filter((candidate) => candidate.eligible).length,
+      rejectedCount: dataset.rebuiltTriggerCandidates.filter((candidate) => !candidate.eligible).length,
       reason: rebuiltTriggerAttempted ? "current_runtime_pool_insufficient" : "not_required_in_current_search",
+      topRejectReasons: Object.entries(dataset.rebuiltTriggerCandidates.reduce<Record<string, number>>((acc, candidate) => {
+        if (!candidate.rejectReason) return acc;
+        acc[candidate.rejectReason] = (acc[candidate.rejectReason] ?? 0) + 1;
+        return acc;
+      }, {})).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([reason, count]) => ({ reason, count })),
     },
     bottleneckSummary: {
       targetAchieved: targetAchieved(bestPolicySummary),
@@ -711,6 +865,10 @@ export async function runEliteSynthesisJob(params: {
         : "Use a deeper profile or add more historical windows before promoting a runtime candidate.",
     },
     leakageAuditSummary: bestPolicyArtifact?.leakageAudit ?? defaultLeakageAudit(),
+    validationErrors: dataset.validationErrors ?? [],
+    dataAvailability: dataset.dataAvailability ?? emptyDataAvailability(),
+    unitValidation: dataset.unitValidation ?? emptyUnitValidation(),
+    missingFeatureImplementations: dataset.missingFeatureImplementations ?? [],
     windowSummary: {
       startTs: effectiveStartTs,
       endTs: effectiveEndTs,
@@ -718,6 +876,8 @@ export async function runEliteSynthesisJob(params: {
       searchProfile,
       maxPasses,
       patiencePasses,
+      jobGrade: searchProfile === "fast" ? "smoke_plumbing_only" : "strategy_grade_review",
+      reasonStopped: stopReason,
     },
     sourceRunIds: dataset.sourceRunIds,
     datasetSummary: dataset.summary,
@@ -734,9 +894,11 @@ export async function runEliteSynthesisJob(params: {
     completedAt: nowIso(),
     bestSummary: bestSummaryFromPolicy(bestPolicySummary, evaluatedPolicyCount, topPolicies.length),
     resultSummary: {
+      resultState: result.resultState,
       targetAchieved: result.targetAchieved,
       topPolicyCount: result.topPolicySummaries.length,
       bottleneck: result.bottleneckSummary.classification,
+      validationErrors: result.validationErrors,
     },
     resultArtifact: result,
   });
