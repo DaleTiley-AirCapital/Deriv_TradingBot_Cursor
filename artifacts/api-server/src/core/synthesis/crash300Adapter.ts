@@ -43,6 +43,7 @@ import type {
 const SYMBOL = "CRASH300";
 const MAX_CONTROL_SAMPLES = 60;
 const LOOP_YIELD_INTERVAL = 24;
+const REBUILT_TRIGGER_OFFSETS = [-10, -5, -3, -2, -1, 0, 1, 2, 3, 5, 10] as const;
 
 type DatasetBuildProgress = {
   stage: EliteSynthesisStage;
@@ -238,6 +239,217 @@ function bucketLabelFromPct(movePct: number): Crash300MoveSizeBucket {
   if (lower <= 6) return "6_to_8_pct";
   if (lower <= 8) return "8_to_10_pct";
   return "10_plus_pct";
+}
+
+function canonicalMoveSizeBucketFromLabel(label: string | null | undefined): Crash300MoveSizeBucket | null {
+  const value = String(label ?? "").trim();
+  if (!value) return null;
+  const match = value.match(/(5_to_6_pct|6_to_8_pct|8_to_10_pct|10_plus_pct)/);
+  return (match?.[1] as Crash300MoveSizeBucket | undefined) ?? null;
+}
+
+function directionFromMove(move: SynthesisMoveRecord): "buy" | "sell" {
+  return move.direction === "down" ? "sell" : "buy";
+}
+
+function pctDeltaPoints(direction: "buy" | "sell", entryPrice: number, price: number): number {
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(price)) return 0;
+  const raw = ((price - entryPrice) / entryPrice) * 100;
+  return direction === "buy" ? raw : -raw;
+}
+
+function findEntryCandleIndex(candles: CandleRow[], targetTs: number): number {
+  for (let index = 0; index < candles.length; index += 1) {
+    if ((candles[index]?.closeTs ?? 0) >= targetTs) return index;
+  }
+  return -1;
+}
+
+function buildNoTradeCandidate(params: {
+  move: SynthesisMoveRecord;
+  candidateId: string;
+  offsetBars: number;
+  entryTs: number;
+  reason: string;
+  runtimeFamily?: string | null;
+  selectedBucket?: string | null;
+  triggerTransition?: string | null;
+  triggerDirection?: string | null;
+  liveSafeFeatures?: Record<string, number | string | boolean | null>;
+  projectedMovePct?: number | null;
+  percentFields?: Record<string, SynthesisPercentFieldMeta>;
+}): SynthesisRebuiltTriggerCandidateRecord {
+  return {
+    kind: "rebuilt_trigger_candidate",
+    candidateId: params.candidateId,
+    moveId: params.move.moveId,
+    matchedCalibratedMoveId: params.move.moveId,
+    sourcePool: "rebuilt_trigger_candidates",
+    entryTs: params.entryTs,
+    exitTs: null,
+    entryPrice: null,
+    exitPrice: null,
+    offsetLabel: `T${params.offsetBars >= 0 ? "+" : ""}${params.offsetBars}`,
+    offsetBars: params.offsetBars,
+    direction: directionFromMove(params.move),
+    runtimeFamily: params.runtimeFamily ?? null,
+    selectedBucket: params.selectedBucket ?? null,
+    triggerTransition: params.triggerTransition ?? null,
+    triggerDirection: params.triggerDirection ?? null,
+    qualityTier: params.move.qualityTier,
+    setupMatch: null,
+    confidence: null,
+    triggerStrengthScore: null,
+    projectedMovePct: params.projectedMovePct ?? Math.abs(params.move.realisticMfeAfterEntry ?? params.move.movePct ?? 0),
+    projectedMovePctPoints: params.projectedMovePct ?? Math.abs(params.move.realisticMfeAfterEntry ?? params.move.movePct ?? 0),
+    slPct: null,
+    slPctPoints: null,
+    trailingActivationPct: null,
+    trailingActivationPctPoints: null,
+    trailingDistancePct: null,
+    trailingDistancePctPoints: null,
+    minHoldBars: null,
+    pnlPct: 0,
+    pnlPctPoints: 0,
+    mfePct: null,
+    mfePctPoints: null,
+    maePct: null,
+    maePctPoints: null,
+    exitReason: null,
+    simulatedTrade: false,
+    eligible: false,
+    rejectReason: params.reason,
+    noTradeReason: params.reason,
+    percentFields: params.percentFields,
+    liveSafeFeatures: {
+      ...params.move.liveSafeFeatures,
+      ...(params.liveSafeFeatures ?? {}),
+    },
+  };
+}
+
+function simulateCandidateTrade(params: {
+  candles: CandleRow[];
+  entryIndex: number;
+  move: SynthesisMoveRecord;
+  direction: "buy" | "sell";
+  tpPctPoints: number;
+  slPctPoints: number;
+  trailingActivationPctPoints: number;
+  trailingDistancePctPoints: number;
+  minHoldBars: number;
+  maxExitTs: number;
+}): {
+  exitIndex: number | null;
+  exitReason: string | null;
+  pnlPctPoints: number;
+  mfePctPoints: number;
+  maePctPoints: number;
+  exitPrice: number | null;
+  noTradeReason: string | null;
+} {
+  const entryCandle = params.candles[params.entryIndex];
+  const entryPrice = entryCandle?.close;
+  if (!entryCandle || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+    return {
+      exitIndex: null,
+      exitReason: null,
+      pnlPctPoints: 0,
+      mfePctPoints: 0,
+      maePctPoints: 0,
+      exitPrice: null,
+      noTradeReason: "missing_price",
+    };
+  }
+
+  let bestFavourable = 0;
+  let worstAdverse = 0;
+  let trailingArmed = false;
+  let trailingStopPct: number | null = null;
+
+  for (let index = params.entryIndex + 1; index < params.candles.length; index += 1) {
+    const candle = params.candles[index];
+    if (!candle) continue;
+    if (candle.closeTs > params.maxExitTs) {
+      const pnlAtWindowEnd = pctDeltaPoints(params.direction, entryPrice, candle.close);
+      return {
+        exitIndex: index,
+        exitReason: "window_end",
+        pnlPctPoints: Number(pnlAtWindowEnd.toFixed(4)),
+        mfePctPoints: Number(bestFavourable.toFixed(4)),
+        maePctPoints: Number((-Math.abs(worstAdverse)).toFixed(4)),
+        exitPrice: candle.close,
+        noTradeReason: null,
+      };
+    }
+
+    const favourableHigh = pctDeltaPoints(params.direction, entryPrice, params.direction === "buy" ? candle.high : candle.low);
+    const adverseLow = pctDeltaPoints(params.direction, entryPrice, params.direction === "buy" ? candle.low : candle.high);
+    bestFavourable = Math.max(bestFavourable, favourableHigh);
+    worstAdverse = Math.max(worstAdverse, Math.abs(Math.min(adverseLow, 0)));
+
+    if (params.slPctPoints > 0 && adverseLow <= -params.slPctPoints) {
+      const exitPrice = params.direction === "buy"
+        ? entryPrice * (1 - params.slPctPoints / 100)
+        : entryPrice * (1 + params.slPctPoints / 100);
+      return {
+        exitIndex: index,
+        exitReason: "sl_hit",
+        pnlPctPoints: Number((-params.slPctPoints).toFixed(4)),
+        mfePctPoints: Number(bestFavourable.toFixed(4)),
+        maePctPoints: Number((-Math.abs(worstAdverse)).toFixed(4)),
+        exitPrice,
+        noTradeReason: null,
+      };
+    }
+
+    if (params.tpPctPoints > 0 && favourableHigh >= params.tpPctPoints) {
+      const exitPrice = params.direction === "buy"
+        ? entryPrice * (1 + params.tpPctPoints / 100)
+        : entryPrice * (1 - params.tpPctPoints / 100);
+      return {
+        exitIndex: index,
+        exitReason: "tp_hit",
+        pnlPctPoints: Number(params.tpPctPoints.toFixed(4)),
+        mfePctPoints: Number(bestFavourable.toFixed(4)),
+        maePctPoints: Number((-Math.abs(worstAdverse)).toFixed(4)),
+        exitPrice,
+        noTradeReason: null,
+      };
+    }
+
+    if (params.trailingActivationPctPoints > 0 && bestFavourable >= params.trailingActivationPctPoints) {
+      trailingArmed = true;
+      trailingStopPct = Math.max(0, bestFavourable - params.trailingDistancePctPoints);
+    }
+
+    if (trailingArmed && trailingStopPct != null && index - params.entryIndex >= params.minHoldBars) {
+      if (adverseLow <= trailingStopPct) {
+        const exitPrice = params.direction === "buy"
+          ? entryPrice * (1 + trailingStopPct / 100)
+          : entryPrice * (1 - trailingStopPct / 100);
+        return {
+          exitIndex: index,
+          exitReason: "trailing_exit",
+          pnlPctPoints: Number(trailingStopPct.toFixed(4)),
+          mfePctPoints: Number(bestFavourable.toFixed(4)),
+          maePctPoints: Number((-Math.abs(worstAdverse)).toFixed(4)),
+          exitPrice,
+          noTradeReason: null,
+        };
+      }
+    }
+  }
+
+  return {
+    exitIndex: null,
+    exitReason: null,
+    pnlPctPoints: 0,
+    mfePctPoints: Number(bestFavourable.toFixed(4)),
+    maePctPoints: Number((-Math.abs(worstAdverse)).toFixed(4)),
+    exitPrice: null,
+    noTradeReason: "outside_backtest_window",
+  };
 }
 
 function inferMoveDirection(value: unknown): "up" | "down" {
@@ -1109,6 +1321,13 @@ export async function buildUnifiedCrash300Dataset(params: {
     unitValidation,
     missingFeatureImplementations,
     reconciliation,
+    internalContext: {
+      candles,
+      runtimeModel: promoted,
+      detectedMoves: detectedMoveRefs,
+      windowStartTs: params.startTs,
+      windowEndTs: params.endTs,
+    },
     summary: {
       calibrationRuns: calibrationRuns.length,
       backtestRuns: backtestRuns.length,
@@ -1241,133 +1460,160 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
   }
 
   async generateTriggerCandidatesFromMoveOffsets(dataset: UnifiedSynthesisDataset) {
+    const internalContext = asRecord(dataset.internalContext);
+    const candles = Array.isArray(internalContext.candles)
+      ? (internalContext.candles as CandleRow[])
+      : [];
+    const runtimeModel = internalContext.runtimeModel as PromotedSymbolRuntimeModel | undefined;
+    const detectedMoves = Array.isArray(internalContext.detectedMoves)
+      ? (internalContext.detectedMoves as Array<{ id: number; startTs: number; endTs: number; direction: "up" | "down"; movePct: number }>)
+      : [];
+    const windowStartTs = asNumber(internalContext.windowStartTs, 0);
+    const windowEndTs = asNumber(internalContext.windowEndTs, 0);
     const candidates: SynthesisRebuiltTriggerCandidateRecord[] = [];
     for (const move of dataset.moves) {
-      const snapshots = move.triggerOffsets
-        .map((snapshot) => asRecord(snapshot))
-        .filter((snapshot) => Number.isFinite(Number(snapshot.offsetBars)));
-      if (snapshots.length === 0) {
+      for (const offsetBars of REBUILT_TRIGGER_OFFSETS) {
+        const candidateId = `move-${move.moveId}-offset-${offsetBars}`;
+        const entryTs = move.startTs + offsetBars * 60;
+        if (!runtimeModel || candles.length === 0 || detectedMoves.length === 0) {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_entry_candle" }));
+          continue;
+        }
+        if ((windowStartTs > 0 && entryTs < windowStartTs) || (windowEndTs > 0 && entryTs > windowEndTs)) {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "outside_backtest_window" }));
+          continue;
+        }
+        const entryIndex = findEntryCandleIndex(candles, entryTs);
+        if (entryIndex < 0) {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_entry_candle" }));
+          continue;
+        }
+        const entryCandle = candles[entryIndex];
+        if (!entryCandle || !Number.isFinite(entryCandle.close) || entryCandle.close <= 0) {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_price" }));
+          continue;
+        }
+
+        const windowSlice = candles.slice(Math.max(0, entryIndex - 240), entryIndex + 1);
+        const built = buildFeatureVectorFromContextTrigger({
+          candles: windowSlice,
+          ts: entryCandle.closeTs,
+          runtimeModel,
+          detectedMoves,
+        });
+        const runtimeFamily = optionalString(built.runtimeFamily ?? move.phaseDerivedFamily);
+        const selectedBucket = canonicalMoveSizeBucketFromLabel(optionalString(built.selectedBucket))
+          ?? canonicalMoveSizeBucketFromLabel(move.phaseDerivedBucket)
+          ?? canonicalMoveSizeBucketFromLabel(move.calibratedMoveSizeBucket);
+        const triggerTransition = optionalString(built.triggerSnapshot.triggerTransition);
+        const triggerDirection = optionalString(built.triggerSnapshot.triggerDirection);
+        const direction = triggerDirection === "buy" || triggerDirection === "up"
+          ? "buy"
+          : triggerDirection === "sell" || triggerDirection === "down"
+            ? "sell"
+            : directionFromMove(move);
+        const contextAgeBars = optionalNumber(built.liveSafeFeatures.contextAgeBars);
+        const triggerAgeBars = optionalNumber(built.liveSafeFeatures.triggerAgeBars);
+        const triggerStrengthScore = optionalNumber(built.liveSafeFeatures.triggerStrengthScore);
+        const confidence = optionalNumber(built.liveSafeFeatures.confidence)
+          ?? optionalNumber(built.liveSafeFeatures.runtimeEvidence)
+          ?? (triggerStrengthScore != null ? Math.max(0, Math.min(1, triggerStrengthScore)) : null);
+        const setupMatch = optionalNumber(built.liveSafeFeatures.setupMatch)
+          ?? (triggerStrengthScore != null ? Math.max(0, Math.min(1, triggerStrengthScore * 0.9)) : null);
+
+        if ((contextAgeBars ?? 0) > 240 || (triggerAgeBars ?? 0) > 12) {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "stale_context", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          continue;
+        }
+        if (!runtimeFamily || runtimeFamily === "unknown") {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "invalid_archetype", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          continue;
+        }
+        if (!selectedBucket) {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "invalid_bucket", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          continue;
+        }
+        if (!triggerTransition || triggerTransition === "none") {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "rejected_by_live_safe_filter", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          continue;
+        }
+        if (direction !== "buy" && direction !== "sell") {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "invalid_direction", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          continue;
+        }
+        if ((triggerStrengthScore ?? 0) <= 0 || (confidence ?? 0) <= 0 || (setupMatch ?? 0) <= 0) {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "failed_thresholds", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          continue;
+        }
+
+        const sourceSubset = dataset.trades.filter((trade) =>
+          trade.runtimeFamily === runtimeFamily
+          && canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === selectedBucket
+          && trade.triggerTransition === triggerTransition
+          && trade.pnlPct > 0,
+        );
+        const fallbackSubset = dataset.trades.filter((trade) =>
+          canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === selectedBucket && trade.pnlPct > 0,
+        );
+        const exitSubset = sourceSubset.length > 0 ? sourceSubset : fallbackSubset;
+        if (exitSubset.length === 0) {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_tp_sl", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          continue;
+        }
+        const exitRules = this.deriveExitPolicyFromSubset(dataset, exitSubset as never);
+        if (
+          exitRules.exitUnitValidation.impossibleExitRejected
+          || exitRules.tpTargetPct <= 0
+          || exitRules.slRiskPct <= 0
+          || exitRules.trailingActivationPct <= 0
+          || exitRules.trailingDistancePct <= 0
+        ) {
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_tp_sl", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          continue;
+        }
+
+        const simulation = simulateCandidateTrade({
+          candles,
+          entryIndex,
+          move,
+          direction,
+          tpPctPoints: exitRules.tpTargetPct,
+          slPctPoints: exitRules.slRiskPct,
+          trailingActivationPctPoints: exitRules.trailingActivationPct,
+          trailingDistancePctPoints: exitRules.trailingDistancePct,
+          minHoldBars: Math.max(1, exitRules.minHoldBars),
+          maxExitTs: Math.min(windowEndTs || Number.MAX_SAFE_INTEGER, move.endTs + Math.max(3600, (move.barsToMfe ?? 12) * 120)),
+        });
+        const projectedMovePct = Math.abs(move.realisticMfeAfterEntryPctPoints ?? move.realisticMfeAfterEntry ?? move.movePctPoints ?? move.movePct);
+        const projectedMovePctMeta = normalizePercentField("projectedMovePct", projectedMovePct, { sourceHint: "percentage_points", reason: "Rebuilt trigger projected move uses canonical move percentage points." });
+        const slPctMeta = normalizePercentField("slPct", exitRules.slRiskPct, { sourceHint: "percentage_points", reason: "Rebuilt trigger SL uses canonical derived percentage points." });
+        const trailingActivationPctMeta = normalizePercentField("trailingActivationPct", exitRules.trailingActivationPct, { sourceHint: "percentage_points", reason: "Rebuilt trigger trailing activation uses canonical derived percentage points." });
+        const trailingDistancePctMeta = normalizePercentField("trailingDistancePct", exitRules.trailingDistancePct, { sourceHint: "percentage_points", reason: "Rebuilt trigger trailing distance uses canonical derived percentage points." });
+        const pnlPctMeta = normalizePercentField("pnlPct", simulation.pnlPctPoints, { sourceHint: "percentage_points", reason: "Rebuilt trigger pnlPct uses candle-simulated canonical percentage points." });
+        const mfePctMeta = normalizePercentField("mfePct", simulation.mfePctPoints, { sourceHint: "percentage_points", reason: "Rebuilt trigger MFE uses candle-simulated canonical percentage points." });
+        const maePctMeta = normalizePercentField("maePct", simulation.maePctPoints, { sourceHint: "percentage_points", reason: "Rebuilt trigger MAE uses candle-simulated canonical percentage points." });
+        const exitCandle = simulation.exitIndex != null ? candles[simulation.exitIndex] : null;
+        const simulatedTrade = simulation.exitIndex != null && !simulation.noTradeReason;
         candidates.push({
           kind: "rebuilt_trigger_candidate",
-          candidateId: `move-${move.moveId}-no-snapshots`,
+          candidateId,
           moveId: move.moveId,
-          entryTs: move.startTs,
-          exitTs: null,
-          offsetLabel: "none",
-          offsetBars: 0,
-          direction: move.direction === "down" ? "sell" : "buy",
-          runtimeFamily: null,
-          selectedBucket: null,
-          triggerTransition: null,
-          triggerDirection: null,
-          qualityTier: move.qualityTier,
-          setupMatch: null,
-          confidence: null,
-          triggerStrengthScore: null,
-          projectedMovePct: Math.abs(move.movePct),
-          projectedMovePctPoints: Math.abs(move.movePct),
-          slPct: null,
-          slPctPoints: null,
-          trailingActivationPct: null,
-          trailingActivationPctPoints: null,
-          trailingDistancePct: null,
-          trailingDistancePctPoints: null,
-          minHoldBars: null,
-          pnlPct: 0,
-          pnlPctPoints: 0,
-          mfePct: null,
-          mfePctPoints: null,
-          maePct: null,
-          maePctPoints: null,
-          exitReason: null,
-          eligible: false,
-          rejectReason: "no_phase_trigger_snapshots",
-          percentFields: {
-            projectedMovePct: normalizePercentField("projectedMovePct", Math.abs(move.movePct), {
-              sourceHint: "percentage_points",
-              reason: "Rebuilt candidate projectedMovePct uses canonical move percentage points.",
-            }),
-          },
-          liveSafeFeatures: { ...move.liveSafeFeatures },
-        });
-        continue;
-      }
-      for (const snapshot of snapshots) {
-        const offsetBars = asNumber(snapshot.offsetBars, 0);
-        const triggerTransition = optionalString(snapshot.triggerTransition);
-        const triggerDirection = optionalString(snapshot.triggerDirection);
-        const runtimeFamily = optionalString(snapshot.runtimeFamily ?? move.phaseDerivedFamily);
-        const selectedBucket = optionalString(snapshot.selectedBucket ?? move.phaseDerivedBucket ?? move.calibratedMoveSizeBucket);
-        const triggerStrengthScore = optionalNumber(snapshot.triggerStrengthScore);
-        const projectedMovePct = Math.abs(move.realisticMfeAfterEntry ?? move.movePct ?? 0);
-        const maePct = Math.abs(move.normalMaeBeforeSuccess ?? 0);
-        const offsetPenalty = Math.max(0, 1 - Math.min(0.75, Math.abs(offsetBars) * 0.06));
-        const effectiveMfePct = Number((projectedMovePct * offsetPenalty).toFixed(4));
-        const effectiveMaePct = Number((Math.max(maePct, projectedMovePct * 0.18) * (1 + Math.abs(offsetBars) * 0.04)).toFixed(4));
-        const slPct = Number(Math.max(0.35, Math.min(effectiveMaePct * 1.15, projectedMovePct * 0.55)).toFixed(4));
-        const trailingActivationPct = Number(Math.max(0.5, effectiveMfePct * 0.45).toFixed(4));
-        const trailingDistancePct = Number(Math.max(0.25, Math.min(slPct, effectiveMaePct * 0.8)).toFixed(4));
-        const minHoldBars = Math.max(3, Number(move.barsToMfe ?? 6));
-        const projectedMovePctMeta = normalizePercentField("projectedMovePct", projectedMovePct, {
-          sourceHint: "percentage_points",
-          reason: "Rebuilt trigger projectedMovePct is derived in canonical percentage points.",
-        });
-        const slPctMeta = normalizePercentField("slPct", slPct, {
-          sourceHint: "percentage_points",
-          reason: "Rebuilt trigger SL is derived in canonical percentage points.",
-        });
-        const trailingActivationPctMeta = normalizePercentField("trailingActivationPct", trailingActivationPct, {
-          sourceHint: "percentage_points",
-          reason: "Rebuilt trigger trailing activation is derived in canonical percentage points.",
-        });
-        const trailingDistancePctMeta = normalizePercentField("trailingDistancePct", trailingDistancePct, {
-          sourceHint: "percentage_points",
-          reason: "Rebuilt trigger trailing distance is derived in canonical percentage points.",
-        });
-        const mfePctMeta = normalizePercentField("mfePct", effectiveMfePct, {
-          sourceHint: "percentage_points",
-          reason: "Rebuilt trigger MFE is evaluated in canonical percentage points.",
-        });
-        const maePctMeta = normalizePercentField("maePct", -Math.abs(effectiveMaePct), {
-          sourceHint: "percentage_points",
-          reason: "Rebuilt trigger MAE uses negative adverse percentage points.",
-        });
-        const eligible =
-          Boolean(runtimeFamily) &&
-          runtimeFamily !== "unknown" &&
-          Boolean(selectedBucket) &&
-          selectedBucket !== "unknown" &&
-          Boolean(triggerTransition) &&
-          triggerTransition !== "none" &&
-          Boolean(triggerDirection) &&
-          triggerDirection !== "none";
-        const reason =
-          !runtimeFamily || runtimeFamily === "unknown"
-            ? "no_runtime_family_from_offset"
-            : !selectedBucket || selectedBucket === "unknown"
-              ? "no_selected_bucket_from_offset"
-              : !triggerTransition || triggerTransition === "none"
-                ? "no_trigger_transition_from_offset"
-                : !triggerDirection || triggerDirection === "none"
-                  ? "no_trigger_direction_from_offset"
-                  : null;
-        const winLike = eligible && effectiveMfePct > slPct * 1.05 && (triggerStrengthScore ?? 0) > 0;
-        candidates.push({
-          kind: "rebuilt_trigger_candidate",
-          candidateId: `move-${move.moveId}-offset-${offsetBars}`,
-          moveId: move.moveId,
-          entryTs: move.startTs + offsetBars * 60,
-          exitTs: move.endTs,
+          matchedCalibratedMoveId: move.moveId,
+          sourcePool: "rebuilt_trigger_candidates",
+          entryTs: entryCandle.closeTs,
+          exitTs: exitCandle?.closeTs ?? null,
+          entryPrice: entryCandle.close,
+          exitPrice: simulation.exitPrice,
           offsetLabel: `T${offsetBars >= 0 ? "+" : ""}${offsetBars}`,
           offsetBars,
-          direction: triggerDirection === "sell" ? "sell" : "buy",
+          direction,
           runtimeFamily,
           selectedBucket,
           triggerTransition,
           triggerDirection,
           qualityTier: move.qualityTier,
-          setupMatch: optionalNumber(snapshot.setupMatch) ?? Math.max(0, Math.min(1, (triggerStrengthScore ?? 0) * 0.9)),
-          confidence: optionalNumber(snapshot.confidence) ?? Math.max(0, Math.min(1, (triggerStrengthScore ?? 0) * 0.95)),
+          setupMatch,
+          confidence,
           triggerStrengthScore,
           projectedMovePct: projectedMovePctMeta.pctPoints,
           projectedMovePctPoints: projectedMovePctMeta.pctPoints,
@@ -1377,44 +1623,43 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           trailingActivationPctPoints: trailingActivationPctMeta.pctPoints,
           trailingDistancePct: trailingDistancePctMeta.pctPoints,
           trailingDistancePctPoints: trailingDistancePctMeta.pctPoints,
-          minHoldBars,
-          pnlPct: winLike ? Number(Math.min(projectedMovePct * 0.55, effectiveMfePct * 0.7).toFixed(4)) : Number((-Math.min(slPct, effectiveMaePct)).toFixed(4)),
-          pnlPctPoints: winLike ? Number(Math.min(projectedMovePct * 0.55, effectiveMfePct * 0.7).toFixed(4)) : Number((-Math.min(slPct, effectiveMaePct)).toFixed(4)),
+          minHoldBars: Math.max(1, exitRules.minHoldBars),
+          pnlPct: pnlPctMeta.pctPoints ?? 0,
+          pnlPctPoints: pnlPctMeta.pctPoints ?? 0,
           mfePct: mfePctMeta.pctPoints,
           mfePctPoints: mfePctMeta.pctPoints,
           maePct: maePctMeta.pctPoints,
           maePctPoints: maePctMeta.pctPoints,
-          exitReason: !eligible ? null : winLike ? "tp_hit" : "sl_hit",
-          eligible,
-          rejectReason: reason,
+          exitReason: simulation.exitReason,
+          simulatedTrade,
+          eligible: simulatedTrade,
+          rejectReason: simulatedTrade ? null : simulation.noTradeReason ?? "no_exit_found",
+          noTradeReason: simulation.noTradeReason,
           percentFields: {
             projectedMovePct: projectedMovePctMeta,
             slPct: slPctMeta,
             trailingActivationPct: trailingActivationPctMeta,
             trailingDistancePct: trailingDistancePctMeta,
+            pnlPct: pnlPctMeta,
             mfePct: mfePctMeta,
             maePct: maePctMeta,
-            pnlPct: normalizePercentField("pnlPct", winLike ? Number(Math.min(projectedMovePct * 0.55, effectiveMfePct * 0.7).toFixed(4)) : Number((-Math.min(slPct, effectiveMaePct)).toFixed(4)), {
-              sourceHint: "percentage_points",
-              reason: "Rebuilt trigger pnlPct is evaluated in canonical percentage points.",
-            }),
           },
           liveSafeFeatures: {
             ...move.liveSafeFeatures,
-            ...Object.fromEntries(
-              Object.entries(snapshot).filter(([, value]) => ["string", "number", "boolean"].includes(typeof value)),
-            ),
+            ...built.liveSafeFeatures,
             runtimeFamily,
             selectedBucket,
             triggerTransition,
             triggerDirection,
             qualityTier: move.qualityTier,
-            projectedMovePct,
-            slPct,
-            trailingActivationPct,
-            trailingDistancePct,
-            projectedMoveToSlRatio: slPct > 0 ? projectedMovePct / slPct : null,
-            projectedMoveToTrailingActivationRatio: trailingActivationPct > 0 ? projectedMovePct / trailingActivationPct : null,
+            setupMatch,
+            confidence,
+            projectedMovePct: projectedMovePctMeta.pctPoints,
+            slPct: slPctMeta.pctPoints,
+            trailingActivationPct: trailingActivationPctMeta.pctPoints,
+            trailingDistancePct: trailingDistancePctMeta.pctPoints,
+            projectedMoveToSlRatio: (slPctMeta.pctPoints ?? 0) > 0 ? (projectedMovePctMeta.pctPoints ?? 0) / (slPctMeta.pctPoints ?? 1) : null,
+            projectedMoveToTrailingActivationRatio: (trailingActivationPctMeta.pctPoints ?? 0) > 0 ? (projectedMovePctMeta.pctPoints ?? 0) / (trailingActivationPctMeta.pctPoints ?? 1) : null,
           },
         });
       }
@@ -1427,8 +1672,46 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
       ? "rebuilt_trigger_candidates"
       : "runtime_trades";
     const pool = sourcePool === "rebuilt_trigger_candidates"
-      ? dataset.rebuiltTriggerCandidates.filter((candidate) => candidate.eligible)
+      ? dataset.rebuiltTriggerCandidates.filter((candidate) => candidate.eligible && candidate.simulatedTrade && !candidate.noTradeReason)
       : dataset.trades;
+    const exitValidation = asRecord(policy.tpRules.exitUnitValidation);
+    if (Boolean(exitValidation.impossibleExitRejected)) {
+      return {
+        policyId: policy.policyId,
+        passNumber: policy.passNumberSelected,
+        trades: 0,
+        wins: 0,
+        losses: 0,
+        winRate: 0,
+        slHits: 0,
+        slHitRate: 0,
+        profitFactor: 0,
+        accountReturnPct: 0,
+        maxDrawdownPct: 0,
+        phantomCount: 0,
+        objectiveScore: 0,
+        selectedFeatures: policy.selectedCoreFeatures,
+        selectedMoveSizeBuckets: policy.selectedMoveSizeBuckets,
+        selectedRuntimeArchetypes: policy.selectedRuntimeArchetypes,
+        selectedBuckets: policy.selectedBuckets,
+        selectedTriggerTransitions: policy.selectedTriggerTransitions,
+        entryThresholds: policy.entryThresholds,
+        entryTimingRules: policy.entryTimingRules.map((rule) => ({ ...rule })),
+        noTradeRules: [...policy.noTradeRules, "impossible_exit_rejected"],
+        exitRules: this.deriveExitPolicyFromSubset(dataset, []),
+        leakagePassed: policy.leakageAudit.passed,
+        monthlyBreakdown: [],
+        reasons: ["impossible_exit_rejected"],
+        sourcePool,
+        diagnostics: {
+          simulatedTradeCount: 0,
+          noTradeReasonCounts: { impossible_exit_rejected: 1 },
+        },
+        selectedFeaturesSummary: policy.selectedCoreFeatures.map((feature) => feature.key),
+        tpSlTrailingSummary: ["policy_rejected: impossible exit scale"],
+        targetAchieved: false,
+      };
+    }
     const eligible = pool.filter((trade) => {
       const familyOk = policy.selectedRuntimeArchetypes.length === 0 || policy.selectedRuntimeArchetypes.includes(trade.runtimeFamily ?? "unknown");
       const bucketOk = policy.selectedBuckets.length === 0 || policy.selectedBuckets.includes(trade.selectedBucket ?? "unknown");
@@ -1445,6 +1728,18 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     const maxDrawdownPct = Math.max(0, ...eligible.map((trade) => Math.max(0, -(trade.pnlPct ?? 0))));
     const winRate = eligible.length > 0 ? wins / eligible.length : 0;
     const slHitRate = eligible.length > 0 ? slHits / eligible.length : 0;
+    const noTradeReasonCounts = sourcePool === "rebuilt_trigger_candidates"
+      ? dataset.rebuiltTriggerCandidates.reduce<Record<string, number>>((acc, candidate) => {
+          const familyOk = policy.selectedRuntimeArchetypes.length === 0 || policy.selectedRuntimeArchetypes.includes(candidate.runtimeFamily ?? "unknown");
+          const bucketOk = policy.selectedBuckets.length === 0 || policy.selectedBuckets.includes(candidate.selectedBucket ?? "unknown");
+          const triggerOk = policy.selectedTriggerTransitions.length === 0 || policy.selectedTriggerTransitions.includes(candidate.triggerTransition ?? "none");
+          if (!familyOk || !bucketOk || !triggerOk) return acc;
+          const reason = candidate.noTradeReason ?? candidate.rejectReason;
+          if (!reason) return acc;
+          acc[reason] = (acc[reason] ?? 0) + 1;
+          return acc;
+        }, {})
+      : {};
     const objectiveScore = objectiveFromMetrics({
       winRate,
       slHitRate,
@@ -1508,6 +1803,10 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
       monthlyBreakdown: [],
       reasons: [],
       sourcePool,
+      diagnostics: {
+        simulatedTradeCount: eligible.length,
+        noTradeReasonCounts,
+      },
       selectedFeaturesSummary: policy.selectedCoreFeatures.map((feature) => feature.key),
       tpSlTrailingSummary: [
         `tp=${asNumber(policy.tpRules.targetPct, 0).toFixed(2)}%`,
@@ -1527,6 +1826,7 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     const derivedTrailingActivationPctPoints = Number(Math.max(0.4, percentile(winnerMfePct, 0.25)).toFixed(2));
     const derivedTrailingDistancePctPoints = Number(Math.max(0.25, percentile(winnerMaePct, 0.75)).toFixed(2));
     const warnings: string[] = [];
+    if (winners.length === 0) warnings.push("Rejected exit derivation because no winning subset trades were available.");
     if (derivedTpPctPoints <= 0) warnings.push("Rejected TP because derived TP was not positive.");
     if (derivedSlPctPoints <= 0) warnings.push("Rejected SL because derived SL was not positive.");
     if (derivedTrailingActivationPctPoints <= 0) warnings.push("Rejected trailing activation because derived value was not positive.");
@@ -1534,8 +1834,14 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     if (winnerMfePct.length > 0 && derivedTpPctPoints < Math.max(0.1, percentile(winnerMfePct, 0.1) * 0.25)) {
       warnings.push("Derived TP is materially below the selected subset MFE distribution.");
     }
+    if (winnerMfePct.length > 0 && derivedTpPctPoints > Math.max(...winnerMfePct)) {
+      warnings.push("Rejected TP because derived TP is larger than the observed winner MFE ceiling.");
+    }
     if (winnerMfePct.length > 0 && winnerMaePct.length > 0 && derivedSlPctPoints > Math.max(...winnerMfePct)) {
-      warnings.push("Derived SL is larger than the observed winner MFE ceiling.");
+      warnings.push("Rejected SL because derived SL is larger than the observed winner MFE ceiling.");
+    }
+    if (winnerMfePct.length > 0 && derivedSlPctPoints >= derivedTpPctPoints) {
+      warnings.push("Rejected SL because derived SL is not smaller than derived TP.");
     }
     const impossibleExitRejected = warnings.some((warning) => warning.startsWith("Rejected"));
     return {
@@ -1548,10 +1854,20 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
       exitUnitValidation: {
         selectedSubsetMfeRange: rangeOf(winnerMfePct),
         selectedSubsetMaeAbsRange: rangeOf(winnerMaePct),
+        selectedSubsetMfeRangePctPoints: rangeOf(winnerMfePct),
+        selectedSubsetMaeAbsRangePctPoints: rangeOf(winnerMaePct),
         derivedTpPctPoints,
         derivedSlPctPoints,
         derivedTrailingActivationPctPoints,
         derivedTrailingDistancePctPoints,
+        sourceValueExamples: {
+          winnerMfePct: winnerMfePct.slice(0, 5),
+          winnerMaeAbsPct: winnerMaePct.slice(0, 5),
+        },
+        canonicalValueExamples: {
+          winnerMfePctPoints: winnerMfePct.slice(0, 5),
+          winnerMaeAbsPctPoints: winnerMaePct.slice(0, 5),
+        },
         impossibleExitRejected,
         warnings,
       },

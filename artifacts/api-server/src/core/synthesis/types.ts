@@ -37,6 +37,7 @@ export type EliteSynthesisBottleneck =
   | "none"
   | "current_runtime_pool_insufficient"
   | "rebuilt_trigger_pool_still_insufficient"
+  | "rebuilt_trigger_execution_failed"
   | "live_safe_features_do_not_separate_winners_from_sl_noise"
   | "exit_policy_cannot_rescue_entries"
   | "calibrated_bucket_archetype_mapping_too_noisy"
@@ -159,10 +160,14 @@ export type EliteSynthesisExitRules = {
   exitUnitValidation: {
     selectedSubsetMfeRange: { min: number | null; max: number | null };
     selectedSubsetMaeAbsRange: { min: number | null; max: number | null };
+    selectedSubsetMfeRangePctPoints?: { min: number | null; max: number | null };
+    selectedSubsetMaeAbsRangePctPoints?: { min: number | null; max: number | null };
     derivedTpPctPoints: number;
     derivedSlPctPoints: number;
     derivedTrailingActivationPctPoints: number;
     derivedTrailingDistancePctPoints: number;
+    sourceValueExamples?: Record<string, number[]>;
+    canonicalValueExamples?: Record<string, number[]>;
     impossibleExitRejected: boolean;
     warnings: string[];
   };

@@ -95,8 +95,12 @@ export type SynthesisRebuiltTriggerCandidateRecord = {
   kind: "rebuilt_trigger_candidate";
   candidateId: string;
   moveId: number;
+  matchedCalibratedMoveId: number | null;
+  sourcePool: "rebuilt_trigger_candidates";
   entryTs: number;
   exitTs: number | null;
+  entryPrice: number | null;
+  exitPrice: number | null;
   offsetLabel: string;
   offsetBars: number;
   direction: "buy" | "sell";
@@ -124,8 +128,10 @@ export type SynthesisRebuiltTriggerCandidateRecord = {
   maePct: number | null;
   maePctPoints: number | null;
   exitReason: string | null;
+  simulatedTrade: boolean;
   eligible: boolean;
   rejectReason: string | null;
+  noTradeReason: string | null;
   percentFields?: Record<string, SynthesisPercentFieldMeta>;
   liveSafeFeatures: Record<string, number | string | boolean | null>;
 };
@@ -153,6 +159,7 @@ export type UnifiedSynthesisDataset = {
   missingFeatureImplementations: string[];
   reconciliation: Record<string, unknown> | null;
   summary: Record<string, unknown>;
+  internalContext?: Record<string, unknown>;
 };
 
 export type PolicyEvaluationResult = EliteSynthesisPolicySummary & {
@@ -169,6 +176,7 @@ export type PolicyEvaluationResult = EliteSynthesisPolicySummary & {
   monthlyBreakdown: Array<Record<string, unknown>>;
   reasons: string[];
   sourcePool: "runtime_trades" | "rebuilt_trigger_candidates";
+  diagnostics?: Record<string, unknown>;
 };
 
 export interface SymbolSynthesisAdapter {
