@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+﻿import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   BookOpen,
@@ -26,7 +26,15 @@ interface VersionInfo {
   name: string;
   version: string;
   lastUpdated: string;
+  deployedAt?: string | null;
+  deploymentId?: string | null;
   releases: ReleaseEntry[];
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
@@ -78,7 +86,9 @@ export default function Help() {
             <span className="inline-flex items-center gap-1.5 bg-primary/10 text-primary px-2.5 py-1 rounded-full">
               <Package className="w-3 h-3" /> v{data?.version ?? "current"}
             </span>
-            <span>Updated {data?.lastUpdated ?? "—"}</span>
+            <span>Updated {data?.lastUpdated ?? "-"}</span>
+            <span>Last redeploy {formatDateTime(data?.deployedAt)}</span>
+            {data?.deploymentId ? <span>Deploy {data.deploymentId}</span> : null}
           </div>
         </div>
       </div>
@@ -86,11 +96,11 @@ export default function Help() {
       <Section title="Architecture" icon={Layers}>
         <Card
           title="Canonical flow"
-          body="Symbol Service → Trade Candidate → Portfolio Allocator → Trade Execution/Manager. Symbol services own calibration models, runtime models, feature snapshots, trigger or archetype detection, candidate creation, and trade management policy. The allocator owns only capital, exposure, and portfolio risk gates."
+          body="Symbol Service â†’ Trade Candidate â†’ Portfolio Allocator â†’ Trade Execution/Manager. Symbol services own calibration models, runtime models, feature snapshots, trigger or archetype detection, candidate creation, and trade management policy. The allocator owns only capital, exposure, and portfolio risk gates."
         />
         <Card
           title="Current active services"
-          body={ACTIVE_SERVICE_SYMBOLS.map((symbol) => `${symbol} (${getSymbolLabel(symbol)})`).join(" · ")}
+          body={ACTIVE_SERVICE_SYMBOLS.map((symbol) => `${symbol} (${getSymbolLabel(symbol)})`).join(" Â· ")}
         />
       </Section>
 
@@ -98,11 +108,11 @@ export default function Help() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card
             title="Per-service sequence"
-            body="Full Calibration → Review calibration runs → Stage Research Model → Promote Runtime → Run parity and trigger validation → Run backtests → Export reports. CRASH300 is the current template for this workflow."
+            body="Full Calibration â†’ Review calibration runs â†’ Stage Research Model â†’ Promote Runtime â†’ Run parity and trigger validation â†’ Run backtests â†’ Export reports. CRASH300 is the current template for this workflow."
           />
           <Card
             title="Reports"
-            body="Use Research → Reports to export detected moves, calibration profiles, pass results, parity, phase identifiers, backtest summaries, trades, attribution, reconciliation, and policy comparisons for the selected service."
+            body="Use Research â†’ Reports to export detected moves, calibration profiles, pass results, parity, phase identifiers, backtest summaries, trades, attribution, reconciliation, and policy comparisons for the selected service."
           />
         </div>
       </Section>
@@ -154,7 +164,7 @@ export default function Help() {
             <div key={release.version} className="rounded-lg border border-border/40 bg-card p-4">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-sm font-semibold">v{release.version}</span>
-                <span className="text-xs text-muted-foreground">— {release.title}</span>
+                <span className="text-xs text-muted-foreground">â€” {release.title}</span>
               </div>
               <p className="text-xs text-muted-foreground/70 mt-1">{release.date}</p>
               <ul className="mt-3 space-y-1.5">
@@ -169,3 +179,5 @@ export default function Help() {
     </div>
   );
 }
+
+

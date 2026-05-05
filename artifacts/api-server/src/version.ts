@@ -1,6 +1,8 @@
 export const APP_VERSION = "3.0.1";
 export const APP_NAME = "Deriv Trading - Long Hold V3";
 export const LAST_UPDATED = "2026-04-21";
+export const DEPLOYED_AT = new Date().toISOString();
+export const DEPLOYMENT_ID = process.env.RAILWAY_DEPLOYMENT_ID ?? null;
 
 export interface ReleaseEntry {
   version: string;

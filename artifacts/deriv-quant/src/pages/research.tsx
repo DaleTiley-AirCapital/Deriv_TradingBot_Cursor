@@ -4511,6 +4511,19 @@ function extractCalibratedBucketEntries(model: RuntimeSymbolModelUi | Record<str
   );
 }
 
+function extractRuntimeTpBucketEntries(model: RuntimeSymbolModelUi | Record<string, unknown> | null | undefined) {
+  const record = asUiRecord(model as unknown);
+  const tpModel = asUiRecord(record.tpModel);
+  const bucketMap = asUiRecord(tpModel.buckets);
+  return Object.entries(bucketMap)
+    .filter(([key]) => key.includes("|"))
+    .sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function formatRuntimeTpBucketLabel(key: string) {
+  return key.split("|").map((part) => part.replace(/_/g, " ")).join(" / ");
+}
+
 function ActiveWorkerTasksCard({ service }: { service: string }) {
   const [jobs, setJobs] = useState<WorkerJobUi[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -4765,6 +4778,8 @@ function RuntimeModelTab({ service }: { service: string }) {
   const baseFamily = service === "CRASH300" ? "crash_expansion" : "service-specific";
   const promotedBuckets = extractCalibratedBucketEntries(runtime?.promotedModel ?? null);
   const stagedBuckets = extractCalibratedBucketEntries(runtime?.stagedModel ?? null);
+  const promotedRuntimeTpBuckets = extractRuntimeTpBucketEntries(runtime?.promotedModel ?? null);
+  const stagedRuntimeTpBuckets = extractRuntimeTpBucketEntries(runtime?.stagedModel ?? null);
   const promotedTpModel = asUiRecord(runtime?.promotedModel?.tpModel);
   const stagedTpModel = asUiRecord(runtime?.stagedModel?.tpModel);
   const runtimeArchetypes = Array.from(new Set([
@@ -4774,7 +4789,7 @@ function RuntimeModelTab({ service }: { service: string }) {
   const validationErrors: string[] = [];
   if (!runtime?.lifecycle?.hasPromotedModel) validationErrors.push("Promoted runtime model missing.");
   if (runtime?.lifecycle?.hasStagedModel && runtime?.lifecycle?.promotedMatchesStaged === false) validationErrors.push("Staged model is newer than promoted runtime.");
-  if (!promotedBuckets.length) validationErrors.push("Calibrated bucket model unavailable.");
+  if (!promotedBuckets.length && !promotedRuntimeTpBuckets.length) validationErrors.push("Runtime TP bucket model unavailable.");
 
   return (
     <div className="space-y-4">
@@ -4807,25 +4822,49 @@ function RuntimeModelTab({ service }: { service: string }) {
       </div>
 
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-        <h3 className="text-sm font-semibold">Calibrated Move-Size Buckets</h3>
+        <h3 className="text-sm font-semibold">Runtime TP Buckets</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
           <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Promoted calibrated buckets</p>
-            {promotedBuckets.length === 0 ? <ErrorBox msg="Calibrated bucket model unavailable" /> : promotedBuckets.map(([bucket, value]) => (
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Promoted bucket model</p>
+            {promotedBuckets.length > 0 ? promotedBuckets.map(([bucket, value]) => (
               <div key={bucket} className="flex items-center justify-between gap-2 border-b border-border/20 last:border-0 py-1">
                 <span className="font-mono text-foreground">{formatCalibratedBucketLabel(bucket)}</span>
                 <span className="text-muted-foreground">{Number(asUiRecord(value).targetPct ?? 0).toFixed(2)}%</span>
               </div>
-            ))}
+            )) : promotedRuntimeTpBuckets.length > 0 ? (
+              <>
+                <p className="text-muted-foreground">
+                  The promoted runtime model is present, but it stores TP buckets as runtime keys such as direction / archetype / quality rather than standalone calibrated move-size labels.
+                </p>
+                {promotedRuntimeTpBuckets.map(([bucket, value]) => (
+                  <div key={bucket} className="flex items-center justify-between gap-2 border-b border-border/20 last:border-0 py-1">
+                    <span className="font-mono text-foreground">{formatRuntimeTpBucketLabel(bucket)}</span>
+                    <span className="text-muted-foreground">{Number(asUiRecord(value).targetPct ?? 0).toFixed(2)}%</span>
+                  </div>
+                ))}
+              </>
+            ) : <ErrorBox msg="Runtime TP bucket model unavailable" />}
           </div>
           <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Staged calibrated buckets</p>
-            {stagedBuckets.length === 0 ? <p className="text-muted-foreground">No staged buckets.</p> : stagedBuckets.map(([bucket, value]) => (
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Staged bucket model</p>
+            {stagedBuckets.length > 0 ? stagedBuckets.map(([bucket, value]) => (
               <div key={bucket} className="flex items-center justify-between gap-2 border-b border-border/20 last:border-0 py-1">
                 <span className="font-mono text-foreground">{formatCalibratedBucketLabel(bucket)}</span>
                 <span className="text-muted-foreground">{Number(asUiRecord(value).targetPct ?? 0).toFixed(2)}%</span>
               </div>
-            ))}
+            )) : stagedRuntimeTpBuckets.length > 0 ? (
+              <>
+                <p className="text-muted-foreground">
+                  The staged runtime model uses runtime TP bucket keys rather than standalone calibrated move-size labels.
+                </p>
+                {stagedRuntimeTpBuckets.map(([bucket, value]) => (
+                  <div key={bucket} className="flex items-center justify-between gap-2 border-b border-border/20 last:border-0 py-1">
+                    <span className="font-mono text-foreground">{formatRuntimeTpBucketLabel(bucket)}</span>
+                    <span className="text-muted-foreground">{Number(asUiRecord(value).targetPct ?? 0).toFixed(2)}%</span>
+                  </div>
+                ))}
+              </>
+            ) : <p className="text-muted-foreground">No staged buckets.</p>}
           </div>
         </div>
       </div>
