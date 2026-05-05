@@ -757,32 +757,39 @@ function buildTradeRecordsFromRun(params: {
     const triggerDirection = optionalString(trade.triggerDirection)
       ?? (String(trade.direction ?? "").toLowerCase() === "sell" ? "sell" : String(trade.direction ?? "").toLowerCase() === "buy" ? "buy" : null);
     const projectedMovePctMeta = normalizePercentField("projectedMovePct", optionalNumber(trade.projectedMovePct), {
-      sourceHint: "percentage_points",
-      reason: "Persisted CRASH300 runtime trade projectedMovePct values are stored in percentage points.",
+      sourceHint: "fraction",
+      reason: "Persisted CRASH300 runtime trade projectedMovePct is stored as tp distance divided by entry price in the backtest runner.",
+      confidence: "source_metadata",
     });
     const slPctMeta = normalizePercentField("slPct", optionalNumber(trade.slPct), {
-      sourceHint: "percentage_points",
-      reason: "Persisted CRASH300 runtime trade slPct values are stored in percentage points.",
+      sourceHint: "fraction",
+      reason: "Persisted CRASH300 runtime trade slPct is stored as stop-loss distance divided by entry price in the backtest runner.",
+      confidence: "source_metadata",
     });
     const trailingActivationPctMeta = normalizePercentField("trailingActivationPct", optionalNumber(trade.trailingActivationPct), {
-      sourceHint: "percentage_points",
-      reason: "Persisted CRASH300 runtime trade trailing activation values are stored in percentage points.",
+      sourceHint: "fraction",
+      reason: "Persisted CRASH300 runtime trade trailingActivationPct is stored as a fractional TP-progress threshold in the backtest runner.",
+      confidence: "source_metadata",
     });
     const trailingDistancePctMeta = normalizePercentField("trailingDistancePct", optionalNumber(trade.trailingDistancePct), {
-      sourceHint: "percentage_points",
-      reason: "Persisted CRASH300 runtime trade trailing distance values are stored in percentage points.",
+      sourceHint: "fraction",
+      reason: "Persisted CRASH300 runtime trade trailingDistancePct is stored as a fractional trailing distance in the backtest runner.",
+      confidence: "source_metadata",
     });
     const mfePctMeta = normalizePercentField("mfePct", optionalNumber(trade.mfePct), {
-      sourceHint: "percentage_points",
-      reason: "Persisted CRASH300 runtime trade MFE values are stored in percentage points.",
+      sourceHint: "fraction",
+      reason: "Persisted CRASH300 runtime trade mfePct is stored as favorable price movement divided by entry price in the backtest runner.",
+      confidence: "source_metadata",
     });
     const maePctMeta = normalizePercentField("maePct", optionalNumber(trade.maePct), {
-      sourceHint: "percentage_points",
-      reason: "Persisted CRASH300 runtime trade MAE values are stored in negative adverse percentage points.",
+      sourceHint: "fraction",
+      reason: "Persisted CRASH300 runtime trade maePct is stored as negative adverse price movement divided by entry price in the backtest runner.",
+      confidence: "source_metadata",
     });
     const pnlPctMeta = normalizePercentField("pnlPct", optionalNumber(trade.pnlPct), {
-      sourceHint: "percentage_points",
-      reason: "Persisted CRASH300 runtime trade pnlPct values are stored in percentage points.",
+      sourceHint: "fraction",
+      reason: "Persisted CRASH300 runtime trade pnlPct is stored as realised price return divided by entry price in the backtest runner.",
+      confidence: "source_metadata",
     });
     const projectedMovePct = projectedMovePctMeta.pctPoints;
     const slPct = slPctMeta.pctPoints;
@@ -1028,6 +1035,78 @@ function runUnitValidationRegressionCase() {
   };
 }
 
+function runRuntimeTradeFractionRegressionCase() {
+  const sample = {
+    pnlPct: normalizePercentField("pnlPct", 0.0719, {
+      sourceHint: "fraction",
+      reason: "Regression check: persisted runtime trade pnlPct is stored as a raw return fraction.",
+      confidence: "source_metadata",
+    }),
+    mfePct: normalizePercentField("mfePct", 0.078986, {
+      sourceHint: "fraction",
+      reason: "Regression check: persisted runtime trade mfePct is stored as a raw return fraction.",
+      confidence: "source_metadata",
+    }),
+    maePct: normalizePercentField("maePct", -0.03145, {
+      sourceHint: "fraction",
+      reason: "Regression check: persisted runtime trade maePct is stored as a raw return fraction.",
+      confidence: "source_metadata",
+    }),
+    slPct: normalizePercentField("slPct", 0.0252, {
+      sourceHint: "fraction",
+      reason: "Regression check: persisted runtime trade slPct is stored as a raw return fraction.",
+      confidence: "source_metadata",
+    }),
+    projectedMovePct: normalizePercentField("projectedMovePct", 0.0719, {
+      sourceHint: "fraction",
+      reason: "Regression check: persisted runtime trade projectedMovePct is stored as a raw return fraction.",
+      confidence: "source_metadata",
+    }),
+    trailingActivationPct: normalizePercentField("trailingActivationPct", 0.0252, {
+      sourceHint: "fraction",
+      reason: "Regression check: persisted runtime trade trailingActivationPct is stored as a raw return fraction.",
+      confidence: "source_metadata",
+    }),
+    trailingDistancePct: normalizePercentField("trailingDistancePct", 0.0126, {
+      sourceHint: "fraction",
+      reason: "Regression check: persisted runtime trade trailingDistancePct is stored as a raw return fraction.",
+      confidence: "source_metadata",
+    }),
+  };
+  const expected = {
+    pnlPct: 7.19,
+    mfePct: 7.8986,
+    maePct: -3.145,
+    slPct: 2.52,
+    projectedMovePct: 7.19,
+    trailingActivationPct: 2.52,
+    trailingDistancePct: 1.26,
+  } satisfies Record<string, number>;
+  const mismatches = Object.entries(sample).flatMap(([fieldName, meta]) => {
+    const pctPoints = meta.pctPoints;
+    const target = expected[fieldName as keyof typeof expected];
+    return pctPoints == null || Math.abs(pctPoints - target) > 0.0001
+      ? [`${fieldName} expected ${target} pct points but got ${pctPoints ?? "null"}`]
+      : [];
+  });
+  return {
+    passed: mismatches.length === 0,
+    note: mismatches.length === 0
+      ? "Regression case passed: persisted runtime trade fraction fields normalize to canonical percentage points."
+      : `Runtime trade fraction regression failed for: ${mismatches.join(", ")}`,
+  };
+}
+
+function exampleValues(
+  metas: Array<SynthesisPercentFieldMeta | null | undefined>,
+  selector: (meta: SynthesisPercentFieldMeta) => number | null,
+): number[] {
+  return metas
+    .map((meta) => (meta ? selector(meta) : null))
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    .slice(0, 5);
+}
+
 function buildUnitValidation(params: {
   moves: SynthesisMoveRecord[];
   trades: SynthesisTradeRecord[];
@@ -1067,8 +1146,12 @@ function buildUnitValidation(params: {
     fieldWarnings.push(`Detected ${tpImpossibleTrades} trades with trailing activation materially larger than projected move.`);
   }
   const regressionCase = runUnitValidationRegressionCase();
+  const runtimeTradeFractionRegressionCase = runRuntimeTradeFractionRegressionCase();
   if (!regressionCase.passed) {
     fieldErrors.push(regressionCase.note);
+  }
+  if (!runtimeTradeFractionRegressionCase.passed) {
+    fieldErrors.push(runtimeTradeFractionRegressionCase.note);
   }
   const fieldUnits: Record<string, EliteSynthesisPercentFieldUnit> = {
     movePct: fieldUnitFromMeta("movePct", params.moves.map((move) => move.percentFields?.movePct)),
@@ -1080,6 +1163,7 @@ function buildUnitValidation(params: {
     trailingActivationPct: fieldUnitFromMeta("trailingActivationPct", params.trades.map((trade) => trade.percentFields?.trailingActivationPct)),
     trailingDistancePct: fieldUnitFromMeta("trailingDistancePct", params.trades.map((trade) => trade.percentFields?.trailingDistancePct)),
   };
+  const tradePercentMetas = params.trades.map((trade) => trade.percentFields ?? {});
   return {
     passed: fieldErrors.length === 0,
     unit: "percentage_points",
@@ -1087,14 +1171,34 @@ function buildUnitValidation(params: {
     notes: [
       "Field-aware CRASH300 unit normalisation is active.",
       regressionCase.note,
+      runtimeTradeFractionRegressionCase.note,
     ],
     fieldUnits,
     fieldWarnings,
     fieldErrors,
     sampledRanges,
+    rawRuntimeTradeExamples: {
+      pnlPct: exampleValues(tradePercentMetas.map((fields) => fields.pnlPct), (meta) => meta.raw),
+      mfePct: exampleValues(tradePercentMetas.map((fields) => fields.mfePct), (meta) => meta.raw),
+      maePct: exampleValues(tradePercentMetas.map((fields) => fields.maePct), (meta) => meta.raw),
+      slPct: exampleValues(tradePercentMetas.map((fields) => fields.slPct), (meta) => meta.raw),
+      projectedMovePct: exampleValues(tradePercentMetas.map((fields) => fields.projectedMovePct), (meta) => meta.raw),
+      trailingActivationPct: exampleValues(tradePercentMetas.map((fields) => fields.trailingActivationPct), (meta) => meta.raw),
+      trailingDistancePct: exampleValues(tradePercentMetas.map((fields) => fields.trailingDistancePct), (meta) => meta.raw),
+    },
+    canonicalRuntimeTradeExamples: {
+      pnlPctPoints: exampleValues(tradePercentMetas.map((fields) => fields.pnlPct), (meta) => meta.pctPoints),
+      mfePctPoints: exampleValues(tradePercentMetas.map((fields) => fields.mfePct), (meta) => meta.pctPoints),
+      maePctPoints: exampleValues(tradePercentMetas.map((fields) => fields.maePct), (meta) => meta.pctPoints),
+      slPctPoints: exampleValues(tradePercentMetas.map((fields) => fields.slPct), (meta) => meta.pctPoints),
+      projectedMovePctPoints: exampleValues(tradePercentMetas.map((fields) => fields.projectedMovePct), (meta) => meta.pctPoints),
+      trailingActivationPctPoints: exampleValues(tradePercentMetas.map((fields) => fields.trailingActivationPct), (meta) => meta.pctPoints),
+      trailingDistancePctPoints: exampleValues(tradePercentMetas.map((fields) => fields.trailingDistancePct), (meta) => meta.pctPoints),
+    },
     normalisationNotes: [
       "CRASH300 synthesis uses canonical percentage_points internally for all percent-like calculations.",
       "Small values such as 0.5 are treated as 0.5 percentage points unless source metadata says fraction.",
+      "Persisted CRASH300 runtime trade percent fields are source fractions in the backtest runner and are multiplied by 100 into canonical percentage points.",
       "MFE stays positive favourable movement, MAE stays negative adverse movement, and SL uses positive absolute risk.",
     ],
   };

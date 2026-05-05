@@ -140,6 +140,8 @@ export type EliteSynthesisUnitValidation = {
   fieldWarnings: string[];
   fieldErrors: string[];
   sampledRanges: Record<string, { min: number | null; max: number | null }>;
+  rawRuntimeTradeExamples?: Record<string, number[]>;
+  canonicalRuntimeTradeExamples?: Record<string, number[]>;
   normalisationNotes: string[];
 };
 
