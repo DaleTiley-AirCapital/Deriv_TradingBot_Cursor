@@ -4,6 +4,9 @@
   "license": "MIT",
   "scripts": {
     "preinstall": "node ./scripts/enforce-pnpm.cjs",
+    "codex:workspace": "powershell -ExecutionPolicy Bypass -NoProfile -File ./scripts/codex-workspace.ps1",
+    "codex:gh": "gh --version",
+    "codex:railway": "railway --version",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"

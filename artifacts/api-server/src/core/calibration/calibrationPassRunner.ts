@@ -39,13 +39,15 @@ export interface RunPassesResult {
   runId: number;
   symbol: string;
   passName: PassName;
-  status: "completed" | "partial" | "failed";
+  status: "completed" | "partial" | "failed" | "cancelled";
   totalMoves: number;
   processedMoves: number;
   failedMoves: number;
   errors: Array<{ moveId: number; pass: string; error: string }>;
   durationMs: number;
 }
+
+export type CalibrationCancellationCheck = () => Promise<void>;
 
 const TIER_ORDER: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
 const STALE_RUNNING_MS = 6 * 60 * 60 * 1000;
@@ -109,11 +111,40 @@ async function createRunRecord(
   return row.id;
 }
 
+export async function createQueuedCalibrationRunRecord(params: {
+  symbol: string;
+  windowDays: number;
+  passName: PassName;
+  stage?: string;
+  metaPatch?: Record<string, unknown>;
+}): Promise<number> {
+  const [row] = await db
+    .insert(calibrationPassRunsTable)
+    .values({
+      symbol: params.symbol,
+      windowDays: params.windowDays,
+      status: "running",
+      passName: params.passName,
+      totalMoves: 0,
+      processedMoves: 0,
+      failedMoves: 0,
+      metaJson: {
+        model: CALIBRATION_MODEL,
+        startedAt: new Date().toISOString(),
+        stage: params.stage ?? "Queued",
+        executionModel: "worker_service",
+        ...(params.metaPatch ?? {}),
+      },
+    })
+    .returning({ id: calibrationPassRunsTable.id });
+  return row.id;
+}
+
 async function updateRunRecord(
   runId: number,
   processedMoves: number,
   failedMoves: number,
-  status: "running" | "completed" | "partial" | "failed",
+  status: "running" | "completed" | "partial" | "failed" | "cancelled",
   errors: Array<{ moveId: number; pass: string; error: string }>,
 ): Promise<void> {
   await db
@@ -124,6 +155,64 @@ async function updateRunRecord(
       status,
       completedAt: ["completed", "partial", "failed"].includes(status) ? new Date() : undefined,
       errorSummary: errors.length > 0 ? errors : undefined,
+    })
+    .where(eq(calibrationPassRunsTable.id, runId));
+}
+
+export async function failCalibrationRunRecord(
+  runId: number,
+  error: { moveId: number; pass: string; error: string },
+  metaPatch?: Record<string, unknown>,
+): Promise<void> {
+  const [row] = await db
+    .select({ meta: calibrationPassRunsTable.metaJson })
+    .from(calibrationPassRunsTable)
+    .where(eq(calibrationPassRunsTable.id, runId))
+    .limit(1);
+  await db
+    .update(calibrationPassRunsTable)
+    .set({
+      status: "failed",
+      completedAt: new Date(),
+      failedMoves: 1,
+      errorSummary: [error] as never,
+      metaJson: {
+        ...(row?.meta && typeof row.meta === "object" ? row.meta as Record<string, unknown> : {}),
+        stage: "Failed",
+        ...(metaPatch ?? {}),
+      } as never,
+    })
+    .where(eq(calibrationPassRunsTable.id, runId));
+}
+
+export async function cancelCalibrationRunRecord(
+  runId: number,
+  metaPatch?: Record<string, unknown>,
+): Promise<void> {
+  const [row] = await db
+    .select({ meta: calibrationPassRunsTable.metaJson })
+    .from(calibrationPassRunsTable)
+    .where(eq(calibrationPassRunsTable.id, runId))
+    .limit(1);
+  await db
+    .update(calibrationPassRunsTable)
+    .set({
+      status: "cancelled" as never,
+      completedAt: new Date(),
+      metaJson: {
+        ...(row?.meta && typeof row.meta === "object" ? row.meta as Record<string, unknown> : {}),
+        stage: "Cancelled",
+        failure: {
+          kind: "cancelled_by_operator",
+          message: "Calibration cancelled by operator",
+        },
+        ...(metaPatch ?? {}),
+      } as never,
+      errorSummary: [{
+        moveId: -1,
+        pass: "runner",
+        error: "Calibration cancelled by operator",
+      }] as never,
     })
     .where(eq(calibrationPassRunsTable.id, runId));
 }
@@ -176,6 +265,10 @@ async function mergeRunMeta(runId: number, patch: Record<string, unknown>): Prom
     .where(eq(calibrationPassRunsTable.id, runId));
 }
 
+export async function updateCalibrationRunMeta(runId: number, patch: Record<string, unknown>): Promise<void> {
+  await mergeRunMeta(runId, patch);
+}
+
 async function loadFilteredMoves(opts: RunPassesOptions): Promise<DetectedMoveRow[]> {
   const { symbol, minTier, moveType, maxMoves } = opts;
   const conditions: ReturnType<typeof eq>[] = [eq(detectedMovesTable.symbol, symbol)];
@@ -206,6 +299,7 @@ async function executeCalibrationRun(
   runId: number,
   filteredMoves: DetectedMoveRow[],
   opts: RunPassesOptions,
+  cancellationCheck?: CalibrationCancellationCheck,
 ): Promise<RunPassesResult> {
   const startMs = Date.now();
   const { symbol, passName = "all", force = false, continueOnMoveErrors = false } = opts;
@@ -220,9 +314,15 @@ async function executeCalibrationRun(
   const totalMoves = filteredMoves.length;
 
   for (let index = 0; index < filteredMoves.length; index++) {
+    if (cancellationCheck && (index === 0 || index % 3 === 0)) {
+      await cancellationCheck();
+    }
     const move = filteredMoves[index]!;
     let moveFailed = false;
     for (const pass of perMovePasses) {
+      if (cancellationCheck) {
+        await cancellationCheck();
+      }
       if (!force) {
         const done = pass === "enrichment"
           ? await hasEnrichment(move.id)
@@ -297,6 +397,9 @@ async function executeCalibrationRun(
   }
 
   if (passName === "all" || passName === "model_synthesis") {
+    if (cancellationCheck) {
+      await cancellationCheck();
+    }
     const synthesisStart = Date.now();
     await mergeRunMeta(runId, {
       stage: "Bucket Model Synthesis",
@@ -378,6 +481,31 @@ async function executeCalibrationRun(
     errors,
     durationMs: Date.now() - startMs,
   };
+}
+
+export async function runCalibrationPassesForExistingRun(
+  runId: number,
+  opts: RunPassesOptions,
+  cancellationCheck?: CalibrationCancellationCheck,
+): Promise<RunPassesResult> {
+  const filteredMoves = await loadFilteredMoves(opts);
+  const totalMoves = filteredMoves.length;
+  await db
+    .update(calibrationPassRunsTable)
+    .set({
+      totalMoves,
+      processedMoves: 0,
+      failedMoves: 0,
+      errorSummary: null,
+      metaJson: {
+        model: CALIBRATION_MODEL,
+        startedAt: new Date().toISOString(),
+        stage: opts.passName === "model_synthesis" ? "Bucket Model Synthesis" : "AI Passes",
+        executionModel: "worker_service",
+      } as never,
+    })
+    .where(eq(calibrationPassRunsTable.id, runId));
+  return executeCalibrationRun(runId, filteredMoves, opts, cancellationCheck);
 }
 
 export async function startCalibrationPassesBackground(opts: RunPassesOptions): Promise<{ runId: number; totalMoves: number }> {

@@ -1,5 +1,13 @@
-import { sql } from "drizzle-orm";
-import { db } from "@workspace/db";
+import {
+  cancelWorkerJob,
+  createWorkerJob,
+  ensureWorkerJobsTable,
+  getWorkerJob,
+  getWorkerSchemaStatus,
+  listWorkerJobs,
+  updateWorkerJob,
+} from "../worker/jobs.js";
+import type { WorkerJobRow } from "../worker/types.js";
 import type {
   EliteSynthesisJobStatus,
   EliteSynthesisParams,
@@ -29,78 +37,33 @@ export type EliteSynthesisJobRow = {
   createdAt: string | null;
 };
 
-let eliteSynthesisSchemaPromise: Promise<void> | null = null;
-
-function iso(raw: unknown): string | null {
-  if (!raw) return null;
-  const d = raw instanceof Date ? raw : new Date(String(raw));
-  return Number.isNaN(d.getTime()) ? String(raw) : d.toISOString();
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+function hydrateEliteSynthesisJob(row: WorkerJobRow | null): EliteSynthesisJobRow | null {
+  if (!row || row.taskType !== "elite_synthesis") return null;
+  const taskState = row.taskState ?? {};
+  return {
+    id: row.id,
+    serviceId: row.serviceId,
+    symbol: row.symbol,
+    status: row.status as EliteSynthesisJobStatus,
+    stage: row.stage as EliteSynthesisStage,
+    params: row.params,
+    progressPct: row.progressPct,
+    currentPass: Number(taskState.currentPass ?? 0),
+    maxPasses: Number(taskState.maxPasses ?? 0),
+    message: row.message,
+    heartbeatAt: row.heartbeatAt,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    errorSummary: row.errorSummary,
+    bestSummary: (taskState.bestSummary as Record<string, unknown> | null) ?? null,
+    resultSummary: row.resultSummary,
+    resultArtifact: (row.resultArtifact as EliteSynthesisResult | null) ?? null,
+    createdAt: row.createdAt,
+  };
 }
 
 export async function ensureEliteSynthesisJobsTable(): Promise<void> {
-  if (eliteSynthesisSchemaPromise) return eliteSynthesisSchemaPromise;
-  eliteSynthesisSchemaPromise = (async () => {
-    try {
-      await db.execute(sql`
-        CREATE TABLE IF NOT EXISTS elite_synthesis_jobs (
-          id serial PRIMARY KEY,
-          service_id text NOT NULL,
-          symbol text NOT NULL,
-          status text NOT NULL DEFAULT 'queued',
-          stage text NOT NULL DEFAULT 'queued',
-          params jsonb,
-          progress_pct integer NOT NULL DEFAULT 0,
-          current_pass integer NOT NULL DEFAULT 0,
-          max_passes integer NOT NULL DEFAULT 0,
-          message text,
-          heartbeat_at timestamptz,
-          started_at timestamptz,
-          completed_at timestamptz,
-          error_summary jsonb,
-          best_summary jsonb,
-          result_summary jsonb,
-          result_artifact jsonb,
-          created_at timestamptz NOT NULL DEFAULT now()
-        )
-      `);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS service_id text`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS symbol text`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS status text`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS stage text`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS params jsonb`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS progress_pct integer`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS current_pass integer`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS max_passes integer`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS message text`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS started_at timestamptz`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS completed_at timestamptz`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS error_summary jsonb`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS best_summary jsonb`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS result_summary jsonb`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS result_artifact jsonb`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ADD COLUMN IF NOT EXISTS created_at timestamptz`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ALTER COLUMN status SET DEFAULT 'queued'`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ALTER COLUMN stage SET DEFAULT 'queued'`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ALTER COLUMN progress_pct SET DEFAULT 0`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ALTER COLUMN current_pass SET DEFAULT 0`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ALTER COLUMN max_passes SET DEFAULT 0`);
-      await db.execute(sql`ALTER TABLE elite_synthesis_jobs ALTER COLUMN created_at SET DEFAULT now()`);
-      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_elite_synthesis_jobs_service_created ON elite_synthesis_jobs(service_id, created_at DESC)`);
-      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_elite_synthesis_jobs_status_created ON elite_synthesis_jobs(status, created_at DESC)`);
-    } catch (err) {
-      eliteSynthesisSchemaPromise = null;
-      const message = err instanceof Error ? err.message : "unknown schema bootstrap error";
-      throw new Error(`Elite synthesis job schema is not ready: ${message}`);
-    }
-  })();
-  return eliteSynthesisSchemaPromise;
+  await ensureWorkerJobsTable();
 }
 
 export async function createEliteSynthesisJob(params: {
@@ -109,29 +72,18 @@ export async function createEliteSynthesisJob(params: {
   jobParams: EliteSynthesisParams;
   maxPasses: number;
 }): Promise<number> {
-  await ensureEliteSynthesisJobsTable();
-  const inserted = await db.execute(sql`
-    INSERT INTO elite_synthesis_jobs (
-      service_id, symbol, status, stage, params, progress_pct, current_pass, max_passes, message
-    ) VALUES (
-      ${params.serviceId},
-      ${params.symbol},
-      'queued',
-      'queued',
-      ${JSON.stringify(params.jobParams)}::jsonb,
-      0,
-      0,
-      ${params.maxPasses},
-      'Queued for integrated elite synthesis'
-    )
-    RETURNING id
-  `);
-  const row = (inserted.rows?.[0] ?? {}) as { id?: number };
-  const jobId = Number(row.id ?? 0);
-  if (!Number.isInteger(jobId) || jobId <= 0) {
-    throw new Error("Failed to create elite synthesis job.");
-  }
-  return jobId;
+  return createWorkerJob({
+    taskType: "elite_synthesis",
+    serviceId: params.serviceId,
+    symbol: params.symbol,
+    jobParams: params.jobParams as Record<string, unknown>,
+    taskState: {
+      currentPass: 0,
+      maxPasses: params.maxPasses,
+      bestSummary: null,
+    },
+    message: "Queued for integrated elite synthesis",
+  });
 }
 
 export async function updateEliteSynthesisJob(
@@ -152,62 +104,35 @@ export async function updateEliteSynthesisJob(
     resultArtifact: EliteSynthesisResult | null;
   }>,
 ): Promise<void> {
-  await ensureEliteSynthesisJobsTable();
-  await db.execute(sql`
-    UPDATE elite_synthesis_jobs
-    SET
-      status = COALESCE(${patch.status ?? null}, status),
-      stage = COALESCE(${patch.stage ?? null}, stage),
-      progress_pct = COALESCE(${patch.progressPct ?? null}, progress_pct),
-      current_pass = COALESCE(${patch.currentPass ?? null}, current_pass),
-      max_passes = COALESCE(${patch.maxPasses ?? null}, max_passes),
-      message = COALESCE(${patch.message ?? null}, message),
-      heartbeat_at = COALESCE(${patch.heartbeatAt ? new Date(patch.heartbeatAt) : null}, heartbeat_at),
-      started_at = COALESCE(${patch.startedAt ? new Date(patch.startedAt) : null}, started_at),
-      completed_at = COALESCE(${patch.completedAt ? new Date(patch.completedAt) : null}, completed_at),
-      error_summary = COALESCE(${patch.errorSummary ? JSON.stringify(patch.errorSummary) : null}::jsonb, error_summary),
-      best_summary = COALESCE(${patch.bestSummary ? JSON.stringify(patch.bestSummary) : null}::jsonb, best_summary),
-      result_summary = COALESCE(${patch.resultSummary ? JSON.stringify(patch.resultSummary) : null}::jsonb, result_summary),
-      result_artifact = COALESCE(${patch.resultArtifact ? JSON.stringify(patch.resultArtifact) : null}::jsonb, result_artifact)
-    WHERE id = ${jobId}
-  `);
-}
-
-export async function markEliteSynthesisJobCancelled(jobId: number): Promise<void> {
-  await updateEliteSynthesisJob(jobId, {
-    status: "cancelled",
-    stage: "cancelled",
-    message: "Cancellation requested",
-    heartbeatAt: new Date(),
-    completedAt: new Date(),
+  const current = await getWorkerJob(jobId);
+  const existingState = current?.taskState ?? {};
+  const nextTaskState: Record<string, unknown> = {
+    ...existingState,
+    ...(patch.currentPass == null ? {} : { currentPass: patch.currentPass }),
+    ...(patch.maxPasses == null ? {} : { maxPasses: patch.maxPasses }),
+    ...(patch.bestSummary == null ? {} : { bestSummary: patch.bestSummary }),
+  };
+  await updateWorkerJob(jobId, {
+    status: patch.status,
+    stage: patch.stage,
+    progressPct: patch.progressPct,
+    message: patch.message ?? null,
+    heartbeatAt: patch.heartbeatAt ?? null,
+    startedAt: patch.startedAt ?? null,
+    completedAt: patch.completedAt ?? null,
+    errorSummary: patch.errorSummary ?? null,
+    resultSummary: patch.resultSummary ?? null,
+    resultArtifact: patch.resultArtifact ?? null,
+    taskState: nextTaskState,
   });
 }
 
+export async function markEliteSynthesisJobCancelled(jobId: number): Promise<void> {
+  await cancelWorkerJob(jobId);
+}
+
 export async function getEliteSynthesisJob(jobId: number): Promise<EliteSynthesisJobRow | null> {
-  await ensureEliteSynthesisJobsTable();
-  const result = await db.execute(sql`SELECT * FROM elite_synthesis_jobs WHERE id = ${jobId} LIMIT 1`);
-  const row = result.rows?.[0] as Record<string, unknown> | undefined;
-  if (!row) return null;
-  return {
-    id: Number(row.id ?? 0),
-    serviceId: String(row.service_id ?? ""),
-    symbol: String(row.symbol ?? ""),
-    status: String(row.status ?? "queued") as EliteSynthesisJobStatus,
-    stage: String(row.stage ?? "queued") as EliteSynthesisStage,
-    params: asRecord(row.params),
-    progressPct: Number(row.progress_pct ?? 0),
-    currentPass: Number(row.current_pass ?? 0),
-    maxPasses: Number(row.max_passes ?? 0),
-    message: row.message == null ? null : String(row.message),
-    heartbeatAt: iso(row.heartbeat_at),
-    startedAt: iso(row.started_at),
-    completedAt: iso(row.completed_at),
-    errorSummary: asRecord(row.error_summary),
-    bestSummary: asRecord(row.best_summary),
-    resultSummary: asRecord(row.result_summary),
-    resultArtifact: (row.result_artifact as EliteSynthesisResult | null) ?? null,
-    createdAt: iso(row.created_at),
-  };
+  return hydrateEliteSynthesisJob(await getWorkerJob(jobId));
 }
 
 export async function getEliteSynthesisProgress(jobId: number): Promise<EliteSynthesisProgressSnapshot | null> {
@@ -240,52 +165,18 @@ export async function getEliteSynthesisProgress(jobId: number): Promise<EliteSyn
 }
 
 export async function listEliteSynthesisJobs(serviceId: string, limit = 10): Promise<EliteSynthesisJobRow[]> {
-  await ensureEliteSynthesisJobsTable();
-  const result = await db.execute(sql`
-    SELECT *
-    FROM elite_synthesis_jobs
-    WHERE service_id = ${serviceId}
-    ORDER BY created_at DESC
-    LIMIT ${Math.max(1, Math.min(50, limit))}
-  `);
-  const rows = (result.rows ?? []) as Record<string, unknown>[];
-  const jobs: EliteSynthesisJobRow[] = [];
-  for (const row of rows) {
-    jobs.push({
-      id: Number(row.id ?? 0),
-      serviceId: String(row.service_id ?? ""),
-      symbol: String(row.symbol ?? ""),
-      status: String(row.status ?? "queued") as EliteSynthesisJobStatus,
-      stage: String(row.stage ?? "queued") as EliteSynthesisStage,
-      params: asRecord(row.params),
-      progressPct: Number(row.progress_pct ?? 0),
-      currentPass: Number(row.current_pass ?? 0),
-      maxPasses: Number(row.max_passes ?? 0),
-      message: row.message == null ? null : String(row.message),
-      heartbeatAt: iso(row.heartbeat_at),
-      startedAt: iso(row.started_at),
-      completedAt: iso(row.completed_at),
-      errorSummary: asRecord(row.error_summary),
-      bestSummary: asRecord(row.best_summary),
-      resultSummary: asRecord(row.result_summary),
-      resultArtifact: (row.result_artifact as EliteSynthesisResult | null) ?? null,
-      createdAt: iso(row.created_at),
-    });
-  }
-  return jobs;
+  const rows = await listWorkerJobs({
+    serviceId,
+    taskType: "elite_synthesis",
+    limit,
+  });
+  return rows.map((row) => hydrateEliteSynthesisJob(row)).filter(Boolean) as EliteSynthesisJobRow[];
 }
 
 export async function getEliteSynthesisSchemaStatus(): Promise<Record<string, unknown>> {
-  await ensureEliteSynthesisJobsTable();
-  const result = await db.execute(sql`
-    SELECT column_name
-    FROM information_schema.columns
-    WHERE table_name = 'elite_synthesis_jobs'
-    ORDER BY ordinal_position
-  `);
+  const status = await getWorkerSchemaStatus();
   return {
-    ready: true,
-    table: "elite_synthesis_jobs",
-    columns: (result.rows ?? []).map((row) => String((row as Record<string, unknown>).column_name ?? "")),
+    ...status,
+    taskType: "elite_synthesis",
   };
 }

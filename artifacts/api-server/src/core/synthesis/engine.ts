@@ -4,6 +4,7 @@ import {
   getEliteSynthesisJob,
   updateEliteSynthesisJob,
 } from "./jobs.js";
+import { isWorkerJobCancellationRequested, WorkerJobCancelledError } from "../worker/jobs.js";
 import type {
   EliteSynthesisBottleneck,
   EliteSynthesisDataAvailability,
@@ -21,15 +22,6 @@ import type {
 } from "./types.js";
 import { profileDefaults } from "./types.js";
 
-const eliteSynthesisQueue: Array<{
-  jobId: number;
-  serviceId: string;
-  request: EliteSynthesisParams;
-}> = [];
-const queuedJobIds = new Set<number>();
-let activeEliteSynthesisJobId: number | null = null;
-let drainingEliteSynthesisQueue = false;
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -40,9 +32,8 @@ async function yieldToEventLoop() {
   });
 }
 
-async function claimQueuedEliteSynthesisJob(jobId: number): Promise<boolean> {
-  const job = await getEliteSynthesisJob(jobId);
-  return Boolean(job && job.status === "queued");
+async function isCancellationRequested(jobId: number): Promise<boolean> {
+  return isWorkerJobCancellationRequested(jobId);
 }
 
 function uniqueStrings(values: Array<string | null | undefined>) {
@@ -351,61 +342,6 @@ export function getSynthesisAdapter(serviceId: string): SymbolSynthesisAdapter {
   throw new Error(`Elite synthesis adapter missing for service ${serviceId}.`);
 }
 
-async function drainEliteSynthesisQueue(): Promise<void> {
-  if (drainingEliteSynthesisQueue || activeEliteSynthesisJobId != null) return;
-  drainingEliteSynthesisQueue = true;
-  try {
-    while (activeEliteSynthesisJobId == null && eliteSynthesisQueue.length > 0) {
-      const next = eliteSynthesisQueue.shift();
-      if (!next) break;
-      queuedJobIds.delete(next.jobId);
-      const canRun = await claimQueuedEliteSynthesisJob(next.jobId);
-      if (!canRun) {
-        continue;
-      }
-      activeEliteSynthesisJobId = next.jobId;
-      setTimeout(() => {
-        void runEliteSynthesisJob(next)
-          .catch(async (error) => {
-            console.error(`[elite-synthesis] job ${next.jobId} failed:`, error instanceof Error ? error.message : error);
-            await markEliteSynthesisJobFailed(next.jobId, error);
-          })
-          .finally(() => {
-            activeEliteSynthesisJobId = null;
-            setTimeout(() => {
-              void drainEliteSynthesisQueue();
-            }, 0);
-          });
-      }, 0);
-      break;
-    }
-  } finally {
-    drainingEliteSynthesisQueue = false;
-  }
-}
-
-export async function scheduleEliteSynthesisJob(params: {
-  jobId: number;
-  serviceId: string;
-  request: EliteSynthesisParams;
-}): Promise<void> {
-  if (queuedJobIds.has(params.jobId) || activeEliteSynthesisJobId === params.jobId) return;
-  queuedJobIds.add(params.jobId);
-  eliteSynthesisQueue.push(params);
-  await updateEliteSynthesisJob(params.jobId, {
-    status: "queued",
-    stage: "queued",
-    progressPct: 0,
-    message: activeEliteSynthesisJobId == null
-      ? "Queued for integrated elite synthesis"
-      : `Queued behind running synthesis job #${activeEliteSynthesisJobId}`,
-    heartbeatAt: nowIso(),
-  });
-  setTimeout(() => {
-    void drainEliteSynthesisQueue();
-  }, 0);
-}
-
 export async function runEliteSynthesisJob(params: {
   jobId: number;
   serviceId: string;
@@ -434,6 +370,9 @@ export async function runEliteSynthesisJob(params: {
     startedAt: nowIso(),
   });
   await yieldToEventLoop();
+  if (await isCancellationRequested(params.jobId)) {
+    throw new WorkerJobCancelledError(params.jobId, "cancelled_by_operator");
+  }
 
   const dataset = await buildUnifiedCrash300Dataset({
     calibrationRunId: params.request.calibrationRunId ?? null,
@@ -450,6 +389,9 @@ export async function runEliteSynthesisJob(params: {
       });
     },
   });
+  if (await isCancellationRequested(params.jobId)) {
+    throw new WorkerJobCancelledError(params.jobId, "cancelled_by_operator");
+  }
   await updateEliteSynthesisJob(params.jobId, {
     stage: "building_dataset",
     progressPct: 20,
@@ -555,7 +497,7 @@ export async function runEliteSynthesisJob(params: {
 
   for (let passNumber = 1; passNumber <= maxPasses; passNumber += 1) {
     const job = await getEliteSynthesisJob(params.jobId);
-    if (job?.status === "cancelled") {
+    if (job?.status === "cancelled" || await isCancellationRequested(params.jobId)) {
       const cancelledResult: EliteSynthesisResult = {
         jobId: params.jobId,
         serviceId: params.serviceId,

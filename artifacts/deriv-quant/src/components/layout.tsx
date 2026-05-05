@@ -33,7 +33,6 @@ import {
 import type { ToggleTradingModeRequestMode } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AiChat } from "./AiChat";
-import { EliteSynthesisMonitor } from "./EliteSynthesisMonitor";
 
 const NAV_ITEMS = [
   { name: "Overview",         href: "/",          icon: Activity  },
@@ -232,8 +231,6 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
             </div>
           </div>
         </div>
-
-        <EliteSynthesisMonitor variant="sidebar" />
 
         <div className="px-4 py-3 border-b border-border/40 space-y-2.5">
           <div className="flex items-center justify-between">

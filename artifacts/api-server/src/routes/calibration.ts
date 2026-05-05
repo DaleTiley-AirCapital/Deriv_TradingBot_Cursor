@@ -39,13 +39,14 @@ import {
 import { count, desc, eq, and, gte, lte, asc } from "drizzle-orm";
 import { detectAndStoreMoves, getDetectedMoves, clearCalibrationArtifactsForSymbol } from "../core/calibration/moveDetector.js";
 import {
-  startCalibrationPassesBackground,
+  createQueuedCalibrationRunRecord,
   getPassRunStatus,
   getLatestPassRun,
   getAllPassRuns,
   getRunningPassRunForSymbol,
   type PassName,
 } from "../core/calibration/calibrationPassRunner.js";
+import { createWorkerJob } from "../core/worker/jobs.js";
 import {
   buildCalibrationAggregate,
   getCalibrationProfile,
@@ -81,9 +82,10 @@ import {
 } from "../core/calibration/backtestOptimiser.js";
 import { getSymbolService } from "../symbol-services/shared/SymbolServiceRegistry.js";
 import { loadCrash300RuntimeEnvelope } from "../symbol-services/CRASH300/model.js";
-import { runCrash300CalibrationParity, runCrash300RuntimeTriggerValidation } from "../symbol-services/CRASH300/calibration.js";
+import { runCrash300CalibrationParity } from "../symbol-services/CRASH300/calibration.js";
 import { buildCrash300PreMoveSnapshots, summarizeCrash300PreMoveSnapshots } from "../symbol-services/CRASH300/featureSnapshots.js";
 import { buildCrash300PhaseIdentifierReport } from "../symbol-services/CRASH300/phaseIdentifiers.js";
+import { buildCalibrationParityReport, buildRuntimeTriggerValidationReport } from "../core/calibration/runtimeDiagnostics.js";
 
 const router: IRouter = Router();
 
@@ -405,87 +407,41 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
       }));
       return;
     }
-
-    const integrity = await getComprehensiveIntegrityReport(symbol, Math.max(365, Number(windowDays)));
-
-    const integrityHealthy =
-      integrity.base1mCount >= MIN_BASE_1M_CANDLES &&
-      integrity.base1mGapCount <= MAX_BASE_1M_GAPS_FOR_HEALTHY &&
-      integrity.base1mCoveragePct >= MIN_BASE_1M_COVERAGE_PCT;
-
-    if (!integrityHealthy) {
-      res.status(409).json(withSymbolDomain(symbol, symbolDomain, {
-        ok: false,
-        error: "Calibration blocked: canonical data is not ready. Run Data Operations first.",
-        failureReason: {
-          kind: "integrity_not_ready",
-          minBase1mCandles: MIN_BASE_1M_CANDLES,
-          minCoveragePct: MIN_BASE_1M_COVERAGE_PCT,
-          maxAllowedGaps: MAX_BASE_1M_GAPS_FOR_HEALTHY,
-          base1mCount: integrity.base1mCount,
-          base1mCoveragePct: integrity.base1mCoveragePct,
-          base1mGapCount: integrity.base1mGapCount,
-          base1mInterpolatedCount: integrity.base1mInterpolatedCount,
-        },
-        integrity,
-      }));
-      return;
-    }
-
     const typedMinTier = minTier ? (String(minTier) as "A" | "B" | "C" | "D") : undefined;
     const typedMaxMoves = maxMoves ? Number(maxMoves) : undefined;
-    const resumePlan = await getFullCalibrationResumePlan(
-      symbol,
-      Number(windowDays),
-      normalizedMoveType,
-      typedMinTier,
-      typedMaxMoves,
-    );
-    const detected = resumePlan.shouldResume
-      ? null
-      : await detectAndStoreMoves(symbol, Number(windowDays), Number(minMovePct), true);
-
-    const { runId, totalMoves } = await startCalibrationPassesBackground({
+    const runId = await createQueuedCalibrationRunRecord({
       symbol,
       windowDays: Number(windowDays),
-      passName: resumePlan.shouldResume ? resumePlan.passName : "all",
-      minTier: typedMinTier,
-      moveType: normalizedMoveType,
-      maxMoves: typedMaxMoves,
-      force: resumePlan.shouldResume ? false : Boolean(force),
-      continueOnMoveErrors: false,
+      passName: "all",
+      stage: "Queued",
+      metaPatch: {
+        queue: "worker_service",
+        requestedWorkflow: "full_calibration",
+      },
     });
-    const [runRow] = await db
-      .select({ metaJson: calibrationPassRunsTable.metaJson })
-      .from(calibrationPassRunsTable)
-      .where(eq(calibrationPassRunsTable.id, runId))
-      .limit(1);
-    const existingMeta =
-      runRow?.metaJson && typeof runRow.metaJson === "object"
-        ? (runRow.metaJson as Record<string, unknown>)
-        : {};
-    await db
-      .update(calibrationPassRunsTable)
-      .set({
-        metaJson: {
-          ...existingMeta,
-          stage: "Deterministic Enrichment",
-          preflight: {
-            readyForCalibration: integrityHealthy,
-            integrityStatus: integrityHealthy ? "healthy" : "reconcile_required",
-          },
-          integritySummary: integrity,
-          detectSummary: detected,
-          resumePlan,
-        } as never,
-      })
-      .where(eq(calibrationPassRunsTable.id, runId));
+    const workerJobId = await createWorkerJob({
+      taskType: "full_calibration",
+      serviceId: symbol,
+      symbol,
+      message: `Queued full calibration for ${symbol}`,
+      taskState: { runId },
+      jobParams: {
+        symbol,
+        windowDays: Number(windowDays),
+        minMovePct: Number(minMovePct),
+        minTier: typedMinTier ?? null,
+        moveType: normalizedMoveType ?? null,
+        maxMoves: typedMaxMoves ?? null,
+        force: Boolean(force),
+      },
+    });
 
     res.json(withSymbolDomain(symbol, symbolDomain, {
       ok: true,
       runId,
-      status: "running",
-      totalMoves,
+      workerJobId,
+      status: "queued",
+      totalMoves: 0,
       stages: [
         "Data Integrity",
         "Move Detection",
@@ -494,9 +450,7 @@ router.post("/calibration/full/:symbol", async (req, res): Promise<void> => {
         "Bucket Model Synthesis",
         "Research Profile Complete",
       ],
-      integritySummary: integrity,
-      detectSummary: detected,
-      resumePlan,
+      executionModel: "worker_service",
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Full calibration failed";
@@ -600,17 +554,41 @@ router.post("/calibration/run-passes/:symbol", async (req, res): Promise<void> =
       return;
     }
 
-    const { runId, totalMoves } = await startCalibrationPassesBackground({
+    const runId = await createQueuedCalibrationRunRecord({
       symbol,
       windowDays,
       passName: resolvedPassName,
-      minTier: minTier as "A" | "B" | "C" | "D" | undefined,
-      moveType: resolvedMoveType,
-      maxMoves,
-      force,
-      continueOnMoveErrors,
+      stage: "Queued",
+      metaPatch: {
+        queue: "worker_service",
+        requestedWorkflow: "calibration_passes",
+      },
     });
-    res.json(withSymbolDomain(symbol, symbolDomain, { ok: true, runId, status: "running", totalMoves }));
+    const workerJobId = await createWorkerJob({
+      taskType: "calibration_passes",
+      serviceId: symbol,
+      symbol,
+      message: `Queued calibration pass run for ${symbol}`,
+      taskState: { runId },
+      jobParams: {
+        symbol,
+        windowDays,
+        passName: resolvedPassName,
+        minTier: (minTier as "A" | "B" | "C" | "D" | undefined) ?? null,
+        moveType: resolvedMoveType ?? null,
+        maxMoves: maxMoves ?? null,
+        force,
+        continueOnMoveErrors,
+      },
+    });
+    res.json(withSymbolDomain(symbol, symbolDomain, {
+      ok: true,
+      runId,
+      workerJobId,
+      status: "queued",
+      totalMoves: 0,
+      executionModel: "worker_service",
+    }));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Pass run failed";
     console.error(`[calibration/run-passes/${symbol}] error:`, message);
@@ -1724,36 +1702,48 @@ router.get("/calibration/runtime-model/:symbol/parity-report", async (req, res):
   }
 
   try {
-    const service = getSymbolService(symbol);
-    if (!service) {
-      res.status(404).json({ error: `No symbol service registered for ${symbol}` });
-      return;
-    }
     const endTs = Number(req.query.endTs ?? Math.floor(Date.now() / 1000));
     const startTs = Number(
       req.query.startTs ??
         (Math.floor(Date.now() / 1000) - Math.max(30, Math.min(730, Number(req.query.windowDays ?? 365))) * 86400),
     );
-    const parity = await service.runCalibrationParity({
-      symbol,
-      startTs,
-      endTs,
-      mode: "parity",
-    });
-    const parityRecord = parity as Record<string, unknown>;
-    const runtimeModel = (parityRecord.runtimeModel ?? null) as Record<string, unknown> | null;
-    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
-      ok: true,
-      generatedAt: new Date().toISOString(),
-      promotedModelRunId: runtimeModel?.promotedModelRunId ?? null,
-      stagedModelRunId: runtimeModel?.stagedModelRunId ?? null,
-      totals: parityRecord.totals ?? {},
-      verdicts: Array.isArray(parityRecord.verdicts) ? parityRecord.verdicts : [],
-      diagnostics: parityRecord.diagnostics ?? {},
-      report: parityRecord,
-    }));
+    const report = await buildCalibrationParityReport({ symbol, startTs, endTs });
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, report));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Parity report generation failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/calibration/runtime-model/:symbol/parity-report/run", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+
+  try {
+    const endTs = Number(req.body?.endTs ?? Math.floor(Date.now() / 1000));
+    const startTs = Number(
+      req.body?.startTs ??
+        (Math.floor(Date.now() / 1000) - Math.max(30, Math.min(730, Number(req.body?.windowDays ?? 365))) * 86400),
+    );
+    const workerJobId = await createWorkerJob({
+      taskType: "parity_run",
+      serviceId: symbol,
+      symbol,
+      message: `Queued parity report for ${symbol}`,
+      jobParams: { symbol, startTs, endTs },
+    });
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      workerJobId,
+      status: "queued",
+      executionModel: "worker_service",
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Parity report queue failed";
     res.status(500).json({ error: message });
   }
 });
@@ -1776,10 +1766,47 @@ router.get("/calibration/runtime-model/:symbol/runtime-trigger-validation", asyn
       req.query.startTs ??
         (Math.floor(Date.now() / 1000) - Math.max(30, Math.min(730, Number(req.query.windowDays ?? 30))) * 86400),
     );
-    const report = await runCrash300RuntimeTriggerValidation({ startTs, endTs });
-    res.json(withSymbolDomain(symbol, checked.symbolDomain, { ok: true, ...report }));
+    const report = await buildRuntimeTriggerValidationReport({ symbol, startTs, endTs });
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, report));
   } catch (err) {
     const message = err instanceof Error ? err.message : "Runtime trigger validation failed";
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post("/calibration/runtime-model/:symbol/runtime-trigger-validation/run", async (req, res): Promise<void> => {
+  const { symbol } = req.params;
+  const checked = assertCalibrationSymbol(symbol);
+  if (!checked.ok) {
+    res.status(400).json({ error: checked.error });
+    return;
+  }
+  if (symbol !== "CRASH300") {
+    res.status(400).json({ error: "Runtime trigger validation is currently available for CRASH300 only." });
+    return;
+  }
+
+  try {
+    const endTs = Number(req.body?.endTs ?? Math.floor(Date.now() / 1000));
+    const startTs = Number(
+      req.body?.startTs ??
+        (Math.floor(Date.now() / 1000) - Math.max(30, Math.min(730, Number(req.body?.windowDays ?? 30))) * 86400),
+    );
+    const workerJobId = await createWorkerJob({
+      taskType: "runtime_trigger_validation",
+      serviceId: symbol,
+      symbol,
+      message: `Queued runtime trigger validation for ${symbol}`,
+      jobParams: { symbol, startTs, endTs },
+    });
+    res.json(withSymbolDomain(symbol, checked.symbolDomain, {
+      ok: true,
+      workerJobId,
+      status: "queued",
+      executionModel: "worker_service",
+    }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Runtime trigger validation queue failed";
     res.status(500).json({ error: message });
   }
 });

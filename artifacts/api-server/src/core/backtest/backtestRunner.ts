@@ -282,6 +282,7 @@ export interface V3BacktestRequest {
   runtimeCalibrationOverride?: LiveCalibrationProfile | null;
   crash300AdmissionPolicy?: Partial<Crash300AdmissionPolicyConfig> | null;
   startingCapitalUsd?: number;
+  cancellationCheck?: (() => Promise<void>) | null;
 }
 
 export type BacktestTierMode = "A" | "AB" | "ABC" | "ALL";
@@ -437,6 +438,18 @@ function percentile(sorted: number[], p: number): number {
 function avg(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+async function runBacktestCancellationCheckpoint(
+  cancellationCheck: (() => Promise<void>) | null | undefined,
+  iteration: number,
+  every: number,
+): Promise<void> {
+  if (!cancellationCheck) return;
+  if (iteration === 0 || iteration % every === 0) {
+    await cancellationCheck();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 // â”€â”€ Summary builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1106,6 +1119,7 @@ export async function runV3Backtest(
   const mode = req.mode ?? "paper";
   const tierMode = normalizeBacktestTierMode(req.tierMode);
   const startingCapitalUsd = Math.max(1, Number(req.startingCapitalUsd ?? DEFAULT_REPORT_STARTING_CAPITAL_USD));
+  const cancellationCheck = req.cancellationCheck ?? null;
   const runtimeQualityBands = allowedRuntimeQualityBands(tierMode);
   const detectedMoveTiers = allowedDetectedMoveTiers(tierMode);
   const crash300AdmissionPolicy = normalizeCrash300AdmissionPolicyConfig(req.crash300AdmissionPolicy);
@@ -1304,6 +1318,7 @@ export async function runV3Backtest(
   ];
 
   for (let i = simStart; i < candles.length; i++) {
+    await runBacktestCancellationCheckpoint(cancellationCheck, i - simStart, 100);
     const sliceStart = Math.max(0, i - STRUCTURAL_LOOKBACK + 1);
     const slice = candles.slice(sliceStart, i + 1);
     const bar = candles[i];
@@ -2079,6 +2094,7 @@ export async function runV3BacktestMulti(
   tierModeRaw?: BacktestTierMode,
   crash300AdmissionPolicyRaw?: Partial<Crash300AdmissionPolicyConfig> | null,
   startingCapitalUsdRaw?: number,
+  cancellationCheck?: (() => Promise<void>) | null,
 ): Promise<Record<string, V3BacktestResult>> {
   const tierMode = normalizeBacktestTierMode(tierModeRaw);
   const runtimeQualityBands = allowedRuntimeQualityBands(tierMode);
@@ -2094,6 +2110,7 @@ export async function runV3BacktestMulti(
       tierMode,
       crash300AdmissionPolicy,
       startingCapitalUsd,
+      cancellationCheck,
     });
     return symbols[0] ? { [symbols[0]]: result } : {};
   }
@@ -2174,6 +2191,7 @@ export async function runV3BacktestMulti(
   const allTs     = new Set<number>();
 
   for (let si = 0; si < symbols.length; si++) {
+    await runBacktestCancellationCheckpoint(cancellationCheck, si, 1);
     const sym     = symbols[si]!;
     const candles = allCandleArrays[si]!;
     if (candles.length < 60) continue;
@@ -2184,6 +2202,7 @@ export async function runV3BacktestMulti(
 
     const idxByTs = new Map<number, number>();
     for (let i = 0; i < candles.length; i++) {
+      await runBacktestCancellationCheckpoint(cancellationCheck, i, 1_000);
       idxByTs.set(candles[i]!.closeTs, i);
       if (i >= simStart) allTs.add(candles[i]!.closeTs);
     }
@@ -2281,7 +2300,10 @@ export async function runV3BacktestMulti(
 
   // â”€â”€ Shared portfolio ledger â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const ledger = new SharedPortfolioLedger();
+  let runtimeCalibrationIndex = 0;
   for (const ctx of symCtxMap.values()) {
+    await runBacktestCancellationCheckpoint(cancellationCheck, runtimeCalibrationIndex, 1);
+    runtimeCalibrationIndex += 1;
     const runtimeCalibrationResolution =
       await resolveLiveCalibrationProfile(ctx.sym, _mode, stateMap).catch(() => null);
     const runtimeCalibration = runtimeCalibrationResolution?.profile ?? null;
@@ -2303,7 +2325,9 @@ export async function runV3BacktestMulti(
   const globalTs = Array.from(allTs).sort((a, b) => a - b);
 
   // â”€â”€ Time-synchronized event loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  for (const ts of globalTs) {
+  for (let tsIndex = 0; tsIndex < globalTs.length; tsIndex += 1) {
+    await runBacktestCancellationCheckpoint(cancellationCheck, tsIndex, 100);
+    const ts = globalTs[tsIndex]!;
     const tsMs = ts * 1000;
 
     // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { buildUnifiedCrash300Dataset } from "../core/synthesis/crash300Adapter.js";
-import { scheduleEliteSynthesisJob, getSynthesisAdapter } from "../core/synthesis/engine.js";
+import { getSynthesisAdapter } from "../core/synthesis/engine.js";
 import {
   createEliteSynthesisJob,
   ensureEliteSynthesisJobsTable,
@@ -120,7 +120,6 @@ router.post("/research/:serviceId/elite-synthesis/jobs", async (req, res): Promi
       jobParams: params,
       maxPasses,
     });
-    await scheduleEliteSynthesisJob({ jobId, serviceId, request: params });
     res.status(202).json({
       jobId,
       serviceId,

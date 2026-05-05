@@ -18,6 +18,7 @@ import { buildCrash300TradeOutcomeAttributionReport } from "../core/backtest/tra
 import { buildCrash300BacktestComparisonReport } from "../core/backtest/backtestComparison.js";
 import { buildCrash300CalibrationReconciliationReport } from "../core/backtest/calibrationReconciliation.js";
 import { ACTIVE_SYMBOLS } from "../core/engineTypes.js";
+import { createWorkerJob } from "../core/worker/jobs.js";
 
 const router: IRouter = Router();
 let v3BacktestJobsSchemaPromise: Promise<void> | null = null;
@@ -123,11 +124,10 @@ type V3BacktestJobParams = {
   tierMode: "A" | "AB" | "ABC" | "ALL";
   crash300AdmissionPolicy?: Partial<Crash300AdmissionPolicyConfig> | null;
   startingCapitalUsd: number;
+  cancellationCheck?: (() => Promise<void>) | null;
 };
 
-const activeV3BacktestJobs = new Map<number, Promise<void>>();
-
-async function ensureV3BacktestRunsTable(): Promise<void> {
+export async function ensureV3BacktestRunsTable(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS v3_backtest_runs (
       id serial PRIMARY KEY,
@@ -145,7 +145,7 @@ async function ensureV3BacktestRunsTable(): Promise<void> {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_v3_backtest_runs_symbol_created ON v3_backtest_runs(symbol, created_at DESC)`);
 }
 
-async function ensureV3BacktestJobsTable(): Promise<void> {
+export async function ensureV3BacktestJobsTable(): Promise<void> {
   if (v3BacktestJobsSchemaPromise) {
     return v3BacktestJobsSchemaPromise;
   }
@@ -366,6 +366,7 @@ async function runV3BacktestRequest(params: V3BacktestJobParams) {
       params.tierMode,
       params.crash300AdmissionPolicy ?? null,
       Number(params.startingCapitalUsd),
+      (params as V3BacktestJobParams & { cancellationCheck?: (() => Promise<void>) | null }).cancellationCheck ?? null,
     );
     return multi as Record<string, unknown>;
   }
@@ -377,11 +378,12 @@ async function runV3BacktestRequest(params: V3BacktestJobParams) {
     tierMode: params.tierMode,
     crash300AdmissionPolicy: params.crash300AdmissionPolicy ?? null,
     startingCapitalUsd: Number(params.startingCapitalUsd),
+    cancellationCheck: (params as V3BacktestJobParams & { cancellationCheck?: (() => Promise<void>) | null }).cancellationCheck ?? null,
   });
   return { [params.symbol]: single };
 }
 
-async function heartbeatV3BacktestJob(jobId: number, patch: {
+export async function heartbeatV3BacktestJob(jobId: number, patch: {
   status?: string;
   phase?: string;
   progressPct?: number;
@@ -412,7 +414,30 @@ async function heartbeatV3BacktestJob(jobId: number, patch: {
   `);
 }
 
-async function executeV3BacktestJob(jobId: number, params: V3BacktestJobParams) {
+export async function cancelV3BacktestJob(jobId: number, reason = "cancelled_by_operator") {
+  await heartbeatV3BacktestJob(jobId, {
+    status: "cancelled",
+    phase: "cancelled",
+    progressPct: 100,
+    message: reason,
+    errorSummary: { reason },
+    completedAt: true,
+  });
+}
+
+export async function executeV3BacktestJob(
+  jobId: number,
+  params: V3BacktestJobParams,
+  onProgress?: (patch: {
+    status?: string;
+    phase?: string;
+    progressPct?: number;
+    message?: string | null;
+    errorSummary?: Record<string, unknown> | null;
+    resultSummary?: Record<string, unknown> | null;
+    persistedRunIds?: Record<string, number> | null;
+  }) => Promise<void>,
+) {
   await heartbeatV3BacktestJob(jobId, {
     status: "running",
     phase: "running_backtest",
@@ -420,9 +445,21 @@ async function executeV3BacktestJob(jobId: number, params: V3BacktestJobParams) 
     message: `Running V3 backtest for ${params.symbol}...`,
     startedAt: true,
   });
+  await onProgress?.({
+    status: "running",
+    phase: "running_backtest",
+    progressPct: 10,
+    message: `Running V3 backtest for ${params.symbol}...`,
+  });
   try {
     const results = await runV3BacktestRequest(params);
     await heartbeatV3BacktestJob(jobId, {
+      phase: "persisting_results",
+      progressPct: 80,
+      message: "Persisting backtest results...",
+      resultSummary: summarizeV3Results(results),
+    });
+    await onProgress?.({
       phase: "persisting_results",
       progressPct: 80,
       message: "Persisting backtest results...",
@@ -444,8 +481,27 @@ async function executeV3BacktestJob(jobId: number, params: V3BacktestJobParams) 
       persistedRunIds: persisted.persistedRunIds,
       completedAt: true,
     });
+    await onProgress?.({
+      status: "completed",
+      phase: "completed",
+      progressPct: 100,
+      message: `Completed ${params.symbol} V3 backtest`,
+      resultSummary: persisted.summaryBySymbol,
+      persistedRunIds: persisted.persistedRunIds,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "V3 backtest job failed";
+    if (message === "cancelled_by_operator") {
+      await cancelV3BacktestJob(jobId, message);
+      await onProgress?.({
+        status: "cancelled",
+        phase: "cancelled",
+        progressPct: 100,
+        message,
+        errorSummary: { reason: message },
+      });
+      return;
+    }
     await heartbeatV3BacktestJob(jobId, {
       status: "failed",
       phase: "failed",
@@ -454,12 +510,17 @@ async function executeV3BacktestJob(jobId: number, params: V3BacktestJobParams) 
       errorSummary: { message },
       completedAt: true,
     });
-  } finally {
-    activeV3BacktestJobs.delete(jobId);
+    await onProgress?.({
+      status: "failed",
+      phase: "failed",
+      progressPct: 100,
+      message,
+      errorSummary: { message },
+    });
   }
 }
 
-async function createV3BacktestJob(params: V3BacktestJobParams) {
+export async function createV3BacktestJob(params: V3BacktestJobParams) {
   await ensureV3BacktestRunsTable();
   await ensureV3BacktestJobsTable();
   const insertResult = await db.execute(sql`
@@ -484,9 +545,6 @@ async function createV3BacktestJob(params: V3BacktestJobParams) {
   if (!Number.isInteger(jobId) || jobId <= 0) {
     throw new Error("Failed to create V3 backtest job");
   }
-  const promise = executeV3BacktestJob(jobId, params);
-  activeV3BacktestJobs.set(jobId, promise);
-  void promise;
   return jobId;
 }
 
@@ -957,9 +1015,26 @@ router.post("/backtest/v3/run-async", async (req, res): Promise<void> => {
       crash300AdmissionPolicy,
       startingCapitalUsd: Number(startingCapitalUsd),
     });
+    const workerJobId = await createWorkerJob({
+      taskType: "runtime_backtest",
+      serviceId: symbol === "all" ? "ALL" : symbol,
+      symbol,
+      message: `Queued runtime backtest for ${symbol}`,
+      taskState: { backtestJobId: jobId },
+      jobParams: {
+        symbol,
+        startTs: parsedStart ?? null,
+        endTs: parsedEnd ?? null,
+        mode: mode ?? "paper",
+        tierMode: normalizedTierMode,
+        crash300AdmissionPolicy,
+        startingCapitalUsd: Number(startingCapitalUsd),
+      },
+    });
     res.json({
       ok: true,
       jobId,
+      workerJobId,
       status: "queued",
       phase: "queued",
       message: `Queued V3 backtest for ${symbol}`,

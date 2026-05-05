@@ -19,6 +19,7 @@ import behaviorRouter from "./behavior";
 import calibrationRouter from "./calibration";
 import aiContextRouter from "./aiContext.js";
 import eliteSynthesisRouter from "./eliteSynthesis.js";
+import workerRouter from "./worker.js";
 
 const router: IRouter = Router();
 
@@ -42,5 +43,6 @@ router.use(behaviorRouter);
 router.use(calibrationRouter);
 router.use(aiContextRouter);
 router.use(eliteSynthesisRouter);
+router.use(workerRouter);
 
 export default router;

@@ -7,10 +7,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDurationCompact } from "@/lib/time";
-import {
-  ELITE_SYNTHESIS_STORAGE_KEY,
-  writeActiveEliteSynthesisJob,
-} from "@/lib/eliteSynthesis";
+import { formatWorkerTaskLabel, type WorkerJobUi } from "@/lib/workerJobs";
 import {
   ACTIVE_SERVICE_SYMBOLS,
   SERVICE_SELECTOR_OPTIONS,
@@ -137,7 +134,7 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
         const s = (await apiFetch(`calibration/run-status/${runId}`)) as PassStatusResult;
         setStatus(s);
         const done =
-          s.status === "completed" || s.status === "failed" || s.status === "partial";
+          s.status === "completed" || s.status === "failed" || s.status === "partial" || s.status === "cancelled";
         if (done) {
           stopInterval();
           try { sessionStorage.removeItem(CALIB_PASS_SESSION_KEY); } catch { /* ignore */ }
@@ -485,6 +482,20 @@ function crash300AdmissionPolicyEquals(
     left.blockRecoveryUpOnDownMove === right.blockRecoveryUpOnDownMove &&
     left.blockCrashDownOnUpMove === right.blockCrashDownOnUpMove
   );
+}
+
+function elapsedLabel(startedAt: string | null) {
+  if (!startedAt) return "n/a";
+  const ms = Date.now() - new Date(startedAt).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "n/a";
+  return formatDurationCompact(Math.floor(ms / 1000));
+}
+
+function heartbeatAgeLabel(heartbeatAt: string | null) {
+  if (!heartbeatAt) return "n/a";
+  const ms = Date.now() - new Date(heartbeatAt).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "n/a";
+  return `${Math.floor(ms / 1000)}s ago`;
 }
 
 function presetForCrash300AdmissionPolicy(
@@ -3181,6 +3192,7 @@ function MoveCalibrationTab({
           <div className={cn(
             "rounded-lg border p-3 space-y-1.5",
             passStatus.status === "completed" ? "bg-green-500/10 border-green-500/20" :
+            passStatus.status === "cancelled" ? "bg-amber-500/10 border-amber-500/20" :
             passStatus.status === "failed"    ? "bg-red-500/10 border-red-500/20" :
             "bg-primary/5 border-primary/20"
           )}>
@@ -3189,10 +3201,12 @@ function MoveCalibrationTab({
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
               )}
               {passStatus.status === "completed" && <CheckCircle className="w-3.5 h-3.5 text-green-400" />}
+              {passStatus.status === "cancelled" && <XCircle className="w-3.5 h-3.5 text-amber-300" />}
               {passStatus.status === "failed"    && <XCircle    className="w-3.5 h-3.5 text-red-400"   />}
               <span className="text-xs font-semibold text-foreground">
                 {passStatus.status === "running"   ? "Calibration running" :
                  passStatus.status === "completed" ? "Calibration completed" :
+                 passStatus.status === "cancelled" ? "Calibration cancelled" :
                  passStatus.status === "failed"    ? "Pass run failed" :
                  `Status: ${passStatus.status}`}
               </span>
@@ -3334,6 +3348,7 @@ function MoveCalibrationTab({
                             <span className={cn(
                               "inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border",
                               run.status === "completed" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/25" :
+                              run.status === "cancelled" ? "text-amber-300 bg-amber-500/10 border-amber-500/25" :
                               run.status === "partial"   ? "text-amber-400 bg-amber-500/10 border-amber-500/25" :
                               run.status === "failed"    ? "text-red-400 bg-red-500/10 border-red-500/25" :
                               "text-sky-400 bg-sky-500/10 border-sky-500/25"
@@ -4017,7 +4032,6 @@ function MoveCalibrationTab({
         </div>
       )}
 
-      <IntegratedEliteSynthesisCard service={symbol} windowDays={windowDays} />
         {parityErr && showAdvancedDiagnostics && <ErrorBox msg={parityErr} />}
         {showAdvancedDiagnostics && parityReport && (
           <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3 space-y-3">
@@ -4452,11 +4466,153 @@ function extractCalibratedBucketEntries(model: RuntimeSymbolModelUi | Record<str
   );
 }
 
-function setActiveEliteSynthesisJob(job: { jobId: number; serviceId: string; symbol: string } | null) {
-  writeActiveEliteSynthesisJob(job);
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(ELITE_SYNTHESIS_STORAGE_KEY));
-  }
+function ActiveWorkerTasksCard({ service }: { service: string }) {
+  const [jobs, setJobs] = useState<WorkerJobUi[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  const loadJobs = useCallback(async (silent = false) => {
+    if (!silent) setErr(null);
+    try {
+      const data = await apiFetch(`worker/jobs?serviceId=${encodeURIComponent(service)}&activeOnly=true&limit=5`) as {
+        jobs?: WorkerJobUi[];
+      };
+      setJobs(Array.isArray(data.jobs) ? data.jobs : []);
+    } catch (e: unknown) {
+      if (!silent) setErr(e instanceof Error ? e.message : "Failed to load active worker jobs");
+    }
+  }, [service]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      await loadJobs(true);
+    };
+    void tick();
+    const handle = window.setInterval(() => {
+      void tick();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [loadJobs]);
+
+  const primaryJob = jobs[0] ?? null;
+  if (!primaryJob && !err) return null;
+
+  const cancelWorkerTask = async () => {
+    if (!primaryJob) return;
+    try {
+      await apiFetch(`worker/jobs/${primaryJob.id}/cancel`, { method: "POST" });
+      await loadJobs(true);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Failed to cancel worker task");
+    }
+  };
+
+  const currentPass = Number(primaryJob?.taskState?.currentPass ?? 0);
+  const maxPasses = Number(primaryJob?.taskState?.maxPasses ?? 0);
+  const cancellationRequested = Boolean(primaryJob?.taskState?.cancelRequestedAt) || primaryJob?.stage === "cancelling";
+  const bestWinRate = Number(primaryJob?.taskState?.bestSummary && (primaryJob.taskState.bestSummary as Record<string, unknown>).bestWinRate);
+  const bestSlRate = Number(primaryJob?.taskState?.bestSummary && (primaryJob.taskState.bestSummary as Record<string, unknown>).bestSlRate);
+  const bestProfitFactor = Number(primaryJob?.taskState?.bestSummary && (primaryJob.taskState.bestSummary as Record<string, unknown>).bestProfitFactor);
+  const bestTradeCount = Number(primaryJob?.taskState?.bestSummary && (primaryJob.taskState.bestSummary as Record<string, unknown>).bestTradeCount);
+
+  return (
+    <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-4 space-y-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold text-cyan-100">Active Worker Task</h3>
+          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+            Heavy research jobs run in the worker service so the main API app stays focused on UI, ticks, and lightweight reads.
+          </p>
+        </div>
+        {primaryJob && (
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 rounded border border-cyan-500/20 bg-cyan-500/10 px-2 py-1 text-[10px] text-cyan-100">
+              {formatWorkerTaskLabel(primaryJob.taskType)} #{primaryJob.id}
+            </span>
+            {(primaryJob.status === "running" || primaryJob.status === "queued") && !cancellationRequested && (
+              <button
+                type="button"
+                onClick={() => void cancelWorkerTask()}
+                className="inline-flex items-center gap-1 rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[10px] text-red-200 hover:bg-red-500/20"
+              >
+                <Trash2 className="w-3 h-3" />
+                Cancel
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {err && <ErrorBox msg={err} />}
+
+      {primaryJob ? (
+        <>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span className="truncate">{primaryJob.message ?? primaryJob.stage.replace(/_/g, " ")}</span>
+              <span className="font-mono text-cyan-200">{primaryJob.progressPct}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded bg-background/80">
+              <div className="h-full bg-cyan-400 transition-all duration-300" style={{ width: `${primaryJob.progressPct}%` }} />
+            </div>
+            {cancellationRequested && (
+              <p className="text-[11px] text-amber-200">
+                Cancellation requested. The worker is waiting for a safe checkpoint before marking this task fully cancelled.
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-[11px]">
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+              <p className="text-muted-foreground uppercase tracking-wide">Status / Stage</p>
+              <p className="mt-1 font-mono text-foreground">{primaryJob.status} / {primaryJob.stage.replace(/_/g, " ")}</p>
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+              <p className="text-muted-foreground uppercase tracking-wide">Pass</p>
+              <p className="mt-1 font-mono text-foreground">{maxPasses > 0 ? `${currentPass}/${maxPasses}` : "n/a"}</p>
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+              <p className="text-muted-foreground uppercase tracking-wide">Heartbeat</p>
+              <p className="mt-1 font-mono text-foreground">{heartbeatAgeLabel(primaryJob.heartbeatAt)}</p>
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+              <p className="text-muted-foreground uppercase tracking-wide">Elapsed</p>
+              <p className="mt-1 font-mono text-foreground">{elapsedLabel(primaryJob.startedAt)}</p>
+            </div>
+          </div>
+
+          {primaryJob.taskType === "elite_synthesis" && (
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-[11px]">
+              <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+                <p className="text-muted-foreground uppercase tracking-wide">Best WR</p>
+                <p className="mt-1 font-mono text-foreground">{Number.isFinite(bestWinRate) ? `${(bestWinRate * 100).toFixed(2)}%` : "n/a"}</p>
+              </div>
+              <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+                <p className="text-muted-foreground uppercase tracking-wide">Best SL</p>
+                <p className="mt-1 font-mono text-foreground">{Number.isFinite(bestSlRate) ? `${(bestSlRate * 100).toFixed(2)}%` : "n/a"}</p>
+              </div>
+              <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+                <p className="text-muted-foreground uppercase tracking-wide">PF</p>
+                <p className="mt-1 font-mono text-foreground">{Number.isFinite(bestProfitFactor) ? bestProfitFactor.toFixed(2) : "n/a"}</p>
+              </div>
+              <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+                <p className="text-muted-foreground uppercase tracking-wide">Best trades</p>
+                <p className="mt-1 font-mono text-foreground">{Number.isFinite(bestTradeCount) ? String(bestTradeCount) : "n/a"}</p>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+          No active worker tasks for {getSymbolLabel(service)}.
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ServiceStatusSummary({ service, windowDays }: { service: string; windowDays: number }) {
@@ -4881,24 +5037,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [jobs, setJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
   const [profile, setProfile] = useState<EliteSynthesisSearchProfileUi>("fast");
-
-  const loadJobs = useCallback(async (silent = false) => {
-    if (!silent) setErr(null);
-    try {
-      const data = await apiFetch(`research/${service}/elite-synthesis/jobs?limit=8`) as {
-        jobs?: EliteSynthesisJobStatusUi[];
-      };
-      setJobs(Array.isArray(data.jobs) ? data.jobs : []);
-    } catch (e: unknown) {
-      if (!silent) setErr(e instanceof Error ? e.message : "Failed to load elite synthesis jobs");
-    }
-  }, [service]);
-
-  useEffect(() => {
-    void loadJobs(true);
-  }, [loadJobs]);
 
   const startJob = async () => {
     setBusy(true);
@@ -4920,21 +5059,13 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
       if (!Number.isInteger(jobId) || jobId <= 0) {
         throw new Error("Integrated elite synthesis did not return a valid job id.");
       }
-      setActiveEliteSynthesisJob({
-        jobId,
-        serviceId: service,
-        symbol: data.symbol ?? service,
-      });
       setNotice(`Integrated elite synthesis started for ${getSymbolLabel(service)} (job #${jobId}).`);
-      await loadJobs(true);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Failed to start integrated elite synthesis");
     } finally {
       setBusy(false);
     }
   };
-
-  const latestJob = jobs[0] ?? null;
 
   return (
     <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-4 space-y-3">
@@ -4985,9 +5116,9 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
           <p className="mt-1 text-foreground">Live-safe feature rules only. Oracle labels remain evaluation-only and never become final live runtime inputs.</p>
         </div>
         <div className="rounded-lg border border-border/30 bg-background/40 p-3">
-          <p className="text-muted-foreground uppercase tracking-wide">Current latest job</p>
+          <p className="text-muted-foreground uppercase tracking-wide">Execution model</p>
           <p className="mt-1 font-mono text-foreground">
-            {latestJob ? `#${latestJob.id} ${latestJob.status} ${latestJob.stage}` : "No synthesis jobs yet"}
+            Worker service queue
           </p>
         </div>
       </div>
@@ -5123,13 +5254,52 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
   const [parity, setParity] = useState<ParityReportUi | null>(null);
   const [busy, setBusy] = useState<"validation" | "parity" | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const pollWorkerJobUntilTerminal = async (
+    workerJobId: number,
+    onCompleted: (artifact: unknown) => void,
+  ) => {
+    for (;;) {
+      const data = await apiFetch(`worker/jobs/${workerJobId}`) as {
+        job?: WorkerJobUi & { resultArtifact?: unknown; errorSummary?: Record<string, unknown> | null };
+      };
+      const job = data.job;
+      if (!job) {
+        throw new Error(`Worker job ${workerJobId} not found.`);
+      }
+      if (job.status === "completed") {
+        onCompleted((job as { resultArtifact?: unknown }).resultArtifact ?? null);
+        return;
+      }
+      if (job.status === "failed" || job.status === "cancelled") {
+        const failure = job.errorSummary && typeof job.errorSummary === "object"
+          ? (job.errorSummary as Record<string, unknown>)
+          : null;
+        throw new Error(String(failure?.reason ?? job.message ?? `Worker job ${workerJobId} ${job.status}`));
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 3000));
+    }
+  };
 
   const loadValidation = async () => {
     setBusy("validation");
     setErr(null);
+    setNotice(null);
     try {
-      const d = await apiFetch(`calibration/runtime-model/${service}/runtime-trigger-validation?windowDays=${windowDays}`);
-      setValidation(d as Record<string, unknown>);
+      const d = await apiFetch(`calibration/runtime-model/${service}/runtime-trigger-validation/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ windowDays }),
+      }) as { workerJobId?: number };
+      const workerJobId = Number(d.workerJobId ?? 0);
+      if (!Number.isInteger(workerJobId) || workerJobId <= 0) {
+        throw new Error("Runtime trigger validation did not return a worker job id.");
+      }
+      setNotice(`Runtime trigger validation queued for ${getSymbolLabel(service)} (worker job #${workerJobId}).`);
+      await pollWorkerJobUntilTerminal(workerJobId, (artifact) => {
+        setValidation(artifact as Record<string, unknown>);
+      });
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Runtime trigger validation failed");
     } finally {
@@ -5140,9 +5310,21 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
   const loadParity = async () => {
     setBusy("parity");
     setErr(null);
+    setNotice(null);
     try {
-      const d = await apiFetch(`calibration/runtime-model/${service}/parity-report?windowDays=${windowDays}`) as ParityReportUi;
-      setParity(d);
+      const d = await apiFetch(`calibration/runtime-model/${service}/parity-report/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ windowDays }),
+      }) as { workerJobId?: number };
+      const workerJobId = Number(d.workerJobId ?? 0);
+      if (!Number.isInteger(workerJobId) || workerJobId <= 0) {
+        throw new Error("Parity report did not return a worker job id.");
+      }
+      setNotice(`Parity report queued for ${getSymbolLabel(service)} (worker job #${workerJobId}).`);
+      await pollWorkerJobUntilTerminal(workerJobId, (artifact) => {
+        setParity(artifact as ParityReportUi);
+      });
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Parity report failed");
     } finally {
@@ -5155,6 +5337,7 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
   return (
     <div className="space-y-4">
       {err && <ErrorBox msg={err} />}
+      {notice && <SuccessBox msg={notice} />}
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
         <div>
           <h3 className="text-sm font-semibold">Advanced Diagnostics</h3>
@@ -5264,6 +5447,7 @@ export default function Research() {
       </div>
 
       <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
+      <ActiveWorkerTasksCard service={selectedService} />
 
       <div className="flex items-center gap-0.5 border-b border-border/30">
         {tabs.map(tab => (
