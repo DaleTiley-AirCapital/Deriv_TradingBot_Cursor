@@ -992,6 +992,7 @@ function BacktestTab({
   const [historyRuns, setHistoryRuns] = useState<PersistedV3BacktestHistoryRun[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedHistoryRunId, setSelectedHistoryRunId] = useState<number | null>(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const [latestPersistedRunIds, setLatestPersistedRunIds] = useState<Record<string, number>>({});
   const [historyRunLoadError, setHistoryRunLoadError] = useState<string | null>(null);
   const [activeJob, setActiveJob] = useState<V3BacktestJobStatus | null>(null);
@@ -1108,6 +1109,10 @@ function BacktestTab({
 
   useEffect(() => {
     void loadBacktestHistory(symbol);
+  }, [symbol]);
+
+  useEffect(() => {
+    setHistoryExpanded(false);
   }, [symbol]);
 
   const shouldUseAsyncBacktest = symbol === "CRASH300" && windowDays >= 60;
@@ -1354,26 +1359,6 @@ function BacktestTab({
     }, `bt-trades-${timestamp}.json`);
   }
 
-  async function exportSignals() {
-    setErr(null);
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
-    const { startTs, endTs } = getWindowRange(windowDays);
-    const params = new URLSearchParams({ startTs: String(startTs), endTs: String(endTs) });
-    // "all" is the sentinel value for all-symbols mode; do not send it as a symbol filter
-    const isAllSymbols = !symbol || symbol === "all";
-    if (!isAllSymbols) params.set("symbol", symbol);
-    try {
-      const data = await apiFetch(`signals/export?${params.toString()}`);
-      const result = data as { truncated?: boolean; count: number; note?: string };
-      if (result.truncated) {
-        setErr(`Signal export capped at ${result.count} rows. ${result.note ?? ""}`);
-      }
-      downloadJson(data, `signals-export-${isAllSymbols ? "all" : symbol}-${timestamp}.json`);
-    } catch (e: any) {
-      setErr(`Signal export failed: ${e?.message ?? "Unknown error"}`);
-    }
-  }
-
   async function exportAttribution() {
     if (symbol !== "CRASH300") {
       setErr("Trade-outcome attribution export is currently available for CRASH300 only.");
@@ -1426,7 +1411,7 @@ function BacktestTab({
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
           <div className="space-y-1">
             <label className="text-[11px] text-muted-foreground">{lockedSymbol ? "Service" : "Symbol"}</label>
             {lockedSymbol ? (
@@ -1461,6 +1446,19 @@ function BacktestTab({
               {getWindowRange(windowDays).startDateStr}  {getWindowRange(windowDays).endDateStr}
             </div>
           </div>
+          <div className="space-y-1">
+            <label className="text-[11px] text-muted-foreground">Run</label>
+            <button
+              onClick={run}
+              disabled={running || sweeping}
+              className="w-full flex items-center justify-center gap-1.5 px-4 py-2 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {running
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <BarChart2 className="w-3.5 h-3.5" />}
+              {running ? `Running ${formatDurationCompact(elapsed)}` : "Run Backtest / Validate Current Runtime"}
+            </button>
+          </div>
           <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
             Heavy exports and trade-level artifacts live under <span className="text-foreground font-medium">Reports</span>.
           </div>
@@ -1470,63 +1468,7 @@ function BacktestTab({
           Manual tier sweeps and admission-policy diagnostics now live under <span className="text-foreground font-medium">Advanced Diagnostics</span>.
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">Backtest Runs</label>
-            <select
-              value={selectedHistoryRunId ? String(selectedHistoryRunId) : ""}
-              onChange={e => {
-                const next = Number(e.target.value);
-                if (Number.isInteger(next) && next > 0) {
-                  void loadBacktestHistoryRun(next);
-                } else {
-                  setSelectedHistoryRunId(null);
-                }
-              }}
-              disabled={symbol === "all" || historyLoading || historyRuns.length === 0}
-              className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground focus:outline-none focus:border-primary/50 disabled:opacity-60"
-            >
-              <option value="">
-                {symbol === "all"
-                  ? "Select a symbol to view run history"
-                  : historyLoading
-                    ? "Loading run history..."
-                    : historyRuns.length === 0
-                      ? "No persisted runs yet"
-                      : "Choose a previous run"}
-              </option>
-              {historyRuns.map(run => (
-                <option key={run.id} value={String(run.id)}>
-                  #{run.id}  {new Date(run.createdAt).toLocaleString()}  {pct(Number(run.summary?.winRate ?? 0))} WR  PF {Number(run.summary?.profitFactor ?? 0).toFixed(2)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">History Refresh</label>
-            <button
-              onClick={() => void loadBacktestHistory(symbol)}
-              disabled={historyLoading || symbol === "all"}
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded border border-border/50 text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors disabled:opacity-50"
-            >
-              {historyLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              Refresh Backtest Runs
-            </button>
-          </div>
-        </div>
-
         <div className="flex items-center gap-3 flex-wrap">
-          <button
-            onClick={run}
-            disabled={running || sweeping}
-            className="flex items-center gap-1.5 px-4 py-2 rounded border border-primary/30 bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {running
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <BarChart2 className="w-3.5 h-3.5" />}
-            {running ? `Running ${formatDurationCompact(elapsed)}` : "Run Backtest / Validate Current Runtime"}
-          </button>
-
           {results !== null && totalTrades !== null && totalTrades > 0 && (
             <>
               <button
@@ -1564,18 +1506,6 @@ function BacktestTab({
                 </>
               )}
             </>
-          )}
-
-          {/* Signals export is gated only on valid date inputs  includes blocked + allowed, not just executed trades */}
-          {windowDays > 0 && (
-            <button
-              onClick={exportSignals}
-              className="flex items-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-muted-foreground text-xs font-medium hover:text-foreground hover:border-border transition-colors"
-              title="Export all live signal decisions (allowed + blocked + executed) for the selected date range from the signal log"
-            >
-              <Download className="w-3.5 h-3.5" />
-              Export Signals JSON
-            </button>
           )}
 
           {(running || sweeping) && (
@@ -1634,6 +1564,97 @@ function BacktestTab({
             </p>
           </div>
         )}
+
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+              <span className="text-xs font-semibold text-foreground">Run History</span>
+              {historyRuns.length > 0 && (
+                <span className="text-[11px] text-muted-foreground">({historyRuns.length} runs)</span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (!historyExpanded) void loadBacktestHistory(symbol);
+                setHistoryExpanded(v => !v);
+              }}
+              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              {historyExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              {historyExpanded ? "Hide history" : "Show history"}
+            </button>
+          </div>
+
+          {historyExpanded && (
+            <div className="space-y-2">
+              {historyLoading && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin" />Loading run history
+                </div>
+              )}
+              {!historyLoading && symbol === "all" && (
+                <p className="text-xs text-muted-foreground">Select a service to inspect persisted backtest runs.</p>
+              )}
+              {!historyLoading && symbol !== "all" && historyRuns.length === 0 && (
+                <p className="text-xs text-muted-foreground">No persisted backtest runs recorded yet for {symbol}.</p>
+              )}
+              {!historyLoading && historyRuns.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className="border-b border-border/30 text-muted-foreground">
+                        <th className="text-left py-2 pr-3 font-medium">ID</th>
+                        <th className="text-left px-3 py-2 font-medium">Status</th>
+                        <th className="text-left px-3 py-2 font-medium">Trades</th>
+                        <th className="text-left px-3 py-2 font-medium">WR</th>
+                        <th className="text-left px-3 py-2 font-medium">PF</th>
+                        <th className="text-left px-3 py-2 font-medium">Started</th>
+                        <th className="text-left px-3 py-2 font-medium">Use</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyRuns.map(run => {
+                        const summaryRecord = asUiRecord(run.summary);
+                        const tradeCount = Number(summaryRecord.totalTrades ?? summaryRecord.tradeCount ?? 0);
+                        const isSelected = selectedHistoryRunId === run.id;
+                        return (
+                          <tr key={run.id} className={cn("border-b border-border/10 last:border-b-0", isSelected && "bg-primary/5")}>
+                            <td className="py-2 pr-3 text-foreground font-medium">#{run.id}</td>
+                            <td className="px-3 py-2">
+                              <span className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-200">
+                                completed
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground">{tradeCount}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{pct(Number(run.summary?.winRate ?? 0))}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{Number(run.summary?.profitFactor ?? 0).toFixed(2)}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{formatRuntimeDate(run.createdAt)}</td>
+                            <td className="px-3 py-2">
+                              <button
+                                type="button"
+                                onClick={() => void loadBacktestHistoryRun(run.id)}
+                                className={cn(
+                                  "inline-flex items-center gap-1 rounded border px-2 py-1 text-[10px] font-medium transition-colors",
+                                  isSelected
+                                    ? "border-primary/30 bg-primary/10 text-primary"
+                                    : "border-border/40 bg-background text-muted-foreground hover:text-foreground hover:border-border",
+                                )}
+                              >
+                                {isSelected ? "Selected" : "Load run"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Results */}
@@ -4840,7 +4861,13 @@ function RuntimeModelTab({ service }: { service: string }) {
 type ReportOption = {
   value: string;
   label: string;
+  task: "full-calibration" | "runtime-backtest" | "parity-diagnostics" | "policy-comparison" | "integrated-elite-synthesis";
   runType: "none" | "backtest" | "comparison" | "synthesis";
+};
+
+type ReportTaskOption = {
+  value: ReportOption["task"];
+  label: string;
 };
 
 const ELITE_SYNTHESIS_PROFILE_DESCRIPTIONS: Record<EliteSynthesisSearchProfileUi, string> = {
@@ -4849,24 +4876,34 @@ const ELITE_SYNTHESIS_PROFILE_DESCRIPTIONS: Record<EliteSynthesisSearchProfileUi
   deep: "Deep profile: broadest search. Uses 24 passes with 6 patience passes for the heaviest refinement and bottleneck discovery.",
 };
 
+const REPORT_TASK_OPTIONS: ReportTaskOption[] = [
+  { value: "full-calibration", label: "Run Full Calibration" },
+  { value: "runtime-backtest", label: "Validate Current Runtime Backtest" },
+  { value: "parity-diagnostics", label: "Run Parity / Diagnostics" },
+  { value: "policy-comparison", label: "Policy Comparison" },
+  { value: "integrated-elite-synthesis", label: "Run Integrated Elite Synthesis" },
+];
+
 const REPORT_OPTIONS: ReportOption[] = [
-  { value: "detected-moves", label: "Detected Moves", runType: "none" },
-  { value: "calibration-profile", label: "Calibration Profile", runType: "none" },
-  { value: "pass-results", label: "Pass Results", runType: "none" },
-  { value: "comparison-summary", label: "Comparison Summary", runType: "none" },
-  { value: "parity-report", label: "Parity Report", runType: "none" },
-  { value: "phase-summary", label: "Phase Identifier Summary", runType: "none" },
-  { value: "phase-sample", label: "Phase Identifier Sample", runType: "none" },
-  { value: "phase-full", label: "Full Phase Identifier Report", runType: "none" },
-  { value: "backtest-summary", label: "Backtest Summary", runType: "backtest" },
-  { value: "backtest-trades", label: "Backtest Trades", runType: "backtest" },
-  { value: "backtest-attribution", label: "Backtest Attribution", runType: "backtest" },
-  { value: "calibration-reconciliation", label: "Calibration Reconciliation", runType: "backtest" },
-  { value: "policy-comparison", label: "Policy Comparison", runType: "comparison" },
-  { value: "elite-synthesis-result", label: "Elite Synthesis Result", runType: "synthesis" },
+  { value: "detected-moves", label: "Detected Moves", task: "full-calibration", runType: "none" },
+  { value: "calibration-profile", label: "Calibration Profile", task: "full-calibration", runType: "none" },
+  { value: "pass-results", label: "Pass Results", task: "full-calibration", runType: "none" },
+  { value: "comparison-summary", label: "Comparison Summary", task: "full-calibration", runType: "none" },
+  { value: "backtest-summary", label: "Backtest Summary", task: "runtime-backtest", runType: "backtest" },
+  { value: "backtest-trades", label: "Backtest Trades", task: "runtime-backtest", runType: "backtest" },
+  { value: "backtest-attribution", label: "Backtest Attribution", task: "runtime-backtest", runType: "backtest" },
+  { value: "calibration-reconciliation", label: "Calibration Reconciliation", task: "runtime-backtest", runType: "backtest" },
+  { value: "backtest-signals", label: "Signal Log Export", task: "runtime-backtest", runType: "none" },
+  { value: "parity-report", label: "Parity Report", task: "parity-diagnostics", runType: "none" },
+  { value: "phase-summary", label: "Phase Identifier Summary", task: "parity-diagnostics", runType: "none" },
+  { value: "phase-sample", label: "Phase Identifier Sample", task: "parity-diagnostics", runType: "none" },
+  { value: "phase-full", label: "Full Phase Identifier Report", task: "parity-diagnostics", runType: "none" },
+  { value: "policy-comparison", label: "Policy Comparison", task: "policy-comparison", runType: "comparison" },
+  { value: "elite-synthesis-result", label: "Elite Synthesis Result", task: "integrated-elite-synthesis", runType: "synthesis" },
 ];
 
 function ReportsTab({ service, windowDays }: { service: string; windowDays: number }) {
+  const [reportTask, setReportTask] = useState<ReportOption["task"]>("full-calibration");
   const [reportType, setReportType] = useState<string>("detected-moves");
   const [calibrationRuns, setCalibrationRuns] = useState<PassRun[]>([]);
   const [backtestRuns, setBacktestRuns] = useState<PersistedV3BacktestHistoryRun[]>([]);
@@ -4907,7 +4944,14 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
     return () => { cancelled = true; };
   }, [service]);
 
-  const selectedOption = REPORT_OPTIONS.find((option) => option.value === reportType) ?? REPORT_OPTIONS[0];
+  const filteredReportOptions = REPORT_OPTIONS.filter((option) => option.task === reportTask);
+  const selectedOption = filteredReportOptions.find((option) => option.value === reportType) ?? filteredReportOptions[0] ?? REPORT_OPTIONS[0];
+
+  useEffect(() => {
+    if (!filteredReportOptions.some((option) => option.value === reportType)) {
+      setReportType(filteredReportOptions[0]?.value ?? REPORT_OPTIONS[0].value);
+    }
+  }, [filteredReportOptions, reportType]);
 
   const exportReport = async () => {
     setBusy(true);
@@ -4961,6 +5005,13 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
           if (!selectedBacktestRunId) throw new Error("Select a backtest run first.");
           endpoint = `backtest/v3/history/${selectedBacktestRunId}/calibration-reconciliation`;
           break;
+        case "backtest-signals": {
+          const { startTs, endTs } = getWindowRange(windowDays);
+          const params = new URLSearchParams({ startTs: String(startTs), endTs: String(endTs) });
+          if (service && service !== "all") params.set("symbol", service);
+          endpoint = `signals/export?${params.toString()}`;
+          break;
+        }
         case "policy-comparison":
           if (!baselineRunId || !policyRunId) throw new Error("Select both baseline and policy runs.");
           endpoint = `backtest/v3/history/compare?baselineRunId=${baselineRunId}&policyRunId=${policyRunId}`;
@@ -4990,9 +5041,15 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
       {err && <ErrorBox msg={err} />}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         <div className="space-y-1">
-          <label className="text-[11px] text-muted-foreground">Report type</label>
-          <select value={reportType} onChange={(e) => setReportType(e.target.value)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
-            {REPORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          <label className="text-[11px] text-muted-foreground">Function</label>
+          <select value={reportTask} onChange={(e) => setReportTask(e.target.value as ReportOption["task"])} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
+            {REPORT_TASK_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[11px] text-muted-foreground">Report</label>
+          <select value={selectedOption?.value ?? reportType} onChange={(e) => setReportType(e.target.value)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
+            {filteredReportOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </div>
         {selectedOption.runType === "backtest" && (
@@ -5151,6 +5208,27 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
       {notice && <SuccessBox msg={notice} />}
       {err && <ErrorBox msg={err} />}
 
+      <div className="rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
+        {ELITE_SYNTHESIS_PROFILE_DESCRIPTIONS[profile]}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+          <p className="text-muted-foreground uppercase tracking-wide">Normal workflow role</p>
+          <p className="mt-1 text-foreground">Owns the normal search over tiers, policies, triggers, exits, and daily selection rules.</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+          <p className="text-muted-foreground uppercase tracking-wide">Runtime safety</p>
+          <p className="mt-1 text-foreground">Live-safe feature rules only. Oracle labels remain evaluation-only and never become final live runtime inputs.</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+          <p className="text-muted-foreground uppercase tracking-wide">Execution model</p>
+          <p className="mt-1 font-mono text-foreground">
+            Worker service queue
+          </p>
+        </div>
+      </div>
+
       <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-3">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2">
@@ -5228,27 +5306,6 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
             )}
           </div>
         )}
-      </div>
-
-      <div className="rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
-        {ELITE_SYNTHESIS_PROFILE_DESCRIPTIONS[profile]}
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
-        <div className="rounded-lg border border-border/30 bg-background/40 p-3">
-          <p className="text-muted-foreground uppercase tracking-wide">Normal workflow role</p>
-          <p className="mt-1 text-foreground">Owns the normal search over tiers, policies, triggers, exits, and daily selection rules.</p>
-        </div>
-        <div className="rounded-lg border border-border/30 bg-background/40 p-3">
-          <p className="text-muted-foreground uppercase tracking-wide">Runtime safety</p>
-          <p className="mt-1 text-foreground">Live-safe feature rules only. Oracle labels remain evaluation-only and never become final live runtime inputs.</p>
-        </div>
-        <div className="rounded-lg border border-border/30 bg-background/40 p-3">
-          <p className="text-muted-foreground uppercase tracking-wide">Execution model</p>
-          <p className="mt-1 font-mono text-foreground">
-            Worker service queue
-          </p>
-        </div>
       </div>
     </div>
   );
