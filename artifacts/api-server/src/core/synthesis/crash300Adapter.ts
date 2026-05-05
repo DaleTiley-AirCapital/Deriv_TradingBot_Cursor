@@ -19,6 +19,7 @@ import type { Crash300MoveSizeBucket } from "../../symbol-services/CRASH300/feat
 import type { PromotedSymbolRuntimeModel } from "../calibration/promotedSymbolModel.js";
 import type {
   PolicyEvaluationResult,
+  SynthesisPercentFieldMeta,
   SynthesisRebuiltTriggerCandidateRecord,
   SymbolSynthesisAdapter,
   SynthesisControlRecord,
@@ -32,6 +33,7 @@ import type {
   EliteSynthesisExitRules,
   EliteSynthesisFeatureSummary,
   EliteSynthesisParams,
+  EliteSynthesisPercentFieldUnit,
   EliteSynthesisPolicyArtifact,
   EliteSynthesisStage,
   EliteSynthesisUnitValidation,
@@ -68,21 +70,98 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function inferPercentUnit(values: Array<number | null | undefined>): "percentage_points" | "fraction" | "mixed" {
-  const finite = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  if (finite.length === 0) return "percentage_points";
-  const small = finite.filter((value) => Math.abs(value) <= 1.2).length;
-  const large = finite.filter((value) => Math.abs(value) > 1.2).length;
-  if (small === finite.length) return "fraction";
-  if (large === finite.length) return "percentage_points";
-  return "mixed";
+type PercentLikeField =
+  | "movePct"
+  | "pnlPct"
+  | "mfePct"
+  | "maePct"
+  | "projectedMovePct"
+  | "slPct"
+  | "trailingActivationPct"
+  | "trailingDistancePct"
+  | "pullbackPct"
+  | "recoveryFromLastCrashPct"
+  | "priceDistanceFromLastCrashLowPct"
+  | "priceVsEma20Pct"
+  | "priceVsEma50Pct"
+  | "priceVsEma200Pct"
+  | "oneBarReturnPct"
+  | "threeBarReturnPct"
+  | "fiveBarReturnPct"
+  | "closeLocationInRangePct"
+  | "microBreakStrengthPct";
+
+const DEFAULT_PERCENT_POINT_FIELDS = new Set<PercentLikeField>([
+  "movePct",
+  "pnlPct",
+  "mfePct",
+  "maePct",
+  "projectedMovePct",
+  "slPct",
+  "trailingActivationPct",
+  "trailingDistancePct",
+  "pullbackPct",
+  "recoveryFromLastCrashPct",
+  "priceDistanceFromLastCrashLowPct",
+  "priceVsEma20Pct",
+  "priceVsEma50Pct",
+  "priceVsEma200Pct",
+  "oneBarReturnPct",
+  "threeBarReturnPct",
+  "fiveBarReturnPct",
+  "closeLocationInRangePct",
+  "microBreakStrengthPct",
+]);
+
+const PERCENT_SANITY_RULES: Record<PercentLikeField, { min: number; max: number; note?: string }> = {
+  movePct: { min: 0, max: 50 },
+  projectedMovePct: { min: 0, max: 50 },
+  pnlPct: { min: -20, max: 50 },
+  mfePct: { min: 0, max: 50 },
+  maePct: { min: -20, max: 0, note: "MAE uses a negative adverse-move convention." },
+  slPct: { min: 0, max: 20 },
+  trailingActivationPct: { min: 0, max: 20 },
+  trailingDistancePct: { min: 0, max: 20 },
+  pullbackPct: { min: 0, max: 20 },
+  recoveryFromLastCrashPct: { min: -50, max: 50 },
+  priceDistanceFromLastCrashLowPct: { min: -50, max: 50 },
+  priceVsEma20Pct: { min: -50, max: 50 },
+  priceVsEma50Pct: { min: -50, max: 50 },
+  priceVsEma200Pct: { min: -50, max: 50 },
+  oneBarReturnPct: { min: -20, max: 20 },
+  threeBarReturnPct: { min: -30, max: 30 },
+  fiveBarReturnPct: { min: -50, max: 50 },
+  closeLocationInRangePct: { min: 0, max: 100 },
+  microBreakStrengthPct: { min: -20, max: 20 },
+};
+
+function inferDefaultUnit(field: PercentLikeField, sourceHint?: EliteSynthesisPercentFieldUnit["inferredSourceUnit"]): EliteSynthesisPercentFieldUnit["inferredSourceUnit"] {
+  if (sourceHint) return sourceHint;
+  return DEFAULT_PERCENT_POINT_FIELDS.has(field) ? "percentage_points" : "percentage_points";
 }
 
-function toPercentagePoints(value: number | null | undefined, unit: "percentage_points" | "fraction" | "mixed"): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  if (unit === "fraction") return value * 100;
-  if (unit === "mixed") return Math.abs(value) <= 1.2 ? value * 100 : value;
-  return value;
+function normalizePercentField(
+  field: PercentLikeField,
+  raw: number | null | undefined,
+  options?: {
+    sourceHint?: EliteSynthesisPercentFieldUnit["inferredSourceUnit"];
+    reason?: string;
+    confidence?: EliteSynthesisPercentFieldUnit["confidence"];
+  },
+): SynthesisPercentFieldMeta {
+  const numeric = typeof raw === "number" && Number.isFinite(raw) ? raw : null;
+  const inferredSourceUnit = inferDefaultUnit(field, options?.sourceHint);
+  const pctPoints = numeric == null ? null : inferredSourceUnit === "fraction" ? numeric * 100 : numeric;
+  return {
+    raw: numeric,
+    pctPoints,
+    unit: inferredSourceUnit,
+    confidence: options?.confidence ?? (options?.sourceHint ? "source_metadata" : "field_default"),
+    reason: options?.reason
+      ?? (inferredSourceUnit === "fraction"
+        ? `CRASH300 ${field} source is stored as fraction and normalised to percentage points.`
+        : `CRASH300 ${field} defaults to percentage_points for synthesis validation.`),
+  };
 }
 
 function metricFromPresence(total: number, present: number, nullableAllowed: boolean, notes: string[] = []): EliteSynthesisDataAvailabilityMetric {
@@ -383,13 +462,30 @@ async function mapMovesToSynthesisRecords(params: {
           detectedMoves,
         })
       : null;
+    const movePctMeta = normalizePercentField("movePct", optionalNumber(move.movePct), {
+      sourceHint: "fraction",
+      reason: "Detected-move magnitudes are stored as fractions in CRASH300 move rows.",
+    });
+    const normalMaeMeta = normalizePercentField("maePct", optionalNumber((phase.during as Record<string, unknown> | undefined)?.maePct), {
+      sourceHint: "fraction",
+      reason: "Phase-report MAE values are stored as fractions and normalised for synthesis.",
+    });
+    const realisticMfeMeta = normalizePercentField("mfePct", optionalNumber((phase.during as Record<string, unknown> | undefined)?.mfePct), {
+      sourceHint: "fraction",
+      reason: "Phase-report MFE values are stored as fractions and normalised for synthesis.",
+    });
+    const pullbackMeta = normalizePercentField("pullbackPct", optionalNumber((phase.after as Record<string, unknown> | undefined)?.pullbackPct), {
+      sourceHint: "fraction",
+      reason: "Phase-report pullback values are stored as fractions and normalised for synthesis.",
+    });
     mapped.push({
       kind: "calibrated_move",
       moveId: Number(move.id ?? 0),
       startTs: Number(move.startTs ?? 0),
       endTs: Number(move.endTs ?? 0),
       direction: inferMoveDirection(move.direction),
-      movePct: toPercentagePoints(optionalNumber(move.movePct), "fraction") ?? 0,
+      movePct: movePctMeta.pctPoints ?? 0,
+      movePctPoints: movePctMeta.pctPoints ?? 0,
       qualityTier: String(move.qualityTier ?? "unknown"),
       calibratedBaseFamily: "crash_expansion",
       calibratedMoveSizeBucket: bucketLabelFromPct(Number(move.movePct ?? 0)),
@@ -397,10 +493,19 @@ async function mapMovesToSynthesisRecords(params: {
       phaseDerivedBucket: String(phase.phaseDerivedBucket ?? "unknown"),
       earliestValidLiveSafeTriggerOffset: (phase.trigger as Record<string, unknown> | undefined)?.firstValidTriggerOffset == null ? null : `T${Number((phase.trigger as Record<string, unknown>).firstValidTriggerOffset) >= 0 ? "+" : ""}${Number((phase.trigger as Record<string, unknown>).firstValidTriggerOffset)}`,
       bestTheoreticalLiveSafeTriggerOffset: (phase.trigger as Record<string, unknown> | undefined)?.strongestTriggerOffset == null ? null : `T${Number((phase.trigger as Record<string, unknown>).strongestTriggerOffset) >= 0 ? "+" : ""}${Number((phase.trigger as Record<string, unknown>).strongestTriggerOffset)}`,
-      normalMaeBeforeSuccess: toPercentagePoints(optionalNumber((phase.during as Record<string, unknown> | undefined)?.maePct), "fraction"),
-      realisticMfeAfterEntry: toPercentagePoints(optionalNumber((phase.during as Record<string, unknown> | undefined)?.mfePct), "fraction"),
+      normalMaeBeforeSuccess: normalMaeMeta.pctPoints,
+      normalMaeBeforeSuccessPctPoints: normalMaeMeta.pctPoints,
+      realisticMfeAfterEntry: realisticMfeMeta.pctPoints,
+      realisticMfeAfterEntryPctPoints: realisticMfeMeta.pctPoints,
       barsToMfe: asNumber((phase.during as Record<string, unknown> | undefined)?.barsToMfe, 0),
-      pullbackAfterMfe: toPercentagePoints(optionalNumber((phase.after as Record<string, unknown> | undefined)?.pullbackPct), "fraction"),
+      pullbackAfterMfe: pullbackMeta.pctPoints,
+      pullbackAfterMfePctPoints: pullbackMeta.pctPoints,
+      percentFields: {
+        movePct: movePctMeta,
+        normalMaeBeforeSuccess: normalMaeMeta,
+        realisticMfeAfterEntry: realisticMfeMeta,
+        pullbackPct: pullbackMeta,
+      },
       liveSafeFeatures: built?.liveSafeFeatures ?? {},
       triggerOffsets: Array.isArray((phase.trigger as Record<string, unknown> | undefined)?.snapshots)
         ? (((phase.trigger as Record<string, unknown>).snapshots as unknown[]) as Array<Record<string, unknown>>)
@@ -428,15 +533,6 @@ function buildTradeRecordsFromRun(params: {
     : [];
   const reconByTradeId = new Map<string, Record<string, unknown>>(reconTrades.map((trade) => [String(trade.tradeId), trade]));
   const trades = Array.isArray(params.run.result.trades) ? (params.run.result.trades as Array<Record<string, unknown>>) : [];
-  const tradeUnit = inferPercentUnit(trades.flatMap((trade) => [
-    optionalNumber(trade.pnlPct),
-    optionalNumber(trade.mfePct),
-    optionalNumber(trade.maePct),
-    optionalNumber(trade.projectedMovePct),
-    optionalNumber(trade.slPct),
-    optionalNumber(trade.trailingActivationPct),
-    optionalNumber(trade.trailingDistancePct),
-  ]));
 
   return trades.map((trade, idx) => {
     const tradeId = String(trade.tradeId ?? `${params.run.id}-${idx + 1}`);
@@ -448,16 +544,54 @@ function buildTradeRecordsFromRun(params: {
     const triggerTransition = optionalString(trade.triggerTransition ?? trade.selectedTriggerTransition);
     const triggerDirection = optionalString(trade.triggerDirection)
       ?? (String(trade.direction ?? "").toLowerCase() === "sell" ? "sell" : String(trade.direction ?? "").toLowerCase() === "buy" ? "buy" : null);
-    const projectedMovePct = toPercentagePoints(optionalNumber(trade.projectedMovePct), tradeUnit);
-    const slPct = toPercentagePoints(optionalNumber(trade.slPct), tradeUnit);
-    const trailingActivationPct = toPercentagePoints(optionalNumber(trade.trailingActivationPct), tradeUnit);
-    const trailingDistancePct = toPercentagePoints(optionalNumber(trade.trailingDistancePct), tradeUnit);
-    const mfePct = toPercentagePoints(optionalNumber(trade.mfePct), tradeUnit);
-    const maePct = toPercentagePoints(optionalNumber(trade.maePct), tradeUnit);
-    const pnlPct = toPercentagePoints(optionalNumber(trade.pnlPct), tradeUnit) ?? 0;
+    const projectedMovePctMeta = normalizePercentField("projectedMovePct", optionalNumber(trade.projectedMovePct), {
+      sourceHint: "percentage_points",
+      reason: "Persisted CRASH300 runtime trade projectedMovePct values are stored in percentage points.",
+    });
+    const slPctMeta = normalizePercentField("slPct", optionalNumber(trade.slPct), {
+      sourceHint: "percentage_points",
+      reason: "Persisted CRASH300 runtime trade slPct values are stored in percentage points.",
+    });
+    const trailingActivationPctMeta = normalizePercentField("trailingActivationPct", optionalNumber(trade.trailingActivationPct), {
+      sourceHint: "percentage_points",
+      reason: "Persisted CRASH300 runtime trade trailing activation values are stored in percentage points.",
+    });
+    const trailingDistancePctMeta = normalizePercentField("trailingDistancePct", optionalNumber(trade.trailingDistancePct), {
+      sourceHint: "percentage_points",
+      reason: "Persisted CRASH300 runtime trade trailing distance values are stored in percentage points.",
+    });
+    const mfePctMeta = normalizePercentField("mfePct", optionalNumber(trade.mfePct), {
+      sourceHint: "percentage_points",
+      reason: "Persisted CRASH300 runtime trade MFE values are stored in percentage points.",
+    });
+    const maePctMeta = normalizePercentField("maePct", optionalNumber(trade.maePct), {
+      sourceHint: "percentage_points",
+      reason: "Persisted CRASH300 runtime trade MAE values are stored in negative adverse percentage points.",
+    });
+    const pnlPctMeta = normalizePercentField("pnlPct", optionalNumber(trade.pnlPct), {
+      sourceHint: "percentage_points",
+      reason: "Persisted CRASH300 runtime trade pnlPct values are stored in percentage points.",
+    });
+    const projectedMovePct = projectedMovePctMeta.pctPoints;
+    const slPct = slPctMeta.pctPoints;
+    const trailingActivationPct = trailingActivationPctMeta.pctPoints;
+    const trailingDistancePct = trailingDistancePctMeta.pctPoints;
+    const mfePct = mfePctMeta.pctPoints;
+    const maePct = maePctMeta.pctPoints;
+    const pnlPct = pnlPctMeta.pctPoints ?? 0;
     const setupMatch = optionalNumber(trade.setupMatch);
     const confidence = optionalNumber(trade.confidence);
     const triggerStrengthScore = optionalNumber(trade.triggerStrengthScore);
+    const recoveryFromLastCrashPctMeta = normalizePercentField("recoveryFromLastCrashPct", optionalNumber(contextSnapshot.recoveryFromLastCrashPct));
+    const priceDistanceFromLastCrashLowPctMeta = normalizePercentField("priceDistanceFromLastCrashLowPct", optionalNumber(contextSnapshot.priceDistanceFromLastCrashLowPct));
+    const priceVsEma20PctMeta = normalizePercentField("priceVsEma20Pct", optionalNumber(contextSnapshot.priceVsEma20Pct));
+    const priceVsEma50PctMeta = normalizePercentField("priceVsEma50Pct", optionalNumber(contextSnapshot.priceVsEma50Pct));
+    const priceVsEma200PctMeta = normalizePercentField("priceVsEma200Pct", optionalNumber(contextSnapshot.priceVsEma200Pct));
+    const oneBarReturnPctMeta = normalizePercentField("oneBarReturnPct", optionalNumber(triggerSnapshot.oneBarReturnPct));
+    const threeBarReturnPctMeta = normalizePercentField("threeBarReturnPct", optionalNumber(triggerSnapshot.threeBarReturnPct));
+    const fiveBarReturnPctMeta = normalizePercentField("fiveBarReturnPct", optionalNumber(triggerSnapshot.fiveBarReturnPct));
+    const closeLocationInRangePctMeta = normalizePercentField("closeLocationInRangePct", optionalNumber(triggerSnapshot.closeLocationInRangePct));
+    const microBreakStrengthPctMeta = normalizePercentField("microBreakStrengthPct", optionalNumber(triggerSnapshot.microBreakStrengthPct));
     return {
       kind: "runtime_trade",
       tradeId,
@@ -476,12 +610,19 @@ function buildTradeRecordsFromRun(params: {
       triggerAgeBars: optionalNumber(trade.triggerAgeBars),
       epochAgeBars: optionalNumber(trade.epochAgeBars),
       projectedMovePct,
+      projectedMovePctPoints: projectedMovePct,
       slPct,
+      slPctPoints: slPct,
       trailingActivationPct,
+      trailingActivationPctPoints: trailingActivationPct,
       trailingDistancePct,
+      trailingDistancePctPoints: trailingDistancePct,
       pnlPct,
+      pnlPctPoints: pnlPct,
       mfePct,
+      mfePctPoints: mfePct,
       maePct,
+      maePctPoints: maePct,
       exitReason: optionalString(trade.exitReason),
       modelSource: optionalString(trade.modelSource),
       runtimeEvidence: optionalNumber(trade.runtimeEvidence),
@@ -493,6 +634,25 @@ function buildTradeRecordsFromRun(params: {
       targetUnrealisticForBucket: String(recon.tradeOutcomeClassification ?? "") === "target_unrealistic_for_bucket",
       trailingTooEarly: String(recon.tradeOutcomeClassification ?? "") === "good_entry_trailing_too_early",
       slTooTight: String(recon.tradeOutcomeClassification ?? "") === "good_entry_sl_too_tight",
+      percentFields: {
+        projectedMovePct: projectedMovePctMeta,
+        slPct: slPctMeta,
+        trailingActivationPct: trailingActivationPctMeta,
+        trailingDistancePct: trailingDistancePctMeta,
+        mfePct: mfePctMeta,
+        maePct: maePctMeta,
+        pnlPct: pnlPctMeta,
+        recoveryFromLastCrashPct: recoveryFromLastCrashPctMeta,
+        priceDistanceFromLastCrashLowPct: priceDistanceFromLastCrashLowPctMeta,
+        priceVsEma20Pct: priceVsEma20PctMeta,
+        priceVsEma50Pct: priceVsEma50PctMeta,
+        priceVsEma200Pct: priceVsEma200PctMeta,
+        oneBarReturnPct: oneBarReturnPctMeta,
+        threeBarReturnPct: threeBarReturnPctMeta,
+        fiveBarReturnPct: fiveBarReturnPctMeta,
+        closeLocationInRangePct: closeLocationInRangePctMeta,
+        microBreakStrengthPct: microBreakStrengthPctMeta,
+      },
       liveSafeFeatures: {
         runtimeFamily,
         selectedBucket,
@@ -507,9 +667,13 @@ function buildTradeRecordsFromRun(params: {
         triggerAgeBars: optionalNumber(trade.triggerAgeBars),
         epochAgeBars: optionalNumber(trade.epochAgeBars),
         projectedMovePct,
+        projectedMovePctPoints: projectedMovePct,
         slPct,
+        slPctPoints: slPct,
         trailingActivationPct,
+        trailingActivationPctPoints: trailingActivationPct,
         trailingDistancePct,
+        trailingDistancePctPoints: trailingDistancePct,
         runtimeEvidence: optionalNumber(trade.runtimeEvidence),
         modelSource: optionalString(trade.modelSource),
         trendPersistenceScore: optionalNumber(contextSnapshot.trendPersistenceScore),
@@ -522,8 +686,10 @@ function buildTradeRecordsFromRun(params: {
         recoverySlope240: optionalNumber(contextSnapshot.recoverySlope240),
         crashRecencyScore: optionalNumber(contextSnapshot.crashRecencyScore),
         barsSinceLastCrash: optionalNumber(contextSnapshot.barsSinceLastCrash),
-        recoveryFromLastCrashPct: optionalNumber(contextSnapshot.recoveryFromLastCrashPct),
-        priceDistanceFromLastCrashLowPct: optionalNumber(contextSnapshot.priceDistanceFromLastCrashLowPct),
+        recoveryFromLastCrashPct: recoveryFromLastCrashPctMeta.pctPoints,
+        recoveryFromLastCrashPctPoints: recoveryFromLastCrashPctMeta.pctPoints,
+        priceDistanceFromLastCrashLowPct: priceDistanceFromLastCrashLowPctMeta.pctPoints,
+        priceDistanceFromLastCrashLowPctPoints: priceDistanceFromLastCrashLowPctMeta.pctPoints,
         rangeCompressionScore60: optionalNumber(contextSnapshot.rangeCompressionScore60),
         rangeCompressionScore240: optionalNumber(contextSnapshot.rangeCompressionScore240),
         rangeExpansionScore15: optionalNumber(contextSnapshot.rangeExpansionScore15),
@@ -533,17 +699,25 @@ function buildTradeRecordsFromRun(params: {
         atrRank240: optionalNumber(contextSnapshot.atrRank240),
         bbWidthRank60: optionalNumber(contextSnapshot.bbWidthRank60),
         bbWidthRank240: optionalNumber(contextSnapshot.bbWidthRank240),
-        priceVsEma20Pct: optionalNumber(contextSnapshot.priceVsEma20Pct),
-        priceVsEma50Pct: optionalNumber(contextSnapshot.priceVsEma50Pct),
-        priceVsEma200Pct: optionalNumber(contextSnapshot.priceVsEma200Pct),
-        oneBarReturnPct: optionalNumber(triggerSnapshot.oneBarReturnPct),
-        threeBarReturnPct: optionalNumber(triggerSnapshot.threeBarReturnPct),
-        fiveBarReturnPct: optionalNumber(triggerSnapshot.fiveBarReturnPct),
+        priceVsEma20Pct: priceVsEma20PctMeta.pctPoints,
+        priceVsEma20PctPoints: priceVsEma20PctMeta.pctPoints,
+        priceVsEma50Pct: priceVsEma50PctMeta.pctPoints,
+        priceVsEma50PctPoints: priceVsEma50PctMeta.pctPoints,
+        priceVsEma200Pct: priceVsEma200PctMeta.pctPoints,
+        priceVsEma200PctPoints: priceVsEma200PctMeta.pctPoints,
+        oneBarReturnPct: oneBarReturnPctMeta.pctPoints,
+        oneBarReturnPctPoints: oneBarReturnPctMeta.pctPoints,
+        threeBarReturnPct: threeBarReturnPctMeta.pctPoints,
+        threeBarReturnPctPoints: threeBarReturnPctMeta.pctPoints,
+        fiveBarReturnPct: fiveBarReturnPctMeta.pctPoints,
+        fiveBarReturnPctPoints: fiveBarReturnPctMeta.pctPoints,
         impulseScore: optionalNumber(triggerSnapshot.impulseScore),
         rejectionScore: optionalNumber(triggerSnapshot.rejectionScore),
-        closeLocationInRangePct: optionalNumber(triggerSnapshot.closeLocationInRangePct),
+        closeLocationInRangePct: closeLocationInRangePctMeta.pctPoints,
+        closeLocationInRangePctPoints: closeLocationInRangePctMeta.pctPoints,
         microBreakDirection: optionalString(triggerSnapshot.microBreakDirection),
-        microBreakStrengthPct: optionalNumber(triggerSnapshot.microBreakStrengthPct),
+        microBreakStrengthPct: microBreakStrengthPctMeta.pctPoints,
+        microBreakStrengthPctPoints: microBreakStrengthPctMeta.pctPoints,
         reclaimConfirmed: typeof triggerSnapshot.reclaimConfirmed === "boolean" ? triggerSnapshot.reclaimConfirmed : null,
         adverseImpulseBeforeTrigger: typeof triggerSnapshot.adverseImpulseBeforeTrigger === "boolean" ? triggerSnapshot.adverseImpulseBeforeTrigger : null,
         projectedMoveToSlRatio: projectedMovePct != null && slPct != null && slPct > 0
@@ -600,47 +774,117 @@ function buildDataAvailability(params: {
   };
 }
 
+function fieldUnitFromMeta(
+  fieldName: string,
+  metas: Array<SynthesisPercentFieldMeta | null | undefined>,
+): EliteSynthesisPercentFieldUnit {
+  const present = metas.find((meta) => meta != null && meta.unit != null) ?? null;
+  if (!present) {
+    return {
+      inferredSourceUnit: "percentage_points",
+      canonicalUnit: "percentage_points",
+      confidence: "field_default",
+      reason: `${fieldName} defaults to percentage_points for CRASH300 synthesis validation.`,
+    };
+  }
+  return {
+    inferredSourceUnit: present.unit,
+    canonicalUnit: "percentage_points",
+    confidence: present.confidence,
+    reason: present.reason,
+  };
+}
+
+function runUnitValidationRegressionCase() {
+  const sample = {
+    movePct: [5, 20.05],
+    slPct: [2.52],
+    mfePct: [0, 7.9],
+    maePct: [-3.1, 0],
+    pnlPct: [-2.52, 7.19],
+  };
+  const violations = Object.entries(sample).flatMap(([fieldName, values]) => {
+    const rule = PERCENT_SANITY_RULES[fieldName as keyof typeof PERCENT_SANITY_RULES];
+    if (!rule) return [];
+    return values.filter((value) => value < rule.min || value > rule.max).map((value) => `${fieldName}=${value}`);
+  });
+  return {
+    passed: violations.length === 0,
+    note: violations.length === 0
+      ? "Regression case passed: valid CRASH300 percentage-point ranges no longer trigger mixed-unit validation."
+      : `Regression case failed for: ${violations.join(", ")}`,
+  };
+}
+
 function buildUnitValidation(params: {
   moves: SynthesisMoveRecord[];
   trades: SynthesisTradeRecord[];
 }): EliteSynthesisUnitValidation {
-  const unit = inferPercentUnit([
-    ...params.moves.map((move) => move.movePct),
-    ...params.trades.flatMap((trade) => [
-      trade.pnlPct,
-      trade.mfePct,
-      trade.maePct,
-      trade.projectedMovePct,
-      trade.slPct,
-      trade.trailingActivationPct,
-      trade.trailingDistancePct,
-    ]),
-  ]);
+  const sampledRanges = {
+    movePct: rangeOf(params.moves.map((move) => move.movePctPoints ?? move.movePct)),
+    pnlPct: rangeOf(params.trades.map((trade) => trade.pnlPctPoints ?? trade.pnlPct)),
+    mfePct: rangeOf(params.trades.map((trade) => trade.mfePctPoints ?? trade.mfePct)),
+    maePct: rangeOf(params.trades.map((trade) => trade.maePctPoints ?? trade.maePct)),
+    projectedMovePct: rangeOf(params.trades.map((trade) => trade.projectedMovePctPoints ?? trade.projectedMovePct)),
+    slPct: rangeOf(params.trades.map((trade) => trade.slPctPoints ?? trade.slPct)),
+    trailingActivationPct: rangeOf(params.trades.map((trade) => trade.trailingActivationPctPoints ?? trade.trailingActivationPct)),
+    trailingDistancePct: rangeOf(params.trades.map((trade) => trade.trailingDistancePctPoints ?? trade.trailingDistancePct)),
+  } satisfies Record<string, { min: number | null; max: number | null }>;
+  const fieldWarnings: string[] = [];
+  const fieldErrors: string[] = [];
+  for (const [fieldName, range] of Object.entries(sampledRanges)) {
+    const rule = PERCENT_SANITY_RULES[fieldName as PercentLikeField];
+    if (!rule) continue;
+    if (range.min != null && range.min < rule.min) {
+      fieldErrors.push(`${fieldName} minimum ${range.min.toFixed(4)} is outside CRASH300 sanity range ${rule.min} to ${rule.max}.`);
+    }
+    if (range.max != null && range.max > rule.max) {
+      fieldErrors.push(`${fieldName} maximum ${range.max.toFixed(4)} is outside CRASH300 sanity range ${rule.min} to ${rule.max}.`);
+    }
+    if (rule.note) {
+      fieldWarnings.push(`${fieldName}: ${rule.note}`);
+    }
+  }
   const tpImpossibleTrades = params.trades.filter((trade) =>
-    trade.projectedMovePct != null &&
-    trade.trailingActivationPct != null &&
-    trade.projectedMovePct > 0 &&
-    trade.trailingActivationPct > trade.projectedMovePct * 1.5,
+    trade.projectedMovePctPoints != null &&
+    trade.trailingActivationPctPoints != null &&
+    trade.projectedMovePctPoints > 0 &&
+    trade.trailingActivationPctPoints > trade.projectedMovePctPoints * 1.5,
   ).length;
+  if (tpImpossibleTrades > 0) {
+    fieldWarnings.push(`Detected ${tpImpossibleTrades} trades with trailing activation materially larger than projected move.`);
+  }
+  const regressionCase = runUnitValidationRegressionCase();
+  if (!regressionCase.passed) {
+    fieldErrors.push(regressionCase.note);
+  }
+  const fieldUnits: Record<string, EliteSynthesisPercentFieldUnit> = {
+    movePct: fieldUnitFromMeta("movePct", params.moves.map((move) => move.percentFields?.movePct)),
+    pnlPct: fieldUnitFromMeta("pnlPct", params.trades.map((trade) => trade.percentFields?.pnlPct)),
+    mfePct: fieldUnitFromMeta("mfePct", params.trades.map((trade) => trade.percentFields?.mfePct)),
+    maePct: fieldUnitFromMeta("maePct", params.trades.map((trade) => trade.percentFields?.maePct)),
+    projectedMovePct: fieldUnitFromMeta("projectedMovePct", params.trades.map((trade) => trade.percentFields?.projectedMovePct)),
+    slPct: fieldUnitFromMeta("slPct", params.trades.map((trade) => trade.percentFields?.slPct)),
+    trailingActivationPct: fieldUnitFromMeta("trailingActivationPct", params.trades.map((trade) => trade.percentFields?.trailingActivationPct)),
+    trailingDistancePct: fieldUnitFromMeta("trailingDistancePct", params.trades.map((trade) => trade.percentFields?.trailingDistancePct)),
+  };
   return {
-    passed: unit !== "mixed" && tpImpossibleTrades === 0,
-    unit,
+    passed: fieldErrors.length === 0,
+    unit: "percentage_points",
+    canonicalUnit: "percentage_points",
     notes: [
-      unit === "mixed"
-        ? "Detected mixed fraction and percentage-point values across move/trade fields."
-        : `Detected ${unit} inputs and standardised synthesis internals to percentage points.`,
-      ...(tpImpossibleTrades > 0 ? [`Detected ${tpImpossibleTrades} trades with trailing activation materially larger than projected move.`] : []),
+      "Field-aware CRASH300 unit normalisation is active.",
+      regressionCase.note,
     ],
-    sampledRanges: {
-      movePct: rangeOf(params.moves.map((move) => move.movePct)),
-      pnlPct: rangeOf(params.trades.map((trade) => trade.pnlPct)),
-      mfePct: rangeOf(params.trades.map((trade) => trade.mfePct)),
-      maePct: rangeOf(params.trades.map((trade) => trade.maePct)),
-      projectedMovePct: rangeOf(params.trades.map((trade) => trade.projectedMovePct)),
-      slPct: rangeOf(params.trades.map((trade) => trade.slPct)),
-      trailingActivationPct: rangeOf(params.trades.map((trade) => trade.trailingActivationPct)),
-      trailingDistancePct: rangeOf(params.trades.map((trade) => trade.trailingDistancePct)),
-    },
+    fieldUnits,
+    fieldWarnings,
+    fieldErrors,
+    sampledRanges,
+    normalisationNotes: [
+      "CRASH300 synthesis uses canonical percentage_points internally for all percent-like calculations.",
+      "Small values such as 0.5 are treated as 0.5 percentage points unless source metadata says fraction.",
+      "MFE stays positive favourable movement, MAE stays negative adverse movement, and SL uses positive absolute risk.",
+    ],
   };
 }
 
@@ -1021,16 +1265,29 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           confidence: null,
           triggerStrengthScore: null,
           projectedMovePct: Math.abs(move.movePct),
+          projectedMovePctPoints: Math.abs(move.movePct),
           slPct: null,
+          slPctPoints: null,
           trailingActivationPct: null,
+          trailingActivationPctPoints: null,
           trailingDistancePct: null,
+          trailingDistancePctPoints: null,
           minHoldBars: null,
           pnlPct: 0,
+          pnlPctPoints: 0,
           mfePct: null,
+          mfePctPoints: null,
           maePct: null,
+          maePctPoints: null,
           exitReason: null,
           eligible: false,
           rejectReason: "no_phase_trigger_snapshots",
+          percentFields: {
+            projectedMovePct: normalizePercentField("projectedMovePct", Math.abs(move.movePct), {
+              sourceHint: "percentage_points",
+              reason: "Rebuilt candidate projectedMovePct uses canonical move percentage points.",
+            }),
+          },
           liveSafeFeatures: { ...move.liveSafeFeatures },
         });
         continue;
@@ -1051,6 +1308,30 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         const trailingActivationPct = Number(Math.max(0.5, effectiveMfePct * 0.45).toFixed(4));
         const trailingDistancePct = Number(Math.max(0.25, Math.min(slPct, effectiveMaePct * 0.8)).toFixed(4));
         const minHoldBars = Math.max(3, Number(move.barsToMfe ?? 6));
+        const projectedMovePctMeta = normalizePercentField("projectedMovePct", projectedMovePct, {
+          sourceHint: "percentage_points",
+          reason: "Rebuilt trigger projectedMovePct is derived in canonical percentage points.",
+        });
+        const slPctMeta = normalizePercentField("slPct", slPct, {
+          sourceHint: "percentage_points",
+          reason: "Rebuilt trigger SL is derived in canonical percentage points.",
+        });
+        const trailingActivationPctMeta = normalizePercentField("trailingActivationPct", trailingActivationPct, {
+          sourceHint: "percentage_points",
+          reason: "Rebuilt trigger trailing activation is derived in canonical percentage points.",
+        });
+        const trailingDistancePctMeta = normalizePercentField("trailingDistancePct", trailingDistancePct, {
+          sourceHint: "percentage_points",
+          reason: "Rebuilt trigger trailing distance is derived in canonical percentage points.",
+        });
+        const mfePctMeta = normalizePercentField("mfePct", effectiveMfePct, {
+          sourceHint: "percentage_points",
+          reason: "Rebuilt trigger MFE is evaluated in canonical percentage points.",
+        });
+        const maePctMeta = normalizePercentField("maePct", -Math.abs(effectiveMaePct), {
+          sourceHint: "percentage_points",
+          reason: "Rebuilt trigger MAE uses negative adverse percentage points.",
+        });
         const eligible =
           Boolean(runtimeFamily) &&
           runtimeFamily !== "unknown" &&
@@ -1088,17 +1369,36 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           setupMatch: optionalNumber(snapshot.setupMatch) ?? Math.max(0, Math.min(1, (triggerStrengthScore ?? 0) * 0.9)),
           confidence: optionalNumber(snapshot.confidence) ?? Math.max(0, Math.min(1, (triggerStrengthScore ?? 0) * 0.95)),
           triggerStrengthScore,
-          projectedMovePct,
-          slPct,
-          trailingActivationPct,
-          trailingDistancePct,
+          projectedMovePct: projectedMovePctMeta.pctPoints,
+          projectedMovePctPoints: projectedMovePctMeta.pctPoints,
+          slPct: slPctMeta.pctPoints,
+          slPctPoints: slPctMeta.pctPoints,
+          trailingActivationPct: trailingActivationPctMeta.pctPoints,
+          trailingActivationPctPoints: trailingActivationPctMeta.pctPoints,
+          trailingDistancePct: trailingDistancePctMeta.pctPoints,
+          trailingDistancePctPoints: trailingDistancePctMeta.pctPoints,
           minHoldBars,
           pnlPct: winLike ? Number(Math.min(projectedMovePct * 0.55, effectiveMfePct * 0.7).toFixed(4)) : Number((-Math.min(slPct, effectiveMaePct)).toFixed(4)),
-          mfePct: effectiveMfePct,
-          maePct: effectiveMaePct,
+          pnlPctPoints: winLike ? Number(Math.min(projectedMovePct * 0.55, effectiveMfePct * 0.7).toFixed(4)) : Number((-Math.min(slPct, effectiveMaePct)).toFixed(4)),
+          mfePct: mfePctMeta.pctPoints,
+          mfePctPoints: mfePctMeta.pctPoints,
+          maePct: maePctMeta.pctPoints,
+          maePctPoints: maePctMeta.pctPoints,
           exitReason: !eligible ? null : winLike ? "tp_hit" : "sl_hit",
           eligible,
           rejectReason: reason,
+          percentFields: {
+            projectedMovePct: projectedMovePctMeta,
+            slPct: slPctMeta,
+            trailingActivationPct: trailingActivationPctMeta,
+            trailingDistancePct: trailingDistancePctMeta,
+            mfePct: mfePctMeta,
+            maePct: maePctMeta,
+            pnlPct: normalizePercentField("pnlPct", winLike ? Number(Math.min(projectedMovePct * 0.55, effectiveMfePct * 0.7).toFixed(4)) : Number((-Math.min(slPct, effectiveMaePct)).toFixed(4)), {
+              sourceHint: "percentage_points",
+              reason: "Rebuilt trigger pnlPct is evaluated in canonical percentage points.",
+            }),
+          },
           liveSafeFeatures: {
             ...move.liveSafeFeatures,
             ...Object.fromEntries(
@@ -1184,6 +1484,25 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         trailingActivationPct: asNumber(policy.trailingRules.activationProfitPct, 0),
         trailingDistancePct: asNumber(policy.trailingRules.trailingDistancePct, 0),
         minHoldBars: asNumber(policy.minHoldRules.minHoldBars, 0),
+        unit: "percentage_points",
+        exitUnitValidation: {
+          selectedSubsetMfeRange: {
+            min: optionalNumber(asRecord(policy.tpRules.exitUnitValidation).selectedSubsetMfeRange && asRecord(asRecord(policy.tpRules.exitUnitValidation).selectedSubsetMfeRange).min),
+            max: optionalNumber(asRecord(policy.tpRules.exitUnitValidation).selectedSubsetMfeRange && asRecord(asRecord(policy.tpRules.exitUnitValidation).selectedSubsetMfeRange).max),
+          },
+          selectedSubsetMaeAbsRange: {
+            min: optionalNumber(asRecord(policy.tpRules.exitUnitValidation).selectedSubsetMaeAbsRange && asRecord(asRecord(policy.tpRules.exitUnitValidation).selectedSubsetMaeAbsRange).min),
+            max: optionalNumber(asRecord(policy.tpRules.exitUnitValidation).selectedSubsetMaeAbsRange && asRecord(asRecord(policy.tpRules.exitUnitValidation).selectedSubsetMaeAbsRange).max),
+          },
+          derivedTpPctPoints: asNumber(asRecord(policy.tpRules.exitUnitValidation).derivedTpPctPoints, 0),
+          derivedSlPctPoints: asNumber(asRecord(policy.tpRules.exitUnitValidation).derivedSlPctPoints, 0),
+          derivedTrailingActivationPctPoints: asNumber(asRecord(policy.tpRules.exitUnitValidation).derivedTrailingActivationPctPoints, 0),
+          derivedTrailingDistancePctPoints: asNumber(asRecord(policy.tpRules.exitUnitValidation).derivedTrailingDistancePctPoints, 0),
+          impossibleExitRejected: Boolean(asRecord(policy.tpRules.exitUnitValidation).impossibleExitRejected),
+          warnings: Array.isArray(asRecord(policy.tpRules.exitUnitValidation).warnings)
+            ? ((asRecord(policy.tpRules.exitUnitValidation).warnings as unknown[]) as string[])
+            : [],
+        },
       },
       leakagePassed: policy.leakageAudit.passed,
       monthlyBreakdown: [],
@@ -1201,17 +1520,41 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
 
   deriveExitPolicyFromSubset(_dataset: UnifiedSynthesisDataset, subset: SynthesisTradeRecord[]): EliteSynthesisExitRules {
     const winners = subset.filter((trade) => trade.pnlPct > 0);
-    const winnerMae = winners.map((trade) => Math.abs(trade.maePct ?? 0)).filter((value) => value > 0);
-    const winnerMfe = winners.map((trade) => Math.abs(trade.mfePct ?? 0)).filter((value) => value > 0);
-    const unit = inferPercentUnit([...winnerMae, ...winnerMfe]);
-    const winnerMaePct = winnerMae.map((value) => toPercentagePoints(value, unit) ?? 0).filter((value) => value > 0);
-    const winnerMfePct = winnerMfe.map((value) => toPercentagePoints(value, unit) ?? 0).filter((value) => value > 0);
+    const winnerMaePct = winners.map((trade) => Math.abs(trade.maePctPoints ?? trade.maePct ?? 0)).filter((value) => value > 0);
+    const winnerMfePct = winners.map((trade) => Math.abs(trade.mfePctPoints ?? trade.mfePct ?? 0)).filter((value) => value > 0);
+    const derivedTpPctPoints = Number(Math.max(0.5, percentile(winnerMfePct, 0.5)).toFixed(2));
+    const derivedSlPctPoints = Number(Math.max(0.35, percentile(winnerMaePct, 0.9)).toFixed(2));
+    const derivedTrailingActivationPctPoints = Number(Math.max(0.4, percentile(winnerMfePct, 0.25)).toFixed(2));
+    const derivedTrailingDistancePctPoints = Number(Math.max(0.25, percentile(winnerMaePct, 0.75)).toFixed(2));
+    const warnings: string[] = [];
+    if (derivedTpPctPoints <= 0) warnings.push("Rejected TP because derived TP was not positive.");
+    if (derivedSlPctPoints <= 0) warnings.push("Rejected SL because derived SL was not positive.");
+    if (derivedTrailingActivationPctPoints <= 0) warnings.push("Rejected trailing activation because derived value was not positive.");
+    if (derivedTrailingDistancePctPoints <= 0) warnings.push("Rejected trailing distance because derived value was not positive.");
+    if (winnerMfePct.length > 0 && derivedTpPctPoints < Math.max(0.1, percentile(winnerMfePct, 0.1) * 0.25)) {
+      warnings.push("Derived TP is materially below the selected subset MFE distribution.");
+    }
+    if (winnerMfePct.length > 0 && winnerMaePct.length > 0 && derivedSlPctPoints > Math.max(...winnerMfePct)) {
+      warnings.push("Derived SL is larger than the observed winner MFE ceiling.");
+    }
+    const impossibleExitRejected = warnings.some((warning) => warning.startsWith("Rejected"));
     return {
-      tpTargetPct: Number(Math.max(0.5, percentile(winnerMfePct, 0.5)).toFixed(2)),
-      slRiskPct: Number(Math.max(0.35, percentile(winnerMaePct, 0.9)).toFixed(2)),
-      trailingActivationPct: Number(Math.max(0.4, percentile(winnerMfePct, 0.25)).toFixed(2)),
-      trailingDistancePct: Number(Math.max(0.25, percentile(winnerMaePct, 0.75)).toFixed(2)),
+      tpTargetPct: derivedTpPctPoints,
+      slRiskPct: derivedSlPctPoints,
+      trailingActivationPct: derivedTrailingActivationPctPoints,
+      trailingDistancePct: derivedTrailingDistancePctPoints,
       minHoldBars: Math.max(1, Math.round(average(winners.map((trade) => Math.max(1, ((trade.exitTs ?? trade.entryTs) - trade.entryTs) / 60))))),
+      unit: "percentage_points",
+      exitUnitValidation: {
+        selectedSubsetMfeRange: rangeOf(winnerMfePct),
+        selectedSubsetMaeAbsRange: rangeOf(winnerMaePct),
+        derivedTpPctPoints,
+        derivedSlPctPoints,
+        derivedTrailingActivationPctPoints,
+        derivedTrailingDistancePctPoints,
+        impossibleExitRejected,
+        warnings,
+      },
     };
   }
 

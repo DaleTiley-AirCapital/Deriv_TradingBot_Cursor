@@ -3,11 +3,20 @@ import type {
   EliteSynthesisExitRules,
   EliteSynthesisFeatureSummary,
   EliteSynthesisParams,
+  EliteSynthesisPercentFieldUnit,
   EliteSynthesisPolicyArtifact,
   EliteSynthesisPolicySummary,
   EliteSynthesisUnitValidation,
   EliteSynthesisValidationError,
 } from "./types.js";
+
+export type SynthesisPercentFieldMeta = {
+  raw: number | null;
+  pctPoints: number | null;
+  unit: EliteSynthesisPercentFieldUnit["inferredSourceUnit"];
+  confidence: EliteSynthesisPercentFieldUnit["confidence"];
+  reason: string;
+};
 
 export type SynthesisMoveRecord = {
   kind: "calibrated_move";
@@ -16,6 +25,7 @@ export type SynthesisMoveRecord = {
   endTs: number;
   direction: "up" | "down";
   movePct: number;
+  movePctPoints: number;
   qualityTier: string;
   calibratedBaseFamily: string;
   calibratedMoveSizeBucket: string;
@@ -24,9 +34,13 @@ export type SynthesisMoveRecord = {
   earliestValidLiveSafeTriggerOffset?: string | null;
   bestTheoreticalLiveSafeTriggerOffset?: string | null;
   normalMaeBeforeSuccess?: number | null;
+  normalMaeBeforeSuccessPctPoints?: number | null;
   realisticMfeAfterEntry?: number | null;
+  realisticMfeAfterEntryPctPoints?: number | null;
   barsToMfe?: number | null;
   pullbackAfterMfe?: number | null;
+  pullbackAfterMfePctPoints?: number | null;
+  percentFields?: Record<string, SynthesisPercentFieldMeta>;
   liveSafeFeatures: Record<string, number | string | boolean | null>;
   triggerOffsets: Array<Record<string, unknown>>;
 };
@@ -49,12 +63,19 @@ export type SynthesisTradeRecord = {
   triggerAgeBars: number | null;
   epochAgeBars: number | null;
   projectedMovePct: number | null;
+  projectedMovePctPoints: number | null;
   slPct: number | null;
+  slPctPoints: number | null;
   trailingActivationPct: number | null;
+  trailingActivationPctPoints: number | null;
   trailingDistancePct: number | null;
+  trailingDistancePctPoints: number | null;
   pnlPct: number;
+  pnlPctPoints: number;
   mfePct: number | null;
+  mfePctPoints: number | null;
   maePct: number | null;
+  maePctPoints: number | null;
   exitReason: string | null;
   modelSource: string | null;
   runtimeEvidence: number | null;
@@ -66,6 +87,7 @@ export type SynthesisTradeRecord = {
   targetUnrealisticForBucket: boolean;
   trailingTooEarly: boolean;
   slTooTight: boolean;
+  percentFields?: Record<string, SynthesisPercentFieldMeta>;
   liveSafeFeatures: Record<string, number | string | boolean | null>;
 };
 
@@ -87,16 +109,24 @@ export type SynthesisRebuiltTriggerCandidateRecord = {
   confidence: number | null;
   triggerStrengthScore: number | null;
   projectedMovePct: number | null;
+  projectedMovePctPoints: number | null;
   slPct: number | null;
+  slPctPoints: number | null;
   trailingActivationPct: number | null;
+  trailingActivationPctPoints: number | null;
   trailingDistancePct: number | null;
+  trailingDistancePctPoints: number | null;
   minHoldBars: number | null;
   pnlPct: number;
+  pnlPctPoints: number;
   mfePct: number | null;
+  mfePctPoints: number | null;
   maePct: number | null;
+  maePctPoints: number | null;
   exitReason: string | null;
   eligible: boolean;
   rejectReason: string | null;
+  percentFields?: Record<string, SynthesisPercentFieldMeta>;
   liveSafeFeatures: Record<string, number | string | boolean | null>;
 };
 

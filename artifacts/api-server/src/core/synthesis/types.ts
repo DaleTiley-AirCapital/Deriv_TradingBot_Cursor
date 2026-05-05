@@ -121,11 +121,25 @@ export type EliteSynthesisDataAvailability = {
   metrics: Record<string, EliteSynthesisDataAvailabilityMetric>;
 };
 
+export type EliteSynthesisPercentUnit = "percentage_points" | "fraction";
+
+export type EliteSynthesisPercentFieldUnit = {
+  inferredSourceUnit: EliteSynthesisPercentUnit;
+  canonicalUnit: "percentage_points";
+  confidence: "field_default" | "source_metadata";
+  reason: string;
+};
+
 export type EliteSynthesisUnitValidation = {
   passed: boolean;
   unit: "percentage_points" | "fraction" | "mixed";
+  canonicalUnit: "percentage_points";
   notes: string[];
+  fieldUnits: Record<string, EliteSynthesisPercentFieldUnit>;
+  fieldWarnings: string[];
+  fieldErrors: string[];
   sampledRanges: Record<string, { min: number | null; max: number | null }>;
+  normalisationNotes: string[];
 };
 
 export type EliteSynthesisEntryTimingRule = {
@@ -141,6 +155,17 @@ export type EliteSynthesisExitRules = {
   trailingActivationPct: number;
   trailingDistancePct: number;
   minHoldBars: number;
+  unit: "percentage_points";
+  exitUnitValidation: {
+    selectedSubsetMfeRange: { min: number | null; max: number | null };
+    selectedSubsetMaeAbsRange: { min: number | null; max: number | null };
+    derivedTpPctPoints: number;
+    derivedSlPctPoints: number;
+    derivedTrailingActivationPctPoints: number;
+    derivedTrailingDistancePctPoints: number;
+    impossibleExitRejected: boolean;
+    warnings: string[];
+  };
 };
 
 export type EliteSynthesisPolicySummary = {

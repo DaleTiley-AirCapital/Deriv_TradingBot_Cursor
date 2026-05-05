@@ -381,6 +381,30 @@ type EliteSynthesisJobStatusUi = {
   resultSummary?: Record<string, unknown> | null;
 };
 
+function synthesisResultStateLabel(job: EliteSynthesisJobStatusUi): string {
+  const resultState = job.resultSummary && typeof job.resultSummary === "object"
+    ? String((job.resultSummary as Record<string, unknown>).resultState ?? "")
+    : "";
+  if (!resultState) return "n/a";
+  return resultState.replaceAll("_", " ");
+}
+
+function synthesisStatusTone(job: EliteSynthesisJobStatusUi): string {
+  const resultState = job.resultSummary && typeof job.resultSummary === "object"
+    ? String((job.resultSummary as Record<string, unknown>).resultState ?? "")
+    : "";
+  if (job.status === "completed" && resultState === "completed_target_achieved") {
+    return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+  }
+  if (job.status === "completed") {
+    return "bg-amber-500/15 text-amber-300 border-amber-500/30";
+  }
+  if (job.status === "failed" || job.status === "cancelled") {
+    return "bg-red-500/15 text-red-300 border-red-500/30";
+  }
+  return "bg-cyan-500/15 text-cyan-200 border-cyan-500/30";
+}
+
 const BACKTEST_TIER_MODES: Array<{ value: BacktestTierMode; label: string }> = [
   { value: "A", label: "A only" },
   { value: "AB", label: "A+B" },
@@ -5038,6 +5062,30 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [profile, setProfile] = useState<EliteSynthesisSearchProfileUi>("fast");
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyJobs, setHistoryJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
+
+  const loadHistory = useCallback(async (silent = false) => {
+    if (!silent) setErr(null);
+    if (!silent) setHistoryLoading(true);
+    try {
+      const data = await apiFetch(`research/${service}/elite-synthesis/jobs?limit=20`) as {
+        jobs?: EliteSynthesisJobStatusUi[];
+      };
+      setHistoryJobs(Array.isArray(data.jobs) ? data.jobs : []);
+    } catch (e: unknown) {
+      if (!silent) setErr(e instanceof Error ? e.message : "Failed to load elite synthesis run history");
+    } finally {
+      if (!silent) setHistoryLoading(false);
+    }
+  }, [service]);
+
+  useEffect(() => {
+    setHistoryExpanded(false);
+    setHistoryJobs([]);
+    setHistoryLoading(false);
+  }, [service]);
 
   const startJob = async () => {
     setBusy(true);
@@ -5060,6 +5108,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
         throw new Error("Integrated elite synthesis did not return a valid job id.");
       }
       setNotice(`Integrated elite synthesis started for ${getSymbolLabel(service)} (job #${jobId}).`);
+      await loadHistory(true);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Failed to start integrated elite synthesis");
     } finally {
@@ -5101,6 +5150,85 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
 
       {notice && <SuccessBox msg={notice} />}
       {err && <ErrorBox msg={err} />}
+
+      <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+            <span className="text-xs font-semibold text-foreground">Run History</span>
+            {historyJobs.length > 0 && (
+              <span className="text-[11px] text-muted-foreground">({historyJobs.length} runs)</span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!historyExpanded) void loadHistory();
+              setHistoryExpanded(v => !v);
+            }}
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            {historyExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            {historyExpanded ? "Hide history" : "Show history"}
+          </button>
+        </div>
+
+        {historyExpanded && (
+          <div className="space-y-2">
+            {historyLoading && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />Loading run history
+              </div>
+            )}
+            {!historyLoading && historyJobs.length === 0 && (
+              <p className="text-xs text-muted-foreground">No elite synthesis runs recorded yet for {service}.</p>
+            )}
+            {!historyLoading && historyJobs.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="border-b border-border/30 text-muted-foreground">
+                      <th className="text-left py-2 pr-3 font-medium">ID</th>
+                      <th className="text-left px-3 py-2 font-medium">Profile</th>
+                      <th className="text-left px-3 py-2 font-medium">Status</th>
+                      <th className="text-left px-3 py-2 font-medium">Result</th>
+                      <th className="text-left px-3 py-2 font-medium">Passes</th>
+                      <th className="text-left px-3 py-2 font-medium">Started</th>
+                      <th className="text-left px-3 py-2 font-medium">Completed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyJobs.map((job) => {
+                      const resultLabel = synthesisResultStateLabel(job);
+                      return (
+                        <tr key={job.id} className="border-b border-border/10 last:border-b-0">
+                          <td className="py-2 pr-3 text-foreground font-medium">#{job.id}</td>
+                          <td className="px-3 py-2 text-muted-foreground">
+                            {Number(job.maxPasses ?? 0) >= 24 ? "Deep" : Number(job.maxPasses ?? 0) >= 12 ? "Balanced" : "Fast"}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium", synthesisStatusTone(job))}>
+                              {job.status}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground">{resultLabel}</td>
+                          <td className="px-3 py-2 text-muted-foreground">
+                            {Number(job.currentPass ?? 0) > 0 || Number(job.maxPasses ?? 0) > 0
+                              ? `${Number(job.currentPass ?? 0)}/${Number(job.maxPasses ?? 0)}`
+                              : "n/a"}
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground">{job.startedAt ? formatRuntimeDate(job.startedAt) : "n/a"}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{job.completedAt ? formatRuntimeDate(job.completedAt) : "n/a"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-[11px] text-muted-foreground">
         {ELITE_SYNTHESIS_PROFILE_DESCRIPTIONS[profile]}

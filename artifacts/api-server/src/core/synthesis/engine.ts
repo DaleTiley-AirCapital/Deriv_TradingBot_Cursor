@@ -141,8 +141,13 @@ function emptyUnitValidation(): EliteSynthesisUnitValidation {
   return {
     passed: false,
     unit: "mixed",
+    canonicalUnit: "percentage_points",
     notes: ["Unit validation not available."],
+    fieldUnits: {},
+    fieldWarnings: [],
+    fieldErrors: [],
     sampledRanges: {},
+    normalisationNotes: [],
   };
 }
 
@@ -203,12 +208,24 @@ function buildPolicyArtifact(params: {
       "max_one_trade_per_day",
       "cascade_disabled_by_default",
     ],
-    tpRules: { targetPct: exitRules.tpTargetPct, source: "synthesis_percentile_subset" },
-    slRules: { maxInitialRiskPct: exitRules.slRiskPct, source: "synthesis_percentile_subset" },
+    tpRules: {
+      targetPct: exitRules.tpTargetPct,
+      unit: exitRules.unit,
+      source: "synthesis_percentile_subset",
+      exitUnitValidation: exitRules.exitUnitValidation,
+    },
+    slRules: {
+      maxInitialRiskPct: exitRules.slRiskPct,
+      unit: exitRules.unit,
+      source: "synthesis_percentile_subset",
+      exitUnitValidation: exitRules.exitUnitValidation,
+    },
     trailingRules: {
       activationProfitPct: exitRules.trailingActivationPct,
       trailingDistancePct: exitRules.trailingDistancePct,
+      unit: exitRules.unit,
       source: "synthesis_percentile_subset",
+      exitUnitValidation: exitRules.exitUnitValidation,
     },
     minHoldRules: { minHoldBars: exitRules.minHoldBars },
     dailyTradeLimit: 1,
