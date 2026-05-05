@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "NODE_ENV=development tsx ./src/index.ts",
     "worker": "tsx ./src/worker/index.ts",
+    "worker:dist": "node ./dist/worker.cjs",
     "build": "tsx ./build.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify:structure": "bash ./scripts/verify-structure.sh",

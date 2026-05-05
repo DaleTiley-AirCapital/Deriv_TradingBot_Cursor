@@ -40,8 +40,12 @@ Run heavy research jobs in a separate Railway service so the main API app remain
 ## Worker start command
 
 ```powershell
-pnpm --filter @workspace/api-server run worker
+node ./artifacts/api-server/dist/worker.cjs
 ```
+
+Why:
+- the final Docker runtime image intentionally excludes `pnpm`
+- the worker must start from the compiled server bundle, not the dev-time `tsx` entrypoint
 
 ## Required environment
 
@@ -86,7 +90,7 @@ Requirements:
 - Service name: worker-jobs
 - Source: same repo and production environment as the API service
 - No public URL
-- Start command: pnpm --filter @workspace/api-server run worker
+- Start command: node ./artifacts/api-server/dist/worker.cjs
 - Use the same shared environment variables as the main API service, especially DATABASE_URL and any app secrets required by the API server heavy-task code
 - Keep instance count at 1
 - Restart on failure
