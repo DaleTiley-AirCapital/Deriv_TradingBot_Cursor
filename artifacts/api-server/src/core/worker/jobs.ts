@@ -200,12 +200,20 @@ export async function listWorkerJobs(params: {
   await ensureWorkerJobsTable();
   const limit = Math.max(1, Math.min(50, params.limit ?? 10));
   const statusArray = params.statuses && params.statuses.length > 0 ? params.statuses : null;
+  const whereParts = [sql`1 = 1`];
+  if (params.serviceId) {
+    whereParts.push(sql`service_id = ${params.serviceId}`);
+  }
+  if (params.taskType) {
+    whereParts.push(sql`task_type = ${params.taskType}`);
+  }
+  if (statusArray) {
+    whereParts.push(sql`status IN (${sql.join(statusArray.map((status) => sql`${status}`), sql`, `)})`);
+  }
   const result = await db.execute(sql`
     SELECT *
     FROM worker_jobs
-    WHERE (${params.serviceId ?? null}::text IS NULL OR service_id = ${params.serviceId ?? null})
-      AND (${params.taskType ?? null}::text IS NULL OR task_type = ${params.taskType ?? null})
-      AND (${statusArray ? true : false} = false OR status = ANY(${statusArray ?? ["queued", "running", "completed", "failed", "cancelled"]}))
+    WHERE ${sql.join(whereParts, sql` AND `)}
     ORDER BY created_at DESC
     LIMIT ${limit}
   `);
@@ -216,7 +224,7 @@ export async function claimNextWorkerJob(taskTypes?: WorkerTaskType[]): Promise<
   await ensureWorkerJobsTable();
   const allowed = taskTypes && taskTypes.length > 0 ? taskTypes : null;
   const typeFilter = allowed
-    ? sql`AND task_type = ANY(${allowed})`
+    ? sql`AND task_type IN (${sql.join(allowed.map((taskType) => sql`${taskType}`), sql`, `)})`
     : sql``;
   const result = await db.execute(sql`
     WITH next_job AS (
