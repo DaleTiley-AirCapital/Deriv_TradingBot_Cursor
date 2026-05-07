@@ -122,6 +122,7 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
     rejectedCandidates.filter((candidate) => candidate.rejectionReasons.includes("invalid_direction") || candidate.rejectionReasons.includes("direction_mismatch")),
     (candidate) => candidate.rawTriggerDirection ?? String(candidate.liveSafeFeatures.rawTriggerDirection ?? ""),
   )).sort((a, b) => b[1] - a[1])[0] ?? null;
+  const missingExitRulesRejected = rejectedCandidates.filter((candidate) => candidate.rejectionReasons.includes("missing_exit_rules"));
   const exampleRejectedCandidatesByReason = rejectedCandidates.reduce<Record<string, Array<Record<string, unknown>>>>((acc, candidate) => {
     const reasons = candidate.rejectionReasons.length > 0
       ? candidate.rejectionReasons
@@ -154,6 +155,21 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
         fiveBarReturnPct: candidate.liveSafeFeatures.fiveBarReturnPct ?? null,
         selectedBucket: candidate.selectedBucket,
         selectedMoveSizeBucket: candidate.selectedMoveSizeBucket,
+        availableExitLookupKeysTried: candidate.availableExitLookupKeysTried ?? candidate.liveSafeFeatures.availableExitLookupKeysTried ?? [],
+        exitSubsetCandidateCount: candidate.exitSubsetCandidateCount ?? candidate.liveSafeFeatures.exitSubsetCandidateCount ?? null,
+        exitSubsetWinnerCount: candidate.exitSubsetWinnerCount ?? candidate.liveSafeFeatures.exitSubsetWinnerCount ?? null,
+        exitSubsetMfeRange: candidate.exitSubsetMfeRange ?? {
+          min: Number.isFinite(Number(candidate.liveSafeFeatures.exitSubsetMfeMin)) ? Number(candidate.liveSafeFeatures.exitSubsetMfeMin) : null,
+          max: Number.isFinite(Number(candidate.liveSafeFeatures.exitSubsetMfeMax)) ? Number(candidate.liveSafeFeatures.exitSubsetMfeMax) : null,
+        },
+        exitSubsetMaeAbsRange: candidate.exitSubsetMaeAbsRange ?? {
+          min: Number.isFinite(Number(candidate.liveSafeFeatures.exitSubsetMaeAbsMin)) ? Number(candidate.liveSafeFeatures.exitSubsetMaeAbsMin) : null,
+          max: Number.isFinite(Number(candidate.liveSafeFeatures.exitSubsetMaeAbsMax)) ? Number(candidate.liveSafeFeatures.exitSubsetMaeAbsMax) : null,
+        },
+        exitRuleRejectReason: candidate.exitRuleRejectReason ?? candidate.liveSafeFeatures.exitRuleRejectReason ?? null,
+        exitRuleSource: candidate.exitRuleSource ?? candidate.liveSafeFeatures.exitRuleSource ?? null,
+        exitRuleWidenedFrom: candidate.exitRuleWidenedFrom ?? candidate.liveSafeFeatures.exitRuleWidenedFrom ?? null,
+        exitRuleWidenedTo: candidate.exitRuleWidenedTo ?? candidate.liveSafeFeatures.exitRuleWidenedTo ?? null,
         rejectionReasons: candidate.rejectionReasons,
       });
     }
@@ -180,6 +196,31 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
     rejectionReasonCountsByRawTransition: countReasonsByGroup(
       rejectedCandidates,
       (candidate) => candidate.rawTriggerTransition ?? String(candidate.liveSafeFeatures.rawTriggerTransition ?? ""),
+    ),
+    missingExitRulesCount: missingExitRulesRejected.length,
+    missingExitRulesByFamily: countByKey(
+      missingExitRulesRejected,
+      (candidate) => candidate.runtimeFamily ?? candidate.rawRuntimeFamily ?? String(candidate.liveSafeFeatures.rawRuntimeFamily ?? ""),
+    ),
+    missingExitRulesByTriggerTransition: countByKey(
+      missingExitRulesRejected,
+      (candidate) => candidate.triggerTransition ?? candidate.rawTriggerTransition ?? String(candidate.liveSafeFeatures.rawTriggerTransition ?? ""),
+    ),
+    missingExitRulesBySelectedBucket: countByKey(
+      missingExitRulesRejected,
+      (candidate) => candidate.selectedBucket,
+    ),
+    missingExitRulesBySelectedMoveSizeBucket: countByKey(
+      missingExitRulesRejected,
+      (candidate) => candidate.selectedMoveSizeBucket,
+    ),
+    missingExitRulesByDirection: countByKey(
+      missingExitRulesRejected,
+      (candidate) => candidate.canonicalDirection ?? candidate.direction,
+    ),
+    missingExitRulesByOffset: countByKey(
+      missingExitRulesRejected,
+      (candidate) => candidate.offsetLabel,
     ),
     candidateOffsetDistribution: countValues(candidates.map((candidate) => candidate.offsetLabel)),
     rawTriggerDirectionDistribution: countValues(candidates.map((candidate) => candidate.rawTriggerDirection ?? String(candidate.liveSafeFeatures.rawTriggerDirection ?? ""))),
@@ -259,6 +300,27 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
       topRawTransitionReject: topRawTransitionReject ? { rawValue: topRawTransitionReject[0], count: topRawTransitionReject[1] } : null,
       topRawDirectionReject: topRawDirectionReject ? { rawValue: topRawDirectionReject[0], count: topRawDirectionReject[1] } : null,
       topInvalidArchetypeExamplesCount: exampleRejectedCandidatesByReason.invalid_archetype?.length ?? 0,
+      topMissingExitRulesReject: Object.entries(countByKey(
+        missingExitRulesRejected,
+        (candidate) => candidate.runtimeFamily && candidate.selectedMoveSizeBucket
+          ? `${candidate.runtimeFamily}|${candidate.selectedMoveSizeBucket}|${candidate.canonicalDirection ?? candidate.direction}`
+          : candidate.runtimeFamily ?? candidate.selectedMoveSizeBucket ?? candidate.selectedBucket ?? "unknown",
+      )).sort((a, b) => b[1] - a[1])[0]
+        ? {
+            rawValue: Object.entries(countByKey(
+              missingExitRulesRejected,
+              (candidate) => candidate.runtimeFamily && candidate.selectedMoveSizeBucket
+                ? `${candidate.runtimeFamily}|${candidate.selectedMoveSizeBucket}|${candidate.canonicalDirection ?? candidate.direction}`
+                : candidate.runtimeFamily ?? candidate.selectedMoveSizeBucket ?? candidate.selectedBucket ?? "unknown",
+            )).sort((a, b) => b[1] - a[1])[0]![0],
+            count: Object.entries(countByKey(
+              missingExitRulesRejected,
+              (candidate) => candidate.runtimeFamily && candidate.selectedMoveSizeBucket
+                ? `${candidate.runtimeFamily}|${candidate.selectedMoveSizeBucket}|${candidate.canonicalDirection ?? candidate.direction}`
+                : candidate.runtimeFamily ?? candidate.selectedMoveSizeBucket ?? candidate.selectedBucket ?? "unknown",
+            )).sort((a, b) => b[1] - a[1])[0]![1],
+          }
+        : null,
     },
   };
 }

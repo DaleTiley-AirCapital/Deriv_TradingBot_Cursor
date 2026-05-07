@@ -144,6 +144,15 @@ export type SynthesisRebuiltTriggerCandidateRecord = {
   rejectReason: string | null;
   noTradeReason: string | null;
   rejectionReasons: string[];
+  availableExitLookupKeysTried?: string[];
+  exitSubsetCandidateCount?: number | null;
+  exitSubsetWinnerCount?: number | null;
+  exitSubsetMfeRange?: { min: number | null; max: number | null } | null;
+  exitSubsetMaeAbsRange?: { min: number | null; max: number | null } | null;
+  exitRuleRejectReason?: string | null;
+  exitRuleSource?: string | null;
+  exitRuleWidenedFrom?: string | null;
+  exitRuleWidenedTo?: string | null;
   percentFields?: Record<string, SynthesisPercentFieldMeta>;
   liveSafeFeatures: Record<string, number | string | boolean | null>;
 };

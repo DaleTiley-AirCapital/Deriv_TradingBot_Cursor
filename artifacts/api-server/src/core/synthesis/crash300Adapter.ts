@@ -44,6 +44,8 @@ const SYMBOL = "CRASH300";
 const MAX_CONTROL_SAMPLES = 60;
 const LOOP_YIELD_INTERVAL = 24;
 const REBUILT_TRIGGER_OFFSETS = [-10, -5, -3, -2, -1, 0, 1, 2, 3, 5, 10] as const;
+const MIN_EXIT_SUBSET_CANDIDATES = 3;
+const MIN_EXIT_SUBSET_WINNERS = 2;
 const VALID_REBUILT_RUNTIME_ARCHETYPES = new Set([
   "crash_event_down",
   "post_crash_recovery_up",
@@ -423,6 +425,131 @@ function findEntryCandleIndex(candles: CandleRow[], targetTs: number): number {
   return lastBefore;
 }
 
+function winnersFromSubset(subset: SynthesisTradeRecord[]) {
+  return subset.filter((trade) => trade.pnlPct > 0);
+}
+
+function exitSubsetStats(subset: SynthesisTradeRecord[]) {
+  const winners = winnersFromSubset(subset);
+  const mfeValues = winners
+    .map((trade) => Math.abs(trade.mfePctPoints ?? trade.mfePct ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const maeValues = winners
+    .map((trade) => Math.abs(trade.maePctPoints ?? trade.maePct ?? 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return {
+    candidateCount: subset.length,
+    winnerCount: winners.length,
+    mfeRange: rangeOf(mfeValues),
+    maeAbsRange: rangeOf(maeValues),
+  };
+}
+
+function buildSyntheticExitTradeFromMove(params: {
+  move: SynthesisMoveRecord;
+  runtimeFamily: string;
+  selectedBucket: string | null;
+  selectedMoveSizeBucket: Crash300MoveSizeBucket | null;
+  direction: "buy" | "sell";
+}): SynthesisTradeRecord | null {
+  const mfePctPoints = Math.abs(params.move.realisticMfeAfterEntryPctPoints ?? params.move.realisticMfeAfterEntry ?? 0);
+  const maeAbsPctPoints = Math.abs(params.move.normalMaeBeforeSuccessPctPoints ?? params.move.normalMaeBeforeSuccess ?? 0);
+  if (mfePctPoints <= 0 || maeAbsPctPoints <= 0) return null;
+  const selectedBucket = params.selectedBucket
+    ?? params.move.phaseDerivedBucket
+    ?? params.move.calibratedMoveSizeBucket
+    ?? params.selectedMoveSizeBucket;
+  return {
+    kind: "runtime_trade",
+    tradeId: `synthetic_move_${params.move.moveId}`,
+    entryTs: params.move.startTs,
+    exitTs: params.move.endTs,
+    direction: params.direction,
+    runtimeFamily: params.runtimeFamily,
+    selectedBucket,
+    triggerTransition: canonicalTriggerTransitionFromFamily(params.runtimeFamily),
+    setupMatch: null,
+    confidence: null,
+    triggerStrengthScore: null,
+    qualityTier: params.move.qualityTier ?? null,
+    regimeAtEntry: null,
+    contextAgeBars: null,
+    triggerAgeBars: null,
+    epochAgeBars: null,
+    projectedMovePct: mfePctPoints,
+    projectedMovePctPoints: mfePctPoints,
+    slPct: maeAbsPctPoints,
+    slPctPoints: maeAbsPctPoints,
+    trailingActivationPct: null,
+    trailingActivationPctPoints: null,
+    trailingDistancePct: null,
+    trailingDistancePctPoints: null,
+    pnlPct: mfePctPoints,
+    pnlPctPoints: mfePctPoints,
+    mfePct: mfePctPoints,
+    mfePctPoints,
+    maePct: -maeAbsPctPoints,
+    maePctPoints: -maeAbsPctPoints,
+    exitReason: "synthetic_calibrated_subset",
+    modelSource: "calibrated_move_subset",
+    runtimeEvidence: null,
+    matchedMoveIdStrict: params.move.moveId,
+    strictRelationshipLabel: "synthetic_calibrated_subset",
+    phantomNoiseLabel: null,
+    enteredTooEarly: false,
+    enteredTooLate: false,
+    targetUnrealisticForBucket: false,
+    trailingTooEarly: false,
+    slTooTight: false,
+    liveSafeFeatures: {
+      source: "calibrated_move_subset",
+      calibratedMoveId: params.move.moveId,
+      calibratedMoveSizeBucket: params.move.calibratedMoveSizeBucket,
+      phaseDerivedBucket: params.move.phaseDerivedBucket ?? null,
+    },
+  };
+}
+
+function buildExitLookupKeySummary(params: {
+  runtimeFamily: string;
+  selectedMoveSizeBucket: Crash300MoveSizeBucket;
+  triggerTransition: string;
+  direction: "buy" | "sell";
+  selectedBucket: string | null;
+}) {
+  return {
+    exact: `family=${params.runtimeFamily}|bucket=${params.selectedMoveSizeBucket}|direction=${params.direction}`,
+    familyBucket: `family=${params.runtimeFamily}|bucket=${params.selectedMoveSizeBucket}`,
+    triggerBucket: `trigger=${params.triggerTransition}|bucket=${params.selectedMoveSizeBucket}`,
+    fullBucket: params.selectedBucket ? `selected_bucket=${params.selectedBucket}` : null,
+    bucketDirection: `bucket=${params.selectedMoveSizeBucket}|direction=${params.direction}`,
+    familyDefault: `family=${params.runtimeFamily}`,
+    broadDefault: `service=${SYMBOL}|bucket=${params.selectedMoveSizeBucket}|direction=${params.direction}|broad_calibrated_default`,
+  };
+}
+
+type ExitLookupSource =
+  | "exact_subset"
+  | "family_bucket_subset"
+  | "trigger_bucket_subset"
+  | "bucket_subset"
+  | "bucket_direction_subset"
+  | "family_default"
+  | "broad_calibrated_default";
+
+type ExitSubsetLookupResult = {
+  subset: SynthesisTradeRecord[];
+  source: ExitLookupSource | null;
+  widenedFrom: string | null;
+  widenedTo: string | null;
+  availableExitLookupKeysTried: string[];
+  exitSubsetCandidateCount: number;
+  exitSubsetWinnerCount: number;
+  exitSubsetMfeRange: { min: number | null; max: number | null };
+  exitSubsetMaeAbsRange: { min: number | null; max: number | null };
+  exitRuleRejectReason: string | null;
+};
+
 function buildNoTradeCandidate(params: {
   move: SynthesisMoveRecord;
   candidateId: string;
@@ -447,6 +574,15 @@ function buildNoTradeCandidate(params: {
   featureSnapshotPresent?: boolean;
   featureSnapshotLiveSafe?: boolean;
   exitRulesPresent?: boolean;
+  availableExitLookupKeysTried?: string[];
+  exitSubsetCandidateCount?: number | null;
+  exitSubsetWinnerCount?: number | null;
+  exitSubsetMfeRange?: { min: number | null; max: number | null } | null;
+  exitSubsetMaeAbsRange?: { min: number | null; max: number | null } | null;
+  exitRuleRejectReason?: string | null;
+  exitRuleSource?: string | null;
+  exitRuleWidenedFrom?: string | null;
+  exitRuleWidenedTo?: string | null;
 }): SynthesisRebuiltTriggerCandidateRecord {
   const inferredDirection = asTradeDirection(params.triggerDirection);
   const candidateDirection: "buy" | "sell" | "unknown" = inferredDirection;
@@ -503,9 +639,29 @@ function buildNoTradeCandidate(params: {
     rejectReason: params.reason,
     noTradeReason: params.reason,
     rejectionReasons: params.rejectionReasons ?? [params.reason],
+    availableExitLookupKeysTried: params.availableExitLookupKeysTried,
+    exitSubsetCandidateCount: params.exitSubsetCandidateCount ?? null,
+    exitSubsetWinnerCount: params.exitSubsetWinnerCount ?? null,
+    exitSubsetMfeRange: params.exitSubsetMfeRange ?? null,
+    exitSubsetMaeAbsRange: params.exitSubsetMaeAbsRange ?? null,
+    exitRuleRejectReason: params.exitRuleRejectReason ?? null,
+    exitRuleSource: params.exitRuleSource ?? null,
+    exitRuleWidenedFrom: params.exitRuleWidenedFrom ?? null,
+    exitRuleWidenedTo: params.exitRuleWidenedTo ?? null,
     percentFields: params.percentFields,
     liveSafeFeatures: {
       ...params.move.liveSafeFeatures,
+      availableExitLookupKeysTried: (params.availableExitLookupKeysTried ?? []).join(" || "),
+      exitSubsetCandidateCount: params.exitSubsetCandidateCount ?? null,
+      exitSubsetWinnerCount: params.exitSubsetWinnerCount ?? null,
+      exitSubsetMfeMin: params.exitSubsetMfeRange?.min ?? null,
+      exitSubsetMfeMax: params.exitSubsetMfeRange?.max ?? null,
+      exitSubsetMaeAbsMin: params.exitSubsetMaeAbsRange?.min ?? null,
+      exitSubsetMaeAbsMax: params.exitSubsetMaeAbsRange?.max ?? null,
+      exitRuleRejectReason: params.exitRuleRejectReason ?? null,
+      exitRuleSource: params.exitRuleSource ?? null,
+      exitRuleWidenedFrom: params.exitRuleWidenedFrom ?? null,
+      exitRuleWidenedTo: params.exitRuleWidenedTo ?? null,
       ...(params.liveSafeFeatures ?? {}),
     },
   };
@@ -1826,6 +1982,157 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     return runtimeFamily === "unknown" ? "unknown" : runtimeFamily;
   }
 
+  private collectCalibratedExitSubset(params: {
+    dataset: UnifiedSynthesisDataset;
+    runtimeFamily: string;
+    selectedMoveSizeBucket: Crash300MoveSizeBucket;
+    direction: "buy" | "sell";
+    selectedBucket: string | null;
+  }) {
+    const synthetic = params.dataset.moves
+      .map((move) => {
+        const moveFamily =
+          canonicalFamilyFromRawRuntimeFamily(move.phaseDerivedFamily ?? move.calibratedBaseFamily)
+          ?? canonicalFamilyFromBucket(move.phaseDerivedBucket ?? move.calibratedMoveSizeBucket);
+        const moveBucket = canonicalMoveSizeBucketFromLabel(move.phaseDerivedBucket ?? move.calibratedMoveSizeBucket);
+        const moveDirection = directionFromMove(move);
+        if (moveFamily !== params.runtimeFamily) return null;
+        if (moveBucket !== params.selectedMoveSizeBucket) return null;
+        if (moveDirection !== params.direction) return null;
+        return buildSyntheticExitTradeFromMove({
+          move,
+          runtimeFamily: params.runtimeFamily,
+          selectedBucket: params.selectedBucket ?? move.phaseDerivedBucket ?? move.calibratedMoveSizeBucket,
+          selectedMoveSizeBucket: params.selectedMoveSizeBucket,
+          direction: params.direction,
+        });
+      })
+      .filter((trade): trade is SynthesisTradeRecord => Boolean(trade));
+    return synthetic;
+  }
+
+  private findExitSubsetForRebuiltCandidate(params: {
+    dataset: UnifiedSynthesisDataset;
+    runtimeFamily: string;
+    selectedMoveSizeBucket: Crash300MoveSizeBucket;
+    triggerTransition: string;
+    direction: "buy" | "sell";
+    selectedBucket: string | null;
+  }): ExitSubsetLookupResult {
+    const keys = buildExitLookupKeySummary(params);
+    const tried: string[] = [];
+    const attempt = (
+      source: ExitLookupSource,
+      key: string | null,
+      subsetFactory: () => SynthesisTradeRecord[],
+    ): ExitSubsetLookupResult | null => {
+      if (!key) return null;
+      tried.push(key);
+      const subset = subsetFactory();
+      const stats = exitSubsetStats(subset);
+      if (stats.candidateCount < MIN_EXIT_SUBSET_CANDIDATES || stats.winnerCount < MIN_EXIT_SUBSET_WINNERS) {
+        return null;
+      }
+      return {
+        subset,
+        source,
+        widenedFrom: keys.exact,
+        widenedTo: key,
+        availableExitLookupKeysTried: [...tried],
+        exitSubsetCandidateCount: stats.candidateCount,
+        exitSubsetWinnerCount: stats.winnerCount,
+        exitSubsetMfeRange: stats.mfeRange,
+        exitSubsetMaeAbsRange: stats.maeAbsRange,
+        exitRuleRejectReason: null,
+      };
+    };
+
+    const runtimeTrades = params.dataset.trades;
+    const exact = attempt("exact_subset", keys.exact, () =>
+      runtimeTrades.filter((trade) =>
+        trade.runtimeFamily === params.runtimeFamily
+        && canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === params.selectedMoveSizeBucket
+        && trade.direction === params.direction
+      ),
+    );
+    if (exact) return exact;
+
+    const familyBucket = attempt("family_bucket_subset", keys.familyBucket, () =>
+      runtimeTrades.filter((trade) =>
+        trade.runtimeFamily === params.runtimeFamily
+        && canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === params.selectedMoveSizeBucket
+      ),
+    );
+    if (familyBucket) return familyBucket;
+
+    const triggerBucket = attempt("trigger_bucket_subset", keys.triggerBucket, () =>
+      runtimeTrades.filter((trade) =>
+        trade.triggerTransition === params.triggerTransition
+        && canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === params.selectedMoveSizeBucket
+      ),
+    );
+    if (triggerBucket) return triggerBucket;
+
+    const fullBucket = attempt("bucket_subset", keys.fullBucket, () =>
+      runtimeTrades.filter((trade) =>
+        trade.selectedBucket === params.selectedBucket
+      ),
+    );
+    if (fullBucket) return fullBucket;
+
+    const bucketDirection = attempt("bucket_direction_subset", keys.bucketDirection, () =>
+      runtimeTrades.filter((trade) =>
+        canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === params.selectedMoveSizeBucket
+        && trade.direction === params.direction
+      ),
+    );
+    if (bucketDirection) return bucketDirection;
+
+    const familyDefault = attempt("family_default", keys.familyDefault, () =>
+      runtimeTrades.filter((trade) =>
+        trade.runtimeFamily === params.runtimeFamily
+      ),
+    );
+    if (familyDefault) return familyDefault;
+
+    const calibratedFallback = attempt("broad_calibrated_default", keys.broadDefault, () =>
+      this.collectCalibratedExitSubset({
+        dataset: params.dataset,
+        runtimeFamily: params.runtimeFamily,
+        selectedMoveSizeBucket: params.selectedMoveSizeBucket,
+        direction: params.direction,
+        selectedBucket: params.selectedBucket,
+      }),
+    );
+    if (calibratedFallback) return calibratedFallback;
+
+    const fallbackSubset = this.collectCalibratedExitSubset({
+      dataset: params.dataset,
+      runtimeFamily: params.runtimeFamily,
+      selectedMoveSizeBucket: params.selectedMoveSizeBucket,
+      direction: params.direction,
+      selectedBucket: params.selectedBucket,
+    });
+    const fallbackStats = exitSubsetStats(fallbackSubset);
+    const rejectReason = fallbackStats.candidateCount === 0
+      ? "no_matching_exit_subset"
+      : fallbackStats.winnerCount === 0
+        ? "no_winning_exit_subset"
+        : "exit_subset_too_small";
+    return {
+      subset: [],
+      source: null,
+      widenedFrom: keys.exact,
+      widenedTo: null,
+      availableExitLookupKeysTried: tried,
+      exitSubsetCandidateCount: fallbackStats.candidateCount,
+      exitSubsetWinnerCount: fallbackStats.winnerCount,
+      exitSubsetMfeRange: fallbackStats.mfeRange,
+      exitSubsetMaeAbsRange: fallbackStats.maeAbsRange,
+      exitRuleRejectReason: rejectReason,
+    };
+  }
+
   async generateTriggerCandidatesFromMoveOffsets(dataset: UnifiedSynthesisDataset) {
     const internalContext = asRecord(dataset.internalContext);
     const candles = Array.isArray(internalContext.candles)
@@ -1992,15 +2299,19 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           continue;
         }
         const executableDirection = direction as "buy" | "sell";
+        const executableRuntimeFamily = runtimeFamily as string;
+        const executableMoveSizeBucket = selectedMoveSizeBucket as Crash300MoveSizeBucket;
+        const executableTriggerTransition = triggerTransition as string;
 
-        const sourceSubset = dataset.trades.filter((trade) =>
-          trade.runtimeFamily === runtimeFamily
-          && canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === selectedMoveSizeBucket
-          && trade.triggerTransition === triggerTransition
-          && trade.direction === executableDirection
-          && trade.pnlPct > 0,
-        );
-        const exitSubset = sourceSubset;
+        const exitLookup = this.findExitSubsetForRebuiltCandidate({
+          dataset,
+          runtimeFamily: executableRuntimeFamily,
+          selectedMoveSizeBucket: executableMoveSizeBucket,
+          triggerTransition: executableTriggerTransition,
+          direction: executableDirection,
+          selectedBucket,
+        });
+        const exitSubset = exitLookup.subset;
         if (exitSubset.length === 0) {
           candidates.push(buildNoTradeCandidate({
             move,
@@ -2023,6 +2334,15 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
             entryPrice: entryCandle.close,
             featureSnapshotPresent: true,
             featureSnapshotLiveSafe: true,
+            availableExitLookupKeysTried: exitLookup.availableExitLookupKeysTried,
+            exitSubsetCandidateCount: exitLookup.exitSubsetCandidateCount,
+            exitSubsetWinnerCount: exitLookup.exitSubsetWinnerCount,
+            exitSubsetMfeRange: exitLookup.exitSubsetMfeRange,
+            exitSubsetMaeAbsRange: exitLookup.exitSubsetMaeAbsRange,
+            exitRuleRejectReason: exitLookup.exitRuleRejectReason,
+            exitRuleSource: exitLookup.source,
+            exitRuleWidenedFrom: exitLookup.widenedFrom,
+            exitRuleWidenedTo: exitLookup.widenedTo,
           }));
           continue;
         }
@@ -2056,6 +2376,15 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
             featureSnapshotPresent: true,
             featureSnapshotLiveSafe: true,
             exitRulesPresent: false,
+            availableExitLookupKeysTried: exitLookup.availableExitLookupKeysTried,
+            exitSubsetCandidateCount: exitLookup.exitSubsetCandidateCount,
+            exitSubsetWinnerCount: exitLookup.exitSubsetWinnerCount,
+            exitSubsetMfeRange: exitLookup.exitSubsetMfeRange,
+            exitSubsetMaeAbsRange: exitLookup.exitSubsetMaeAbsRange,
+            exitRuleRejectReason: "impossible_exit_rejected",
+            exitRuleSource: exitLookup.source,
+            exitRuleWidenedFrom: exitLookup.widenedFrom,
+            exitRuleWidenedTo: exitLookup.widenedTo,
           }));
           continue;
         }
@@ -2137,6 +2466,15 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           rejectReason: simulatedTrade ? null : noTradeReason ?? "simulation_error",
           noTradeReason,
           rejectionReasons: candidateRejectionReasons,
+          availableExitLookupKeysTried: exitLookup.availableExitLookupKeysTried,
+          exitSubsetCandidateCount: exitLookup.exitSubsetCandidateCount,
+          exitSubsetWinnerCount: exitLookup.exitSubsetWinnerCount,
+          exitSubsetMfeRange: exitLookup.exitSubsetMfeRange,
+          exitSubsetMaeAbsRange: exitLookup.exitSubsetMaeAbsRange,
+          exitRuleRejectReason: simulatedTrade ? null : noTradeReason ?? "simulation_error",
+          exitRuleSource: exitLookup.source,
+          exitRuleWidenedFrom: exitLookup.widenedFrom,
+          exitRuleWidenedTo: exitLookup.widenedTo,
           percentFields: {
             projectedMovePct: projectedMovePctMeta,
             slPct: slPctMeta,
@@ -2163,6 +2501,16 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
             trailingDistancePct: trailingDistancePctMeta.pctPoints,
             projectedMoveToSlRatio: (slPctMeta.pctPoints ?? 0) > 0 ? (projectedMovePctMeta.pctPoints ?? 0) / (slPctMeta.pctPoints ?? 1) : null,
             projectedMoveToTrailingActivationRatio: (trailingActivationPctMeta.pctPoints ?? 0) > 0 ? (projectedMovePctMeta.pctPoints ?? 0) / (trailingActivationPctMeta.pctPoints ?? 1) : null,
+            availableExitLookupKeysTried: exitLookup.availableExitLookupKeysTried.join(" || "),
+            exitSubsetCandidateCount: exitLookup.exitSubsetCandidateCount,
+            exitSubsetWinnerCount: exitLookup.exitSubsetWinnerCount,
+            exitSubsetMfeMin: exitLookup.exitSubsetMfeRange.min,
+            exitSubsetMfeMax: exitLookup.exitSubsetMfeRange.max,
+            exitSubsetMaeAbsMin: exitLookup.exitSubsetMaeAbsRange.min,
+            exitSubsetMaeAbsMax: exitLookup.exitSubsetMaeAbsRange.max,
+            exitRuleSource: exitLookup.source,
+            exitRuleWidenedFrom: exitLookup.widenedFrom,
+            exitRuleWidenedTo: exitLookup.widenedTo,
           },
         });
       }
