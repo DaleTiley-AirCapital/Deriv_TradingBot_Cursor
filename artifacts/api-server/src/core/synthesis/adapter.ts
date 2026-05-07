@@ -107,11 +107,15 @@ export type SynthesisRebuiltTriggerCandidateRecord = {
   offsetLabel: string;
   offsetBars: number;
   direction: "buy" | "sell";
+  canonicalDirection: "buy" | "sell" | "unknown";
   runtimeFamily: string | null;
+  rawRuntimeFamily: string | null;
   selectedBucket: string | null;
   selectedMoveSizeBucket: string | null;
   triggerTransition: string | null;
+  rawTriggerTransition: string | null;
   triggerDirection: string | null;
+  rawTriggerDirection: string | null;
   qualityTier: string | null;
   featureSnapshotPresent: boolean;
   featureSnapshotLiveSafe: boolean;

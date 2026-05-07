@@ -1,5 +1,5 @@
 import { Crash300SynthesisAdapter, buildUnifiedCrash300Dataset } from "./crash300Adapter.js";
-import type { SymbolSynthesisAdapter, UnifiedSynthesisDataset } from "./adapter.js";
+import type { SymbolSynthesisAdapter, SynthesisRebuiltTriggerCandidateRecord, UnifiedSynthesisDataset } from "./adapter.js";
 import {
   getEliteSynthesisJob,
   updateEliteSynthesisJob,
@@ -80,11 +80,72 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
     acc[value] = (acc[value] ?? 0) + 1;
     return acc;
   }, {});
+  const countByKey = (
+    items: SynthesisRebuiltTriggerCandidateRecord[],
+    keyFn: (candidate: SynthesisRebuiltTriggerCandidateRecord) => string | null | undefined,
+  ) => items.reduce<Record<string, number>>((acc, candidate) => {
+    const key = keyFn(candidate);
+    if (!key) return acc;
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const countReasonsByGroup = (
+    items: SynthesisRebuiltTriggerCandidateRecord[],
+    groupFn: (candidate: SynthesisRebuiltTriggerCandidateRecord) => string | null | undefined,
+  ) => items.reduce<Record<string, number>>((acc, candidate) => {
+    const group = groupFn(candidate);
+    if (!group) return acc;
+    const reasons = candidate.rejectionReasons.length > 0
+      ? candidate.rejectionReasons
+      : [candidate.rejectReason ?? candidate.noTradeReason].filter(Boolean) as string[];
+    for (const reason of reasons) {
+      const key = `${group}::${reason}`;
+      acc[key] = (acc[key] ?? 0) + 1;
+    }
+    return acc;
+  }, {});
   const timestamps = candidates.map((candidate) => candidate.entryTs).filter((value) => Number.isFinite(value));
   const inspectedCalibratedMoves = dataset.moves.length;
   const offsetsAttempted = dataset.moves.length * 11;
   const simulatedTrades = candidates.filter((candidate) => candidate.simulatedTrade);
   const rejectedCandidates = candidates.filter((candidate) => !candidate.simulatedTrade);
+  const exampleRejectedCandidatesByReason = rejectedCandidates.reduce<Record<string, Array<Record<string, unknown>>>>((acc, candidate) => {
+    const reasons = candidate.rejectionReasons.length > 0
+      ? candidate.rejectionReasons
+      : [candidate.rejectReason ?? candidate.noTradeReason].filter(Boolean) as string[];
+    for (const reason of reasons) {
+      if ((acc[reason]?.length ?? 0) >= 5) continue;
+      const rawTriggerTransition = typeof candidate.rawTriggerTransition === "string"
+        ? candidate.rawTriggerTransition
+        : String(candidate.liveSafeFeatures.rawTriggerTransition ?? candidate.triggerTransition ?? "");
+      const rawRuntimeFamily = typeof candidate.rawRuntimeFamily === "string"
+        ? candidate.rawRuntimeFamily
+        : String(candidate.liveSafeFeatures.rawRuntimeFamily ?? candidate.runtimeFamily ?? "");
+      const rawTriggerDirection = typeof candidate.rawTriggerDirection === "string"
+        ? candidate.rawTriggerDirection
+        : String(candidate.liveSafeFeatures.rawTriggerDirection ?? candidate.triggerDirection ?? "");
+      (acc[reason] ??= []).push({
+        candidateId: candidate.candidateId,
+        moveId: candidate.moveId,
+        offsetLabel: candidate.offsetLabel,
+        entryTs: candidate.entryTs,
+        rawTriggerTransition,
+        canonicalTriggerTransition: candidate.triggerTransition,
+        rawRuntimeFamily,
+        canonicalRuntimeFamily: candidate.runtimeFamily,
+        rawTriggerDirection,
+        canonicalDirection: candidate.canonicalDirection,
+        microBreakDirection: candidate.liveSafeFeatures.microBreakDirection ?? null,
+        oneBarReturnPct: candidate.liveSafeFeatures.oneBarReturnPct ?? null,
+        threeBarReturnPct: candidate.liveSafeFeatures.threeBarReturnPct ?? null,
+        fiveBarReturnPct: candidate.liveSafeFeatures.fiveBarReturnPct ?? null,
+        selectedBucket: candidate.selectedBucket,
+        selectedMoveSizeBucket: candidate.selectedMoveSizeBucket,
+        rejectionReasons: candidate.rejectionReasons,
+      });
+    }
+    return acc;
+  }, {});
   return {
     attempted: candidates.length > 0,
     inspectedCalibratedMoves,
@@ -98,9 +159,28 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
     simulatedTradeCount: simulatedTrades.length,
     matchedCalibratedMoveCount: new Set(simulatedTrades.map((candidate) => candidate.matchedCalibratedMoveId).filter((value) => value != null)).size,
     rejectionReasonCounts: countValues(rejectedCandidates.flatMap((candidate) => candidate.rejectionReasons.length > 0 ? candidate.rejectionReasons : [candidate.rejectReason ?? candidate.noTradeReason])),
+    rejectionReasonCountsByOffset: countReasonsByGroup(rejectedCandidates, (candidate) => candidate.offsetLabel),
+    rejectionReasonCountsByRawTransition: countReasonsByGroup(
+      rejectedCandidates,
+      (candidate) => candidate.rawTriggerTransition ?? String(candidate.liveSafeFeatures.rawTriggerTransition ?? ""),
+    ),
     candidateOffsetDistribution: countValues(candidates.map((candidate) => candidate.offsetLabel)),
+    rawTriggerDirectionDistribution: countValues(candidates.map((candidate) => candidate.rawTriggerDirection ?? String(candidate.liveSafeFeatures.rawTriggerDirection ?? ""))),
+    canonicalDirectionDistribution: countValues(candidates.map((candidate) => candidate.canonicalDirection ?? candidate.direction)),
+    rawRuntimeFamilyDistribution: countValues(candidates.map((candidate) => candidate.rawRuntimeFamily ?? String(candidate.liveSafeFeatures.rawRuntimeFamily ?? ""))),
+    canonicalRuntimeFamilyDistribution: countValues(candidates.map((candidate) => candidate.runtimeFamily)),
+    invalidRuntimeFamilyDistribution: countByKey(
+      rejectedCandidates.filter((candidate) => candidate.rejectionReasons.includes("invalid_archetype")),
+      (candidate) => candidate.rawRuntimeFamily ?? String(candidate.liveSafeFeatures.rawRuntimeFamily ?? ""),
+    ),
     candidateArchetypeDistribution: countValues(candidates.map((candidate) => candidate.runtimeFamily)),
     candidateDirectionDistribution: countValues(candidates.map((candidate) => candidate.direction)),
+    rawTriggerTransitionDistribution: countValues(candidates.map((candidate) => candidate.rawTriggerTransition ?? String(candidate.liveSafeFeatures.rawTriggerTransition ?? ""))),
+    canonicalTriggerTransitionDistribution: countValues(candidates.map((candidate) => candidate.triggerTransition)),
+    invalidTriggerTransitionDistribution: countByKey(
+      rejectedCandidates.filter((candidate) => candidate.rejectionReasons.includes("invalid_trigger_transition")),
+      (candidate) => candidate.rawTriggerTransition ?? String(candidate.liveSafeFeatures.rawTriggerTransition ?? ""),
+    ),
     candidateTriggerTransitionDistribution: countValues(candidates.map((candidate) => candidate.triggerTransition)),
     candidateBucketDistribution: countValues(candidates.map((candidate) => candidate.selectedBucket)),
     selectedBucketDistribution: countValues(candidates.map((candidate) => candidate.selectedBucket)),
@@ -111,6 +191,7 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
       uniqueEntryDays: new Set(timestamps.map((ts) => new Date(ts * 1000).toISOString().slice(0, 10))).size,
     },
     noTradeReasonCounts: countValues(candidates.map((candidate) => candidate.noTradeReason)),
+    exampleRejectedCandidatesByReason,
     exampleRejectedCandidates: rejectedCandidates.slice(0, 8).map((candidate) => ({
       candidateId: candidate.candidateId,
       matchedCalibratedMoveId: candidate.matchedCalibratedMoveId,
@@ -121,6 +202,12 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
       entryTs: candidate.entryTs,
       entryCandleFound: candidate.entryCandleFound,
       entryPrice: candidate.entryPrice,
+      rawTriggerTransition: candidate.rawTriggerTransition ?? candidate.liveSafeFeatures.rawTriggerTransition ?? null,
+      canonicalTriggerTransition: candidate.triggerTransition,
+      rawRuntimeFamily: candidate.rawRuntimeFamily ?? candidate.liveSafeFeatures.rawRuntimeFamily ?? null,
+      canonicalRuntimeFamily: candidate.runtimeFamily,
+      rawTriggerDirection: candidate.rawTriggerDirection ?? candidate.liveSafeFeatures.rawTriggerDirection ?? null,
+      canonicalDirection: candidate.canonicalDirection ?? candidate.direction,
       direction: candidate.direction,
       archetype: candidate.runtimeFamily,
       triggerTransition: candidate.triggerTransition,

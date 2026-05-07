@@ -90,6 +90,34 @@ function canonicalTriggerTransitionFromFamily(family: string | null | undefined)
   }
 }
 
+function canonicalTriggerTransitionFromRawTransition(transition: string | null | undefined): string | null {
+  switch (transition) {
+    case "crash_continuation_down":
+      return "crash_continuation_down";
+    case "post_crash_recovery_reclaim_up":
+    case "recovery_continuation_up":
+      return "post_crash_recovery_reclaim_up";
+    case "bear_trap_reversal_up":
+    case "failed_down_impulse_reclaim_up":
+      return "bear_trap_reversal_up";
+    case "failed_recovery_break_down":
+    case "compression_break_down":
+      return "failed_recovery_break_down";
+    default:
+      return null;
+  }
+}
+
+function canonicalFamilyFromBucket(bucket: string | null | undefined): string | null {
+  const value = String(bucket ?? "").trim().toLowerCase();
+  if (!value) return null;
+  if (value.includes("|crash_event|")) return "crash_event_down";
+  if (value.includes("|recovery|")) return "post_crash_recovery_up";
+  if (value.includes("|reversal|")) return "bear_trap_reversal_up";
+  if (value.includes("|failed_recovery|")) return "failed_recovery_short";
+  return null;
+}
+
 type DatasetBuildProgress = {
   stage: EliteSynthesisStage;
   progressPct: number;
@@ -336,10 +364,14 @@ function buildNoTradeCandidate(params: {
   reason: string;
   rejectionReasons?: string[];
   runtimeFamily?: string | null;
+  rawRuntimeFamily?: string | null;
   selectedBucket?: string | null;
   selectedMoveSizeBucket?: string | null;
   triggerTransition?: string | null;
+  rawTriggerTransition?: string | null;
   triggerDirection?: string | null;
+  rawTriggerDirection?: string | null;
+  canonicalDirection?: "buy" | "sell" | "unknown";
   liveSafeFeatures?: Record<string, number | string | boolean | null>;
   projectedMovePct?: number | null;
   percentFields?: Record<string, SynthesisPercentFieldMeta>;
@@ -350,9 +382,7 @@ function buildNoTradeCandidate(params: {
   exitRulesPresent?: boolean;
 }): SynthesisRebuiltTriggerCandidateRecord {
   const inferredDirection = asTradeDirection(params.triggerDirection);
-  const candidateDirection: "buy" | "sell" = inferredDirection === "unknown"
-    ? directionFromMove(params.move)
-    : inferredDirection;
+  const candidateDirection: "buy" | "sell" = inferredDirection === "sell" ? "sell" : "buy";
   return {
     kind: "rebuilt_trigger_candidate",
     candidateId: params.candidateId,
@@ -369,11 +399,15 @@ function buildNoTradeCandidate(params: {
     offsetLabel: buildOffsetLabel(params.offsetBars),
     offsetBars: params.offsetBars,
     direction: candidateDirection,
+    canonicalDirection: params.canonicalDirection ?? inferredDirection,
     runtimeFamily: params.runtimeFamily ?? null,
+    rawRuntimeFamily: params.rawRuntimeFamily ?? params.runtimeFamily ?? null,
     selectedBucket: params.selectedBucket ?? null,
     selectedMoveSizeBucket: params.selectedMoveSizeBucket ?? canonicalMoveSizeBucketFromLabel(params.selectedBucket) ?? canonicalMoveSizeBucketFromLabel(params.move.calibratedMoveSizeBucket),
     triggerTransition: params.triggerTransition ?? null,
+    rawTriggerTransition: params.rawTriggerTransition ?? params.triggerTransition ?? null,
     triggerDirection: params.triggerDirection ?? null,
+    rawTriggerDirection: params.rawTriggerDirection ?? params.triggerDirection ?? null,
     qualityTier: params.move.qualityTier,
     featureSnapshotPresent: params.featureSnapshotPresent ?? false,
     featureSnapshotLiveSafe: params.featureSnapshotLiveSafe ?? false,
@@ -606,12 +640,14 @@ function buildFeatureVectorFromContextTrigger(params: {
     trigger: semanticTrigger,
     moveDirection: liveSafeMoveDirection,
   });
+  const rawRuntimeFamily = family.familyFinal === "unknown" ? family.familyRaw : family.familyFinal;
+  const rawTriggerTransition = semanticTrigger.triggerTransition;
   const familyFinal = family.familyFinal === "unknown"
-    ? (canonicalFamilyFromTriggerTransition(semanticTrigger.triggerTransition) ?? "unknown")
+    ? (canonicalFamilyFromTriggerTransition(rawTriggerTransition) ?? "unknown")
     : family.familyFinal;
-  const triggerTransitionFinal = semanticTrigger.triggerTransition === "none" || !semanticTrigger.triggerTransition
-    ? (canonicalTriggerTransitionFromFamily(familyFinal) ?? semanticTrigger.triggerTransition)
-    : semanticTrigger.triggerTransition;
+  const triggerTransitionFinal = canonicalTriggerTransitionFromRawTransition(rawTriggerTransition)
+    ?? canonicalTriggerTransitionFromFamily(familyFinal)
+    ?? rawTriggerTransition;
   const bucket = deriveCrash300RuntimeBucket({
     family: familyFinal as Parameters<typeof deriveCrash300RuntimeBucket>[0]["family"],
     trigger: semanticTrigger,
@@ -621,15 +657,20 @@ function buildFeatureVectorFromContextTrigger(params: {
     contextSnapshot,
     triggerSnapshot: {
       ...semanticTrigger,
+      rawTriggerTransition,
       triggerTransition: triggerTransitionFinal,
     },
+    rawRuntimeFamily,
     runtimeFamily: familyFinal,
     selectedBucket: bucket,
     liveSafeFeatures: {
+      rawRuntimeFamily,
       runtimeFamily: familyFinal,
       selectedBucket: bucket,
+      rawTriggerTransition,
       triggerTransition: triggerTransitionFinal,
       triggerDirection: semanticTrigger.triggerDirection,
+      rawTriggerDirection: semanticTrigger.triggerDirection,
       triggerStrengthScore: semanticTrigger.triggerStrengthScore,
       oneBarReturnPct: semanticTrigger.oneBarReturnPct,
       threeBarReturnPct: semanticTrigger.threeBarReturnPct,
@@ -1722,17 +1763,56 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           runtimeModel,
           detectedMoves,
         });
-        const runtimeFamily = optionalString(built.runtimeFamily);
+        const rawTriggerTransition = optionalString((built.triggerSnapshot as Record<string, unknown>).rawTriggerTransition)
+          ?? optionalString(built.triggerSnapshot.triggerTransition);
+        const rawTriggerDirection = optionalString((built.liveSafeFeatures as Record<string, unknown>).rawTriggerDirection)
+          ?? optionalString(built.triggerSnapshot.triggerDirection);
+        const rawRuntimeFamily = optionalString((built as Record<string, unknown>).rawRuntimeFamily)
+          ?? optionalString((built.liveSafeFeatures as Record<string, unknown>).rawRuntimeFamily)
+          ?? optionalString(built.runtimeFamily);
         const selectedBucket = optionalString(built.selectedBucket);
         const selectedMoveSizeBucket = canonicalMoveSizeBucketFromLabel(selectedBucket)
           ?? canonicalMoveSizeBucketFromLabel(move.calibratedMoveSizeBucket);
-        const triggerTransition = optionalString(built.triggerSnapshot.triggerTransition)
-          ?? canonicalTriggerTransitionFromFamily(runtimeFamily);
-        const triggerDirection = optionalString(built.triggerSnapshot.triggerDirection);
+        const semanticDirection = asTradeDirection(rawTriggerDirection);
+        const microBreakDirection = String(built.liveSafeFeatures.microBreakDirection ?? "").toLowerCase();
+        const oneBarReturnPct = optionalNumber(built.liveSafeFeatures.oneBarReturnPct);
+        const threeBarReturnPct = optionalNumber(built.liveSafeFeatures.threeBarReturnPct);
+        const fiveBarReturnPct = optionalNumber(built.liveSafeFeatures.fiveBarReturnPct);
+        const shortReturnDirection =
+          (oneBarReturnPct ?? 0) > 0 || (threeBarReturnPct ?? 0) > 0 || (fiveBarReturnPct ?? 0) > 0
+            ? "buy"
+            : (oneBarReturnPct ?? 0) < 0 || (threeBarReturnPct ?? 0) < 0 || (fiveBarReturnPct ?? 0) < 0
+              ? "sell"
+              : "unknown";
+        const microBreakTradeDirection =
+          microBreakDirection === "up"
+            ? "buy"
+            : microBreakDirection === "down"
+              ? "sell"
+              : "unknown";
+        const canonicalDirection = semanticDirection !== "unknown"
+          ? semanticDirection
+          : microBreakTradeDirection !== "unknown"
+            ? microBreakTradeDirection
+            : shortReturnDirection;
+        const canonicalFamilyFromRaw = canonicalFamilyFromTriggerTransition(rawTriggerTransition);
+        const canonicalFamilyFromBucketValue = canonicalFamilyFromBucket(selectedBucket);
+        const inferredRuntimeFamily = optionalString(built.runtimeFamily);
+        const runtimeFamily = inferredRuntimeFamily && inferredRuntimeFamily !== "unknown"
+          ? inferredRuntimeFamily
+          : rawRuntimeFamily && rawRuntimeFamily !== "unknown"
+            ? rawRuntimeFamily
+            : canonicalFamilyFromRaw
+              ?? canonicalFamilyFromBucketValue
+              ?? null;
+        const triggerTransition = canonicalTriggerTransitionFromRawTransition(rawTriggerTransition)
+          ?? canonicalTriggerTransitionFromFamily(runtimeFamily)
+          ?? canonicalTriggerTransitionFromFamily(canonicalFamilyFromBucketValue)
+          ?? null;
         const derivedFamilyDirection = runtimeFamily ? directionFromCrash300Family(runtimeFamily as never) : "unknown";
         const derivedBucketDirection = directionFromCrash300Bucket(selectedBucket);
-        const directionCandidate = asTradeDirection(triggerDirection) !== "unknown"
-          ? asTradeDirection(triggerDirection)
+        const directionCandidate = canonicalDirection !== "unknown"
+          ? canonicalDirection
           : derivedFamilyDirection !== "unknown"
             ? derivedFamilyDirection
             : derivedBucketDirection !== "unknown"
@@ -1754,6 +1834,12 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         const liveSafeFeatures = {
           ...move.liveSafeFeatures,
           ...built.liveSafeFeatures,
+          rawRuntimeFamily,
+          rawTriggerTransition,
+          rawTriggerDirection,
+          canonicalDirection,
+          canonicalRuntimeFamily: runtimeFamily,
+          canonicalTriggerTransition: triggerTransition,
         };
 
         if (!featureSnapshotPresent) rejectionReasons.push("missing_feature_snapshot");
@@ -1775,10 +1861,14 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
             reason: rejectionReasons[0] ?? "rejected_by_live_safe_filter",
             rejectionReasons,
             runtimeFamily,
+            rawRuntimeFamily,
             selectedBucket,
             selectedMoveSizeBucket,
             triggerTransition,
-            triggerDirection,
+            rawTriggerTransition,
+            triggerDirection: direction,
+            rawTriggerDirection,
+            canonicalDirection,
             liveSafeFeatures,
             entryCandleFound: true,
             entryPrice: entryCandle.close,
@@ -1807,10 +1897,14 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
             reason: "missing_exit_rules",
             rejectionReasons: ["missing_exit_rules"],
             runtimeFamily,
+            rawRuntimeFamily,
             selectedBucket,
             selectedMoveSizeBucket,
             triggerTransition,
-            triggerDirection,
+            rawTriggerTransition,
+            triggerDirection: direction,
+            rawTriggerDirection,
+            canonicalDirection,
             liveSafeFeatures,
             entryCandleFound: true,
             entryPrice: entryCandle.close,
@@ -1835,10 +1929,14 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
             reason: "impossible_exit_rejected",
             rejectionReasons: ["impossible_exit_rejected"],
             runtimeFamily,
+            rawRuntimeFamily,
             selectedBucket,
             selectedMoveSizeBucket,
             triggerTransition,
-            triggerDirection,
+            rawTriggerTransition,
+            triggerDirection: direction,
+            rawTriggerDirection,
+            canonicalDirection,
             liveSafeFeatures,
             entryCandleFound: true,
             entryPrice: entryCandle.close,
@@ -1889,11 +1987,15 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           offsetLabel: buildOffsetLabel(offsetBars),
           offsetBars,
           direction: executableDirection,
+          canonicalDirection: executableDirection,
           runtimeFamily,
+          rawRuntimeFamily,
           selectedBucket,
           selectedMoveSizeBucket,
           triggerTransition,
-          triggerDirection,
+          rawTriggerTransition,
+          triggerDirection: direction,
+          rawTriggerDirection,
           qualityTier: move.qualityTier,
           featureSnapshotPresent: true,
           featureSnapshotLiveSafe: true,
@@ -1937,7 +2039,8 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
             selectedBucket,
             selectedMoveSizeBucket,
             triggerTransition,
-            triggerDirection,
+            triggerDirection: direction,
+            rawTriggerDirection,
             qualityTier: move.qualityTier,
             setupMatch,
             confidence,
