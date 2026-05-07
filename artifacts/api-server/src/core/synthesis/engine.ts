@@ -1,5 +1,5 @@
 import { Crash300SynthesisAdapter, buildUnifiedCrash300Dataset } from "./crash300Adapter.js";
-import type { SymbolSynthesisAdapter, SynthesisRebuiltTriggerCandidateRecord, UnifiedSynthesisDataset } from "./adapter.js";
+import type { PolicyEvaluationResult, SymbolSynthesisAdapter, SynthesisRebuiltTriggerCandidateRecord, UnifiedSynthesisDataset } from "./adapter.js";
 import {
   getEliteSynthesisJob,
   updateEliteSynthesisJob,
@@ -424,9 +424,96 @@ type PolicySeed = {
   selectedBuckets: string[];
   selectedMoveSizeBuckets: string[];
   selectedTriggerTransitions: string[];
+  selectedDirections?: Array<"buy" | "sell">;
+  offsetClusters?: string[];
   featureSet: EliteSynthesisFeatureSummary[];
   mutationSummary: string;
+  diagnostics?: Record<string, unknown>;
 };
+
+const CANONICAL_REBUILT_FAMILIES = new Set([
+  "crash_event_down",
+  "post_crash_recovery_up",
+  "bear_trap_reversal_up",
+  "failed_recovery_short",
+]);
+
+const CANONICAL_REBUILT_TRANSITIONS = new Set([
+  "crash_continuation_down",
+  "post_crash_recovery_reclaim_up",
+  "bear_trap_reversal_up",
+  "failed_recovery_break_down",
+]);
+
+function offsetClusterFromLabel(label: string | null | undefined) {
+  switch (label) {
+    case "T-10":
+    case "T-5":
+    case "T-3":
+      return "early";
+    case "T-2":
+    case "T-1":
+    case "T+0":
+    case "T0":
+    case "T+1":
+      return "trigger";
+    case "T+2":
+    case "T+3":
+    case "T+5":
+    case "T+10":
+      return "late";
+    default:
+      return "unknown";
+  }
+}
+
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p)));
+  return sorted[idx] ?? 0;
+}
+
+function summarizeDistribution(values: number[]) {
+  const finite = values.filter((value) => Number.isFinite(value));
+  if (finite.length === 0) return { p25: 0, p50: 0, p75: 0 };
+  return {
+    p25: Number(percentile(finite, 0.25).toFixed(2)),
+    p50: Number(percentile(finite, 0.5).toFixed(2)),
+    p75: Number(percentile(finite, 0.75).toFixed(2)),
+  };
+}
+
+function summarizeRange(values: number[]) {
+  const finite = values.filter((value) => Number.isFinite(value) && value > 0);
+  if (finite.length === 0) return { min: null, max: null };
+  return { min: Math.min(...finite), max: Math.max(...finite) };
+}
+
+function summarizeExitRulesFromRebuiltCandidates(candidates: SynthesisRebuiltTriggerCandidateRecord[]) {
+  const tp = summarizeDistribution(candidates.map((candidate) => candidate.projectedMovePctPoints ?? 0).filter((value) => value > 0));
+  const sl = summarizeDistribution(candidates.map((candidate) => candidate.slPctPoints ?? 0).filter((value) => value > 0));
+  const trailingActivation = summarizeDistribution(candidates.map((candidate) => candidate.trailingActivationPctPoints ?? 0).filter((value) => value > 0));
+  const trailingDistance = summarizeDistribution(candidates.map((candidate) => candidate.trailingDistancePctPoints ?? 0).filter((value) => value > 0));
+  const exitRuleSourceDistribution = candidates.reduce<Record<string, number>>((acc, candidate) => {
+    const key = candidate.exitRuleSource ?? "unknown";
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const widenedDistribution = candidates.reduce<Record<string, number>>((acc, candidate) => {
+    const key = `${candidate.exitRuleWidenedFrom ?? "none"}=>${candidate.exitRuleWidenedTo ?? "none"}`;
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  return {
+    tp,
+    sl,
+    trailingActivation,
+    trailingDistance,
+    exitRuleSourceDistribution,
+    widenedDistribution,
+  };
+}
 
 function emptyDataAvailability(): EliteSynthesisDataAvailability {
   return { counts: {}, metrics: {} };
@@ -455,17 +542,62 @@ function buildPolicyArtifact(params: {
   selectedBuckets: string[];
   selectedMoveSizeBuckets: string[];
   selectedTriggerTransitions: string[];
+  selectedDirections?: Array<"buy" | "sell">;
+  offsetClusters?: string[];
   mutationSummary: string;
   sourcePool: "runtime_trades" | "rebuilt_trigger_candidates";
+  diagnostics?: Record<string, unknown>;
 }) {
   const exitSubset = (params.sourcePool === "rebuilt_trigger_candidates"
-    ? params.dataset.rebuiltTriggerCandidates
-    : params.dataset.trades).filter((trade) =>
-    params.selectedRuntimeArchetypes.includes(trade.runtimeFamily ?? "unknown")
-    && params.selectedBuckets.includes(trade.selectedBucket ?? "unknown")
-    && params.selectedTriggerTransitions.includes(trade.triggerTransition ?? "none"),
-  );
-  const exitRules = params.adapter.deriveExitPolicyFromSubset(params.dataset, exitSubset as never);
+    ? params.dataset.rebuiltTriggerCandidates.filter((candidate) =>
+        candidate.eligible
+        && candidate.simulatedTrade
+        && !candidate.noTradeReason
+        && params.selectedRuntimeArchetypes.includes(candidate.runtimeFamily ?? "unknown")
+        && params.selectedTriggerTransitions.includes(candidate.triggerTransition ?? "none")
+        && params.selectedMoveSizeBuckets.includes(candidate.selectedMoveSizeBucket ?? "unknown")
+        && ((params.selectedDirections?.length ?? 0) === 0 || params.selectedDirections?.includes(candidate.direction as "buy" | "sell"))
+        && ((params.offsetClusters?.length ?? 0) === 0 || params.offsetClusters?.includes(offsetClusterFromLabel(candidate.offsetLabel)))
+      )
+    : params.dataset.trades.filter((trade) =>
+        params.selectedRuntimeArchetypes.includes(trade.runtimeFamily ?? "unknown")
+        && params.selectedBuckets.includes(trade.selectedBucket ?? "unknown")
+        && params.selectedTriggerTransitions.includes(trade.triggerTransition ?? "none"),
+      ));
+  const exitRules = params.sourcePool === "rebuilt_trigger_candidates"
+    ? (() => {
+        const rebuiltSubset = exitSubset as SynthesisRebuiltTriggerCandidateRecord[];
+        const exitSummary = summarizeExitRulesFromRebuiltCandidates(rebuiltSubset);
+        return {
+          tpTargetPct: exitSummary.tp.p50,
+          slRiskPct: exitSummary.sl.p50,
+          trailingActivationPct: exitSummary.trailingActivation.p50,
+          trailingDistancePct: exitSummary.trailingDistance.p50,
+          minHoldBars: Math.max(1, Math.round(median(rebuiltSubset.map((candidate) => Math.max(1, candidate.minHoldBars ?? 1))))),
+          unit: "percentage_points" as const,
+          exitUnitValidation: {
+            selectedSubsetMfeRange: summarizeRange(rebuiltSubset.map((candidate) => Math.abs(candidate.mfePctPoints ?? 0))),
+            selectedSubsetMaeAbsRange: summarizeRange(rebuiltSubset.map((candidate) => Math.abs(candidate.maePctPoints ?? 0))),
+            selectedSubsetMfeRangePctPoints: summarizeRange(rebuiltSubset.map((candidate) => Math.abs(candidate.mfePctPoints ?? 0))),
+            selectedSubsetMaeAbsRangePctPoints: summarizeRange(rebuiltSubset.map((candidate) => Math.abs(candidate.maePctPoints ?? 0))),
+            derivedTpPctPoints: exitSummary.tp.p50,
+            derivedSlPctPoints: exitSummary.sl.p50,
+            derivedTrailingActivationPctPoints: exitSummary.trailingActivation.p50,
+            derivedTrailingDistancePctPoints: exitSummary.trailingDistance.p50,
+            sourceValueExamples: {
+              tpTargetPct: rebuiltSubset.map((candidate) => candidate.projectedMovePctPoints ?? 0).slice(0, 5),
+              slRiskPct: rebuiltSubset.map((candidate) => candidate.slPctPoints ?? 0).slice(0, 5),
+            },
+            canonicalValueExamples: {
+              tpTargetPct: rebuiltSubset.map((candidate) => candidate.projectedMovePctPoints ?? 0).slice(0, 5),
+              slRiskPct: rebuiltSubset.map((candidate) => candidate.slPctPoints ?? 0).slice(0, 5),
+            },
+            impossibleExitRejected: rebuiltSubset.length === 0,
+            warnings: rebuiltSubset.length === 0 ? ["Rejected rebuilt policy because no simulated rebuilt trades were available for exit summary."] : [],
+          },
+        };
+      })()
+    : params.adapter.deriveExitPolicyFromSubset(params.dataset, exitSubset as never);
   const selectedMoveSizeBuckets = params.selectedMoveSizeBuckets.length > 0
     ? uniqueStrings(params.selectedMoveSizeBuckets)
     : resolveSelectedMoveSizeBuckets({
@@ -494,6 +626,9 @@ function buildPolicyArtifact(params: {
     entryThresholds: {
       sourcePool: params.sourcePool,
       mutationSummary: params.mutationSummary,
+      selectedDirections: params.selectedDirections ?? [],
+      offsetClusters: params.offsetClusters ?? [],
+      rebuiltSeedDiagnostics: params.diagnostics ?? null,
       minConfidence: subsetConfidence.length > 0 ? Number(median(subsetConfidence).toFixed(4)) : 0.45,
       minSetupMatch: subsetSetupMatch.length > 0 ? Number(median(subsetSetupMatch).toFixed(4)) : 0.45,
     },
@@ -503,6 +638,7 @@ function buildPolicyArtifact(params: {
         earliestSafeOffset: "T-1",
         rejectEarlierThan: "T-5",
         rejectLaterThan: "T+3",
+        offsetClusters: params.offsetClusters ?? [],
       },
     ],
     noTradeRules: [
@@ -548,6 +684,7 @@ function buildPolicyArtifact(params: {
     implementationNotes: [
       "Generated by integrated elite synthesis foundation pass.",
       "Uses only live-safe feature families for final policy inputs.",
+      ...(params.sourcePool === "rebuilt_trigger_candidates" ? ["Rebuilt policy exits are summarised from simulated rebuilt candidate outcomes."] : []),
       ...(exitRules.exitUnitValidation.impossibleExitRejected ? ["Policy carries impossible exit rejection diagnostics and must not be promoted."] : []),
     ],
   };
@@ -603,35 +740,115 @@ function generateInitialPolicies(dataset: UnifiedSynthesisDataset, features: Eli
 }
 
 function generatePoliciesFromTriggerRebuild(dataset: UnifiedSynthesisDataset, rebuiltCandidates: UnifiedSynthesisDataset["rebuiltTriggerCandidates"], features: EliteSynthesisFeatureSummary[]): PolicySeed[] {
-  const groups = new Map<string, number>();
+  const groups = new Map<string, {
+    family: string;
+    triggerTransition: string;
+    selectedMoveSizeBucket: string;
+    direction: "buy" | "sell";
+    offsetCluster: string;
+    selectedBuckets: Map<string, number>;
+    offsetLabels: Map<string, number>;
+    simulatedCandidateCount: number;
+    simulatedTradeCount: number;
+    wins: number;
+    losses: number;
+    slHits: number;
+    exitRuleSourceDistribution: Record<string, number>;
+  }>();
+  const seedRejectionReasons: Record<string, number> = {};
   for (const candidate of rebuiltCandidates) {
     if (!candidate.eligible) continue;
     const family = String(candidate.runtimeFamily ?? "unknown");
-    const bucket = String(candidate.selectedBucket ?? "unknown");
-    const trigger = String(candidate.triggerTransition ?? "none");
-    const key = `${family}|${bucket}|${trigger}`;
-    groups.set(key, (groups.get(key) ?? 0) + 1);
+    const triggerTransition = String(candidate.triggerTransition ?? "none");
+    const selectedMoveSizeBucket = String(candidate.selectedMoveSizeBucket ?? "unknown");
+    const direction = candidate.direction === "buy" || candidate.direction === "sell" ? candidate.direction : "buy";
+    const offsetCluster = offsetClusterFromLabel(candidate.offsetLabel);
+    if (!CANONICAL_REBUILT_FAMILIES.has(family)) {
+      seedRejectionReasons.invalid_runtime_family = (seedRejectionReasons.invalid_runtime_family ?? 0) + 1;
+      continue;
+    }
+    if (!CANONICAL_REBUILT_TRANSITIONS.has(triggerTransition)) {
+      seedRejectionReasons.invalid_trigger_transition = (seedRejectionReasons.invalid_trigger_transition ?? 0) + 1;
+      continue;
+    }
+    if (!selectedMoveSizeBucket || selectedMoveSizeBucket === "unknown") {
+      seedRejectionReasons.missing_selected_move_size_bucket = (seedRejectionReasons.missing_selected_move_size_bucket ?? 0) + 1;
+      continue;
+    }
+    if (offsetCluster === "unknown") {
+      seedRejectionReasons.unknown_offset_cluster = (seedRejectionReasons.unknown_offset_cluster ?? 0) + 1;
+      continue;
+    }
+    const key = `${family}|${triggerTransition}|${selectedMoveSizeBucket}|${direction}|${offsetCluster}`;
+    const group = groups.get(key) ?? {
+      family,
+      triggerTransition,
+      selectedMoveSizeBucket,
+      direction,
+      offsetCluster,
+      selectedBuckets: new Map<string, number>(),
+      offsetLabels: new Map<string, number>(),
+      simulatedCandidateCount: 0,
+      simulatedTradeCount: 0,
+      wins: 0,
+      losses: 0,
+      slHits: 0,
+      exitRuleSourceDistribution: {},
+    };
+    group.simulatedCandidateCount += 1;
+    group.simulatedTradeCount += candidate.simulatedTrade ? 1 : 0;
+    if ((candidate.pnlPctPoints ?? candidate.pnlPct ?? 0) > 0) group.wins += 1; else group.losses += 1;
+    if (candidate.exitReason === "sl_hit") group.slHits += 1;
+    if (candidate.selectedBucket) group.selectedBuckets.set(candidate.selectedBucket, (group.selectedBuckets.get(candidate.selectedBucket) ?? 0) + 1);
+    group.offsetLabels.set(candidate.offsetLabel, (group.offsetLabels.get(candidate.offsetLabel) ?? 0) + 1);
+    const exitRuleSource = candidate.exitRuleSource ?? "unknown";
+    group.exitRuleSourceDistribution[exitRuleSource] = (group.exitRuleSourceDistribution[exitRuleSource] ?? 0) + 1;
+    groups.set(key, group);
   }
-  return [...groups.entries()]
-    .sort((a, b) => b[1] - a[1])
+  const seeds = [...groups.values()]
+    .sort((a, b) => b.simulatedTradeCount - a.simulatedTradeCount)
     .slice(0, 20)
-    .map(([key], index) => {
-      const [family, bucket, trigger] = key.split("|");
+    .map((group, index) => {
+      const topBucket = [...group.selectedBuckets.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? `${group.direction === "buy" ? "up" : "down"}|${group.family}|${group.selectedMoveSizeBucket}`;
+      const offsetLabelsIncluded = [...group.offsetLabels.entries()].sort((a, b) => b[1] - a[1]).map(([label]) => label);
       return {
         passNumber: 2,
         sourcePool: "rebuilt_trigger_candidates" as const,
-        selectedRuntimeArchetypes: [family ?? "unknown"],
-        selectedBuckets: [bucket ?? "unknown"],
-        selectedMoveSizeBuckets: resolveSelectedMoveSizeBuckets({
-          dataset,
-          selectedBuckets: [bucket ?? "unknown"],
-          selectedRuntimeArchetypes: [family ?? "unknown"],
-        }).slice(0, 5),
-        selectedTriggerTransitions: [trigger ?? "none"],
+        selectedRuntimeArchetypes: [group.family],
+        selectedBuckets: [topBucket],
+        selectedMoveSizeBuckets: [group.selectedMoveSizeBucket],
+        selectedTriggerTransitions: [group.triggerTransition],
+        selectedDirections: [group.direction],
+        offsetClusters: [group.offsetCluster],
         featureSet: features.filter((feature) => feature.kept).slice(0, Math.max(4, 8 + index % 4)),
         mutationSummary: index === 0 ? "rebuilt_from_calibrated_move_offsets" : `rebuilt_trigger_cluster_${index + 1}`,
+        diagnostics: {
+          groupKey: `${group.family}|${group.triggerTransition}|${group.selectedMoveSizeBucket}|${group.direction}|${group.offsetCluster}`,
+          runtimeFamily: group.family,
+          triggerTransition: group.triggerTransition,
+          selectedMoveSizeBucket: group.selectedMoveSizeBucket,
+          direction: group.direction,
+          selectedBucket: topBucket,
+          offsetLabelsIncluded,
+          simulatedCandidateCount: group.simulatedCandidateCount,
+          simulatedTradeCount: group.simulatedTradeCount,
+          wins: group.wins,
+          losses: group.losses,
+          slHits: group.slHits,
+          exitRuleSourceDistribution: group.exitRuleSourceDistribution,
+        },
       };
     });
+  (dataset.summary.rebuiltPolicySeedDiagnostics as Record<string, unknown> | undefined) ??= {};
+  Object.assign(dataset.summary.rebuiltPolicySeedDiagnostics as Record<string, unknown>, {
+    rebuiltPolicySeedCount: seeds.length,
+    rebuiltPolicySeedGroups: [...groups.keys()],
+    rebuiltPolicySeedGroupKeys: [...groups.keys()],
+    rebuiltPolicySeedRejectedCount: Object.values(seedRejectionReasons).reduce((sum, value) => sum + value, 0),
+    rebuiltPolicySeedRejectionReasons: seedRejectionReasons,
+    exampleRebuiltPolicySeeds: seeds.slice(0, 10).map((seed) => seed.diagnostics ?? {}),
+  });
+  return seeds;
 }
 
 function targetAchieved(policy: EliteSynthesisPolicySummary | null) {
@@ -809,9 +1026,10 @@ export async function runEliteSynthesisJob(params: {
   let passLog: EliteSynthesisPassLog[] = [];
   let bestPolicySummary: EliteSynthesisPolicySummary | null = null;
   let bestPolicyArtifact: EliteSynthesisPolicyArtifact | null = null;
-  const topPolicies: EliteSynthesisPolicySummary[] = [];
+  const topPolicies: PolicyEvaluationResult[] = [];
   let rebuiltTriggerAttempted = false;
   let rebuiltTriggerDiagnostics = buildRebuiltTriggerDiagnostics(dataset);
+  let rejectedPolicySummaries: Array<Record<string, unknown>> = [];
   let bottleneck: EliteSynthesisBottleneck = "current_runtime_pool_insufficient";
   let noImprovementPasses = 0;
   let evaluatedPolicyCount = 0;
@@ -893,6 +1111,7 @@ export async function runEliteSynthesisJob(params: {
       dataset.rebuiltTriggerCandidates = rebuilt;
       rebuiltTriggerDiagnostics = buildRebuiltTriggerDiagnostics(dataset);
       policySeeds = generatePoliciesFromTriggerRebuild(dataset, rebuilt, features);
+      Object.assign(rebuiltTriggerDiagnostics, dataset.summary.rebuiltPolicySeedDiagnostics ?? {});
       searchSpaceRemaining = policySeeds.length;
       const rebuiltTopReason = Object.entries(rebuiltTriggerDiagnostics.rejectionReasonCounts ?? {}).sort((a, b) => b[1] - a[1])[0];
       passLog.push({
@@ -978,8 +1197,11 @@ export async function runEliteSynthesisJob(params: {
         selectedBuckets: seed.selectedBuckets,
         selectedMoveSizeBuckets: seed.selectedMoveSizeBuckets,
         selectedTriggerTransitions: seed.selectedTriggerTransitions,
+        selectedDirections: seed.selectedDirections,
+        offsetClusters: seed.offsetClusters,
         mutationSummary: seed.mutationSummary,
         sourcePool: seed.sourcePool,
+        diagnostics: seed.diagnostics,
       });
       const evaluation = await adapter.evaluatePolicyOnHistoricalData(dataset, artifact);
       artifact.objectiveScore = evaluation.objectiveScore;
@@ -996,7 +1218,34 @@ export async function runEliteSynthesisJob(params: {
       };
       artifact.monthlyBreakdown = evaluation.monthlyBreakdown;
       evaluatedPolicyCount += 1;
-      if (!passBest || evaluation.objectiveScore > passBest.objectiveScore) {
+      if (
+        evaluation.trades === 0
+        || evaluation.reasons.includes("impossible_exit_rejected")
+        || evaluation.reasons.includes("no_simulated_rebuilt_trades")
+        || (evaluation.sourcePool === "rebuilt_trigger_candidates" && (
+          artifact.selectedTriggerTransitions.some((value) => ["trending", "recovery", "failed_recovery", "up", "down"].includes(value))
+          || artifact.selectedMoveSizeBuckets.length === 0
+          || artifact.selectedRuntimeArchetypes.some((value) => !CANONICAL_REBUILT_FAMILIES.has(value))
+        ))
+      ) {
+        rejectedPolicySummaries.push({
+          policyId: evaluation.policyId,
+          sourcePool: evaluation.sourcePool,
+          trades: evaluation.trades,
+          reasons: evaluation.reasons,
+          selectedRuntimeArchetypes: artifact.selectedRuntimeArchetypes,
+          selectedTriggerTransitions: artifact.selectedTriggerTransitions,
+          selectedMoveSizeBuckets: artifact.selectedMoveSizeBuckets,
+          selectedBuckets: artifact.selectedBuckets,
+          diagnostics: seed.diagnostics ?? null,
+        });
+      }
+      const evaluationValidForBest = !(
+        evaluation.trades === 0
+        || evaluation.reasons.includes("impossible_exit_rejected")
+        || evaluation.reasons.includes("no_simulated_rebuilt_trades")
+      );
+      if (evaluationValidForBest && (!passBest || evaluation.objectiveScore > passBest.objectiveScore)) {
         passBest = evaluation;
         passBestArtifact = artifact;
       }
@@ -1046,6 +1295,7 @@ export async function runEliteSynthesisJob(params: {
         `archetypes:${(policySeeds[0]?.selectedRuntimeArchetypes ?? []).join(",")}`,
         `buckets:${(policySeeds[0]?.selectedBuckets ?? []).join(",")}`,
         `triggers:${(policySeeds[0]?.selectedTriggerTransitions ?? []).join(",")}`,
+        `offset_clusters:${(policySeeds[0]?.offsetClusters ?? []).join(",")}`,
       ],
       reasonBestImproved: improved ? "objective_score_improved" : "no_improvement_this_pass",
       bestSoFar: improved,
@@ -1087,6 +1337,7 @@ export async function runEliteSynthesisJob(params: {
       dataset.rebuiltTriggerCandidates = rebuilt;
       rebuiltTriggerDiagnostics = buildRebuiltTriggerDiagnostics(dataset);
       policySeeds = generatePoliciesFromTriggerRebuild(dataset, rebuilt, features);
+      Object.assign(rebuiltTriggerDiagnostics, dataset.summary.rebuiltPolicySeedDiagnostics ?? {});
       searchSpaceRemaining = policySeeds.length;
       const rebuiltTopReason = Object.entries(rebuiltTriggerDiagnostics.rejectionReasonCounts ?? {}).sort((a, b) => b[1] - a[1])[0];
       passLog.push({
@@ -1126,8 +1377,8 @@ export async function runEliteSynthesisJob(params: {
       policySeeds[0]?.sourcePool === "rebuilt_trigger_candidates"
       && (passBest?.trades ?? 0) === 0
     ) {
-      bottleneck = "rebuilt_trigger_execution_failed";
-      stopReason = "rebuilt_zero_trade_diagnostics";
+      bottleneck = rebuiltTriggerDiagnostics.simulatedTradeCount ? "rebuilt_policy_evaluation_failed" : "rebuilt_trigger_execution_failed";
+      stopReason = rebuiltTriggerDiagnostics.simulatedTradeCount ? "rebuilt_policy_evaluation_failed" : "rebuilt_zero_trade_diagnostics";
       const lastLog = passLog[passLog.length - 1];
       if (lastLog) {
         const rebuiltTopReason = Object.entries(rebuiltTriggerDiagnostics.rejectionReasonCounts ?? {}).sort((a, b) => b[1] - a[1])[0];
@@ -1136,6 +1387,7 @@ export async function runEliteSynthesisJob(params: {
           ...lastLog.changedParameters,
           `rebuilt_eligible:${rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesEligible}`,
           `rebuilt_simulated:${rebuiltTriggerDiagnostics.simulatedTradeCount}`,
+          `rejected_policies:${rejectedPolicySummaries.length}`,
           ...(rebuiltTopReason ? [`top_reject:${rebuiltTopReason[0]}:${rebuiltTopReason[1]}`] : []),
         ];
       }
@@ -1176,8 +1428,35 @@ export async function runEliteSynthesisJob(params: {
     heartbeatAt: nowIso(),
   });
 
+  Object.assign(rebuiltTriggerDiagnostics, dataset.summary.rebuiltPolicySeedDiagnostics ?? {}, {
+    rebuiltPolicyEvaluationTradeCounts: topPolicies
+      .filter((policy) => policy.sourcePool === "rebuilt_trigger_candidates")
+      .map((policy) => ({
+        policyId: policy.policyId,
+        trades: policy.trades,
+        wins: policy.wins,
+        losses: policy.losses,
+        sourcePool: policy.sourcePool,
+        selectedRuntimeArchetypes: policy.selectedRuntimeArchetypes,
+        selectedTriggerTransitions: policy.selectedTriggerTransitions,
+        selectedMoveSizeBuckets: policy.selectedMoveSizeBuckets,
+      })),
+    rebuiltPoliciesWithTrades: topPolicies.filter((policy) => policy.sourcePool === "rebuilt_trigger_candidates" && policy.trades > 0).length,
+    rebuiltRejectedPolicyCount: rejectedPolicySummaries.length,
+  });
+
   const topPolicySummaries = topPolicies
     .slice()
+    .filter((policy) =>
+      policy.trades > 0
+      && !policy.reasons.includes("impossible_exit_rejected")
+      && !policy.reasons.includes("no_simulated_rebuilt_trades")
+      && !(policy.sourcePool === "rebuilt_trigger_candidates" && (
+        policy.selectedTriggerTransitions.some((value) => ["trending", "recovery", "failed_recovery", "up", "down"].includes(value))
+        || policy.selectedMoveSizeBuckets.length === 0
+        || policy.selectedRuntimeArchetypes.some((value) => !CANONICAL_REBUILT_FAMILIES.has(value))
+      ))
+    )
     .sort((a, b) => b.objectiveScore - a.objectiveScore)
     .slice(0, 20);
 
@@ -1187,6 +1466,8 @@ export async function runEliteSynthesisJob(params: {
     status: "completed",
     resultState: targetAchieved(bestPolicySummary)
       ? "completed_target_achieved"
+      : bottleneck === "rebuilt_policy_evaluation_failed"
+        ? "rebuilt_policy_evaluation_failed"
       : bottleneck === "rebuilt_trigger_execution_failed"
         ? "completed_foundation_incomplete"
       : rebuiltTriggerAttempted || passLog.length >= maxPasses
@@ -1195,6 +1476,7 @@ export async function runEliteSynthesisJob(params: {
     targetAchieved: targetAchieved(bestPolicySummary),
     bestPolicySummary,
     topPolicySummaries,
+    rejectedPolicySummaries,
     bestPolicyArtifact: bestPolicyArtifact
       ? {
           ...bestPolicyArtifact,
@@ -1228,7 +1510,11 @@ export async function runEliteSynthesisJob(params: {
       eligibleCount: dataset.rebuiltTriggerCandidates.filter((candidate) => candidate.eligible).length,
       rejectedCount: dataset.rebuiltTriggerCandidates.filter((candidate) => !candidate.eligible).length,
       reason: rebuiltTriggerAttempted
-        ? (bottleneck === "rebuilt_trigger_execution_failed" ? "rebuilt_trigger_execution_failed" : "current_runtime_pool_insufficient")
+        ? (bottleneck === "rebuilt_trigger_execution_failed"
+          ? "rebuilt_trigger_execution_failed"
+          : bottleneck === "rebuilt_policy_evaluation_failed"
+            ? "rebuilt_policy_evaluation_failed"
+            : "current_runtime_pool_insufficient")
         : "not_required_in_current_search",
       topRejectReasons: Object.entries(dataset.rebuiltTriggerCandidates.reduce<Record<string, number>>((acc, candidate) => {
         if (!candidate.rejectReason) return acc;
@@ -1248,12 +1534,17 @@ export async function runEliteSynthesisJob(params: {
             ...(bottleneck === "rebuilt_trigger_execution_failed"
               ? ["Rebuilt trigger candidates were generated but did not convert into executable simulated trades."]
               : []),
+            ...(bottleneck === "rebuilt_policy_evaluation_failed"
+              ? ["Rebuilt trigger candidates simulated successfully, but rebuilt policy grouping/evaluation produced zero rebuilt policy trades."]
+              : []),
             rebuiltTriggerAttempted
               ? "Rebuilt trigger pool was evaluated after the current runtime pool proved insufficient."
               : "Configured smoke profile did not find a target-grade policy in the current runtime pool.",
           ],
       futureImplementationRecommendation: targetAchieved(bestPolicySummary)
         ? "Run deeper synthesis on a longer window before considering any paper promotion."
+        : bottleneck === "rebuilt_policy_evaluation_failed"
+          ? "Repair rebuilt policy grouping and post-group daily selection so simulated rebuilt candidates become valid rebuilt policy trades."
         : bottleneck === "rebuilt_trigger_execution_failed"
           ? "Repair rebuilt trigger candidate execution before using rebuilt passes to judge strategy quality."
         : "Use a deeper profile or add more historical windows before promoting a runtime candidate.",

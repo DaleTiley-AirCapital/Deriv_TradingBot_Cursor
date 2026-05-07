@@ -9,6 +9,7 @@ export type EliteSynthesisResultState =
   | "completed_target_achieved"
   | "completed_exhausted_no_target"
   | "completed_foundation_incomplete"
+  | "rebuilt_policy_evaluation_failed"
   | "failed_validation"
   | "failed_error"
   | "cancelled";
@@ -38,6 +39,7 @@ export type EliteSynthesisBottleneck =
   | "current_runtime_pool_insufficient"
   | "rebuilt_trigger_pool_still_insufficient"
   | "rebuilt_trigger_execution_failed"
+  | "rebuilt_policy_evaluation_failed"
   | "live_safe_features_do_not_separate_winners_from_sl_noise"
   | "exit_policy_cannot_rescue_entries"
   | "calibrated_bucket_archetype_mapping_too_noisy"
@@ -150,6 +152,7 @@ export type EliteSynthesisEntryTimingRule = {
   earliestSafeOffset: string | null;
   rejectEarlierThan?: string | null;
   rejectLaterThan?: string | null;
+  offsetClusters?: string[];
 };
 
 export type EliteSynthesisExitRules = {
@@ -279,6 +282,7 @@ export type EliteSynthesisResult = {
   targetAchieved: boolean;
   bestPolicySummary: EliteSynthesisPolicySummary | null;
   topPolicySummaries: EliteSynthesisPolicySummary[];
+  rejectedPolicySummaries?: Array<Record<string, unknown>>;
   bestPolicyArtifact: EliteSynthesisPolicyArtifact | null;
   passLogSummary: EliteSynthesisPassLog[];
   fullPassLog: EliteSynthesisPassLog[];

@@ -2522,11 +2522,8 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     const sourcePool = String(policy.entryThresholds.sourcePool ?? "runtime_trades") === "rebuilt_trigger_candidates"
       ? "rebuilt_trigger_candidates"
       : "runtime_trades";
-    const pool = sourcePool === "rebuilt_trigger_candidates"
-      ? dataset.rebuiltTriggerCandidates.filter((candidate) => candidate.eligible && candidate.simulatedTrade && !candidate.noTradeReason)
-      : dataset.trades;
     const exitValidation = asRecord(policy.tpRules.exitUnitValidation);
-    if (Boolean(exitValidation.impossibleExitRejected)) {
+    if (sourcePool !== "rebuilt_trigger_candidates" && Boolean(exitValidation.impossibleExitRejected)) {
       return {
         policyId: policy.policyId,
         passNumber: policy.passNumberSelected,
@@ -2563,12 +2560,60 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         targetAchieved: false,
       };
     }
-    const eligible = pool.filter((trade) => {
-      const familyOk = policy.selectedRuntimeArchetypes.length === 0 || policy.selectedRuntimeArchetypes.includes(trade.runtimeFamily ?? "unknown");
-      const bucketOk = policy.selectedBuckets.length === 0 || policy.selectedBuckets.includes(trade.selectedBucket ?? "unknown");
-      const triggerOk = policy.selectedTriggerTransitions.length === 0 || policy.selectedTriggerTransitions.includes(trade.triggerTransition ?? "none");
-      return familyOk && bucketOk && triggerOk;
-    });
+    const selectedDirections = Array.isArray(policy.entryThresholds.selectedDirections)
+      ? (policy.entryThresholds.selectedDirections as Array<"buy" | "sell">)
+      : [];
+    const offsetClusters = Array.isArray(policy.entryThresholds.offsetClusters)
+      ? (policy.entryThresholds.offsetClusters as string[])
+      : [];
+    const eligible = sourcePool === "rebuilt_trigger_candidates"
+      ? (() => {
+          const rebuiltPool = dataset.rebuiltTriggerCandidates.filter((candidate) => candidate.eligible && candidate.simulatedTrade && !candidate.noTradeReason);
+          const grouped = rebuiltPool.filter((candidate) => {
+            const familyOk = policy.selectedRuntimeArchetypes.length === 0 || policy.selectedRuntimeArchetypes.includes(candidate.runtimeFamily ?? "unknown");
+            const triggerOk = policy.selectedTriggerTransitions.length === 0 || policy.selectedTriggerTransitions.includes(candidate.triggerTransition ?? "none");
+            const moveSizeOk = policy.selectedMoveSizeBuckets.length === 0 || policy.selectedMoveSizeBuckets.includes(candidate.selectedMoveSizeBucket ?? "unknown");
+            const directionOk = selectedDirections.length === 0 || selectedDirections.includes(candidate.direction as "buy" | "sell");
+            const clusterOk = offsetClusters.length === 0 || offsetClusters.includes(
+              candidate.offsetLabel === "T-10" || candidate.offsetLabel === "T-5" || candidate.offsetLabel === "T-3"
+                ? "early"
+                : candidate.offsetLabel === "T-2" || candidate.offsetLabel === "T-1" || candidate.offsetLabel === "T0" || candidate.offsetLabel === "T+0" || candidate.offsetLabel === "T+1"
+                  ? "trigger"
+                  : candidate.offsetLabel === "T+2" || candidate.offsetLabel === "T+3" || candidate.offsetLabel === "T+5" || candidate.offsetLabel === "T+10"
+                    ? "late"
+                    : "unknown",
+            );
+            return familyOk && triggerOk && moveSizeOk && directionOk && clusterOk;
+          });
+          const candidatesBeforeDailyLimit = grouped.length;
+          const perDay = new Map<string, SynthesisRebuiltTriggerCandidateRecord[]>();
+          for (const candidate of grouped) {
+            const dayKey = new Date(candidate.entryTs * 1000).toISOString().slice(0, 10);
+            const bucket = perDay.get(dayKey) ?? [];
+            bucket.push(candidate);
+            perDay.set(dayKey, bucket);
+          }
+          const selected: SynthesisRebuiltTriggerCandidateRecord[] = [];
+          for (const bucket of perDay.values()) {
+            bucket.sort((a, b) => {
+              const aScore = (a.confidence ?? 0) * 0.45 + (a.setupMatch ?? 0) * 0.35 + (a.triggerStrengthScore ?? 0) * 0.2;
+              const bScore = (b.confidence ?? 0) * 0.45 + (b.setupMatch ?? 0) * 0.35 + (b.triggerStrengthScore ?? 0) * 0.2;
+              return bScore - aScore;
+            });
+            const chosen = bucket[0];
+            if (chosen) selected.push(chosen);
+          }
+          (policy.entryThresholds as Record<string, unknown>).candidatesBeforeDailyLimit = candidatesBeforeDailyLimit;
+          (policy.entryThresholds as Record<string, unknown>).candidatesAfterDailyLimit = selected.length;
+          (policy.entryThresholds as Record<string, unknown>).rejectedByDailyLimit = Math.max(0, candidatesBeforeDailyLimit - selected.length);
+          return selected;
+        })()
+      : dataset.trades.filter((trade) => {
+          const familyOk = policy.selectedRuntimeArchetypes.length === 0 || policy.selectedRuntimeArchetypes.includes(trade.runtimeFamily ?? "unknown");
+          const bucketOk = policy.selectedBuckets.length === 0 || policy.selectedBuckets.includes(trade.selectedBucket ?? "unknown");
+          const triggerOk = policy.selectedTriggerTransitions.length === 0 || policy.selectedTriggerTransitions.includes(trade.triggerTransition ?? "none");
+          return familyOk && bucketOk && triggerOk;
+        });
     const wins = eligible.filter((trade) => trade.pnlPct > 0).length;
     const losses = eligible.length - wins;
     const slHits = eligible.filter((trade) => trade.exitReason === "sl_hit").length;
@@ -2582,9 +2627,9 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     const noTradeReasonCounts = sourcePool === "rebuilt_trigger_candidates"
       ? dataset.rebuiltTriggerCandidates.reduce<Record<string, number>>((acc, candidate) => {
           const familyOk = policy.selectedRuntimeArchetypes.length === 0 || policy.selectedRuntimeArchetypes.includes(candidate.runtimeFamily ?? "unknown");
-          const bucketOk = policy.selectedBuckets.length === 0 || policy.selectedBuckets.includes(candidate.selectedBucket ?? "unknown");
+          const moveSizeOk = policy.selectedMoveSizeBuckets.length === 0 || policy.selectedMoveSizeBuckets.includes(candidate.selectedMoveSizeBucket ?? "unknown");
           const triggerOk = policy.selectedTriggerTransitions.length === 0 || policy.selectedTriggerTransitions.includes(candidate.triggerTransition ?? "none");
-          if (!familyOk || !bucketOk || !triggerOk) return acc;
+          if (!familyOk || !moveSizeOk || !triggerOk) return acc;
           const reason = candidate.noTradeReason ?? candidate.rejectReason;
           if (!reason) return acc;
           acc[reason] = (acc[reason] ?? 0) + 1;
@@ -2602,6 +2647,63 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
       maxDrawdownPct,
       phantomCount,
     });
+    if (sourcePool === "rebuilt_trigger_candidates" && eligible.length === 0) {
+      const reasons = [
+        "no_simulated_rebuilt_trades",
+      ];
+      return {
+        policyId: policy.policyId,
+        passNumber: policy.passNumberSelected,
+        trades: 0,
+        wins: 0,
+        losses: 0,
+        winRate: 0,
+        slHits: 0,
+        slHitRate: 0,
+        profitFactor: 0,
+        accountReturnPct: 0,
+        maxDrawdownPct: 0,
+        phantomCount: 0,
+        objectiveScore: 0,
+        selectedFeatures: policy.selectedCoreFeatures,
+        selectedMoveSizeBuckets: policy.selectedMoveSizeBuckets,
+        selectedRuntimeArchetypes: policy.selectedRuntimeArchetypes,
+        selectedBuckets: policy.selectedBuckets,
+        selectedTriggerTransitions: policy.selectedTriggerTransitions,
+        entryThresholds: policy.entryThresholds,
+        entryTimingRules: policy.entryTimingRules.map((rule) => ({ ...rule })),
+        noTradeRules: [...policy.noTradeRules, "no_simulated_rebuilt_trades"],
+        exitRules: {
+          tpTargetPct: asNumber(policy.tpRules.targetPct, 0),
+          slRiskPct: asNumber(policy.slRules.maxInitialRiskPct, 0),
+          trailingActivationPct: asNumber(policy.trailingRules.activationProfitPct, 0),
+          trailingDistancePct: asNumber(policy.trailingRules.trailingDistancePct, 0),
+          minHoldBars: asNumber(policy.minHoldRules.minHoldBars, 0),
+          unit: "percentage_points",
+          exitUnitValidation: {
+            selectedSubsetMfeRange: { min: null, max: null },
+            selectedSubsetMaeAbsRange: { min: null, max: null },
+            derivedTpPctPoints: asNumber(policy.tpRules.targetPct, 0),
+            derivedSlPctPoints: asNumber(policy.slRules.maxInitialRiskPct, 0),
+            derivedTrailingActivationPctPoints: asNumber(policy.trailingRules.activationProfitPct, 0),
+            derivedTrailingDistancePctPoints: asNumber(policy.trailingRules.trailingDistancePct, 0),
+            impossibleExitRejected: false,
+            warnings: ["No simulated rebuilt trades survived grouping and daily selection."],
+          },
+        },
+        leakagePassed: policy.leakageAudit.passed,
+        monthlyBreakdown: [],
+        reasons,
+        sourcePool,
+        diagnostics: {
+          simulatedTradeCount: 0,
+          noTradeReasonCounts,
+        },
+        selectedFeaturesSummary: policy.selectedCoreFeatures.map((feature) => feature.key),
+        tpSlTrailingSummary: ["policy_rejected: no simulated rebuilt trades"],
+        targetAchieved: false,
+      };
+    }
     return {
       policyId: policy.policyId,
       passNumber: policy.passNumberSelected,
