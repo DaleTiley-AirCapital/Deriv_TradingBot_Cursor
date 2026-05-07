@@ -97,8 +97,11 @@ export type SynthesisRebuiltTriggerCandidateRecord = {
   moveId: number;
   matchedCalibratedMoveId: number | null;
   sourcePool: "rebuilt_trigger_candidates";
+  sourceMoveStartTs: number | null;
+  sourceMoveEndTs: number | null;
   entryTs: number;
   exitTs: number | null;
+  entryCandleFound: boolean;
   entryPrice: number | null;
   exitPrice: number | null;
   offsetLabel: string;
@@ -106,9 +109,13 @@ export type SynthesisRebuiltTriggerCandidateRecord = {
   direction: "buy" | "sell";
   runtimeFamily: string | null;
   selectedBucket: string | null;
+  selectedMoveSizeBucket: string | null;
   triggerTransition: string | null;
   triggerDirection: string | null;
   qualityTier: string | null;
+  featureSnapshotPresent: boolean;
+  featureSnapshotLiveSafe: boolean;
+  exitRulesPresent: boolean;
   setupMatch: number | null;
   confidence: number | null;
   triggerStrengthScore: number | null;
@@ -132,6 +139,7 @@ export type SynthesisRebuiltTriggerCandidateRecord = {
   eligible: boolean;
   rejectReason: string | null;
   noTradeReason: string | null;
+  rejectionReasons: string[];
   percentFields?: Record<string, SynthesisPercentFieldMeta>;
   liveSafeFeatures: Record<string, number | string | boolean | null>;
 };

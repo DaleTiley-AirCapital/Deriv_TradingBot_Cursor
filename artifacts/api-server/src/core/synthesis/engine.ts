@@ -81,22 +81,75 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
     return acc;
   }, {});
   const timestamps = candidates.map((candidate) => candidate.entryTs).filter((value) => Number.isFinite(value));
+  const inspectedCalibratedMoves = dataset.moves.length;
+  const offsetsAttempted = dataset.moves.length * 11;
+  const simulatedTrades = candidates.filter((candidate) => candidate.simulatedTrade);
+  const rejectedCandidates = candidates.filter((candidate) => !candidate.simulatedTrade);
   return {
+    attempted: candidates.length > 0,
+    inspectedCalibratedMoves,
+    offsetsAttempted,
+    rawCandidatesGenerated: candidates.length,
     rebuiltTriggerCandidatesGenerated: candidates.length,
+    eligibleCandidates: candidates.filter((candidate) => candidate.eligible).length,
     rebuiltTriggerCandidatesEligible: candidates.filter((candidate) => candidate.eligible).length,
-    rebuiltTriggerCandidatesRejected: candidates.filter((candidate) => !candidate.eligible).length,
-    rejectionReasonCounts: countValues(candidates.filter((candidate) => !candidate.eligible).map((candidate) => candidate.rejectReason ?? candidate.noTradeReason)),
+    rejectedCandidates: rejectedCandidates.length,
+    rebuiltTriggerCandidatesRejected: rejectedCandidates.length,
+    simulatedTradeCount: simulatedTrades.length,
+    matchedCalibratedMoveCount: new Set(simulatedTrades.map((candidate) => candidate.matchedCalibratedMoveId).filter((value) => value != null)).size,
+    rejectionReasonCounts: countValues(rejectedCandidates.flatMap((candidate) => candidate.rejectionReasons.length > 0 ? candidate.rejectionReasons : [candidate.rejectReason ?? candidate.noTradeReason])),
     candidateOffsetDistribution: countValues(candidates.map((candidate) => candidate.offsetLabel)),
     candidateArchetypeDistribution: countValues(candidates.map((candidate) => candidate.runtimeFamily)),
     candidateDirectionDistribution: countValues(candidates.map((candidate) => candidate.direction)),
+    candidateTriggerTransitionDistribution: countValues(candidates.map((candidate) => candidate.triggerTransition)),
+    candidateBucketDistribution: countValues(candidates.map((candidate) => candidate.selectedBucket)),
     selectedBucketDistribution: countValues(candidates.map((candidate) => candidate.selectedBucket)),
+    selectedMoveSizeBucketDistribution: countValues(candidates.map((candidate) => candidate.selectedMoveSizeBucket)),
     entryTimestampCoverage: {
       minEntryTs: timestamps.length > 0 ? Math.min(...timestamps) : null,
       maxEntryTs: timestamps.length > 0 ? Math.max(...timestamps) : null,
       uniqueEntryDays: new Set(timestamps.map((ts) => new Date(ts * 1000).toISOString().slice(0, 10))).size,
     },
-    simulatedTradeCount: candidates.filter((candidate) => candidate.simulatedTrade).length,
     noTradeReasonCounts: countValues(candidates.map((candidate) => candidate.noTradeReason)),
+    exampleRejectedCandidates: rejectedCandidates.slice(0, 8).map((candidate) => ({
+      candidateId: candidate.candidateId,
+      matchedCalibratedMoveId: candidate.matchedCalibratedMoveId,
+      sourceMoveStartTs: candidate.sourceMoveStartTs,
+      sourceMoveEndTs: candidate.sourceMoveEndTs,
+      offsetLabel: candidate.offsetLabel,
+      offsetBars: candidate.offsetBars,
+      entryTs: candidate.entryTs,
+      entryCandleFound: candidate.entryCandleFound,
+      entryPrice: candidate.entryPrice,
+      direction: candidate.direction,
+      archetype: candidate.runtimeFamily,
+      triggerTransition: candidate.triggerTransition,
+      selectedBucket: candidate.selectedBucket,
+      selectedMoveSizeBucket: candidate.selectedMoveSizeBucket,
+      featureSnapshotPresent: candidate.featureSnapshotPresent,
+      exitRulesPresent: candidate.exitRulesPresent,
+      simulatedTradeCreated: candidate.simulatedTrade,
+      noTradeReason: candidate.noTradeReason,
+      rejectionReasons: candidate.rejectionReasons,
+    })),
+    exampleSimulatedTrades: simulatedTrades.slice(0, 8).map((candidate) => ({
+      candidateId: candidate.candidateId,
+      matchedCalibratedMoveId: candidate.matchedCalibratedMoveId,
+      offsetLabel: candidate.offsetLabel,
+      entryTs: candidate.entryTs,
+      exitTs: candidate.exitTs,
+      direction: candidate.direction,
+      entryPrice: candidate.entryPrice,
+      exitPrice: candidate.exitPrice,
+      pnlPct: candidate.pnlPct,
+      mfePct: candidate.mfePct,
+      maePct: candidate.maePct,
+      exitReason: candidate.exitReason,
+      selectedRuntimeArchetype: candidate.runtimeFamily,
+      selectedTriggerTransition: candidate.triggerTransition,
+      selectedBucket: candidate.selectedBucket,
+      selectedMoveSizeBucket: candidate.selectedMoveSizeBucket,
+    })),
   };
 }
 
@@ -108,16 +161,33 @@ function featureSummaryFromDataset(dataset: UnifiedSynthesisDataset): EliteSynth
     ...negativeTrades.flatMap((trade) => Object.keys(trade.liveSafeFeatures)),
   ]);
   return keys.map((key) => {
-    const positive = positiveTrades.map((trade) => Number(trade.liveSafeFeatures[key])).filter((value) => Number.isFinite(value));
-    const negative = negativeTrades.map((trade) => Number(trade.liveSafeFeatures[key])).filter((value) => Number.isFinite(value));
+    const positiveRaw = positiveTrades.map((trade) => trade.liveSafeFeatures[key]);
+    const negativeRaw = negativeTrades.map((trade) => trade.liveSafeFeatures[key]);
+    const positive = positiveRaw.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+    const negative = negativeRaw.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+    const nonNullCount = [...positiveRaw, ...negativeRaw].filter((value) => value != null && `${value}`.trim() !== "").length;
+    const denominator = positiveTrades.length + negativeTrades.length;
+    const missingRate = denominator > 0
+      ? 1 - (nonNullCount / denominator)
+      : 1;
+    const isCategorical = nonNullCount > 0 && positive.length + negative.length === 0;
+    if (isCategorical) {
+      return {
+        key,
+        positiveP50: null,
+        negativeP50: null,
+        overlapScore: 0,
+        separationScore: 0,
+        missingRate: Number(missingRate.toFixed(4)),
+        monthlyStabilityScore: Number((1 - Math.min(1, missingRate)).toFixed(4)),
+        kept: false,
+        reasons: ["categorical_not_numeric"],
+      };
+    }
     const posMedian = median(positive);
     const negMedian = median(negative);
     const separationScore = Math.abs(posMedian - negMedian);
     const overlapScore = separationScore <= 0.02 ? 1 : Math.max(0, 1 - separationScore);
-    const denominator = positiveTrades.length + negativeTrades.length;
-    const missingRate = denominator > 0
-      ? 1 - ((positive.length + negative.length) / denominator)
-      : 1;
     const monthlyStabilityScore = 1 - Math.min(1, missingRate + (separationScore < 0.01 ? 0.4 : 0));
     const kept = separationScore >= 0.015 && missingRate <= 0.35;
     return {
@@ -502,6 +572,7 @@ export async function runEliteSynthesisJob(params: {
       featureDistributions: [],
       exitOptimisationTable: [],
       triggerRebuildSummary: { attempted: false, candidateCount: 0, eligibleCount: 0 },
+      rebuiltTriggerDiagnostics: { attempted: false, candidateCount: 0, eligibleCount: 0 },
       bottleneckSummary: {
         targetAchieved: false,
         triggerRebuildAttempted: false,
@@ -593,6 +664,7 @@ export async function runEliteSynthesisJob(params: {
         featureDistributions: features,
         exitOptimisationTable: [],
         triggerRebuildSummary: { attempted: rebuiltTriggerAttempted },
+        rebuiltTriggerDiagnostics,
         bottleneckSummary: {
           targetAchieved: false,
           triggerRebuildAttempted: rebuiltTriggerAttempted,
@@ -892,7 +964,6 @@ export async function runEliteSynthesisJob(params: {
     featureDistributions: features,
     exitOptimisationTable: bestPolicyArtifact ? [bestPolicyArtifact.tpRules, bestPolicyArtifact.slRules, bestPolicyArtifact.trailingRules] : [],
     triggerRebuildSummary: {
-      attempted: rebuiltTriggerAttempted,
       candidateCount: dataset.rebuiltTriggerCandidates.length,
       eligibleCount: dataset.rebuiltTriggerCandidates.filter((candidate) => candidate.eligible).length,
       rejectedCount: dataset.rebuiltTriggerCandidates.filter((candidate) => !candidate.eligible).length,
@@ -906,6 +977,7 @@ export async function runEliteSynthesisJob(params: {
       }, {})).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([reason, count]) => ({ reason, count })),
       ...rebuiltTriggerDiagnostics,
     },
+    rebuiltTriggerDiagnostics,
     bottleneckSummary: {
       targetAchieved: targetAchieved(bestPolicySummary),
       triggerRebuildAttempted: rebuiltTriggerAttempted,

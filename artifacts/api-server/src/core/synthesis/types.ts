@@ -281,6 +281,7 @@ export type EliteSynthesisResult = {
   featureDistributions: EliteSynthesisFeatureSummary[];
   exitOptimisationTable: Array<Record<string, unknown>>;
   triggerRebuildSummary: Record<string, unknown>;
+  rebuiltTriggerDiagnostics: Record<string, unknown>;
   bottleneckSummary: EliteSynthesisBottleneckAnalysis;
   leakageAuditSummary: EliteSynthesisLeakageAudit;
   validationErrors: EliteSynthesisValidationError[];

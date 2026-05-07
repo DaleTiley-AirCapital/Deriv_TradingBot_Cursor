@@ -13,8 +13,8 @@ import { buildCrash300PhaseIdentifierReport } from "../../symbol-services/CRASH3
 import { buildCrash300ContextSnapshot } from "../../symbol-services/CRASH300/context.js";
 import { buildCrash300TriggerSnapshot } from "../../symbol-services/CRASH300/trigger.js";
 import { detectCrash300TriggerTransition } from "../../symbol-services/CRASH300/triggerSemantics.js";
-import { deriveCrash300RuntimeFamilyWithSemantics } from "../../symbol-services/CRASH300/familySemantics.js";
-import { deriveCrash300RuntimeBucket } from "../../symbol-services/CRASH300/bucketSemantics.js";
+import { deriveCrash300RuntimeFamilyWithSemantics, directionFromCrash300Family } from "../../symbol-services/CRASH300/familySemantics.js";
+import { deriveCrash300RuntimeBucket, directionFromCrash300Bucket } from "../../symbol-services/CRASH300/bucketSemantics.js";
 import type { Crash300MoveSizeBucket } from "../../symbol-services/CRASH300/features.js";
 import type { PromotedSymbolRuntimeModel } from "../calibration/promotedSymbolModel.js";
 import type {
@@ -44,6 +44,18 @@ const SYMBOL = "CRASH300";
 const MAX_CONTROL_SAMPLES = 60;
 const LOOP_YIELD_INTERVAL = 24;
 const REBUILT_TRIGGER_OFFSETS = [-10, -5, -3, -2, -1, 0, 1, 2, 3, 5, 10] as const;
+const VALID_REBUILT_RUNTIME_ARCHETYPES = new Set([
+  "crash_event_down",
+  "post_crash_recovery_up",
+  "bear_trap_reversal_up",
+  "failed_recovery_short",
+]);
+const VALID_REBUILT_TRIGGER_TRANSITIONS = new Set([
+  "crash_continuation_down",
+  "post_crash_recovery_reclaim_up",
+  "bear_trap_reversal_up",
+  "failed_recovery_break_down",
+]);
 
 type DatasetBuildProgress = {
   stage: EliteSynthesisStage;
@@ -252,6 +264,17 @@ function directionFromMove(move: SynthesisMoveRecord): "buy" | "sell" {
   return move.direction === "down" ? "sell" : "buy";
 }
 
+function asTradeDirection(value: string | null | undefined): "buy" | "sell" | "unknown" {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "buy" || normalized === "up") return "buy";
+  if (normalized === "sell" || normalized === "down") return "sell";
+  return "unknown";
+}
+
+function buildOffsetLabel(offsetBars: number) {
+  return `T${offsetBars >= 0 ? "+" : ""}${offsetBars}`;
+}
+
 function pctDeltaPoints(direction: "buy" | "sell", entryPrice: number, price: number): number {
   if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(price)) return 0;
   const raw = ((price - entryPrice) / entryPrice) * 100;
@@ -259,10 +282,17 @@ function pctDeltaPoints(direction: "buy" | "sell", entryPrice: number, price: nu
 }
 
 function findEntryCandleIndex(candles: CandleRow[], targetTs: number): number {
+  let lastBefore = -1;
   for (let index = 0; index < candles.length; index += 1) {
-    if ((candles[index]?.closeTs ?? 0) >= targetTs) return index;
+    const closeTs = candles[index]?.closeTs ?? 0;
+    if (closeTs === targetTs) return index;
+    if (closeTs < targetTs) {
+      lastBefore = index;
+      continue;
+    }
+    return lastBefore >= 0 ? lastBefore : index;
   }
-  return -1;
+  return lastBefore;
 }
 
 function buildNoTradeCandidate(params: {
@@ -271,32 +301,50 @@ function buildNoTradeCandidate(params: {
   offsetBars: number;
   entryTs: number;
   reason: string;
+  rejectionReasons?: string[];
   runtimeFamily?: string | null;
   selectedBucket?: string | null;
+  selectedMoveSizeBucket?: string | null;
   triggerTransition?: string | null;
   triggerDirection?: string | null;
   liveSafeFeatures?: Record<string, number | string | boolean | null>;
   projectedMovePct?: number | null;
   percentFields?: Record<string, SynthesisPercentFieldMeta>;
+  entryCandleFound?: boolean;
+  entryPrice?: number | null;
+  featureSnapshotPresent?: boolean;
+  featureSnapshotLiveSafe?: boolean;
+  exitRulesPresent?: boolean;
 }): SynthesisRebuiltTriggerCandidateRecord {
+  const inferredDirection = asTradeDirection(params.triggerDirection);
+  const candidateDirection: "buy" | "sell" = inferredDirection === "unknown"
+    ? directionFromMove(params.move)
+    : inferredDirection;
   return {
     kind: "rebuilt_trigger_candidate",
     candidateId: params.candidateId,
     moveId: params.move.moveId,
     matchedCalibratedMoveId: params.move.moveId,
     sourcePool: "rebuilt_trigger_candidates",
+    sourceMoveStartTs: params.move.startTs,
+    sourceMoveEndTs: params.move.endTs,
     entryTs: params.entryTs,
     exitTs: null,
-    entryPrice: null,
+    entryCandleFound: params.entryCandleFound ?? false,
+    entryPrice: params.entryPrice ?? null,
     exitPrice: null,
-    offsetLabel: `T${params.offsetBars >= 0 ? "+" : ""}${params.offsetBars}`,
+    offsetLabel: buildOffsetLabel(params.offsetBars),
     offsetBars: params.offsetBars,
-    direction: directionFromMove(params.move),
+    direction: candidateDirection,
     runtimeFamily: params.runtimeFamily ?? null,
     selectedBucket: params.selectedBucket ?? null,
+    selectedMoveSizeBucket: params.selectedMoveSizeBucket ?? canonicalMoveSizeBucketFromLabel(params.selectedBucket) ?? canonicalMoveSizeBucketFromLabel(params.move.calibratedMoveSizeBucket),
     triggerTransition: params.triggerTransition ?? null,
     triggerDirection: params.triggerDirection ?? null,
     qualityTier: params.move.qualityTier,
+    featureSnapshotPresent: params.featureSnapshotPresent ?? false,
+    featureSnapshotLiveSafe: params.featureSnapshotLiveSafe ?? false,
+    exitRulesPresent: params.exitRulesPresent ?? false,
     setupMatch: null,
     confidence: null,
     triggerStrengthScore: null,
@@ -320,6 +368,7 @@ function buildNoTradeCandidate(params: {
     eligible: false,
     rejectReason: params.reason,
     noTradeReason: params.reason,
+    rejectionReasons: params.rejectionReasons ?? [params.reason],
     percentFields: params.percentFields,
     liveSafeFeatures: {
       ...params.move.liveSafeFeatures,
@@ -358,7 +407,19 @@ function simulateCandidateTrade(params: {
       mfePctPoints: 0,
       maePctPoints: 0,
       exitPrice: null,
-      noTradeReason: "missing_price",
+      noTradeReason: "missing_entry_price",
+    };
+  }
+
+  if (params.entryIndex >= params.candles.length - 1) {
+    return {
+      exitIndex: null,
+      exitReason: null,
+      pnlPctPoints: 0,
+      mfePctPoints: 0,
+      maePctPoints: 0,
+      exitPrice: null,
+      noTradeReason: "no_forward_candles",
     };
   }
 
@@ -448,7 +509,7 @@ function simulateCandidateTrade(params: {
     mfePctPoints: Number(bestFavourable.toFixed(4)),
     maePctPoints: Number((-Math.abs(worstAdverse)).toFixed(4)),
     exitPrice: null,
-    noTradeReason: "outside_backtest_window",
+    noTradeReason: "no_exit_found",
   };
 }
 
@@ -1580,21 +1641,21 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         const candidateId = `move-${move.moveId}-offset-${offsetBars}`;
         const entryTs = move.startTs + offsetBars * 60;
         if (!runtimeModel || candles.length === 0 || detectedMoves.length === 0) {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_entry_candle" }));
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_entry_candle", rejectionReasons: ["missing_entry_candle"] }));
           continue;
         }
         if ((windowStartTs > 0 && entryTs < windowStartTs) || (windowEndTs > 0 && entryTs > windowEndTs)) {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "outside_backtest_window" }));
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "outside_backtest_window", rejectionReasons: ["outside_backtest_window"] }));
           continue;
         }
         const entryIndex = findEntryCandleIndex(candles, entryTs);
         if (entryIndex < 0) {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_entry_candle" }));
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_entry_candle", rejectionReasons: ["missing_entry_candle"] }));
           continue;
         }
         const entryCandle = candles[entryIndex];
         if (!entryCandle || !Number.isFinite(entryCandle.close) || entryCandle.close <= 0) {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_price" }));
+          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_entry_price", rejectionReasons: ["missing_entry_price"], entryCandleFound: Boolean(entryCandle), entryPrice: entryCandle?.close ?? null }));
           continue;
         }
 
@@ -1606,16 +1667,24 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           detectedMoves,
         });
         const runtimeFamily = optionalString(built.runtimeFamily ?? move.phaseDerivedFamily);
-        const selectedBucket = canonicalMoveSizeBucketFromLabel(optionalString(built.selectedBucket))
+        const selectedBucket = optionalString(built.selectedBucket ?? move.phaseDerivedBucket);
+        const selectedMoveSizeBucket = canonicalMoveSizeBucketFromLabel(selectedBucket)
           ?? canonicalMoveSizeBucketFromLabel(move.phaseDerivedBucket)
           ?? canonicalMoveSizeBucketFromLabel(move.calibratedMoveSizeBucket);
         const triggerTransition = optionalString(built.triggerSnapshot.triggerTransition);
         const triggerDirection = optionalString(built.triggerSnapshot.triggerDirection);
-        const direction = triggerDirection === "buy" || triggerDirection === "up"
-          ? "buy"
-          : triggerDirection === "sell" || triggerDirection === "down"
-            ? "sell"
-            : directionFromMove(move);
+        const derivedFamilyDirection = runtimeFamily ? directionFromCrash300Family(runtimeFamily as never) : "unknown";
+        const derivedBucketDirection = directionFromCrash300Bucket(selectedBucket);
+        const directionCandidate = asTradeDirection(triggerDirection) !== "unknown"
+          ? asTradeDirection(triggerDirection)
+          : derivedFamilyDirection !== "unknown"
+            ? derivedFamilyDirection
+            : derivedBucketDirection !== "unknown"
+              ? derivedBucketDirection
+              : "unknown";
+        const direction = directionCandidate === "buy" || directionCandidate === "sell"
+          ? directionCandidate
+          : null;
         const contextAgeBars = optionalNumber(built.liveSafeFeatures.contextAgeBars);
         const triggerAgeBars = optionalNumber(built.liveSafeFeatures.triggerAgeBars);
         const triggerStrengthScore = optionalNumber(built.liveSafeFeatures.triggerStrengthScore);
@@ -1624,44 +1693,74 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           ?? (triggerStrengthScore != null ? Math.max(0, Math.min(1, triggerStrengthScore)) : null);
         const setupMatch = optionalNumber(built.liveSafeFeatures.setupMatch)
           ?? (triggerStrengthScore != null ? Math.max(0, Math.min(1, triggerStrengthScore * 0.9)) : null);
+        const featureSnapshotPresent = Object.keys(built.liveSafeFeatures ?? {}).length > 0;
+        const rejectionReasons: string[] = [];
+        const liveSafeFeatures = {
+          ...move.liveSafeFeatures,
+          ...built.liveSafeFeatures,
+        };
 
-        if ((contextAgeBars ?? 0) > 240 || (triggerAgeBars ?? 0) > 12) {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "stale_context", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+        if (!featureSnapshotPresent) rejectionReasons.push("missing_feature_snapshot");
+        if ((contextAgeBars ?? 0) > 240 || (triggerAgeBars ?? 0) > 12) rejectionReasons.push("stale_context");
+        if (!runtimeFamily || runtimeFamily === "unknown" || !VALID_REBUILT_RUNTIME_ARCHETYPES.has(runtimeFamily)) rejectionReasons.push("invalid_archetype");
+        if (!selectedBucket) rejectionReasons.push("invalid_bucket");
+        if (!selectedMoveSizeBucket) rejectionReasons.push("missing_selected_move_size_bucket");
+        if (!triggerTransition || triggerTransition === "none" || !VALID_REBUILT_TRIGGER_TRANSITIONS.has(triggerTransition)) rejectionReasons.push("invalid_trigger_transition");
+        if (!direction) rejectionReasons.push("invalid_direction");
+        if ((triggerStrengthScore ?? 0) <= 0 || (confidence ?? 0) <= 0 || (setupMatch ?? 0) <= 0) rejectionReasons.push("rejected_by_candidate_thresholds");
+        if ((triggerStrengthScore ?? 0) <= 0.05) rejectionReasons.push("rejected_by_live_safe_filter");
+
+        if (rejectionReasons.length > 0) {
+          candidates.push(buildNoTradeCandidate({
+            move,
+            candidateId,
+            offsetBars,
+            entryTs,
+            reason: rejectionReasons[0] ?? "rejected_by_live_safe_filter",
+            rejectionReasons,
+            runtimeFamily,
+            selectedBucket,
+            selectedMoveSizeBucket,
+            triggerTransition,
+            triggerDirection,
+            liveSafeFeatures,
+            entryCandleFound: true,
+            entryPrice: entryCandle.close,
+            featureSnapshotPresent,
+            featureSnapshotLiveSafe: featureSnapshotPresent && !rejectionReasons.includes("rejected_by_live_safe_filter"),
+            exitRulesPresent: false,
+          }));
           continue;
         }
-        if (!runtimeFamily || runtimeFamily === "unknown") {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "invalid_archetype", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
-          continue;
-        }
-        if (!selectedBucket) {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "invalid_bucket", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
-          continue;
-        }
-        if (!triggerTransition || triggerTransition === "none") {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "rejected_by_live_safe_filter", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
-          continue;
-        }
-        if (direction !== "buy" && direction !== "sell") {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "invalid_direction", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
-          continue;
-        }
-        if ((triggerStrengthScore ?? 0) <= 0 || (confidence ?? 0) <= 0 || (setupMatch ?? 0) <= 0) {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "failed_thresholds", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
-          continue;
-        }
+        const executableDirection = direction as "buy" | "sell";
 
         const sourceSubset = dataset.trades.filter((trade) =>
           trade.runtimeFamily === runtimeFamily
-          && canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === selectedBucket
+          && canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === selectedMoveSizeBucket
           && trade.triggerTransition === triggerTransition
+          && trade.direction === executableDirection
           && trade.pnlPct > 0,
         );
-        const fallbackSubset = dataset.trades.filter((trade) =>
-          canonicalMoveSizeBucketFromLabel(trade.selectedBucket) === selectedBucket && trade.pnlPct > 0,
-        );
-        const exitSubset = sourceSubset.length > 0 ? sourceSubset : fallbackSubset;
+        const exitSubset = sourceSubset;
         if (exitSubset.length === 0) {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_tp_sl", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          candidates.push(buildNoTradeCandidate({
+            move,
+            candidateId,
+            offsetBars,
+            entryTs,
+            reason: "missing_exit_rules",
+            rejectionReasons: ["missing_exit_rules"],
+            runtimeFamily,
+            selectedBucket,
+            selectedMoveSizeBucket,
+            triggerTransition,
+            triggerDirection,
+            liveSafeFeatures,
+            entryCandleFound: true,
+            entryPrice: entryCandle.close,
+            featureSnapshotPresent: true,
+            featureSnapshotLiveSafe: true,
+          }));
           continue;
         }
         const exitRules = this.deriveExitPolicyFromSubset(dataset, exitSubset as never);
@@ -1672,7 +1771,25 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           || exitRules.trailingActivationPct <= 0
           || exitRules.trailingDistancePct <= 0
         ) {
-          candidates.push(buildNoTradeCandidate({ move, candidateId, offsetBars, entryTs, reason: "missing_tp_sl", runtimeFamily, selectedBucket, triggerTransition, triggerDirection, liveSafeFeatures: built.liveSafeFeatures }));
+          candidates.push(buildNoTradeCandidate({
+            move,
+            candidateId,
+            offsetBars,
+            entryTs,
+            reason: "impossible_exit_rejected",
+            rejectionReasons: ["impossible_exit_rejected"],
+            runtimeFamily,
+            selectedBucket,
+            selectedMoveSizeBucket,
+            triggerTransition,
+            triggerDirection,
+            liveSafeFeatures,
+            entryCandleFound: true,
+            entryPrice: entryCandle.close,
+            featureSnapshotPresent: true,
+            featureSnapshotLiveSafe: true,
+            exitRulesPresent: false,
+          }));
           continue;
         }
 
@@ -1680,7 +1797,7 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           candles,
           entryIndex,
           move,
-          direction,
+          direction: executableDirection,
           tpPctPoints: exitRules.tpTargetPct,
           slPctPoints: exitRules.slRiskPct,
           trailingActivationPctPoints: exitRules.trailingActivationPct,
@@ -1698,24 +1815,33 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         const maePctMeta = normalizePercentField("maePct", simulation.maePctPoints, { sourceHint: "percentage_points", reason: "Rebuilt trigger MAE uses candle-simulated canonical percentage points." });
         const exitCandle = simulation.exitIndex != null ? candles[simulation.exitIndex] : null;
         const simulatedTrade = simulation.exitIndex != null && !simulation.noTradeReason;
+        const noTradeReason = simulation.noTradeReason;
+        const candidateRejectionReasons = simulatedTrade ? [] : [noTradeReason ?? "simulation_error"];
         candidates.push({
           kind: "rebuilt_trigger_candidate",
           candidateId,
           moveId: move.moveId,
           matchedCalibratedMoveId: move.moveId,
           sourcePool: "rebuilt_trigger_candidates",
+          sourceMoveStartTs: move.startTs,
+          sourceMoveEndTs: move.endTs,
           entryTs: entryCandle.closeTs,
           exitTs: exitCandle?.closeTs ?? null,
+          entryCandleFound: true,
           entryPrice: entryCandle.close,
           exitPrice: simulation.exitPrice,
-          offsetLabel: `T${offsetBars >= 0 ? "+" : ""}${offsetBars}`,
+          offsetLabel: buildOffsetLabel(offsetBars),
           offsetBars,
-          direction,
+          direction: executableDirection,
           runtimeFamily,
           selectedBucket,
+          selectedMoveSizeBucket,
           triggerTransition,
           triggerDirection,
           qualityTier: move.qualityTier,
+          featureSnapshotPresent: true,
+          featureSnapshotLiveSafe: true,
+          exitRulesPresent: true,
           setupMatch,
           confidence,
           triggerStrengthScore,
@@ -1737,8 +1863,9 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           exitReason: simulation.exitReason,
           simulatedTrade,
           eligible: simulatedTrade,
-          rejectReason: simulatedTrade ? null : simulation.noTradeReason ?? "no_exit_found",
-          noTradeReason: simulation.noTradeReason,
+          rejectReason: simulatedTrade ? null : noTradeReason ?? "simulation_error",
+          noTradeReason,
+          rejectionReasons: candidateRejectionReasons,
           percentFields: {
             projectedMovePct: projectedMovePctMeta,
             slPct: slPctMeta,
@@ -1749,10 +1876,10 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
             maePct: maePctMeta,
           },
           liveSafeFeatures: {
-            ...move.liveSafeFeatures,
-            ...built.liveSafeFeatures,
+            ...liveSafeFeatures,
             runtimeFamily,
             selectedBucket,
+            selectedMoveSizeBucket,
             triggerTransition,
             triggerDirection,
             qualityTier: move.qualityTier,
