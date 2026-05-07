@@ -850,12 +850,27 @@ async function emitDatasetBuildProgress(
   await cb(update);
 }
 
-async function buildPhaseReport(params: { startTs: number; endTs: number }) {
+async function buildPhaseReport(params: {
+  startTs: number;
+  endTs: number;
+  onProgress?: (update: DatasetBuildProgress) => Promise<void> | void;
+  assertNotCancelled?: () => Promise<void> | void;
+}) {
   return buildCrash300PhaseIdentifierReport({
     startTs: params.startTs,
     endTs: params.endTs,
     includeMoves: true,
     includeAggregates: true,
+    onProgress: params.onProgress
+      ? async (update) => {
+        await params.onProgress?.({
+          stage: "building_dataset",
+          progressPct: typeof update.progressPct === "number" ? update.progressPct : 10,
+          message: update.message,
+        });
+      }
+      : undefined,
+    assertNotCancelled: params.assertNotCancelled,
   });
 }
 
@@ -1459,6 +1474,7 @@ export async function buildUnifiedCrash300Dataset(params: {
   endTs: number;
   windowDays: number;
   onProgress?: (update: DatasetBuildProgress) => Promise<void> | void;
+  assertNotCancelled?: () => Promise<void> | void;
 }): Promise<UnifiedSynthesisDataset> {
   const adapter = new Crash300SynthesisAdapter();
   await emitDatasetBuildProgress(params.onProgress, {
@@ -1471,6 +1487,7 @@ export async function buildUnifiedCrash300Dataset(params: {
   if (!promoted) {
     throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
   }
+  await params.assertNotCancelled?.();
   await yieldToEventLoop();
 
   await emitDatasetBuildProgress(params.onProgress, {
@@ -1479,6 +1496,7 @@ export async function buildUnifiedCrash300Dataset(params: {
     message: "Loading persisted CRASH300 backtest run",
   });
   const persistedRun = await loadPersistedBacktestRun(params.backtestRunId);
+  await params.assertNotCancelled?.();
   await yieldToEventLoop();
 
   await emitDatasetBuildProgress(params.onProgress, {
@@ -1487,6 +1505,7 @@ export async function buildUnifiedCrash300Dataset(params: {
     message: "Loading 1m candle window once for synthesis dataset",
   });
   const candles = await loadWindowCandles(params.startTs - 240 * 60, params.endTs + 10 * 60);
+  await params.assertNotCancelled?.();
   await yieldToEventLoop();
 
   await emitDatasetBuildProgress(params.onProgress, {
@@ -1502,6 +1521,7 @@ export async function buildUnifiedCrash300Dataset(params: {
       between(detectedMovesTable.startTs, params.startTs, params.endTs),
     ))
     .orderBy(asc(detectedMovesTable.startTs));
+  await params.assertNotCancelled?.();
   await yieldToEventLoop();
 
   await emitDatasetBuildProgress(params.onProgress, {
@@ -1512,8 +1532,11 @@ export async function buildUnifiedCrash300Dataset(params: {
   const phaseReport = await buildPhaseReport({
     startTs: params.startTs,
     endTs: params.endTs,
+    onProgress: params.onProgress,
+    assertNotCancelled: params.assertNotCancelled,
   });
   const phaseSnapshots = ((phaseReport.moves ?? []) as unknown as Array<Record<string, unknown>>) ?? [];
+  await params.assertNotCancelled?.();
   await yieldToEventLoop();
 
   const moves = await mapMovesToSynthesisRecords({
@@ -1523,6 +1546,7 @@ export async function buildUnifiedCrash300Dataset(params: {
     phaseMoves: phaseSnapshots,
     onProgress: params.onProgress,
   });
+  await params.assertNotCancelled?.();
   await yieldToEventLoop();
 
   await emitDatasetBuildProgress(params.onProgress, {
@@ -1534,7 +1558,18 @@ export async function buildUnifiedCrash300Dataset(params: {
     runId: persistedRun.id,
     createdAt: persistedRun.createdAt,
     result: persistedRun.result as unknown as Parameters<typeof buildCrash300CalibrationReconciliationReport>[0]["result"],
+    onProgress: params.onProgress
+      ? async (update) => {
+        await params.onProgress?.({
+          stage: "building_dataset",
+          progressPct: typeof update.progressPct === "number" ? update.progressPct : 15,
+          message: update.message,
+        });
+      }
+      : undefined,
+    assertNotCancelled: params.assertNotCancelled,
   });
+  await params.assertNotCancelled?.();
   await yieldToEventLoop();
 
   await emitDatasetBuildProgress(params.onProgress, {
@@ -1546,6 +1581,7 @@ export async function buildUnifiedCrash300Dataset(params: {
     run: persistedRun,
     reconciliation,
   });
+  await params.assertNotCancelled?.();
   await yieldToEventLoop();
 
   const dataAvailability = buildDataAvailability({
@@ -1579,6 +1615,7 @@ export async function buildUnifiedCrash300Dataset(params: {
     adapter.loadCalibrationRuns(),
     adapter.loadBacktestRuns(),
   ]);
+  await params.assertNotCancelled?.();
   await yieldToEventLoop();
 
   const detectedMoveRefs = moves.map((move) => ({
@@ -1618,6 +1655,7 @@ export async function buildUnifiedCrash300Dataset(params: {
       liveSafeFeatures: built.liveSafeFeatures,
     });
     if ((idx + 1) % LOOP_YIELD_INTERVAL === 0) {
+      await params.assertNotCancelled?.();
       await emitDatasetBuildProgress(params.onProgress, {
         stage: "building_dataset",
         progressPct: 19,

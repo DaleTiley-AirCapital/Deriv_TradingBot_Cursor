@@ -629,6 +629,11 @@ export async function runEliteSynthesisJob(params: {
         heartbeatAt: nowIso(),
       });
     },
+    assertNotCancelled: async () => {
+      if (await isCancellationRequested(params.jobId)) {
+        throw new WorkerJobCancelledError(params.jobId, "cancelled_by_operator");
+      }
+    },
   });
   if (await isCancellationRequested(params.jobId)) {
     throw new WorkerJobCancelledError(params.jobId, "cancelled_by_operator");

@@ -256,15 +256,30 @@ export async function buildCrash300CalibrationReconciliationReport(params: {
   runId: number;
   result: V3BacktestResult;
   createdAt?: string | null;
+  onProgress?: (update: { message: string; progressPct?: number | null }) => Promise<void> | void;
+  assertNotCancelled?: () => Promise<void> | void;
 }) {
+  const emitProgress = async (message: string, progressPct?: number | null) => {
+    if (!params.onProgress) return;
+    await params.onProgress({ message, progressPct: progressPct ?? null });
+  };
+  const assertNotCancelled = async () => {
+    if (!params.assertNotCancelled) return;
+    await params.assertNotCancelled();
+  };
   if (params.result.symbol !== "CRASH300") {
     throw new Error("Calibration reconciliation is currently available for CRASH300 only.");
   }
+  await emitProgress("Reconciliation: building backtest attribution", 15);
   const attribution = await buildCrash300TradeOutcomeAttributionReport(params);
+  await assertNotCancelled();
+  await emitProgress("Reconciliation: running runtime trigger validation", 15);
   const validation = await runCrash300RuntimeTriggerValidation({
     startTs: params.result.startTs,
     endTs: params.result.endTs,
   });
+  await assertNotCancelled();
+  await emitProgress("Reconciliation: loading detected moves for linkage", 16);
   const detectedMoves = await db
     .select({
       id: detectedMovesTable.id,
@@ -285,6 +300,8 @@ export async function buildCrash300CalibrationReconciliationReport(params: {
   const detectedMoveById = new Map<number, typeof detectedMoves[number]>();
   for (const move of detectedMoves) detectedMoveById.set(Number(move.id), move);
 
+  await assertNotCancelled();
+  await emitProgress(`Reconciliation: mapping ${attribution.trades.length} trades to moves`, 16);
   const trades = attribution.trades.map((trade) => {
     const relation = relationToMove(trade);
     const semanticConflictFlags = trade.directionConsistencyFlags.filter(isSemanticConflictFlag);
@@ -328,6 +345,8 @@ export async function buildCrash300CalibrationReconciliationReport(params: {
     else tradesByMoveId.set(moveId, [trade]);
   }
 
+  await assertNotCancelled();
+  await emitProgress(`Reconciliation: mapping ${validation.rows.length} validated moves`, 17);
   const moves = validation.rows.map((row) => {
     const validationRow = row;
     const moveId = Number(row.moveId);

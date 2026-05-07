@@ -30,6 +30,7 @@ const TRIGGER_OFFSETS = [-5, -3, -2, -1, 0, 1, 3, 5] as const;
 const DURING_HORIZONS = [5, 15, 30, 60, 120, 240] as const;
 const AFTER_HORIZONS = [5, 15, 30, 60, 120, 240] as const;
 const LOOKBACK_BUFFER_BARS = 1600;
+const LOOP_YIELD_INTERVAL = 24;
 
 type DetectedMoveRow = {
   id: number;
@@ -464,6 +465,12 @@ function ensureRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+async function yieldToEventLoop() {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 async function resolveWindow(input: {
@@ -1423,8 +1430,19 @@ export async function buildCrash300PhaseIdentifierReport(params: {
   limit?: number | null;
   includeMoves?: boolean;
   includeAggregates?: boolean;
+  onProgress?: (update: { message: string; progressPct?: number | null }) => Promise<void> | void;
+  assertNotCancelled?: () => Promise<void> | void;
 }) : Promise<Crash300MovePhaseIdentifierReport> {
+  const emitProgress = async (message: string, progressPct?: number | null) => {
+    if (!params.onProgress) return;
+    await params.onProgress({ message, progressPct: progressPct ?? null });
+  };
+  const assertNotCancelled = async () => {
+    if (!params.assertNotCancelled) return;
+    await params.assertNotCancelled();
+  };
   const window = await resolveWindow({ startTs: params.startTs, endTs: params.endTs });
+  await assertNotCancelled();
   const envelope = await loadCrash300RuntimeEnvelope();
   if (!envelope.promotedModel) {
     throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
@@ -1443,17 +1461,29 @@ export async function buildCrash300PhaseIdentifierReport(params: {
     move11419Summary: null,
   };
 
+  await emitProgress("Phase report: loading detected moves", 10);
   const moves = await loadDetectedMoves(window, params.limit ?? undefined);
+  await assertNotCancelled();
+  await yieldToEventLoop();
+  await emitProgress(`Phase report: loading 1m candles for ${moves.length} moves`, 11);
   const candles = await loadCandles(window, moves);
   diagnostics.candleRangeStartTs = candles[0]?.openTs ?? null;
   diagnostics.candleRangeEndTs = candles[candles.length - 1]?.closeTs ?? null;
-
+  await assertNotCancelled();
+  await yieldToEventLoop();
+  await emitProgress("Phase report: running calibration parity", 12);
   const parity = await runCrash300CalibrationParity({ startTs: window.startTs, endTs: window.endTs, mode: "parity" });
   const parityByMoveId = buildParityMap(parity.verdicts);
+  await assertNotCancelled();
+  await yieldToEventLoop();
+  await emitProgress("Phase report: loading latest backtest attribution", 13);
   const backtest = await loadLatestBacktestAttribution(window);
   diagnostics.linkedBacktestRunId = backtest?.runId ?? null;
-
-  const rows = moves.map((move) => {
+  await assertNotCancelled();
+  await yieldToEventLoop();
+  const rows: Crash300MovePhaseIdentifiers[] = [];
+  for (let index = 0; index < moves.length; index += 1) {
+    const move = moves[index]!;
     const startIndex = pickCandleIndexAtOrAfter(candles, move.startTs);
     const endIndex = pickCandleIndexAtOrAfter(candles, move.endTs);
     const before = {
@@ -1588,9 +1618,16 @@ export async function buildCrash300PhaseIdentifierReport(params: {
         strongestTriggerTransition: trigger.strongestTriggerTransition,
       };
     }
-    return row;
-  });
+    rows.push(row);
+    if ((index + 1) % LOOP_YIELD_INTERVAL === 0) {
+      await emitProgress(`Phase report: mapped ${index + 1}/${moves.length} moves`, 14);
+      await assertNotCancelled();
+      await yieldToEventLoop();
+    }
+  }
 
+  await emitProgress("Phase report: aggregating distributions and diagnostics", 14);
+  await assertNotCancelled();
   const { groupMap, aggregates } = aggregateByGroups(rows);
   const triggerDiagnostics = buildTriggerDiagnostics(rows);
   const out: Crash300MovePhaseIdentifierReport = {
