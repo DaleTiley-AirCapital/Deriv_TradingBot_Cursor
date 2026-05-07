@@ -9,7 +9,16 @@ for (const lockFile of ["package-lock.json", "yarn.lock"]) {
 }
 
 const userAgent = process.env.npm_config_user_agent || "";
-if (!userAgent.startsWith("pnpm/")) {
+const execPath = (process.env.npm_execpath || "").toLowerCase();
+const lifecycleScript = (process.env.npm_lifecycle_script || "").toLowerCase();
+const invokedWithPnpm =
+  userAgent.startsWith("pnpm/") ||
+  execPath.includes("pnpm") ||
+  lifecycleScript.includes("pnpm install") ||
+  lifecycleScript.includes("pnpm add") ||
+  lifecycleScript.includes("pnpm dlx");
+
+if (!invokedWithPnpm) {
   console.error("Use pnpm instead");
   process.exit(1);
 }
