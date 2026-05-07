@@ -209,6 +209,11 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
         sourceRunIds: compact.sourceRunIds,
         datasetSummary: compact.datasetSummary,
         passLogSummary: compact.passLogSummary,
+        fullPassLog: compact.fullPassLog,
+        featureDistributions: compact.featureDistributions,
+        triggerRebuildSummary: compact.triggerRebuildSummary,
+        rebuiltTriggerDiagnostics: compact.rebuiltTriggerDiagnostics ?? compact.triggerRebuildSummary ?? null,
+        exitOptimisationTable: compact.exitOptimisationTable,
       },
     });
   } catch (err) {

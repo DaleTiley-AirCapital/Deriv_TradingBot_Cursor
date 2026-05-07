@@ -709,6 +709,37 @@ export async function runEliteSynthesisJob(params: {
       rebuiltTriggerDiagnostics = buildRebuiltTriggerDiagnostics(dataset);
       policySeeds = generatePoliciesFromTriggerRebuild(dataset, rebuilt, features);
       searchSpaceRemaining = policySeeds.length;
+      const rebuiltTopReason = Object.entries(rebuiltTriggerDiagnostics.rejectionReasonCounts ?? {}).sort((a, b) => b[1] - a[1])[0];
+      passLog.push({
+        passNumber,
+        stage: "rebuilding_trigger_candidates",
+        candidateCount: rebuiltTriggerDiagnostics.rawCandidatesGenerated ?? rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesGenerated ?? 0,
+        evaluatedCount: rebuiltTriggerDiagnostics.eligibleCandidates ?? rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesEligible ?? 0,
+        bestPolicyId: bestPolicySummary?.policyId ?? null,
+        trades: rebuiltTriggerDiagnostics.simulatedTradeCount ?? 0,
+        wins: 0,
+        losses: 0,
+        winRate: 0,
+        slHits: 0,
+        slHitRate: 0,
+        profitFactor: 0,
+        accountReturnPct: 0,
+        maxDrawdownPct: 0,
+        phantomCount: 0,
+        selectedFeatures: [],
+        mutationSummary: "rebuilt_from_calibrated_move_offsets",
+        changedParameters: [
+          "source_pool:rebuilt_trigger_candidates",
+          `inspected_moves:${rebuiltTriggerDiagnostics.inspectedCalibratedMoves ?? dataset.moves.length}`,
+          `offsets_attempted:${rebuiltTriggerDiagnostics.offsetsAttempted ?? 0}`,
+          `eligible_candidates:${rebuiltTriggerDiagnostics.eligibleCandidates ?? rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesEligible ?? 0}`,
+          ...(rebuiltTopReason ? [`top_reject:${rebuiltTopReason[0]}:${rebuiltTopReason[1]}`] : []),
+        ],
+        reasonBestImproved: "rebuild_diagnostics_only",
+        bestSoFar: false,
+        searchSpaceRemaining,
+        reasonStopped: null,
+      });
       await updateEliteSynthesisJob(params.jobId, {
         stage: "generating_policies",
         progressPct: 42,
@@ -720,11 +751,22 @@ export async function runEliteSynthesisJob(params: {
     }
 
     if (policySeeds.length === 0 && rebuiltTriggerAttempted) {
+      const lastLog = passLog[passLog.length - 1];
       if (rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesGenerated > 0 && rebuiltTriggerDiagnostics.simulatedTradeCount === 0) {
         bottleneck = "rebuilt_trigger_execution_failed";
         stopReason = "rebuilt_zero_trade_diagnostics";
       } else {
         stopReason = "search_space_exhausted:no_policy_seeds";
+      }
+      if (lastLog) {
+        const rebuiltTopReason = Object.entries(rebuiltTriggerDiagnostics.rejectionReasonCounts ?? {}).sort((a, b) => b[1] - a[1])[0];
+        lastLog.reasonStopped = stopReason;
+        lastLog.changedParameters = [
+          ...lastLog.changedParameters,
+          `rebuilt_generated:${rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesGenerated ?? 0}`,
+          `rebuilt_simulated:${rebuiltTriggerDiagnostics.simulatedTradeCount ?? 0}`,
+          ...(rebuiltTopReason ? [`top_reject:${rebuiltTopReason[0]}:${rebuiltTopReason[1]}`] : []),
+        ];
       }
       break;
     }
@@ -861,6 +903,37 @@ export async function runEliteSynthesisJob(params: {
       rebuiltTriggerDiagnostics = buildRebuiltTriggerDiagnostics(dataset);
       policySeeds = generatePoliciesFromTriggerRebuild(dataset, rebuilt, features);
       searchSpaceRemaining = policySeeds.length;
+      const rebuiltTopReason = Object.entries(rebuiltTriggerDiagnostics.rejectionReasonCounts ?? {}).sort((a, b) => b[1] - a[1])[0];
+      passLog.push({
+        passNumber: passNumber + 1,
+        stage: "rebuilding_trigger_candidates",
+        candidateCount: rebuiltTriggerDiagnostics.rawCandidatesGenerated ?? rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesGenerated ?? 0,
+        evaluatedCount: rebuiltTriggerDiagnostics.eligibleCandidates ?? rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesEligible ?? 0,
+        bestPolicyId: bestPolicySummary?.policyId ?? null,
+        trades: rebuiltTriggerDiagnostics.simulatedTradeCount ?? 0,
+        wins: 0,
+        losses: 0,
+        winRate: 0,
+        slHits: 0,
+        slHitRate: 0,
+        profitFactor: 0,
+        accountReturnPct: 0,
+        maxDrawdownPct: 0,
+        phantomCount: 0,
+        selectedFeatures: [],
+        mutationSummary: "rebuilt_from_calibrated_move_offsets",
+        changedParameters: [
+          "source_pool:rebuilt_trigger_candidates",
+          `inspected_moves:${rebuiltTriggerDiagnostics.inspectedCalibratedMoves ?? dataset.moves.length}`,
+          `offsets_attempted:${rebuiltTriggerDiagnostics.offsetsAttempted ?? 0}`,
+          `eligible_candidates:${rebuiltTriggerDiagnostics.eligibleCandidates ?? rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesEligible ?? 0}`,
+          ...(rebuiltTopReason ? [`top_reject:${rebuiltTopReason[0]}:${rebuiltTopReason[1]}`] : []),
+        ],
+        reasonBestImproved: "rebuild_diagnostics_only",
+        bestSoFar: false,
+        searchSpaceRemaining,
+        reasonStopped: null,
+      });
       continue;
     }
 
@@ -872,11 +945,13 @@ export async function runEliteSynthesisJob(params: {
       stopReason = "rebuilt_zero_trade_diagnostics";
       const lastLog = passLog[passLog.length - 1];
       if (lastLog) {
+        const rebuiltTopReason = Object.entries(rebuiltTriggerDiagnostics.rejectionReasonCounts ?? {}).sort((a, b) => b[1] - a[1])[0];
         lastLog.reasonStopped = stopReason;
         lastLog.changedParameters = [
           ...lastLog.changedParameters,
           `rebuilt_eligible:${rebuiltTriggerDiagnostics.rebuiltTriggerCandidatesEligible}`,
           `rebuilt_simulated:${rebuiltTriggerDiagnostics.simulatedTradeCount}`,
+          ...(rebuiltTopReason ? [`top_reject:${rebuiltTopReason[0]}:${rebuiltTopReason[1]}`] : []),
         ];
       }
       break;

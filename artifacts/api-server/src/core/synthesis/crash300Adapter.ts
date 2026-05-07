@@ -57,6 +57,39 @@ const VALID_REBUILT_TRIGGER_TRANSITIONS = new Set([
   "failed_recovery_break_down",
 ]);
 
+function canonicalFamilyFromTriggerTransition(transition: string | null | undefined): string | null {
+  switch (transition) {
+    case "crash_continuation_down":
+      return "crash_event_down";
+    case "post_crash_recovery_reclaim_up":
+    case "recovery_continuation_up":
+      return "post_crash_recovery_up";
+    case "bear_trap_reversal_up":
+    case "failed_down_impulse_reclaim_up":
+      return "bear_trap_reversal_up";
+    case "failed_recovery_break_down":
+    case "compression_break_down":
+      return "failed_recovery_short";
+    default:
+      return null;
+  }
+}
+
+function canonicalTriggerTransitionFromFamily(family: string | null | undefined): string | null {
+  switch (family) {
+    case "crash_event_down":
+      return "crash_continuation_down";
+    case "post_crash_recovery_up":
+      return "post_crash_recovery_reclaim_up";
+    case "bear_trap_reversal_up":
+      return "bear_trap_reversal_up";
+    case "failed_recovery_short":
+      return "failed_recovery_break_down";
+    default:
+      return null;
+  }
+}
+
 type DatasetBuildProgress = {
   stage: EliteSynthesisStage;
   progressPct: number;
@@ -554,25 +587,48 @@ function buildFeatureVectorFromContextTrigger(params: {
     mode: "diagnostic",
     offsetBars: 0,
   });
+  const liveSafeMoveDirection: "up" | "down" | "unknown" =
+    semanticTrigger.triggerDirection === "buy"
+      ? "up"
+      : semanticTrigger.triggerDirection === "sell"
+        ? "down"
+        : semanticTrigger.microBreakDirection === "up"
+          ? "up"
+          : semanticTrigger.microBreakDirection === "down"
+            ? "down"
+            : semanticTrigger.oneBarReturnPct > 0
+              ? "up"
+              : semanticTrigger.oneBarReturnPct < 0
+                ? "down"
+                : "unknown";
   const family = deriveCrash300RuntimeFamilyWithSemantics({
     context: contextSnapshot,
     trigger: semanticTrigger,
-    moveDirection: "unknown",
+    moveDirection: liveSafeMoveDirection,
   });
+  const familyFinal = family.familyFinal === "unknown"
+    ? (canonicalFamilyFromTriggerTransition(semanticTrigger.triggerTransition) ?? "unknown")
+    : family.familyFinal;
+  const triggerTransitionFinal = semanticTrigger.triggerTransition === "none" || !semanticTrigger.triggerTransition
+    ? (canonicalTriggerTransitionFromFamily(familyFinal) ?? semanticTrigger.triggerTransition)
+    : semanticTrigger.triggerTransition;
   const bucket = deriveCrash300RuntimeBucket({
-    family: family.familyFinal,
+    family: familyFinal as Parameters<typeof deriveCrash300RuntimeBucket>[0]["family"],
     trigger: semanticTrigger,
     moveSizeBucket: bucketLabelFromPct((contextSnapshot.recoveryFromLastCrashPct ?? 0) * 100),
   });
   return {
     contextSnapshot,
-    triggerSnapshot: semanticTrigger,
-    runtimeFamily: family.familyFinal,
+    triggerSnapshot: {
+      ...semanticTrigger,
+      triggerTransition: triggerTransitionFinal,
+    },
+    runtimeFamily: familyFinal,
     selectedBucket: bucket,
     liveSafeFeatures: {
-      runtimeFamily: family.familyFinal,
+      runtimeFamily: familyFinal,
       selectedBucket: bucket,
-      triggerTransition: semanticTrigger.triggerTransition,
+      triggerTransition: triggerTransitionFinal,
       triggerDirection: semanticTrigger.triggerDirection,
       triggerStrengthScore: semanticTrigger.triggerStrengthScore,
       oneBarReturnPct: semanticTrigger.oneBarReturnPct,
@@ -1666,12 +1722,12 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           runtimeModel,
           detectedMoves,
         });
-        const runtimeFamily = optionalString(built.runtimeFamily ?? move.phaseDerivedFamily);
-        const selectedBucket = optionalString(built.selectedBucket ?? move.phaseDerivedBucket);
+        const runtimeFamily = optionalString(built.runtimeFamily);
+        const selectedBucket = optionalString(built.selectedBucket);
         const selectedMoveSizeBucket = canonicalMoveSizeBucketFromLabel(selectedBucket)
-          ?? canonicalMoveSizeBucketFromLabel(move.phaseDerivedBucket)
           ?? canonicalMoveSizeBucketFromLabel(move.calibratedMoveSizeBucket);
-        const triggerTransition = optionalString(built.triggerSnapshot.triggerTransition);
+        const triggerTransition = optionalString(built.triggerSnapshot.triggerTransition)
+          ?? canonicalTriggerTransitionFromFamily(runtimeFamily);
         const triggerDirection = optionalString(built.triggerSnapshot.triggerDirection);
         const derivedFamilyDirection = runtimeFamily ? directionFromCrash300Family(runtimeFamily as never) : "unknown";
         const derivedBucketDirection = directionFromCrash300Bucket(selectedBucket);
