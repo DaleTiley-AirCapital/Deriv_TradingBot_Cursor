@@ -1,10 +1,12 @@
 # Optional: docker build --build-arg SKIP_FROZEN_LOCK=1 if lockfile is temporarily out of sync (run `pnpm install` at repo root to fix properly).
 ARG SKIP_FROZEN_LOCK=0
+ARG PNPM_VERSION=10.33.4
 
 # ── Stage 1: Build the React frontend ─────────────────────────────────────────
 FROM node:24-slim AS frontend
 ARG SKIP_FROZEN_LOCK
-RUN npm install -g pnpm
+ARG PNPM_VERSION
+RUN npm install -g pnpm@${PNPM_VERSION}
 WORKDIR /app
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
@@ -38,7 +40,8 @@ RUN pnpm --filter @workspace/deriv-quant run build
 # ── Stage 2: Build the API server bundle ──────────────────────────────────────
 FROM node:24-slim AS api-build
 ARG SKIP_FROZEN_LOCK
-RUN npm install -g pnpm
+ARG PNPM_VERSION
+RUN npm install -g pnpm@${PNPM_VERSION}
 WORKDIR /app
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
