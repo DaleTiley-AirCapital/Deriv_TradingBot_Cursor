@@ -106,7 +106,7 @@ export type SynthesisRebuiltTriggerCandidateRecord = {
   exitPrice: number | null;
   offsetLabel: string;
   offsetBars: number;
-  direction: "buy" | "sell";
+  direction: "buy" | "sell" | "unknown";
   canonicalDirection: "buy" | "sell" | "unknown";
   runtimeFamily: string | null;
   rawRuntimeFamily: string | null;

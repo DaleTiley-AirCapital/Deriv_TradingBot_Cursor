@@ -265,6 +265,10 @@ export type EliteSynthesisBottleneckAnalysis = {
   classification: EliteSynthesisBottleneck;
   reasons: string[];
   futureImplementationRecommendation: string;
+  topRawFamilyReject?: { rawValue: string; count: number } | null;
+  topRawTransitionReject?: { rawValue: string; count: number } | null;
+  topRawDirectionReject?: { rawValue: string; count: number } | null;
+  topInvalidArchetypeExamplesCount?: number;
 };
 
 export type EliteSynthesisResult = {

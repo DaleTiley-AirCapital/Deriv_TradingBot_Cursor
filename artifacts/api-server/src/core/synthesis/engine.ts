@@ -109,6 +109,19 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
   const offsetsAttempted = dataset.moves.length * 11;
   const simulatedTrades = candidates.filter((candidate) => candidate.simulatedTrade);
   const rejectedCandidates = candidates.filter((candidate) => !candidate.simulatedTrade);
+  const topReasonCounts = countValues(rejectedCandidates.flatMap((candidate) => candidate.rejectionReasons.length > 0 ? candidate.rejectionReasons : [candidate.rejectReason ?? candidate.noTradeReason]));
+  const topRawFamilyReject = Object.entries(countByKey(
+    rejectedCandidates.filter((candidate) => candidate.rejectionReasons.includes("invalid_archetype")),
+    (candidate) => candidate.rawRuntimeFamily ?? String(candidate.liveSafeFeatures.rawRuntimeFamily ?? ""),
+  )).sort((a, b) => b[1] - a[1])[0] ?? null;
+  const topRawTransitionReject = Object.entries(countByKey(
+    rejectedCandidates.filter((candidate) => candidate.rejectionReasons.includes("invalid_trigger_transition")),
+    (candidate) => candidate.rawTriggerTransition ?? String(candidate.liveSafeFeatures.rawTriggerTransition ?? ""),
+  )).sort((a, b) => b[1] - a[1])[0] ?? null;
+  const topRawDirectionReject = Object.entries(countByKey(
+    rejectedCandidates.filter((candidate) => candidate.rejectionReasons.includes("invalid_direction") || candidate.rejectionReasons.includes("direction_mismatch")),
+    (candidate) => candidate.rawTriggerDirection ?? String(candidate.liveSafeFeatures.rawTriggerDirection ?? ""),
+  )).sort((a, b) => b[1] - a[1])[0] ?? null;
   const exampleRejectedCandidatesByReason = rejectedCandidates.reduce<Record<string, Array<Record<string, unknown>>>>((acc, candidate) => {
     const reasons = candidate.rejectionReasons.length > 0
       ? candidate.rejectionReasons
@@ -158,7 +171,7 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
     rebuiltTriggerCandidatesRejected: rejectedCandidates.length,
     simulatedTradeCount: simulatedTrades.length,
     matchedCalibratedMoveCount: new Set(simulatedTrades.map((candidate) => candidate.matchedCalibratedMoveId).filter((value) => value != null)).size,
-    rejectionReasonCounts: countValues(rejectedCandidates.flatMap((candidate) => candidate.rejectionReasons.length > 0 ? candidate.rejectionReasons : [candidate.rejectReason ?? candidate.noTradeReason])),
+    rejectionReasonCounts: topReasonCounts,
     rejectionReasonCountsByRawFamily: countReasonsByGroup(
       rejectedCandidates,
       (candidate) => candidate.rawRuntimeFamily ?? String(candidate.liveSafeFeatures.rawRuntimeFamily ?? ""),
@@ -240,7 +253,13 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
       selectedTriggerTransition: candidate.triggerTransition,
       selectedBucket: candidate.selectedBucket,
       selectedMoveSizeBucket: candidate.selectedMoveSizeBucket,
-    })),
+      })),
+    summary: {
+      topRawFamilyReject: topRawFamilyReject ? { rawValue: topRawFamilyReject[0], count: topRawFamilyReject[1] } : null,
+      topRawTransitionReject: topRawTransitionReject ? { rawValue: topRawTransitionReject[0], count: topRawTransitionReject[1] } : null,
+      topRawDirectionReject: topRawDirectionReject ? { rawValue: topRawDirectionReject[0], count: topRawDirectionReject[1] } : null,
+      topInvalidArchetypeExamplesCount: exampleRejectedCandidatesByReason.invalid_archetype?.length ?? 0,
+    },
   };
 }
 
@@ -675,6 +694,10 @@ export async function runEliteSynthesisJob(params: {
         classification: "insufficient_data_quality",
         reasons: validationErrors,
         futureImplementationRecommendation: "Repair synthesis dataset inputs before running search again.",
+        topRawFamilyReject: null,
+        topRawTransitionReject: null,
+        topRawDirectionReject: null,
+        topInvalidArchetypeExamplesCount: 0,
       },
       leakageAuditSummary: defaultLeakageAudit(),
       validationErrors,
@@ -767,6 +790,10 @@ export async function runEliteSynthesisJob(params: {
           classification: "search_exhausted",
           reasons: ["Job was cancelled before completion."],
           futureImplementationRecommendation: "Restart synthesis if a full search is still required.",
+          topRawFamilyReject: rebuiltTriggerDiagnostics.summary?.topRawFamilyReject ?? null,
+          topRawTransitionReject: rebuiltTriggerDiagnostics.summary?.topRawTransitionReject ?? null,
+          topRawDirectionReject: rebuiltTriggerDiagnostics.summary?.topRawDirectionReject ?? null,
+          topInvalidArchetypeExamplesCount: rebuiltTriggerDiagnostics.summary?.topInvalidArchetypeExamplesCount ?? 0,
         },
         leakageAuditSummary: bestPolicyArtifact?.leakageAudit ?? defaultLeakageAudit(),
         validationErrors: dataset.validationErrors ?? [],
@@ -1168,6 +1195,10 @@ export async function runEliteSynthesisJob(params: {
         : bottleneck === "rebuilt_trigger_execution_failed"
           ? "Repair rebuilt trigger candidate execution before using rebuilt passes to judge strategy quality."
         : "Use a deeper profile or add more historical windows before promoting a runtime candidate.",
+      topRawFamilyReject: rebuiltTriggerDiagnostics.summary?.topRawFamilyReject ?? null,
+      topRawTransitionReject: rebuiltTriggerDiagnostics.summary?.topRawTransitionReject ?? null,
+      topRawDirectionReject: rebuiltTriggerDiagnostics.summary?.topRawDirectionReject ?? null,
+      topInvalidArchetypeExamplesCount: rebuiltTriggerDiagnostics.summary?.topInvalidArchetypeExamplesCount ?? 0,
     },
     leakageAuditSummary: bestPolicyArtifact?.leakageAudit ?? defaultLeakageAudit(),
     validationErrors: dataset.validationErrors ?? [],

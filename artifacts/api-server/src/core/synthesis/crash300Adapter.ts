@@ -127,6 +127,10 @@ function canonicalFamilyFromRawRuntimeFamily(value: string | null | undefined): 
     case "bear_trap_reversal_up":
     case "failed_recovery_short":
       return family;
+    case "drift_continuation_up":
+      return "post_crash_recovery_up";
+    case "bull_trap_reversal_down":
+      return "failed_recovery_short";
     case "crash_expansion_down":
     case "crash_continuation_down":
       return "crash_event_down";
@@ -445,7 +449,7 @@ function buildNoTradeCandidate(params: {
   exitRulesPresent?: boolean;
 }): SynthesisRebuiltTriggerCandidateRecord {
   const inferredDirection = asTradeDirection(params.triggerDirection);
-  const candidateDirection: "buy" | "sell" = inferredDirection === "sell" ? "sell" : "buy";
+  const candidateDirection: "buy" | "sell" | "unknown" = inferredDirection;
   return {
     kind: "rebuilt_trigger_candidate",
     candidateId: params.candidateId,
@@ -1902,7 +1906,7 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         const inferredRuntimeFamily = optionalString(built.runtimeFamily);
         const runtimeFamily = canonicalFamilyFromRaw
           ?? (inferredRuntimeFamily && inferredRuntimeFamily !== "unknown"
-            ? canonicalFamilyFromRawRuntimeFamily(inferredRuntimeFamily) ?? inferredRuntimeFamily
+            ? canonicalFamilyFromRawRuntimeFamily(inferredRuntimeFamily)
             : null)
           ?? canonicalFamilyFromTransition
           ?? canonicalFamilyFromBucketValue
