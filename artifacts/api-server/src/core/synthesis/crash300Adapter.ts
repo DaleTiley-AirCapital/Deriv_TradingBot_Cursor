@@ -118,6 +118,69 @@ function canonicalFamilyFromBucket(bucket: string | null | undefined): string | 
   return null;
 }
 
+function canonicalFamilyFromRawRuntimeFamily(value: string | null | undefined): string | null {
+  const family = String(value ?? "").trim().toLowerCase();
+  if (!family || family === "none" || family === "unknown") return null;
+  switch (family) {
+    case "crash_event_down":
+    case "post_crash_recovery_up":
+    case "bear_trap_reversal_up":
+    case "failed_recovery_short":
+      return family;
+    case "crash_expansion_down":
+    case "crash_continuation_down":
+      return "crash_event_down";
+    case "recovery_continuation_up":
+    case "post_crash_recovery_reclaim_up":
+      return "post_crash_recovery_up";
+    case "failed_down_impulse_reclaim_up":
+      return "bear_trap_reversal_up";
+    case "compression_break_down":
+    case "failed_recovery_break_down":
+      return "failed_recovery_short";
+    default:
+      if (family.startsWith("down|crash_event|")) return "crash_event_down";
+      if (family.startsWith("up|recovery|")) return "post_crash_recovery_up";
+      if (family.startsWith("up|reversal|")) return "bear_trap_reversal_up";
+      if (family.startsWith("down|failed_recovery|")) return "failed_recovery_short";
+      return null;
+  }
+}
+
+function canonicalFamilyFromLiveSafeEvidence(params: {
+  canonicalDirection: "buy" | "sell" | "unknown";
+  selectedBucket: string | null;
+  canonicalTriggerTransition: string | null;
+  contextSnapshot: Record<string, unknown>;
+  liveSafeFeatures: Record<string, number | string | boolean | null>;
+}): string | null {
+  const fromTransition = canonicalFamilyFromTriggerTransition(params.canonicalTriggerTransition);
+  if (fromTransition) return fromTransition;
+  const fromBucket = canonicalFamilyFromBucket(params.selectedBucket);
+  if (fromBucket) return fromBucket;
+  const crashRecencyScore = optionalNumber(params.contextSnapshot.crashRecencyScore ?? params.liveSafeFeatures.crashRecencyScore) ?? 0;
+  const recoveryFromLastCrashPct = optionalNumber(params.contextSnapshot.recoveryFromLastCrashPct ?? params.liveSafeFeatures.recoveryFromLastCrashPct) ?? 0;
+  const recoveryQualityScore = optionalNumber(params.contextSnapshot.recoveryQualityScore ?? params.liveSafeFeatures.recoveryQualityScore) ?? 0;
+  const trendPersistenceScore = optionalNumber(params.contextSnapshot.trendPersistenceScore ?? params.liveSafeFeatures.trendPersistenceScore) ?? 0;
+  const compressionToExpansionScore = optionalNumber(params.contextSnapshot.compressionToExpansionScore ?? params.liveSafeFeatures.compressionToExpansionScore) ?? 0;
+  const reclaimConfirmed = Boolean(params.liveSafeFeatures.reclaimConfirmed);
+  const adverseImpulseBeforeTrigger = Boolean(params.liveSafeFeatures.adverseImpulseBeforeTrigger);
+  if (params.canonicalDirection === "buy") {
+    if (reclaimConfirmed && adverseImpulseBeforeTrigger) return "bear_trap_reversal_up";
+    if (
+      crashRecencyScore > 0.2 &&
+      (recoveryFromLastCrashPct > 0 || recoveryQualityScore >= Math.max(0.25, trendPersistenceScore - 0.1))
+    ) {
+      return "post_crash_recovery_up";
+    }
+  }
+  if (params.canonicalDirection === "sell") {
+    if (crashRecencyScore > 0.4 && compressionToExpansionScore > 0.45) return "crash_event_down";
+    if (recoveryQualityScore < Math.max(0.35, trendPersistenceScore - 0.05)) return "failed_recovery_short";
+  }
+  return null;
+}
+
 type DatasetBuildProgress = {
   stage: EliteSynthesisStage;
   progressPct: number;
@@ -1795,16 +1858,23 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           : microBreakTradeDirection !== "unknown"
             ? microBreakTradeDirection
             : shortReturnDirection;
-        const canonicalFamilyFromRaw = canonicalFamilyFromTriggerTransition(rawTriggerTransition);
+        const canonicalFamilyFromRaw = canonicalFamilyFromRawRuntimeFamily(rawRuntimeFamily);
+        const canonicalFamilyFromTransition = canonicalFamilyFromTriggerTransition(rawTriggerTransition);
         const canonicalFamilyFromBucketValue = canonicalFamilyFromBucket(selectedBucket);
         const inferredRuntimeFamily = optionalString(built.runtimeFamily);
-        const runtimeFamily = inferredRuntimeFamily && inferredRuntimeFamily !== "unknown"
-          ? inferredRuntimeFamily
-          : rawRuntimeFamily && rawRuntimeFamily !== "unknown"
-            ? rawRuntimeFamily
-            : canonicalFamilyFromRaw
-              ?? canonicalFamilyFromBucketValue
-              ?? null;
+        const runtimeFamily = canonicalFamilyFromRaw
+          ?? (inferredRuntimeFamily && inferredRuntimeFamily !== "unknown"
+            ? canonicalFamilyFromRawRuntimeFamily(inferredRuntimeFamily) ?? inferredRuntimeFamily
+            : null)
+          ?? canonicalFamilyFromTransition
+          ?? canonicalFamilyFromBucketValue
+          ?? canonicalFamilyFromLiveSafeEvidence({
+            canonicalDirection,
+            selectedBucket,
+            canonicalTriggerTransition: canonicalTriggerTransitionFromRawTransition(rawTriggerTransition),
+            contextSnapshot: built.contextSnapshot as unknown as Record<string, unknown>,
+            liveSafeFeatures: built.liveSafeFeatures,
+          });
         const triggerTransition = canonicalTriggerTransitionFromRawTransition(rawTriggerTransition)
           ?? canonicalTriggerTransitionFromFamily(runtimeFamily)
           ?? canonicalTriggerTransitionFromFamily(canonicalFamilyFromBucketValue)
@@ -1849,6 +1919,7 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         if (!selectedMoveSizeBucket) rejectionReasons.push("missing_selected_move_size_bucket");
         if (!triggerTransition || triggerTransition === "none" || !VALID_REBUILT_TRIGGER_TRANSITIONS.has(triggerTransition)) rejectionReasons.push("invalid_trigger_transition");
         if (!direction) rejectionReasons.push("invalid_direction");
+        if (direction && derivedFamilyDirection !== "unknown" && direction !== derivedFamilyDirection) rejectionReasons.push("direction_mismatch");
         if ((triggerStrengthScore ?? 0) <= 0 || (confidence ?? 0) <= 0 || (setupMatch ?? 0) <= 0) rejectionReasons.push("rejected_by_candidate_thresholds");
         if ((triggerStrengthScore ?? 0) <= 0.05) rejectionReasons.push("rejected_by_live_safe_filter");
 

@@ -159,6 +159,10 @@ function buildRebuiltTriggerDiagnostics(dataset: UnifiedSynthesisDataset) {
     simulatedTradeCount: simulatedTrades.length,
     matchedCalibratedMoveCount: new Set(simulatedTrades.map((candidate) => candidate.matchedCalibratedMoveId).filter((value) => value != null)).size,
     rejectionReasonCounts: countValues(rejectedCandidates.flatMap((candidate) => candidate.rejectionReasons.length > 0 ? candidate.rejectionReasons : [candidate.rejectReason ?? candidate.noTradeReason])),
+    rejectionReasonCountsByRawFamily: countReasonsByGroup(
+      rejectedCandidates,
+      (candidate) => candidate.rawRuntimeFamily ?? String(candidate.liveSafeFeatures.rawRuntimeFamily ?? ""),
+    ),
     rejectionReasonCountsByOffset: countReasonsByGroup(rejectedCandidates, (candidate) => candidate.offsetLabel),
     rejectionReasonCountsByRawTransition: countReasonsByGroup(
       rejectedCandidates,
