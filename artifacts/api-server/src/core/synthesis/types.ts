@@ -195,6 +195,7 @@ export type EliteSynthesisPolicySummary = {
   selectedFeaturesSummary: string[];
   tpSlTrailingSummary: string[];
   targetAchieved: boolean;
+  [key: string]: unknown;
 };
 
 export type EliteSynthesisPolicyArtifact = {
@@ -226,6 +227,7 @@ export type EliteSynthesisPolicyArtifact = {
   leakageAudit: EliteSynthesisLeakageAudit;
   bottleneckAnalysis: EliteSynthesisBottleneckAnalysis;
   implementationNotes: string[];
+  [key: string]: unknown;
 };
 
 export type EliteSynthesisPassLog = {
@@ -272,6 +274,8 @@ export type EliteSynthesisBottleneckAnalysis = {
   topRawTransitionReject?: { rawValue: string; count: number } | null;
   topRawDirectionReject?: { rawValue: string; count: number } | null;
   topInvalidArchetypeExamplesCount?: number;
+  validationHardeningFailed?: boolean;
+  failedInvariant?: string | null;
 };
 
 export type EliteSynthesisResult = {
@@ -299,6 +303,7 @@ export type EliteSynthesisResult = {
   windowSummary: Record<string, unknown>;
   sourceRunIds: Record<string, number | null>;
   datasetSummary: Record<string, unknown>;
+  [key: string]: unknown;
 };
 
 export type EliteSynthesisProgressSnapshot = {

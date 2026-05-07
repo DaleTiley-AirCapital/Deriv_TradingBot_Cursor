@@ -4939,6 +4939,7 @@ const REPORT_OPTIONS: ReportOption[] = [
   { value: "phase-full", label: "Full Phase Identifier Report", task: "parity-diagnostics", runType: "none" },
   { value: "policy-comparison", label: "Policy Comparison", task: "policy-comparison", runType: "comparison" },
   { value: "elite-synthesis-result", label: "Elite Synthesis Result", task: "integrated-elite-synthesis", runType: "synthesis" },
+  { value: "elite-synthesis-selected-trades", label: "Elite Synthesis Selected Trades", task: "integrated-elite-synthesis", runType: "synthesis" },
 ];
 
 function ReportsTab({ service, windowDays }: { service: string; windowDays: number }) {
@@ -4953,6 +4954,7 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
   const [policyRunId, setPolicyRunId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [synthesisReportResult, setSynthesisReportResult] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -4991,6 +4993,27 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
       setReportType(filteredReportOptions[0]?.value ?? REPORT_OPTIONS[0].value);
     }
   }, [filteredReportOptions, reportType]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (selectedOption.runType !== "synthesis" || !selectedSynthesisJobId) {
+      setSynthesisReportResult(null);
+      return;
+    }
+    (async () => {
+      try {
+        const data = await apiFetch(`research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/result`) as {
+          result?: Record<string, unknown> | null;
+        };
+        if (!cancelled) setSynthesisReportResult(data.result ?? null);
+      } catch {
+        if (!cancelled) setSynthesisReportResult(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedOption.runType, selectedSynthesisJobId, service]);
 
   const exportReport = async () => {
     setBusy(true);
@@ -5058,6 +5081,10 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
         case "elite-synthesis-result":
           if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
           endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/full`;
+          break;
+        case "elite-synthesis-selected-trades":
+          if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
+          endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/selected-trades`;
           break;
       }
       const d = await apiFetch(endpoint);
@@ -5149,6 +5176,30 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
         {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
         Export / Download JSON
       </button>
+      {selectedOption.runType === "synthesis" && synthesisReportResult && (
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 text-[11px]">
+          <div>
+            <p className="text-muted-foreground uppercase tracking-wide">Target</p>
+            <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.targetAchievedBreakdown as Record<string, unknown> | undefined)?.finalTargetAchieved) ? "Target achieved" : "Target not achieved"}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground uppercase tracking-wide">Balanced readiness</p>
+            <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.strategyGradeReadiness as Record<string, unknown> | undefined)?.safeToRunBalanced) ? "Safe to run balanced" : "More review needed"}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground uppercase tracking-wide">Late offset safety</p>
+            <p className="mt-1 text-foreground">{Boolean(((synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.lateOffsetSafetyAudit as Record<string, unknown> | undefined)?.passed) ? "Passed" : "Review warnings"}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground uppercase tracking-wide">Exit derivation</p>
+            <p className="mt-1 text-foreground">{Boolean(((synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.exitDerivationAudit as Record<string, unknown> | undefined)?.passed) ? "Passed" : "Review audit"}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground uppercase tracking-wide">Selected trades</p>
+            <p className="mt-1 text-foreground">{Number((synthesisReportResult.bestPolicySelectedTradesSummary as Record<string, unknown> | undefined)?.tradeCount ?? 0)} trade(s) in export</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -214,10 +214,41 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
         triggerRebuildSummary: compact.triggerRebuildSummary,
         rebuiltTriggerDiagnostics: compact.rebuiltTriggerDiagnostics ?? compact.triggerRebuildSummary ?? null,
         exitOptimisationTable: compact.exitOptimisationTable,
+        bestPolicySelectedTradesSummary: compact.bestPolicySelectedTradesSummary ?? null,
+        targetAchievedBreakdown: compact.targetAchievedBreakdown ?? null,
+        strategyGradeReadiness: compact.strategyGradeReadiness ?? null,
+        validationHardeningGuard: compact.validationHardeningGuard ?? null,
       },
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis result fetch failed" });
+  }
+});
+
+router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/selected-trades", async (req, res): Promise<void> => {
+  try {
+    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+    getSynthesisAdapter(serviceId);
+    const jobId = Number(req.params.id);
+    const job = await getEliteSynthesisJob(jobId);
+    if (!job || job.serviceId !== serviceId) {
+      res.status(404).json({ error: `Elite synthesis job ${jobId} not found for ${serviceId}.` });
+      return;
+    }
+    if (!job.resultArtifact) {
+      res.status(409).json({ error: `Elite synthesis job ${jobId} has no completed result artifact yet.` });
+      return;
+    }
+    res.json({
+      jobId,
+      serviceId,
+      status: job.status,
+      exportedAt: new Date().toISOString(),
+      bestPolicySelectedTradesSummary: job.resultArtifact.bestPolicySelectedTradesSummary ?? null,
+      bestPolicySelectedTrades: job.resultArtifact.bestPolicySelectedTrades ?? [],
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis selected-trades export failed" });
   }
 });
 

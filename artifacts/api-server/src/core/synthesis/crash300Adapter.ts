@@ -213,6 +213,92 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function rebuiltOffsetCluster(label: string | null | undefined): string {
+  switch (label) {
+    case "T-10":
+    case "T-5":
+    case "T-3":
+      return "early";
+    case "T-2":
+    case "T-1":
+    case "T0":
+    case "T+0":
+    case "T+1":
+      return "trigger";
+    case "T+2":
+    case "T+3":
+    case "T+5":
+    case "T+10":
+      return "late";
+    default:
+      return "unknown";
+  }
+}
+
+function deterministicRebuiltCandidateScore(candidate: SynthesisRebuiltTriggerCandidateRecord): number {
+  return (candidate.confidence ?? 0) * 0.45
+    + (candidate.setupMatch ?? 0) * 0.35
+    + (candidate.triggerStrengthScore ?? 0) * 0.2;
+}
+
+function buildMonthlyBreakdown(
+  trades: Array<
+    Pick<SynthesisTradeRecord, "entryTs" | "pnlPct" | "exitReason" | "selectedBucket">
+    | Pick<SynthesisRebuiltTriggerCandidateRecord, "entryTs" | "pnlPct" | "exitReason" | "selectedBucket" | "offsetLabel">
+  >,
+): Array<Record<string, unknown>> {
+  const grouped = new Map<string, Array<typeof trades[number]>>();
+  for (const trade of trades) {
+    const month = new Date(trade.entryTs * 1000).toISOString().slice(0, 7);
+    const bucket = grouped.get(month) ?? [];
+    bucket.push(trade);
+    grouped.set(month, bucket);
+  }
+  return Array.from(grouped.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, bucket]) => {
+      const wins = bucket.filter((trade) => trade.pnlPct > 0).length;
+      const losses = bucket.length - wins;
+      const slHits = bucket.filter((trade) => trade.exitReason === "sl_hit").length;
+      const grossProfit = bucket.filter((trade) => trade.pnlPct > 0).reduce((sum, trade) => sum + trade.pnlPct, 0);
+      const grossLoss = Math.abs(bucket.filter((trade) => trade.pnlPct <= 0).reduce((sum, trade) => sum + trade.pnlPct, 0));
+      const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : 0;
+      const pnlValues = bucket.map((trade) => trade.pnlPct).sort((a, b) => a - b);
+      const exitReasonCounts = bucket.reduce<Record<string, number>>((acc, trade) => {
+        const reason = trade.exitReason ?? "unknown";
+        acc[reason] = (acc[reason] ?? 0) + 1;
+        return acc;
+      }, {});
+      const selectedBucketCounts = bucket.reduce<Record<string, number>>((acc, trade) => {
+        const key = trade.selectedBucket ?? "unknown";
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {});
+      const offsetCounts = bucket.reduce<Record<string, number>>((acc, trade) => {
+        const key = "offsetLabel" in trade ? (trade.offsetLabel ?? "unknown") : "runtime_trade";
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {});
+      return {
+        month,
+        trades: bucket.length,
+        wins,
+        losses,
+        slHits,
+        winRate: bucket.length > 0 ? wins / bucket.length : 0,
+        slHitRate: bucket.length > 0 ? slHits / bucket.length : 0,
+        profitFactor,
+        accountReturnPct: bucket.reduce((sum, trade) => sum + trade.pnlPct, 0) * 0.15,
+        maxDrawdownPct: Math.max(0, ...bucket.map((trade) => Math.max(0, -trade.pnlPct))),
+        avgPnlPct: bucket.length > 0 ? bucket.reduce((sum, trade) => sum + trade.pnlPct, 0) / bucket.length : 0,
+        medianPnlPct: percentile(pnlValues, 0.5),
+        exitReasonCounts,
+        selectedBucketCounts,
+        offsetCounts,
+      };
+    });
+}
+
 type PercentLikeField =
   | "movePct"
   | "pnlPct"
@@ -2596,8 +2682,8 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           const selected: SynthesisRebuiltTriggerCandidateRecord[] = [];
           for (const bucket of perDay.values()) {
             bucket.sort((a, b) => {
-              const aScore = (a.confidence ?? 0) * 0.45 + (a.setupMatch ?? 0) * 0.35 + (a.triggerStrengthScore ?? 0) * 0.2;
-              const bScore = (b.confidence ?? 0) * 0.45 + (b.setupMatch ?? 0) * 0.35 + (b.triggerStrengthScore ?? 0) * 0.2;
+              const aScore = deterministicRebuiltCandidateScore(a);
+              const bScore = deterministicRebuiltCandidateScore(b);
               return bScore - aScore;
             });
             const chosen = bucket[0];
@@ -2624,6 +2710,13 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     const maxDrawdownPct = Math.max(0, ...eligible.map((trade) => Math.max(0, -(trade.pnlPct ?? 0))));
     const winRate = eligible.length > 0 ? wins / eligible.length : 0;
     const slHitRate = eligible.length > 0 ? slHits / eligible.length : 0;
+    const monthlyBreakdown = buildMonthlyBreakdown(eligible as Array<
+      Pick<SynthesisTradeRecord, "entryTs" | "pnlPct" | "exitReason" | "selectedBucket">
+      | Pick<SynthesisRebuiltTriggerCandidateRecord, "entryTs" | "pnlPct" | "exitReason" | "selectedBucket" | "offsetLabel">
+    >);
+    const selectedTradeIds = sourcePool === "rebuilt_trigger_candidates"
+      ? (eligible as SynthesisRebuiltTriggerCandidateRecord[]).map((trade) => trade.candidateId)
+      : (eligible as SynthesisTradeRecord[]).map((trade) => trade.tradeId);
     const noTradeReasonCounts = sourcePool === "rebuilt_trigger_candidates"
       ? dataset.rebuiltTriggerCandidates.reduce<Record<string, number>>((acc, candidate) => {
           const familyOk = policy.selectedRuntimeArchetypes.length === 0 || policy.selectedRuntimeArchetypes.includes(candidate.runtimeFamily ?? "unknown");
@@ -2692,12 +2785,16 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           },
         },
         leakagePassed: policy.leakageAudit.passed,
-        monthlyBreakdown: [],
+        monthlyBreakdown,
         reasons,
         sourcePool,
         diagnostics: {
           simulatedTradeCount: 0,
           noTradeReasonCounts,
+          selectedTradeIds,
+          selectedTradeCount: 0,
+          selectedTradeSource: sourcePool === "rebuilt_trigger_candidates" ? "candidateId" : "tradeId",
+          monthlyBreakdown,
         },
         selectedFeaturesSummary: policy.selectedCoreFeatures.map((feature) => feature.key),
         tpSlTrailingSummary: ["policy_rejected: no simulated rebuilt trades"],
@@ -2753,12 +2850,21 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         },
       },
       leakagePassed: policy.leakageAudit.passed,
-      monthlyBreakdown: [],
+      monthlyBreakdown,
       reasons: [],
       sourcePool,
       diagnostics: {
         simulatedTradeCount: eligible.length,
         noTradeReasonCounts,
+        selectedTradeIds,
+        selectedTradeCount: eligible.length,
+        selectedTradeSource: sourcePool === "rebuilt_trigger_candidates" ? "candidateId" : "tradeId",
+        monthlyBreakdown,
+        selectedTradeExitReasonCounts: eligible.reduce<Record<string, number>>((acc, trade) => {
+          const key = trade.exitReason ?? "unknown";
+          acc[key] = (acc[key] ?? 0) + 1;
+          return acc;
+        }, {}),
       },
       selectedFeaturesSummary: policy.selectedCoreFeatures.map((feature) => feature.key),
       tpSlTrailingSummary: [
