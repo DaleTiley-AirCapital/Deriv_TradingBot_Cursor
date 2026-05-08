@@ -92,6 +92,20 @@ Each symbol service also owns its research-to-runtime preparation flow:
 
 Integrated Elite Synthesis is the normal search engine for future services. It consumes service-owned research data, evaluates complete runtime-policy candidates, and returns a candidate runtime artifact. It does not auto-promote and it does not alter live runtime behavior by itself.
 
+Candidate runtime staging is a separate paper-only step:
+
+1. synthesis returns a best candidate policy
+2. selected-trades export consistency must pass
+3. the best candidate may be staged as `crash300_synthesis_candidate_runtime`
+4. the staged artifact stays paper-only until runtime-mimic validation passes
+5. the existing promoted runtime remains unchanged until explicit manual promotion
+
+Runtime mimic rules:
+
+- must use live-safe rules only
+- must not use calibrated move ids, selected trade ids, move-start timestamps, or move-end timestamps as live rules
+- must not use realised pnl, future mfe/mae, or exit reason as live inputs
+
 ## Reusable Service Synthesis Shape
 
 Symbol services that support integrated synthesis should provide an adapter with capabilities equivalent to:

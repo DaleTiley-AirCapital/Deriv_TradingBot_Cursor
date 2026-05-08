@@ -548,6 +548,16 @@ function buildPolicyArtifact(params: {
   sourcePool: "runtime_trades" | "rebuilt_trigger_candidates";
   diagnostics?: Record<string, unknown>;
 }) {
+  const policyKeyParts = [
+    params.sourcePool === "rebuilt_trigger_candidates" ? "rebuilt" : "runtime",
+    params.selectedRuntimeArchetypes.join("-") || "all_archetypes",
+    params.selectedTriggerTransitions.join("-") || "all_triggers",
+    params.selectedMoveSizeBuckets.join("-") || "all_move_sizes",
+    (params.selectedDirections ?? []).join("-") || "all_directions",
+    (params.offsetClusters ?? []).join("-") || "all_offsets",
+  ]
+    .map((value) => value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter((value) => value.length > 0);
   const exitSubset = (params.sourcePool === "rebuilt_trigger_candidates"
     ? params.dataset.rebuiltTriggerCandidates.filter((candidate) =>
         candidate.eligible
@@ -612,7 +622,7 @@ function buildPolicyArtifact(params: {
     .map((trade) => Number((trade as Record<string, unknown>).setupMatch))
     .filter((value) => Number.isFinite(value) && value > 0);
   const policy: EliteSynthesisPolicyArtifact = {
-    policyId: `crash300-elite-pass-${params.passNumber}`,
+    policyId: `crash300-elite-pass-${params.passNumber}-${policyKeyParts.join("-")}`,
     version: "0.1.0-foundation",
     generatedAt: nowIso(),
     sourceCalibrationRunId: Number(params.dataset.sourceRunIds.calibrationRunId ?? 0) || null,
@@ -879,7 +889,11 @@ function getBestPolicyEvaluation(
   topPolicies: PolicyEvaluationResult[],
 ) {
   if (!bestPolicySummary) return null;
-  return topPolicies.find((policy) => policy.policyId === bestPolicySummary.policyId) ?? null;
+  for (let index = topPolicies.length - 1; index >= 0; index -= 1) {
+    const policy = topPolicies[index];
+    if (policy?.policyId === bestPolicySummary.policyId) return policy;
+  }
+  return null;
 }
 
 function relationshipToCalibratedMove(
@@ -954,6 +968,7 @@ function buildBestRebuiltPolicyArtifacts(
       calibratedMoveRelationshipSummary: null as Record<string, unknown> | null,
       exitDerivationAudit: null as Record<string, unknown> | null,
       monthlyStabilityAssessment: buildMonthlyStabilityAssessment(bestEvaluation?.monthlyBreakdown ?? []),
+      policyArtifactReadiness: null as Record<string, unknown> | null,
     };
   }
   const selectedIds = Array.isArray(bestEvaluation.diagnostics?.selectedTradeIds)
@@ -1074,13 +1089,16 @@ function buildBestRebuiltPolicyArtifacts(
     wrongDirectionCount: relationshipCounts.wrong_direction ?? 0,
     outsideNoiseCount: relationshipCounts.outside_move_noise ?? 0,
     unmatchedCount: relationshipCounts.unmatched ?? 0,
+    totalSelectedTrades: selectedTrades.length,
     matchedMoveIds: Array.from(new Set(selectedTrades.map((trade) => trade.matchedCalibratedMoveId).filter((value): value is number => Number.isInteger(value)))),
     duplicateEntriesPerMove: Object.entries(selectedTrades.reduce<Record<string, number>>((acc, trade) => {
       const key = String(trade.matchedCalibratedMoveId ?? "unmatched");
       acc[key] = (acc[key] ?? 0) + 1;
       return acc;
     }, {})).filter(([, count]) => count > 1).map(([moveId, count]) => ({ moveId, count })),
-    passed: (relationshipCounts.outside_move_noise ?? 0) + (relationshipCounts.unmatched ?? 0) <= Math.max(5, Math.floor(selectedTrades.length * 0.25)),
+    passed: (relationshipCounts.outside_move_noise ?? 0) === 0
+      && (relationshipCounts.unmatched ?? 0) === 0
+      && (relationshipCounts.wrong_direction ?? 0) === 0,
   };
   const exitDerivationAudit = {
     exitRuleSourceDistribution: exitRuleSources,
@@ -1090,6 +1108,11 @@ function buildBestRebuiltPolicyArtifacts(
     bucketDirectionSubsetCount: exitRuleSources.bucket_direction_subset ?? 0,
     familyDefaultCount: exitRuleSources.family_default ?? 0,
     broadDefaultCount: exitRuleSources.broad_calibrated_default ?? 0,
+    exitDerivationSourceSubsetTradeCount: sourceSubset.length,
+    finalSelectedTradeCount: selectedTrades.length,
+    sourceSubsetPolicyKey: mostCommonExitSource,
+    finalPolicyKey: `${bestEvaluation.selectedRuntimeArchetypes.join("|")}::${bestEvaluation.selectedTriggerTransitions.join("|")}::${bestEvaluation.selectedMoveSizeBuckets.join("|")}::${(bestEvaluation.entryThresholds.offsetClusters as string[] | undefined)?.join("|") ?? ""}`,
+    sourceSubsetEqualsFinalSelectedTrades: sourceSubset.length === selectedTrades.length,
     subsetUsedForExitDerivation: {
       source: mostCommonExitSource,
       sampleCount: sourceSubset.length,
@@ -1126,14 +1149,34 @@ function buildBestRebuiltPolicyArtifacts(
     explanation: mostCommonExitSource === "family_default"
       ? "The selected rebuilt trades use the family_default exit subset. TP/SL/trailing should be judged against the source value ranges aggregated from the simulated selected trades, not only against a narrower intermediate display range."
       : `The selected rebuilt trades use ${mostCommonExitSource} exit derivation and the displayed ranges are aggregated from that selected subset.`,
-    warnings: [],
+    warnings: sourceSubset.length !== selectedTrades.length
+      ? ["Exit rules were derived from a broader source subset than the final selected trades."]
+      : [],
     passed: true,
   };
+  const selectedIdSet = new Set(selectedTrades.map((trade) => trade.candidateId));
+  const diagnosticsSelectedIds = Array.isArray(bestEvaluation.diagnostics?.selectedTradeIds)
+    ? (bestEvaluation.diagnostics?.selectedTradeIds as string[])
+    : [];
+  const sortedSelectedIds = [...selectedIdSet].sort();
+  const sortedDiagnosticIds = [...diagnosticsSelectedIds].sort();
+  const reportConsistencyChecks = {
+    tradeCountMatches: selectedTradeExports.length === bestEvaluation.trades,
+    selectedIdsMatch: JSON.stringify(sortedSelectedIds) === JSON.stringify(sortedDiagnosticIds),
+    winsMatch: selectedTradeExports.filter((trade) => Number(trade.pnlPct ?? 0) > 0).length === bestEvaluation.wins,
+    lossesMatch: selectedTradeExports.filter((trade) => Number(trade.pnlPct ?? 0) <= 0).length === bestEvaluation.losses,
+    slHitsMatch: selectedTradeExports.filter((trade) => trade.exitReason === "sl_hit").length === bestEvaluation.slHits,
+    sourcePoolMatches: selectedTradeExports.every((trade) => trade.sourcePool === bestEvaluation.sourcePool),
+    policyIdMatches: Boolean(bestEvaluation.policyId),
+  };
   const bestPolicySelectedTradesSummary = {
+    policyId: bestEvaluation.policyId,
+    sourcePool: bestEvaluation.sourcePool,
     tradeCount: selectedTradeExports.length,
     wins: selectedTradeExports.filter((trade) => Number(trade.pnlPct ?? 0) > 0).length,
     losses: selectedTradeExports.filter((trade) => Number(trade.pnlPct ?? 0) <= 0).length,
     slHits: selectedTradeExports.filter((trade) => trade.exitReason === "sl_hit").length,
+    selectedTradeIds: sortedSelectedIds,
     offsets: offsetCounts,
     dateRange: {
       start: selectedTradeExports[0]?.date ?? null,
@@ -1154,6 +1197,34 @@ function buildBestRebuiltPolicyArtifacts(
       outside_noise: relationshipCounts.outside_move_noise ?? 0,
       unmatched: relationshipCounts.unmatched ?? 0,
     },
+    reportConsistencyChecks,
+  };
+  const policyArtifactReadiness = {
+    reportConsistencyPassed: Object.values(reportConsistencyChecks).every(Boolean),
+    selectedTradesExportPassed: Object.values(reportConsistencyChecks).every(Boolean),
+    monthlyStabilityPassed: Boolean(monthlyStabilityAssessment.passed),
+    calibratedRelationshipPassed: Boolean(calibratedMoveRelationshipSummary.passed),
+    leakagePassed: true,
+    lateOffsetSafetyPassed: Boolean(lateOffsetSafetyAudit.passed),
+    exitDerivationPassed: Boolean(exitDerivationAudit.passed),
+    exactExitSubsetPassed: Boolean(exitDerivationAudit.sourceSubsetEqualsFinalSelectedTrades),
+    targetAchieved: bestEvaluation.targetAchieved,
+    canStageForPaper: Object.values(reportConsistencyChecks).every(Boolean)
+      && Boolean(lateOffsetSafetyAudit.passed)
+      && (calibratedMoveRelationshipSummary.outsideNoiseCount ?? 0) === 0
+      && (calibratedMoveRelationshipSummary.unmatchedCount ?? 0) === 0,
+    canPromoteRuntime: false,
+    canPromoteLive: false,
+    blockers: [
+      ...(!Object.values(reportConsistencyChecks).every(Boolean) ? ["report_consistency_failed"] : []),
+      ...((calibratedMoveRelationshipSummary.outsideNoiseCount ?? 0) > 0 ? ["outside_move_noise_in_final_selected_trades"] : []),
+      ...((calibratedMoveRelationshipSummary.unmatchedCount ?? 0) > 0 ? ["unmatched_final_selected_trades"] : []),
+      ...(!monthlyStabilityAssessment.passed ? ["monthly_stability_failed"] : []),
+    ],
+    warnings: [
+      ...(exitDerivationAudit.sourceSubsetEqualsFinalSelectedTrades ? [] : ["broad_exit_subset_used"]),
+      ...(lateOffsetSafetyAudit.warnings as string[]),
+    ],
   };
   return {
     bestPolicySelectedTrades: selectedTradeExports,
@@ -1162,6 +1233,7 @@ function buildBestRebuiltPolicyArtifacts(
     calibratedMoveRelationshipSummary,
     exitDerivationAudit,
     monthlyStabilityAssessment,
+    policyArtifactReadiness,
   };
 }
 
@@ -1892,6 +1964,25 @@ export async function runEliteSynthesisJob(params: {
     .slice(0, 20);
   const bestPolicyEvaluation = getBestPolicyEvaluation(bestPolicySummary, topPolicies);
   const bestPolicyValidationArtifacts = buildBestRebuiltPolicyArtifacts(bestPolicyEvaluation, dataset);
+  const policyArtifactReadiness: Record<string, unknown> | null = bestPolicyValidationArtifacts.policyArtifactReadiness
+    ? {
+        ...bestPolicyValidationArtifacts.policyArtifactReadiness,
+        leakagePassed: Boolean(bestPolicyArtifact?.leakageAudit.passed ?? false),
+      }
+    : null;
+  if (policyArtifactReadiness) {
+    policyArtifactReadiness.canStageForPaper = Boolean(
+      policyArtifactReadiness.reportConsistencyPassed
+      && policyArtifactReadiness.selectedTradesExportPassed
+      && policyArtifactReadiness.leakagePassed
+      && policyArtifactReadiness.lateOffsetSafetyPassed
+      && policyArtifactReadiness.calibratedRelationshipPassed,
+    );
+    const blockers = Array.isArray(policyArtifactReadiness.blockers) ? policyArtifactReadiness.blockers as string[] : [];
+    if (!policyArtifactReadiness.leakagePassed && !blockers.includes("leakage_audit_failed")) {
+      policyArtifactReadiness.blockers = [...blockers, "leakage_audit_failed"];
+    }
+  }
   const targetBreakdown = buildTargetAchievedBreakdown({
     bestPolicySummary,
     targetTradeCountMin: Number(params.request.targetTradeCountMin ?? defaults.targetTradeCountMin),
@@ -1940,6 +2031,9 @@ export async function runEliteSynthesisJob(params: {
           exitDerivationAudit: bestPolicyValidationArtifacts.exitDerivationAudit,
           monthlyStabilityAssessment: bestPolicyValidationArtifacts.monthlyStabilityAssessment,
           targetAchievedBreakdown: targetBreakdown,
+          policyArtifactReadiness,
+          sourcePool: bestPolicyEvaluation?.sourcePool ?? null,
+          selectedTradeIds: bestPolicyValidationArtifacts.bestPolicySelectedTradesSummary?.selectedTradeIds ?? [],
         }
       : null,
     topPolicySummaries,
@@ -1962,6 +2056,7 @@ export async function runEliteSynthesisJob(params: {
           bestPolicySelectedTrades: bestPolicyValidationArtifacts.bestPolicySelectedTrades,
           targetAchievedBreakdown: targetBreakdown,
           strategyGradeReadiness,
+          policyArtifactReadiness,
           bottleneckAnalysis: {
             targetAchieved: targetAchieved(bestPolicySummary),
             triggerRebuildAttempted: rebuiltTriggerAttempted,
@@ -2056,6 +2151,7 @@ export async function runEliteSynthesisJob(params: {
     bestPolicySelectedTrades: bestPolicyValidationArtifacts.bestPolicySelectedTrades,
     targetAchievedBreakdown: targetBreakdown,
     strategyGradeReadiness,
+    policyArtifactReadiness,
     validationHardeningGuard,
   };
 

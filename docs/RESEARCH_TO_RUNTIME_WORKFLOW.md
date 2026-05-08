@@ -60,6 +60,25 @@ Current report families include:
 - calibration reconciliation
 - policy comparison
 - elite synthesis result exports
+- elite synthesis selected-trades exports
+
+## Candidate Runtime Lifecycle
+
+The candidate runtime lifecycle is now:
+
+1. run synthesis
+2. fix or verify best-policy export consistency
+3. stage best synthesis candidate as a paper-only artifact
+4. validate the candidate runtime mimic against the synthesis result
+5. if parity passes, run the candidate in paper
+6. only after paper validation, consider explicit promote-to-runtime
+7. live promotion remains separate and manual
+
+Important:
+
+- a synthesis best policy is not automatically live-ready
+- paper-only candidate staging must not change the current promoted runtime
+- runtime mimic must use live-safe rules, not calibrated move offsets or selected trade ids
 
 ## Runtime Model
 

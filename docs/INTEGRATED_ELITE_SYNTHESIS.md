@@ -210,3 +210,22 @@ Integrated synthesis runs async, persists progress, and must keep Railway respon
 - keeping status payloads compact
 - deferring heavy artifacts to export endpoints
 - supporting cancellation between chunks or passes
+
+## Candidate Runtime Staging
+
+Integrated Elite Synthesis can now stage a best candidate as a separate paper-only artifact:
+
+1. run synthesis
+2. verify selected-trades export consistency against the best-policy summary
+3. stage the best synthesis candidate as a paper-only artifact
+4. validate the candidate runtime mimic against the synthesis result
+5. run the candidate in paper
+6. only after paper validation, consider explicit promote-to-runtime
+7. any live promotion remains separate and manual
+
+Important rules:
+
+- the synthesis best policy is not automatically live-ready
+- the staged candidate artifact is paper-only
+- runtime mimic must use live-safe rules, not calibrated move offsets, selected trade ids, or calibrated move outcome labels
+- the existing promoted runtime remains unchanged until an explicit later promotion step

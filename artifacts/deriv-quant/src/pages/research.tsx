@@ -4954,6 +4954,7 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
   const [policyRunId, setPolicyRunId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [synthesisReportResult, setSynthesisReportResult] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
@@ -5018,6 +5019,7 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
   const exportReport = async () => {
     setBusy(true);
     setErr(null);
+    setNotice(null);
     try {
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       let endpoint = "";
@@ -5096,6 +5098,46 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
     }
   };
 
+  const stageBestSynthesisCandidate = async () => {
+    if (!selectedSynthesisJobId) return;
+    setBusy(true);
+    setErr(null);
+    setNotice(null);
+    try {
+      const data = await apiFetch(`research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/stage-candidate-runtime`, {
+        method: "POST",
+      }) as { artifact?: { artifactId?: string } };
+      setNotice(`Paper-only candidate staged${data.artifact?.artifactId ? ` (${data.artifact.artifactId})` : ""}.`);
+      const refreshed = await apiFetch(`research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/result`) as {
+        result?: Record<string, unknown> | null;
+      };
+      setSynthesisReportResult(refreshed.result ?? null);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Failed to stage best synthesis candidate");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const validateCandidateRuntime = async (artifactId: string) => {
+    setBusy(true);
+    setErr(null);
+    setNotice(null);
+    try {
+      const data = await apiFetch(`research/${service}/elite-synthesis/candidate-runtime/${artifactId}/validate-backtest`, {
+        method: "POST",
+      }) as { candidateRuntimeValidation?: { blockers?: string[] } };
+      const blockers = Array.isArray(data.candidateRuntimeValidation?.blockers)
+        ? data.candidateRuntimeValidation?.blockers.join(", ")
+        : "validation submitted";
+      setNotice(`Candidate runtime validation response: ${blockers}`);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Failed to validate candidate runtime");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
       <div>
@@ -5104,6 +5146,7 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
           Consolidated read-only exports for the selected symbol service. Backtest-heavy artifacts stay here instead of being scattered through calibration and runtime cards.
         </p>
       </div>
+      {notice && <SuccessBox msg={notice} />}
       {err && <ErrorBox msg={err} />}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         <div className="space-y-1">
@@ -5177,26 +5220,61 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
         Export / Download JSON
       </button>
       {selectedOption.runType === "synthesis" && synthesisReportResult && (
-        <div className="rounded-lg border border-border/30 bg-background/40 p-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 text-[11px]">
-          <div>
-            <p className="text-muted-foreground uppercase tracking-wide">Target</p>
-            <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.targetAchievedBreakdown as Record<string, unknown> | undefined)?.finalTargetAchieved) ? "Target achieved" : "Target not achieved"}</p>
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-3 text-[11px]">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Target</p>
+              <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.targetAchievedBreakdown as Record<string, unknown> | undefined)?.finalTargetAchieved) ? "Target achieved" : "Target not achieved"}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Report consistency</p>
+              <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.reportConsistencyPassed) ? "Passed" : "Mismatch detected"}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Balanced readiness</p>
+              <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.strategyGradeReadiness as Record<string, unknown> | undefined)?.safeToRunBalanced) ? "Safe to run balanced" : "More review needed"}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Late offset safety</p>
+              <p className="mt-1 text-foreground">{Boolean(((synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.lateOffsetSafetyAudit as Record<string, unknown> | undefined)?.passed) ? "Passed" : "Review warnings"}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Exit derivation</p>
+              <p className="mt-1 text-foreground">{Boolean(((synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.exitDerivationAudit as Record<string, unknown> | undefined)?.passed) ? "Passed" : "Review audit"}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Selected trades</p>
+              <p className="mt-1 text-foreground">{Number((synthesisReportResult.bestPolicySelectedTradesSummary as Record<string, unknown> | undefined)?.tradeCount ?? 0)} trade(s) in export</p>
+            </div>
           </div>
-          <div>
-            <p className="text-muted-foreground uppercase tracking-wide">Balanced readiness</p>
-            <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.strategyGradeReadiness as Record<string, unknown> | undefined)?.safeToRunBalanced) ? "Safe to run balanced" : "More review needed"}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground uppercase tracking-wide">Late offset safety</p>
-            <p className="mt-1 text-foreground">{Boolean(((synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.lateOffsetSafetyAudit as Record<string, unknown> | undefined)?.passed) ? "Passed" : "Review warnings"}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground uppercase tracking-wide">Exit derivation</p>
-            <p className="mt-1 text-foreground">{Boolean(((synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.exitDerivationAudit as Record<string, unknown> | undefined)?.passed) ? "Passed" : "Review audit"}</p>
-          </div>
-          <div>
-            <p className="text-muted-foreground uppercase tracking-wide">Selected trades</p>
-            <p className="mt-1 text-foreground">{Number((synthesisReportResult.bestPolicySelectedTradesSummary as Record<string, unknown> | undefined)?.tradeCount ?? 0)} trade(s) in export</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.canStageForPaper) && (
+              <button
+                type="button"
+                onClick={() => void stageBestSynthesisCandidate()}
+                disabled={busy}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
+              >
+                Stage Best Synthesis Candidate
+              </button>
+            )}
+            <span className="text-[11px] text-amber-300">Paper-only candidate. Not live-approved.</span>
+            {Array.isArray((synthesisReportResult.candidateRuntimeArtifacts as unknown[] | undefined))
+              && (synthesisReportResult.candidateRuntimeArtifacts as Array<Record<string, unknown>>).length > 0 && (
+              <>
+                <span className="text-[11px] text-muted-foreground">
+                  Candidate artifact: {String(((synthesisReportResult.candidateRuntimeArtifacts as Array<Record<string, unknown>>).slice(-1)[0]?.artifactId ?? "n/a"))}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void validateCandidateRuntime(String(((synthesisReportResult.candidateRuntimeArtifacts as Array<Record<string, unknown>>).slice(-1)[0]?.artifactId ?? "")))}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
+                >
+                  Validate Candidate Runtime Backtest
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -34,6 +34,7 @@ export type EliteSynthesisJobRow = {
   bestSummary: Record<string, unknown> | null;
   resultSummary: Record<string, unknown> | null;
   resultArtifact: EliteSynthesisResult | null;
+  candidateRuntimeArtifacts: Array<Record<string, unknown>>;
   createdAt: string | null;
 };
 
@@ -58,6 +59,9 @@ function hydrateEliteSynthesisJob(row: WorkerJobRow | null): EliteSynthesisJobRo
     bestSummary: (taskState.bestSummary as Record<string, unknown> | null) ?? null,
     resultSummary: row.resultSummary,
     resultArtifact: (row.resultArtifact as EliteSynthesisResult | null) ?? null,
+    candidateRuntimeArtifacts: Array.isArray(taskState.candidateRuntimeArtifacts)
+      ? (taskState.candidateRuntimeArtifacts as Array<Record<string, unknown>>)
+      : [],
     createdAt: row.createdAt,
   };
 }
@@ -81,6 +85,7 @@ export async function createEliteSynthesisJob(params: {
       currentPass: 0,
       maxPasses: params.maxPasses,
       bestSummary: null,
+      candidateRuntimeArtifacts: [],
     },
     message: "Queued for integrated elite synthesis",
   });
@@ -102,6 +107,7 @@ export async function updateEliteSynthesisJob(
     bestSummary: Record<string, unknown> | null;
     resultSummary: Record<string, unknown> | null;
     resultArtifact: EliteSynthesisResult | null;
+    taskStatePatch: Record<string, unknown>;
   }>,
 ): Promise<void> {
   const current = await getWorkerJob(jobId);
@@ -111,6 +117,7 @@ export async function updateEliteSynthesisJob(
     ...(patch.currentPass == null ? {} : { currentPass: patch.currentPass }),
     ...(patch.maxPasses == null ? {} : { maxPasses: patch.maxPasses }),
     ...(patch.bestSummary == null ? {} : { bestSummary: patch.bestSummary }),
+    ...(patch.taskStatePatch ?? {}),
   };
   await updateWorkerJob(jobId, {
     status: patch.status,
