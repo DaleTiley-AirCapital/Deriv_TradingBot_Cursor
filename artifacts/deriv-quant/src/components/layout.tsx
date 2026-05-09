@@ -36,7 +36,7 @@ import { AiChat } from "./AiChat";
 
 const NAV_ITEMS = [
   { name: "Overview",         href: "/",          icon: Activity  },
-  { name: "Engine Decisions", href: "/decisions", icon: Zap       },
+  { name: "Allocator Decisions", href: "/decisions", icon: Zap       },
   { name: "Trades",           href: "/trades",    icon: History   },
   { name: "Research",         href: "/research",  icon: BarChart2 },
   { name: "Data",             href: "/data",      icon: Database  },
