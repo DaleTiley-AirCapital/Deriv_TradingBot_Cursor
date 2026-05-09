@@ -6,41 +6,9 @@ import {
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { ACTIVE_SERVICE_SYMBOLS, getSymbolLabel } from "@/lib/symbolCatalog";
 
 const BASE = import.meta.env.BASE_URL || "/";
 type SettingsMap = Record<string, string>;
-const ENGINE_PATH: Record<string, string> = {
-  BOOM300: "boom_expansion_engine",
-  CRASH300: "crash_expansion_engine",
-  R_75: "r75_reversal|r75_continuation|r75_breakout",
-  R_100: "r100_reversal|r100_continuation|r100_breakout",
-};
-
-interface SymbolWiringRow {
-  symbol: string;
-  enginePath: string;
-  status: "complete" | "partial" | "missing";
-  moveCount: number;
-  hasResearchProfile: boolean;
-  runtimeCalibrationReady: boolean;
-  latestRunStatus: string;
-  runtimeSource: string;
-  latestResearchRunId: number | null;
-  promotedRunId: number | null;
-  driftPendingPromotion: boolean;
-}
-
-interface RuntimeModelStatus {
-  lifecycle?: {
-    hasPromotedModel?: boolean;
-    runtimeSource?: string;
-    latestRunId?: number | null;
-    latestResearchRunId?: number | null;
-    promotedRunId?: number | null;
-    driftPendingPromotion?: boolean;
-  };
-}
 
 function useSettings() {
   return useQuery<SettingsMap>({
@@ -52,61 +20,6 @@ function useSettings() {
     },
     staleTime: 8_000,
     refetchInterval: 15_000,
-  });
-}
-
-function useSymbolWiring() {
-  return useQuery<SymbolWiringRow[]>({
-    queryKey: ["/api/settings/symbol-wiring"],
-    queryFn: async () => {
-      const rows = await Promise.all(
-        ACTIVE_SERVICE_SYMBOLS.map(async (symbol): Promise<SymbolWiringRow> => {
-          const [rp, aggregate, run, runtime] = await Promise.all([
-            fetch(`${BASE}api/calibration/research-profile/${symbol}`).then(async r => r.ok ? r.json() : null).catch(() => null),
-            fetch(`${BASE}api/calibration/aggregate/${symbol}`).then(async r => r.ok ? r.json() : null).catch(() => null),
-            fetch(`${BASE}api/calibration/latest-run/${symbol}`).then(async r => r.ok ? r.json() : null).catch(() => null),
-            fetch(`${BASE}api/calibration/runtime-model/${symbol}`).then(async r => r.ok ? r.json() as Promise<RuntimeModelStatus> : null).catch(() => null),
-          ]);
-
-          const moveCount =
-            Number(aggregate?.overall?.targetMoves ?? aggregate?.totalMoves ?? rp?.moveCount ?? 0) || 0;
-          const hasResearchProfile = Boolean(rp && !rp.error);
-          const latestRunStatus = String(run?.status ?? "none");
-          const lifecycle = runtime?.lifecycle;
-          const runtimeSource = String(lifecycle?.runtimeSource ?? "none");
-          const latestResearchRunId = Number(lifecycle?.latestResearchRunId ?? lifecycle?.latestRunId ?? 0) || null;
-          const promotedRunId = Number(lifecycle?.promotedRunId ?? 0) || null;
-          const driftPendingPromotion = Boolean(lifecycle?.driftPendingPromotion);
-          const runtimeCalibrationReady = Boolean(
-            lifecycle?.hasPromotedModel &&
-            runtimeSource === "promoted_symbol_model" &&
-            promotedRunId != null &&
-            !driftPendingPromotion,
-          );
-          const status: SymbolWiringRow["status"] =
-            runtimeCalibrationReady ? "complete"
-            : (moveCount > 0 || latestRunStatus === "running") ? "partial"
-            : "missing";
-
-          return {
-            symbol,
-            enginePath: ENGINE_PATH[symbol] ?? "not-mapped",
-            status,
-            moveCount,
-            hasResearchProfile,
-            runtimeCalibrationReady,
-            latestRunStatus,
-            runtimeSource,
-            latestResearchRunId,
-            promotedRunId,
-            driftPendingPromotion,
-          };
-        }),
-      );
-      return rows;
-    },
-    staleTime: 20_000,
-    refetchInterval: 30_000,
   });
 }
 
@@ -251,7 +164,6 @@ export default function Settings() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const { data, isLoading, isError } = useSettings();
-  const { data: wiringRows, isLoading: wiringLoading } = useSymbolWiring();
 
   const updateMutation = useMutation({
     mutationFn: async ({ key, value }: { key: string; value: string }) => {
@@ -372,81 +284,6 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Symbol Wiring Map */}
-          <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
-            <div className="px-4 py-3 border-b border-border/30 bg-muted/10">
-              <h2 className="text-sm font-semibold">Per-Symbol Wiring Diagram</h2>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Symbol Service → Trade Candidate → Portfolio Allocator → Trade Execution/Manager.
-              </p>
-            </div>
-            <div className="p-4 space-y-3">
-              <div className="rounded-lg border border-border/30 bg-background/40 p-3 text-[11px] text-muted-foreground">
-                <div className="font-mono text-foreground mb-1">
-                  Symbol Service → Trade Candidate → Portfolio Allocator → Trade Execution/Manager
-                </div>
-                <p>
-                  Each symbol service owns calibration, runtime model, live-safe feature snapshot, trigger or archetype detection, candidate factory, and trade-management policy. The allocator only ranks approved candidates and applies capital, exposure, and risk limits.
-                </p>
-                <p className="mt-1.5">
-                  Current runtime toggle:{" "}
-                  <span className={cn("font-semibold", data["use_calibrated_runtime_profiles"] === "true" ? "text-green-400" : "text-amber-400")}>
-                    {data["use_calibrated_runtime_profiles"] === "true" ? "ON" : "OFF"}
-                  </span>
-                </p>
-              </div>
-              {wiringLoading && <p className="text-xs text-muted-foreground">Loading wiring status…</p>}
-              {!wiringLoading && wiringRows && (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-[10px] text-muted-foreground uppercase tracking-wide border-b border-border/30">
-                        <th className="text-left py-2 pr-3">Symbol</th>
-                        <th className="text-left py-2 pr-3">Engine path</th>
-                        <th className="text-right py-2 pr-3">Moves</th>
-                        <th className="text-center py-2 pr-3">Research profile</th>
-                        <th className="text-center py-2 pr-3">Runtime ready</th>
-                        <th className="text-center py-2 pr-3">Runtime run</th>
-                        <th className="text-center py-2 pr-3">Runtime source</th>
-                        <th className="text-center py-2 pr-3">Latest run</th>
-                        <th className="text-center py-2">Wiring</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {wiringRows.map((r) => (
-                        <tr key={r.symbol} className={cn("border-b border-border/20", ACTIVE_SERVICE_SYMBOLS.includes(r.symbol as typeof ACTIVE_SERVICE_SYMBOLS[number]) && "bg-primary/5")}>
-                          <td className="py-2 pr-3">
-                            <div className="font-mono text-foreground">{r.symbol}</div>
-                            <div className="text-[10px] text-muted-foreground">{getSymbolLabel(r.symbol)}</div>
-                          </td>
-                          <td className="py-2 pr-3 font-mono text-muted-foreground">{r.enginePath}</td>
-                          <td className="py-2 pr-3 text-right font-mono">{r.moveCount.toLocaleString()}</td>
-                          <td className="py-2 pr-3 text-center">{r.hasResearchProfile ? "yes" : "no"}</td>
-                          <td className="py-2 pr-3 text-center">{r.runtimeCalibrationReady ? "yes" : "no"}</td>
-                          <td className="py-2 pr-3 text-center font-mono">
-                            {r.promotedRunId ?? "none"} / {r.latestResearchRunId ?? "none"}
-                            {r.driftPendingPromotion && <span className="ml-1 text-amber-400">drift</span>}
-                          </td>
-                          <td className="py-2 pr-3 text-center font-mono">{r.runtimeSource}</td>
-                          <td className="py-2 pr-3 text-center">{r.latestRunStatus}</td>
-                          <td className="py-2 text-center">
-                            <span className={cn(
-                              "inline-flex items-center px-2 py-0.5 rounded border text-[10px] font-semibold",
-                              r.status === "complete" ? "bg-green-500/15 text-green-400 border-green-500/25"
-                              : r.status === "partial" ? "bg-amber-500/15 text-amber-400 border-amber-500/25"
-                              : "bg-muted/40 text-muted-foreground border-border/50"
-                            )}>
-                              {r.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
 
           {/* Streaming Settings */}
           <div className="rounded-xl border border-border/50 bg-card overflow-hidden">

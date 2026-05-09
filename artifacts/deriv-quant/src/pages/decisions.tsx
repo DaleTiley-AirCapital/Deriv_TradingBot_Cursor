@@ -21,7 +21,6 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   BarChart3,
-  Brain,
   CheckCircle,
   ChevronDown,
   ChevronLeft,
@@ -42,34 +41,6 @@ import { ACTIVE_SERVICE_SYMBOLS, getSymbolLabel } from "@/lib/symbolCatalog";
 
 const PAGE_SIZE = 50;
 const BASE = import.meta.env.BASE_URL || "/";
-
-const ENGINE_LABELS: Record<string, string> = {
-  boom_expansion_engine: "Boom Expansion",
-  boom_expansion_long_engine: "Boom Expansion Long",
-  crash_expansion_engine: "Crash Expansion",
-  crash_expansion_short_engine: "Crash Expansion Short",
-  r75_continuation_engine: "R75 Continuation",
-  r75_reversal_engine: "R75 Reversal",
-  r75_breakout_engine: "R75 Breakout",
-  r100_continuation_engine: "R100 Continuation",
-  r100_reversal_engine: "R100 Reversal",
-  r100_breakout_engine: "R100 Breakout",
-  v3_engine: "V3 Engine",
-};
-
-const ENGINE_COLORS: Record<string, string> = {
-  boom_expansion_engine: "bg-emerald-500/12 text-emerald-400 border-emerald-500/25",
-  boom_expansion_long_engine: "bg-lime-500/12 text-lime-400 border-lime-500/25",
-  crash_expansion_engine: "bg-red-500/12 text-red-400 border-red-500/25",
-  crash_expansion_short_engine: "bg-rose-500/12 text-rose-400 border-rose-500/25",
-  r75_continuation_engine: "bg-blue-500/12 text-blue-400 border-blue-500/25",
-  r75_reversal_engine: "bg-purple-500/12 text-purple-400 border-purple-500/25",
-  r75_breakout_engine: "bg-cyan-500/12 text-cyan-400 border-cyan-500/25",
-  r100_continuation_engine: "bg-indigo-500/12 text-indigo-400 border-indigo-500/25",
-  r100_reversal_engine: "bg-violet-500/12 text-violet-400 border-violet-500/25",
-  r100_breakout_engine: "bg-sky-500/12 text-sky-400 border-sky-500/25",
-  v3_engine: "bg-amber-500/12 text-amber-400 border-amber-500/25",
-};
 
 async function apiFetch<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}api/${path.replace(/^\//, "")}`);
@@ -194,6 +165,15 @@ function formatPercentScale(value: number | null | undefined, digits = 0) {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+function humanizeKey(value: string | null | undefined) {
+  if (!value) return "-";
+  return value
+    .replace(/\|/g, " | ")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function classifyDecision(sig: SignalLog): DecisionState {
   if (sig.executionStatus === "open" || sig.executionStatus === "executed" || sig.executionStatus === "closed") {
     return "traded";
@@ -310,8 +290,6 @@ function runtimeSuggestionSummary(sig: SignalLog, runtimeEvidence: RuntimeEviden
   return runtimeEvidence.triggerTransition
     ?? runtimeEvidence.selectedRuntimeFamily
     ?? runtimeEvidence.selectedBucket
-    ?? sig.strategyName
-    ?? sig.strategyFamily
     ?? "runtime suggestion";
 }
 
@@ -322,6 +300,25 @@ function featureSnapshotPreview(featureSnapshot: Record<string, unknown> | null)
   return keys
     .map((key) => `${key}=${typeof featureSnapshot[key] === "number" ? formatNumber(Number(featureSnapshot[key]), 4) : String(featureSnapshot[key])}`)
     .join(", ");
+}
+
+function suggestionHeadline(sig: SignalLog, runtimeEvidence: RuntimeEvidenceView) {
+  if (runtimeEvidence.selectedBucket) {
+    return `Bucket ${humanizeKey(runtimeEvidence.selectedBucket)}`;
+  }
+  if (runtimeEvidence.selectedMoveSizeBucket) {
+    return `Move-size ${humanizeKey(runtimeEvidence.selectedMoveSizeBucket)}`;
+  }
+  return "Service runtime suggestion";
+}
+
+function suggestionSubline(sig: SignalLog, runtimeEvidence: RuntimeEvidenceView) {
+  const parts = [
+    runtimeEvidence.triggerTransition ? humanizeKey(runtimeEvidence.triggerTransition) : null,
+    runtimeEvidence.confidence != null ? `confidence ${formatPercentScale(runtimeEvidence.confidence)}` : null,
+    runtimeEvidence.setupMatch != null ? `setup ${formatPercentScale(runtimeEvidence.setupMatch)}` : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" - ") : humanizeKey(sig.regime ?? "service runtime");
 }
 
 function DirectionChip({ direction }: { direction: string | null | undefined }) {
@@ -335,51 +332,12 @@ function DirectionChip({ direction }: { direction: string | null | undefined }) 
   );
 }
 
-function ScorePill({ score }: { score: number | null | undefined }) {
-  if (score == null) return <span className="text-xs text-muted-foreground/40">-</span>;
-  const cls = score >= 70
-    ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/25"
-    : score >= 55
-      ? "text-amber-400 bg-amber-500/10 border-amber-500/25"
-      : "text-red-400 bg-red-500/10 border-red-500/25";
-  return (
-    <span className={cn("inline-flex items-center px-2 py-0.5 rounded text-sm font-bold border tabular-nums", cls)}>
-      {Math.round(score)}
-    </span>
-  );
-}
-
 function StateChip({ state }: { state: DecisionState }) {
   const style = STATE_STYLES[state];
   const Icon = style.icon;
   return (
     <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold border whitespace-nowrap", style.chip)}>
       <Icon className="w-3 h-3 shrink-0" /> {style.label}
-    </span>
-  );
-}
-
-function StrategyChip({ strategyName }: { strategyName: string | null | undefined }) {
-  if (!strategyName) return <span className="text-muted-foreground/50 text-xs">-</span>;
-  const cls = ENGINE_COLORS[strategyName] ?? "bg-gray-500/12 text-gray-400 border-gray-500/25";
-  return (
-    <span className={cn("inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border", cls)}>
-      {ENGINE_LABELS[strategyName] ?? strategyName}
-    </span>
-  );
-}
-
-function AiVerdictChip({ verdict }: { verdict: string | null | undefined }) {
-  if (!verdict || verdict === "skipped") return <span className="text-[11px] text-muted-foreground/40">-</span>;
-  const cls = verdict === "agree"
-    ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/25"
-    : verdict === "disagree"
-      ? "text-red-400 bg-red-500/10 border-red-500/25"
-      : "text-amber-400 bg-amber-500/10 border-amber-500/25";
-  return (
-    <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold border", cls)}>
-      <Brain className="w-3 h-3" />
-      {verdict.charAt(0).toUpperCase() + verdict.slice(1)}
     </span>
   );
 }
@@ -491,10 +449,10 @@ function DecisionDetailPanel({
           <DR label="Capital received" value={allocatorCapitalLabel(sig)} highlight={sig.allocationPct != null && sig.allocationPct > 0 ? "green" : undefined} />
           <DR label="Leverage" value={leverageLabel()} />
           <DR label="Mode" value={sig.mode ?? "not_set"} />
-          <DR label="AI verifier" value={sig.aiVerdict ?? "not_used"} />
+          <DR label="Allocator gate" value={sig.allowedFlag ? "passed" : "blocked"} highlight={sig.allowedFlag ? "green" : "red"} />
           {gate && <DR label="Blocking gate" value={gate.gate} highlight="red" />}
           {gate && <DR label="Gate detail" value={gate.detail} />}
-          {!gate && sig.allowedFlag && <DR label="Why it advanced" value={`Runtime evidence ${Math.round(sig.runtimeEvidence ?? 0)} met the active allocator gate`} highlight="green" />}
+          {!gate && sig.allowedFlag && <DR label="Why it advanced" value="Allocator approved the service suggestion for the active mode and capital rules." highlight="green" />}
           {!gate && !sig.allowedFlag && sig.admissionReason && <DR label="Raw blocker" value={sig.admissionReason} highlight="red" />}
         </div>
         <div className="rounded-md border border-border/30 bg-muted/20 p-2.5 space-y-1.5">
@@ -515,17 +473,14 @@ function DecisionDetailPanel({
         </h4>
         <div className="rounded-md border border-border/30 bg-muted/20 p-2.5 space-y-1.5">
           <DR label="Service" value={sig.symbol} />
-          <DR label="Runtime engine" value={sig.strategyName ?? "-"} />
           <DR label="Suggestion summary" value={runtimeSuggestionSummary(sig, runtimeEvidence)} />
-          <DR label="Sub-strategy" value={sig.subStrategy ?? "-"} />
-          <DR label="Regime" value={sig.regime ?? "-"} />
-          <DR label="Regime certainty" value={formatPercentScale(sig.regimeConfidence)} />
+          <DR label="Move bucket" value={runtimeEvidence.selectedBucket ? humanizeKey(runtimeEvidence.selectedBucket) : runtimeEvidence.selectedMoveSizeBucket ? humanizeKey(runtimeEvidence.selectedMoveSizeBucket) : "not emitted"} />`r`n          <DR label="Trigger transition" value={runtimeEvidence.triggerTransition ? humanizeKey(runtimeEvidence.triggerTransition) : "not emitted"} />`r`n          <DR label="Confidence" value={formatPercentScale(runtimeEvidence.confidence)} />
           <DR label="Suggested allocation" value={allocatorCapitalLabel(sig)} />
           <DR label="Timestamp" value={compactDateTimeSeconds(sig.ts)} />
         </div>
         <div className="space-y-2">
           <div className="text-[10px] text-muted-foreground uppercase tracking-wide font-medium">Service runtime payload</div>
-          <div className="rounded-md bg-card/60 border border-border/30 p-2 text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap max-h-64 overflow-auto">
+          <div className="rounded-md bg-card/60 border border-border/30 p-2 text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-all max-h-64 overflow-auto">
             {JSON.stringify(runtimeEvidence.rawPayload, null, 2)}
           </div>
         </div>
@@ -551,7 +506,6 @@ function PendingBlock({ data }: { data: PendingSignalsResponse | undefined }) {
             <div className="flex items-center gap-2.5 flex-1 min-w-0">
               <DirectionChip direction={ps.direction} />
               <span className="font-semibold text-sm">{ps.symbol}</span>
-              <StrategyChip strategyName={ps.strategyName} />
               {ps.pyramidLevel > 0 && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-border/50 text-[10px] text-muted-foreground">
                   <Layers className="w-3 h-3" />
@@ -570,7 +524,9 @@ function PendingBlock({ data }: { data: PendingSignalsResponse | undefined }) {
                 <div className="h-full bg-amber-500 rounded-full" style={{ width: `${ps.progressPct}%` }} />
               </div>
             </div>
-            <ScorePill score={ps.lastCompositeScore} />
+            <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+              awaiting confirmation
+            </span>
           </div>
         ))}
       </div>
@@ -609,7 +565,6 @@ export default function Decisions() {
   const crashPromotedAt = crashRuntimeModel?.lifecycle?.promotedAt ?? null;
   const signals = data?.signals ?? [];
   const total = data?.total ?? 0;
-  const visibilityThreshold = data?.visibilityThreshold ?? 50;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const dateFiltered = useMemo(() => {
@@ -668,7 +623,7 @@ export default function Decisions() {
             Promoted CRASH300 runtime source: model run {crashPromotedRunId ?? "none"} at {compactDateTime(crashPromotedAt)}.
           </p>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Suggested trade opportunities emitted by active services, the allocator outcome, and the runtime payload behind each suggestion.
+            Suggested trade opportunities emitted by registered service runtimes, the allocator outcome, and the runtime payload behind each suggestion.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -681,7 +636,6 @@ export default function Decisions() {
                   time: new Date(sig.ts).toISOString(),
                   service: sig.symbol,
                   serviceLabel: getSymbolLabel(sig.symbol),
-                  runtimeEngine: sig.strategyName,
                   runtimeFamily: runtimeEvidence.selectedRuntimeFamily,
                   triggerTransition: runtimeEvidence.triggerTransition,
                   selectedBucket: runtimeEvidence.selectedBucket,
@@ -787,9 +741,6 @@ export default function Decisions() {
               Clear
             </button>
           )}
-          <span className="ml-auto text-[11px] text-muted-foreground">
-            Suggestion log visibility: &gt;={visibilityThreshold}
-          </span>
         </div>
       </div>
 
@@ -806,16 +757,16 @@ export default function Decisions() {
               {hasFilters ? "No allocator suggestions match the current filters" : "No allocator suggestions recorded yet"}
             </p>
             <p className="text-xs text-muted-foreground/60 mt-1">
-              {!hasFilters && "Active service runtimes emit suggestions here as they are evaluated by the allocator."}
+              {!hasFilters && "Registered service runtimes emit suggestions here as they are evaluated by the allocator."}
             </p>
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-[minmax(0,1.3fr)_90px_minmax(0,1fr)_120px_100px_110px_150px_20px] gap-x-4 px-4 py-2.5 border-b border-border/40 bg-muted/10 text-[11px] text-muted-foreground uppercase tracking-wide font-medium">
+            <div className="grid grid-cols-[minmax(0,1.65fr)_88px_minmax(0,1fr)_130px_100px_110px_150px_20px] gap-x-4 px-4 py-2.5 border-b border-border/40 bg-muted/10 text-[11px] text-muted-foreground uppercase tracking-wide font-medium">
               <span>Service / Suggestion</span>
-              <span className="w-[90px] text-center">Dir</span>
+              <span className="w-[88px] text-center">Dir</span>
               <span>Runtime</span>
-              <span className="w-[120px] text-center">Allocator</span>
+              <span className="w-[130px] text-center">Allocator</span>
               <span className="w-[100px] text-right">Capital</span>
               <span className="w-[110px] text-center">Leverage</span>
               <span className="w-[150px] text-right">Time</span>
@@ -834,40 +785,40 @@ export default function Decisions() {
                   <React.Fragment key={sig.id}>
                     <div
                       className={cn(
-                        "grid grid-cols-[minmax(0,1.3fr)_90px_minmax(0,1fr)_120px_100px_110px_150px_20px] gap-x-4 px-4 py-2.5 items-center cursor-pointer hover:bg-muted/10 transition-colors",
+                        "grid grid-cols-[minmax(0,1.65fr)_88px_minmax(0,1fr)_130px_100px_110px_150px_20px] gap-x-4 px-4 py-3 items-center cursor-pointer hover:bg-muted/10 transition-colors",
                         style.row,
                         isExpanded && "bg-muted/5",
                       )}
                       onClick={() => setExpandedId((prev) => prev === sig.id ? null : sig.id)}
                     >
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-bold text-sm font-mono text-foreground shrink-0">{sig.symbol}</span>
-                          <StrategyChip strategyName={sig.strategyName} />
+                        <div className="font-bold text-sm font-mono text-foreground shrink-0">{sig.symbol}</div>
+                        <div className="mt-1 text-[12px] text-foreground truncate">
+                          {suggestionHeadline(sig, runtimeEvidence)}
                         </div>
-                        <div className="mt-1 text-[11px] text-muted-foreground truncate">
-                          {runtimeEvidence.selectedRuntimeFamily ?? "runtime family not emitted"}
-                          {runtimeEvidence.triggerTransition ? ` | ${runtimeEvidence.triggerTransition}` : ""}
+                        <div className="mt-0.5 text-[11px] text-muted-foreground truncate">
+                          {suggestionSubline(sig, runtimeEvidence)}
                         </div>
                       </div>
 
-                      <div className="w-[90px] flex justify-center">
+                      <div className="w-[88px] flex justify-center">
                         <DirectionChip direction={sig.direction} />
                       </div>
 
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <ScorePill score={sig.runtimeEvidence} />
-                          <span className="text-[11px] text-foreground truncate">
-                            {runtimeEvidence.selectedBucket ?? runtimeEvidence.selectedMoveSizeBucket ?? runtimeSuggestionSummary(sig, runtimeEvidence)}
-                          </span>
+                        <div className="text-[11px] text-foreground truncate">
+                          {runtimeEvidence.selectedMoveSizeBucket
+                            ? `Bucket ${humanizeKey(runtimeEvidence.selectedMoveSizeBucket)}`
+                            : runtimeEvidence.selectedBucket
+                              ? humanizeKey(runtimeEvidence.selectedBucket)
+                              : "Bucket not emitted"}
                         </div>
-                        <div className="mt-1 text-[10px] text-muted-foreground truncate">
-                          expected move {formatPctPoints(sig.expectedMovePct)} | EV {formatSignedPct(sig.expectedValue, 3)}
+                        <div className="mt-0.5 text-[10px] text-muted-foreground truncate">
+                          confidence {formatPercentScale(runtimeEvidence.confidence)} - expected move {formatPctPoints(sig.expectedMovePct)} - EV {formatSignedPct(sig.expectedValue, 3)}
                         </div>
                       </div>
 
-                      <div className="w-[120px] flex justify-center">
+                      <div className="w-[130px] flex justify-center">
                         <StateChip state={state} />
                       </div>
 
@@ -941,3 +892,4 @@ export default function Decisions() {
     </div>
   );
 }
+

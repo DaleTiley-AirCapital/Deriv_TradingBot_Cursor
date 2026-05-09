@@ -157,7 +157,7 @@ function SymbolSelectFull({ value, onChange }: { value: string; onChange: (s: st
         <optgroup key={section.group} label={section.group}>
           {section.entries.map((entry) => (
             <option key={entry.symbol} value={entry.symbol}>
-              {entry.symbol} — {entry.label}{ACTIVE_SYMBOLS.includes(entry.symbol) ? " ●" : ""}
+              {entry.symbol} - {entry.label}
             </option>
           ))}
         </optgroup>
@@ -171,7 +171,7 @@ function LockedSymbolBadge({ symbol }: { symbol: string }) {
     <div className="inline-flex items-center gap-2 rounded-lg border border-border/40 bg-background px-3 py-2 text-xs">
       <span className="font-mono text-foreground">{symbol}</span>
       <span className="text-muted-foreground">— {getSymbolLabel(symbol)}</span>
-      <span className="text-[10px] text-primary">active service</span>
+      <span className="text-[10px] text-primary">current service</span>
     </div>
   );
 }
@@ -182,8 +182,8 @@ function StreamState({ state }: { state: string | undefined }) {
   const cfg: Record<string, { cls: string; label: string }> = {
     streaming: { cls: "bg-green-500/12 text-green-400 border-green-500/25",   label: "Streaming" },
     available: { cls: "bg-blue-500/12 text-blue-400 border-blue-500/25",      label: "Registered" },
-    idle:      { cls: "bg-muted/30 text-muted-foreground border-border/40",   label: "Pending"    },
-    disabled:  { cls: "bg-amber-500/12 text-amber-400 border-amber-500/25",   label: "Paused"     },
+    idle:      { cls: "bg-muted/30 text-muted-foreground border-border/40",   label: "Registered"  },
+    disabled:  { cls: "bg-blue-500/12 text-blue-400 border-blue-500/25",      label: "Registered" },
     no_data:   { cls: "bg-muted/20 text-muted-foreground/40 border-border/20",label: "No data"   },
   };
   const s = cfg[state ?? "idle"] ?? cfg.idle;
@@ -225,7 +225,6 @@ function SymbolStreamRow({ sym, diag, coverage, onToggle }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [optimisticState, setOptimisticState] = useState<string | null>(null);
-  const isActive = ACTIVE_SYMBOLS.includes(sym);
 
   const serverState: string = (() => {
     if (diag?.streamingState) return diag.streamingState;
@@ -251,10 +250,9 @@ function SymbolStreamRow({ sym, diag, coverage, onToggle }: {
   }
 
   return (
-    <tr className={cn("border-b border-border/20 last:border-0", isActive ? "bg-primary/2" : "")}>
+    <tr className="border-b border-border/20 last:border-0">
       <td className="py-2.5 px-4">
         <div className="flex items-center gap-2">
-          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
           <span className="font-mono font-semibold text-sm text-foreground">{sym}</span>
           <span className="text-[11px] text-muted-foreground">{getSymbolLabel(sym)}</span>
         </div>
@@ -262,7 +260,6 @@ function SymbolStreamRow({ sym, diag, coverage, onToggle }: {
       <td className="py-2.5 px-3">
         <div className="flex items-center gap-2">
           <StreamState state={effectiveState} />
-          {isActive && <span className="text-[10px] text-primary/60 font-medium">ACTIVE</span>}
         </div>
       </td>
       <td className="py-2.5 px-3 tabular-nums text-xs text-muted-foreground">
@@ -321,12 +318,10 @@ function CoverageTable({ data, tier }: { data: DataStatusSymbol[]; tier?: string
         </thead>
         <tbody>
           {rows.map(sym => {
-            const isActive = ACTIVE_SYMBOLS.includes(sym.symbol);
             return (
-              <tr key={sym.symbol} className={cn("border-b border-border/20 hover:bg-muted/10", isActive ? "bg-primary/2" : "")}>
+              <tr key={sym.symbol} className="border-b border-border/20 hover:bg-muted/10">
                 <td className="py-2.5 px-4">
                   <div className="flex items-center gap-2">
-                    {isActive && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
                     <span className="font-mono font-semibold text-foreground">{sym.symbol}</span>
                     <span className="text-[11px] text-muted-foreground">{getSymbolLabel(sym.symbol)}</span>
                   </div>
@@ -677,7 +672,7 @@ export function HistoricalDownloadCard({
         <div>
           <h3 className="text-sm font-semibold">Download Historical Data (Per Symbol)</h3>
           <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed max-w-xl">
-            Backfills missing or incomplete history for any symbol, including active symbols like R_100 and research-only symbols with no data.
+            Backfills missing or incomplete history for any registered symbol, including research-only symbols with no local candles yet.
           </p>
         </div>
       </div>
@@ -1101,7 +1096,7 @@ function RuntimeTab() {
   return (
     <div className="space-y-4">
       <RuntimePanel title="Legacy V3 Feature Snapshot" icon={Cpu}
-        badge={<span className="text-[10px] text-muted-foreground">Active symbols only</span>}>
+        badge={<span className="text-[10px] text-muted-foreground">Registered services</span>}>
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground bg-muted/20 rounded p-3">
             Legacy feature vectors from the older V3 engine path. These are diagnostic-only and are not the current symbol-service decision source.
@@ -1173,9 +1168,7 @@ export function CoverageAllGrid() {
   }, [data]);
 
   const symbolsWithData = useMemo(() => {
-    const activeFirst = ACTIVE_SYMBOLS.filter(s => ALL_28_SYMBOLS.includes(s));
-    const rest = ALL_28_SYMBOLS.filter(s => !ACTIVE_SYMBOLS.includes(s));
-    return [...activeFirst, ...rest];
+    return ALL_28_SYMBOLS;
   }, []);
 
   const statusCls = (count: number, interpCount: number) => {
@@ -1219,13 +1212,11 @@ export function CoverageAllGrid() {
           </thead>
           <tbody>
             {symbolsWithData.map(sym => {
-              const isActive = ACTIVE_SYMBOLS.includes(sym);
               const symData = matrix[sym] ?? {};
               return (
-                <tr key={sym} className={cn("border-b border-border/15 hover:bg-muted/10", isActive && "bg-primary/2")}>
-                  <td className={cn("py-2 px-4 sticky left-0 z-10", isActive ? "bg-primary/5" : "bg-card")}>
+                <tr key={sym} className="border-b border-border/15 hover:bg-muted/10">
+                  <td className="py-2 px-4 sticky left-0 z-10 bg-card">
                     <div className="flex items-center gap-1.5">
-                      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />}
                       <span className="font-mono font-semibold whitespace-nowrap">{sym}</span>
                     </div>
                   </td>
@@ -1297,9 +1288,9 @@ export function ActiveSymbolCoverageCard({
     <div className={cn("rounded-xl border border-border/50 bg-card p-4 space-y-3", compact && "border-border/30 bg-transparent p-0")}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h3 className="text-sm font-semibold">{compact ? "Active-Symbol Candle Coverage" : "Multi-Timeframe Candle Coverage"}</h3>
+          <h3 className="text-sm font-semibold">{compact ? "Current-Symbol Candle Coverage" : "Multi-Timeframe Candle Coverage"}</h3>
           <p className="text-xs text-muted-foreground mt-1">
-            Active-service coverage only for {symbol}. Use this after Clean Canonical Data to confirm refreshed counts across derived timeframes.
+            Current service coverage for {symbol}. Use this after Clean Canonical Data to confirm refreshed counts across derived timeframes.
           </p>
         </div>
         <button
@@ -1311,7 +1302,7 @@ export function ActiveSymbolCoverageCard({
         </button>
       </div>
       {isLoading ? (
-        <p className="text-xs text-muted-foreground">Loading active-symbol coverage...</p>
+        <p className="text-xs text-muted-foreground">Loading current-symbol coverage...</p>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 text-[11px]">
           {ALL_TIMEFRAMES.map((timeframe) => {
@@ -1361,17 +1352,12 @@ export default function DataManager() {
 
   const diagSymbols = diagData?.symbols ?? [];
   const streamingCount = diagSymbols.filter(d => d.streamingState === "streaming").length;
-  const activeDiag = ACTIVE_SYMBOLS.map(sym => diagSymbols.find(d => d.symbol === sym)).filter(Boolean) as SymbolDiagnostic[];
-  const activeStreamingCount = activeDiag.filter(d => d.streamingState === "streaming").length;
-  const activePausedCount = activeDiag.filter(d => d.streamingState === "disabled" || d.streamingState === "available").length;
-  const staleActiveCount = activeDiag.filter(d => {
+  const registeredCount = diagSymbols.filter(d => d.streamingState !== "no_data").length;
+  const streamingDiag = diagSymbols.filter(d => d.streamingState === "streaming");
+  const staleStreamingCount = streamingDiag.filter(d => {
     if (d.streamingState !== "streaming" || !d.lastTick) return false;
     return Date.now() - d.lastTick > 120_000;
   }).length;
-  const oldestActiveTickTs = activeDiag
-    .map(d => d.lastTick ?? 0)
-    .filter(ts => ts > 0)
-    .sort((a, b) => a - b)[0] ?? null;
 
   async function toggleStream(sym: string, enable: boolean) {
     await apiFetch(`diagnostics/symbols/${sym}/streaming`, {
@@ -1392,6 +1378,21 @@ export default function DataManager() {
       coverage: coverageMap.get(sym),
     }));
   }, [diagSymbols, researchData]);
+
+  const streamingOptions = useMemo(() => {
+    return diagSymbols
+      .filter((entry) => entry.streamingState === "streaming")
+      .map((entry) => entry.symbol)
+      .filter(Boolean);
+  }, [diagSymbols]);
+
+  useEffect(() => {
+    if (tab !== "live") return;
+    if (streamingOptions.length === 0) return;
+    if (!streamingOptions.includes(symbol)) {
+      setSymbol(streamingOptions[0]);
+    }
+  }, [streamingOptions, symbol, tab]);
 
   const tabs: { id: ViewTab; label: string; icon: React.ElementType }[] = [
     { id: "streaming", label: "Symbol State",     icon: Radio     },
@@ -1443,28 +1444,25 @@ export default function DataManager() {
                 <Radio className="w-4 h-4 text-primary" /> Per-Symbol Streaming State
               </h2>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                All {allSymbolRows.length} symbols · Active trading symbols highlighted · Toggle streaming per active symbol
+                All {allSymbolRows.length} registered symbols. Turn live streaming on or off per symbol.
               </p>
             </div>
             <div className="flex items-center gap-2">
               <span className={cn(
                 "inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] border",
-                staleActiveCount > 0
+                staleStreamingCount > 0
                   ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
                   : "bg-green-500/10 text-green-400 border-green-500/30"
               )}>
-                Live {activeStreamingCount}/{ACTIVE_SYMBOLS.length}
-                {activePausedCount > 0 && <span className="text-muted-foreground">· paused {activePausedCount}</span>}
+                Streaming {streamingCount}
               </span>
               <span className={cn(
                 "inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] border",
-                staleActiveCount > 0
+                staleStreamingCount > 0
                   ? "bg-red-500/10 text-red-400 border-red-500/30"
                   : "bg-muted/20 text-muted-foreground border-border/40"
               )}>
-                {oldestActiveTickTs
-                  ? `Oldest tick ${formatAge(new Date(oldestActiveTickTs).toISOString())}`
-                  : "No tick data"}
+                Registered {registeredCount}
               </span>
               <button onClick={() => refetchDiag()}
                 className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground hover:text-foreground border border-border/40 hover:border-border transition-colors">
@@ -1497,7 +1495,7 @@ export default function DataManager() {
                 {allSymbolRows.length === 0 && (
                   <tr>
                     <td colSpan={6} className="text-center py-10 text-sm text-muted-foreground">
-                      Loading symbol data…
+                      Loading symbol data...
                     </td>
                   </tr>
                 )}
@@ -1506,9 +1504,8 @@ export default function DataManager() {
           </div>
           <div className="px-4 py-2 border-t border-border/20 bg-muted/5">
             <p className="text-[10px] text-muted-foreground">
-              <span className="text-green-400 font-medium">Streaming</span> = active live tick feed ·
-              <span className="text-blue-400 font-medium ml-1">Registered</span> = validated with Deriv API and ready for historical data / optional streaming ·
-              <span className="text-amber-400 font-medium ml-1">Paused</span> = registered but live streaming intentionally switched off ·
+              <span className="text-green-400 font-medium">Streaming</span> = live tick feed is running �
+              <span className="text-blue-400 font-medium ml-1">Registered</span> = symbol is available in the system and ready for history or streaming �
               <span className="ml-1">No data</span> = not yet bootstrapped
             </p>
           </div>
@@ -1541,15 +1538,15 @@ export default function DataManager() {
               <label className="text-xs text-muted-foreground font-medium">Symbol:</label>
               <select className="bg-card border border-border/50 rounded-md px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none h-8 w-52"
                 value={symbol} onChange={e => setSymbol(e.target.value)}>
-                {GROUPED_ALL_SYMBOLS.map((section) => (
-                  <optgroup key={section.group} label={section.group}>
-                    {section.entries.map((entry) => (
-                      <option key={entry.symbol} value={entry.symbol}>
-                        {entry.symbol} — {entry.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
+                {streamingOptions.length === 0 ? (
+                  <option value="">No streaming symbols</option>
+                ) : (
+                  streamingOptions.map((streamingSymbol) => (
+                    <option key={streamingSymbol} value={streamingSymbol}>
+                      {streamingSymbol} - {getSymbolLabel(streamingSymbol)}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
             <div className="flex gap-1 border border-border/40 rounded-lg p-0.5 bg-muted/10">
@@ -1708,4 +1705,7 @@ export default function DataManager() {
     </div>
   );
 }
+
+
+
 
