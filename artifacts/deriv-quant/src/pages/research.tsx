@@ -11,11 +11,14 @@ import { formatWorkerTaskLabel, type WorkerJobUi } from "@/lib/workerJobs";
 import {
   ACTIVE_SERVICE_SYMBOLS,
   SERVICE_SELECTOR_OPTIONS,
+  SYMBOL_CATALOG,
   getSymbolLabel,
+  getSymbolGroup,
+  getGroupedSymbols,
   isEnabledService,
   isScaffoldedService,
 } from "@/lib/symbolCatalog";
-import { CleanCanonicalTab, CoverageAllGrid, HistoricalDownloadCard, useResearchDataStatus } from "./data";
+import { CleanCanonicalTab, HistoricalDownloadCard, useResearchDataStatus } from "./data";
 
 const BASE = import.meta.env.BASE_URL || "/";
 
@@ -31,6 +34,7 @@ function apiFetch(path: string, opts?: RequestInit) {
 }
 
 const CALIB_PASS_SESSION_KEY = "deriv_calib_pass_run";
+const RESEARCH_CUSTOM_SERVICES_KEY = "deriv_research_custom_services_v1";
 
 interface PassStatusResult {
   id: number;
@@ -186,6 +190,27 @@ const RESEARCH_WINDOWS = [
 
 function windowLabel(days: number): string {
   return RESEARCH_WINDOWS.find(w => w.days === days)?.label ?? `${days} days`;
+}
+
+function readCustomResearchServices(): string[] {
+  try {
+    const raw = localStorage.getItem(RESEARCH_CUSTOM_SERVICES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.map((value) => String(value ?? "").toUpperCase()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCustomResearchServices(services: string[]): void {
+  try {
+    localStorage.setItem(RESEARCH_CUSTOM_SERVICES_KEY, JSON.stringify(Array.from(new Set(services))));
+  } catch {
+    // Ignore storage failures and keep the current session usable.
+  }
 }
 
 function getWindowRange(windowDays: number): {
@@ -4778,18 +4803,14 @@ function ServicePipelinePanel({
   onJumpToTab: (tab: ResearchTabId) => void;
 }) {
   const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
-  const [promotedRuntime, setPromotedRuntime] = useState<ServicePromotedRuntimeUi | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [expandedStage, setExpandedStage] = useState("Data Coverage");
 
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const [lifecycleResp, promotedResp] = await Promise.all([
-        apiFetch(`research/${service}/service-lifecycle`),
-        apiFetch(`research/${service}/promoted-runtime`).catch(() => ({ promotedRuntime: null })),
-      ]);
+      const lifecycleResp = await apiFetch(`research/${service}/service-lifecycle`);
       setLifecycle(((lifecycleResp as { serviceLifecycleStatus?: ServiceLifecycleStatusUi }).serviceLifecycleStatus) ?? null);
-      setPromotedRuntime(((promotedResp as { promotedRuntime?: ServicePromotedRuntimeUi | null }).promotedRuntime) ?? null);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Failed to load service lifecycle");
     }
@@ -4802,46 +4823,55 @@ function ServicePipelinePanel({
   const stages = lifecycle ? [
     {
       label: "Data Coverage",
+      tab: "data" as ResearchTabId,
       status: lifecycle.dataCoverageStatus === "ready" ? "complete" : lifecycle.dataCoverageStatus === "stale" ? "warning" : "blocked",
       detail: lifecycle.latestCandleTs ? formatRuntimeDate(lifecycle.latestCandleTs) : "No candles yet",
     },
     {
       label: "Calibration",
+      tab: "calibration" as ResearchTabId,
       status: lifecycle.calibrationStatus === "complete" ? "complete" : "not_run",
       detail: lifecycle.latestCalibrationRunId ? `run ${lifecycle.latestCalibrationRunId}` : "Not run",
     },
     {
       label: "Elite Synthesis",
+      tab: "synthesis" as ResearchTabId,
       status: lifecycle.latestSynthesisJobId && lifecycle.synthesisStatus === "completed" ? "complete" : lifecycle.latestSynthesisJobId ? "warning" : "not_run",
       detail: lifecycle.latestSynthesisJobId ? `job #${lifecycle.latestSynthesisJobId}` : "Not run",
     },
     {
       label: "Candidate Staged",
+      tab: "synthesis" as ResearchTabId,
       status: lifecycle.stagedCandidateArtifactId ? "complete" : "not_run",
       detail: lifecycle.stagedCandidateArtifactId ?? "Not staged",
     },
     {
       label: "Runtime Validated",
+      tab: "diagnostics" as ResearchTabId,
       status: lifecycle.runtimeValidationStatus === "passed" ? "complete" : lifecycle.runtimeValidationStatus === "failed" ? "blocked" : lifecycle.runtimeValidationStatus === "running" ? "warning" : "not_run",
       detail: runtimeValidationSummary(lifecycle.runtimeValidationStatus),
     },
     {
       label: "Runtime Promoted",
+      tab: "runtime" as ResearchTabId,
       status: lifecycle.promotedRuntimeArtifactId ? "complete" : "not_run",
       detail: lifecycle.promotedRuntimeArtifactId ?? "Not promoted",
     },
     {
       label: "Stream Active",
+      tab: "data" as ResearchTabId,
       status: lifecycle.streamState === "active" ? "complete" : "blocked",
       detail: lifecycle.streamState === "active" ? "Live stream active" : "Stream inactive",
     },
     {
       label: "Allocator Connected",
+      tab: "runtime" as ResearchTabId,
       status: lifecycle.allocatorConnected ? "complete" : "blocked",
       detail: lifecycle.executionAllowedForActiveMode ? "Ready for Paper allocator" : "Waiting on mode or risk gates",
     },
     {
       label: "Paper Monitoring",
+      tab: "backtests" as ResearchTabId,
       status: lifecycle.executionAllowedForActiveMode ? "complete" : "warning",
       detail: lifecycle.executionAllowedForActiveMode ? "Execution allowed for active mode" : lifecycle.nextRequiredAction,
     },
@@ -4911,9 +4941,19 @@ function ServicePipelinePanel({
     };
   })() : null;
 
+  const activeStage = stages.find((stage) => stage.label === expandedStage) ?? stages[0] ?? null;
+  const stageTone = (status: string) =>
+    status === "complete"
+      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+      : status === "warning"
+        ? "border-amber-500/25 bg-amber-500/10 text-amber-200"
+        : status === "blocked"
+          ? "border-red-500/25 bg-red-500/10 text-red-200"
+          : "border-border/30 bg-background/30 text-muted-foreground";
+
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+    <div className="rounded-xl border border-border/50 bg-card p-3 space-y-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h3 className="text-sm font-semibold">Service Pipeline</h3>
           <p className="text-xs text-muted-foreground mt-1">
@@ -4929,6 +4969,36 @@ function ServicePipelinePanel({
       {err && <ErrorBox msg={err} />}
       {lifecycle ? (
         <>
+          <div className="flex flex-wrap gap-2">
+            {stages.map((stage) => (
+              <button
+                key={stage.label}
+                type="button"
+                onClick={() => setExpandedStage(stage.label)}
+                className={cn("rounded-lg border px-3 py-2 text-left text-[11px] min-w-[132px] transition-colors", stageTone(stage.status), activeStage?.label === stage.label && "ring-1 ring-primary/40")}
+              >
+                <p className="font-medium">{stage.label}</p>
+              </button>
+            ))}
+          </div>
+          {activeStage && (
+            <div className="rounded-lg border border-border/30 bg-background/35 p-3 text-[11px]">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="space-y-1">
+                  <p className="text-muted-foreground uppercase tracking-wide">{activeStage.label}</p>
+                  <p className="font-medium text-foreground">{activeStage.detail}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onJumpToTab(activeStage.tab)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-primary/30 bg-primary/10 text-xs text-primary hover:bg-primary/15"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                  Open {activeStage.tab === "data" ? "Data & Coverage" : activeStage.tab === "calibration" ? "Calibration" : activeStage.tab === "synthesis" ? "Elite Synthesis" : activeStage.tab === "runtime" ? "Runtime Model" : activeStage.tab === "diagnostics" ? "Advanced Diagnostics" : "Backtests"}
+                </button>
+              </div>
+            </div>
+          )}
           {nextStepGuide && (
             <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-2 text-[11px]">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -4948,39 +5018,6 @@ function ServicePipelinePanel({
               <p className="text-muted-foreground">{nextStepGuide.detail}</p>
             </div>
           )}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {stages.map((stage) => (
-              <div key={stage.label} className={cn("rounded-lg border p-3 space-y-1", lifecycleTone(stage.status as "complete" | "warning" | "blocked" | "not_run"))}>
-                <p className="text-[10px] uppercase tracking-wide">{stage.label}</p>
-                <p className="font-medium">{stage.detail}</p>
-              </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 text-[11px]">
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-              <p className="text-muted-foreground uppercase tracking-wide">Current promoted runtime</p>
-              <StatRow label="Policy" value={promotedRuntime?.sourcePolicyId ?? lifecycle.promotedRuntimeSourcePolicyId ?? "n/a"} />
-              <StatRow label="Family" value={promotedRuntime?.runtimeFamily ?? "n/a"} />
-              <StatRow label="Direction" value={promotedRuntime?.direction ?? "n/a"} />
-              <StatRow label="Allowed modes" value={[
-                promotedRuntime?.allowedModes?.paper ? "paper" : null,
-                promotedRuntime?.allowedModes?.demo ? "demo" : null,
-                promotedRuntime?.allowedModes?.real ? "real" : null,
-              ].filter(Boolean).join(", ") || "none"} />
-            </div>
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-              <p className="text-muted-foreground uppercase tracking-wide">Blockers</p>
-              {lifecycle.blockers.length > 0 ? lifecycle.blockers.map((blocker) => (
-                <p key={blocker} className="text-red-300">{blocker}</p>
-              )) : <p className="text-emerald-300">No active blockers</p>}
-            </div>
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-              <p className="text-muted-foreground uppercase tracking-wide">Warnings</p>
-              {lifecycle.warnings.length > 0 ? lifecycle.warnings.map((warning) => (
-                <p key={warning} className="text-amber-200">{warning}</p>
-              )) : <p className="text-muted-foreground">No current warnings</p>}
-            </div>
-          </div>
         </>
       ) : (
         <p className="text-xs text-muted-foreground">Loading service pipeline status…</p>
@@ -4995,6 +5032,7 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
   const [backtests, setBacktests] = useState<PersistedV3BacktestHistoryRun[]>([]);
   const [synthesisJobs, setSynthesisJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
   const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
+  const [promotedRuntime, setPromotedRuntime] = useState<ServicePromotedRuntimeUi | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -5002,12 +5040,13 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
     (async () => {
       setErr(null);
       try {
-        const [runtimeResp, runResp, backtestResp, synthesisResp, lifecycleResp] = await Promise.all([
+        const [runtimeResp, runResp, backtestResp, synthesisResp, lifecycleResp, promotedResp] = await Promise.all([
           apiFetch(`calibration/runtime-model/${service}`).catch(() => null),
           apiFetch(`calibration/runs/${service}`).catch(() => ({ runs: [] })),
           apiFetch(`backtest/v3/history?symbol=${encodeURIComponent(service)}&limit=5`).catch(() => ({ runs: [] })),
           apiFetch(`research/${service}/elite-synthesis/jobs?limit=10`).catch(() => ({ jobs: [] })),
           apiFetch(`research/${service}/service-lifecycle`).catch(() => ({ serviceLifecycleStatus: null })),
+          apiFetch(`research/${service}/promoted-runtime`).catch(() => ({ promotedRuntime: null })),
         ]);
         if (cancelled) return;
         setRuntime(runtimeResp as RuntimeModelStateUi | null);
@@ -5015,6 +5054,7 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
         setBacktests(Array.isArray((backtestResp as { runs?: PersistedV3BacktestHistoryRun[] } | null)?.runs) ? (backtestResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs ?? [] : []);
         setSynthesisJobs(Array.isArray((synthesisResp as { jobs?: EliteSynthesisJobStatusUi[] } | null)?.jobs) ? (synthesisResp as { jobs?: EliteSynthesisJobStatusUi[] }).jobs ?? [] : []);
         setLifecycle(((lifecycleResp as { serviceLifecycleStatus?: ServiceLifecycleStatusUi | null }).serviceLifecycleStatus) ?? null);
+        setPromotedRuntime(((promotedResp as { promotedRuntime?: ServicePromotedRuntimeUi | null }).promotedRuntime) ?? null);
       } catch (e: unknown) {
         if (cancelled) return;
         setErr(e instanceof Error ? e.message : "Failed to load service status");
@@ -5094,22 +5134,49 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
         </div>
       </div>
       {lifecycle ? (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-[11px]">
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-            <p className="text-muted-foreground uppercase tracking-wide">Active mode</p>
-            <p className="font-mono text-foreground">{lifecycle.activeMode}</p>
+        <div className="space-y-3 text-[11px]">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Active mode</p>
+              <p className="font-mono text-foreground">{lifecycle.activeMode}</p>
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Stream</p>
+              <p className="font-mono text-foreground">{lifecycle.streamState}</p>
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Allocator</p>
+              <p className="font-mono text-foreground">{lifecycle.allocatorConnected ? "connected" : "disconnected"}</p>
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Next action</p>
+              <p className="font-mono text-foreground">{lifecycle.nextRequiredAction}</p>
+            </div>
           </div>
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-            <p className="text-muted-foreground uppercase tracking-wide">Stream</p>
-            <p className="font-mono text-foreground">{lifecycle.streamState}</p>
-          </div>
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-            <p className="text-muted-foreground uppercase tracking-wide">Allocator</p>
-            <p className="font-mono text-foreground">{lifecycle.allocatorConnected ? "connected" : "disconnected"}</p>
-          </div>
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-            <p className="text-muted-foreground uppercase tracking-wide">Next action</p>
-            <p className="font-mono text-foreground">{lifecycle.nextRequiredAction}</p>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Current promoted runtime</p>
+              <StatRow label="Policy" value={promotedRuntime?.sourcePolicyId ?? lifecycle.promotedRuntimeSourcePolicyId ?? "n/a"} />
+              <StatRow label="Family" value={promotedRuntime?.runtimeFamily ?? "n/a"} />
+              <StatRow label="Direction" value={promotedRuntime?.direction ?? "n/a"} />
+              <StatRow label="Allowed modes" value={[
+                promotedRuntime?.allowedModes?.paper ? "paper" : null,
+                promotedRuntime?.allowedModes?.demo ? "demo" : null,
+                promotedRuntime?.allowedModes?.real ? "real" : null,
+              ].filter(Boolean).join(", ") || "none"} />
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Blockers</p>
+              {lifecycle.blockers.length > 0 ? lifecycle.blockers.map((blocker) => (
+                <p key={blocker} className="text-red-300">{blocker}</p>
+              )) : <p className="text-emerald-300">No active blockers</p>}
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Warnings</p>
+              {lifecycle.warnings.length > 0 ? lifecycle.warnings.map((warning) => (
+                <p key={warning} className="text-amber-200">{warning}</p>
+              )) : <p className="text-muted-foreground">No current warnings</p>}
+            </div>
           </div>
         </div>
       ) : null}
@@ -5434,74 +5501,90 @@ const REPORT_OPTIONS: ReportOption[] = [
   { value: "elite-return-amplification", label: "Return Amplification Analysis", task: "integrated-elite-synthesis", runType: "synthesis" },
 ];
 
-function AddServiceWorkflowCard({
+function AddServiceModal({
   selectedService,
-  onSelectService,
+  onClose,
+  onCreateService,
 }: {
   selectedService: string;
-  onSelectService: (service: string) => void;
+  onClose: () => void;
+  onCreateService: (service: string) => void;
 }) {
-  const serviceCards = [
-    {
-      symbol: "R_75",
-      title: "Next service",
-      subtitle: "Volatility family template",
-      note: "Ready for the next optimisation pass using the same V3.1 workflow.",
-    },
-    {
-      symbol: "BOOM300",
-      title: "Later service",
-      subtitle: "Crash/Boom portfolio contributor",
-      note: "Keep as a follow-on candidate after R_75.",
-    },
-    {
-      symbol: "R_100",
-      title: "Later service",
-      subtitle: "Volatility family follow-up",
-      note: "Use after R_75 stabilises and the portfolio allocator has more than one active contributor.",
-    },
-  ];
+  const [selectedSymbol, setSelectedSymbol] = useState<string>(selectedService);
+  const groupedSymbols = useMemo(() => getGroupedSymbols(SYMBOL_CATALOG.map((entry) => entry.symbol)), []);
+  const selectedEntry = SYMBOL_CATALOG.find((entry) => entry.symbol === selectedSymbol) ?? null;
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h3 className="text-sm font-semibold">Add New Service</h3>
-          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-            Controlled service onboarding belongs at the service selector level. Choose or scaffold the next symbol-service here, then use the Research tabs for data download, calibration, synthesis, runtime promotion, and reports.
-          </p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+      <div className="w-full max-w-2xl rounded-2xl border border-border/60 bg-card p-5 space-y-4 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold">Add New Service</h3>
+            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+              Choose a symbol from the full system list. Once created, Research will open that symbol as its own service workflow so data download, calibration, synthesis, runtime, backtests, and reports all start blank from that service.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center justify-center rounded-lg border border-border/40 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            Close
+          </button>
         </div>
-        <span className="px-2 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-200">
-          Controlled onboarding only
-        </span>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
-        {serviceCards.map((card) => (
-          <div key={card.symbol} className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-2">
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">{card.title}</p>
-              <p className="font-mono text-foreground mt-1">{card.symbol}</p>
-              <p className="text-muted-foreground mt-1">{card.subtitle}</p>
-            </div>
-            <p className="text-muted-foreground">{card.note}</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_240px] gap-4">
+          <div className="space-y-2">
+            <label className="text-xs text-muted-foreground uppercase tracking-wide">Symbol</label>
+            <select
+              value={selectedSymbol}
+              onChange={(e) => setSelectedSymbol(e.target.value)}
+              className="w-full text-xs bg-background border border-border/50 rounded px-3 py-2 text-foreground focus:outline-none focus:border-primary/50"
+            >
+              {groupedSymbols.map((section) => (
+                <optgroup key={section.group} label={section.group}>
+                  {section.entries.map((entry) => (
+                    <option key={entry.symbol} value={entry.symbol}>
+                      {entry.symbol} — {entry.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 text-[11px] space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Selected service</p>
+            <p className="font-mono text-foreground">{selectedSymbol}</p>
+            <p className="text-muted-foreground">{selectedEntry?.label ?? selectedSymbol}</p>
+            <p className="text-muted-foreground">{selectedEntry?.group ?? "Unclassified"}</p>
+            <p className="text-amber-200 pt-2">
+              New services open blank. Unsupported templates still fail loudly until their backend workflow exists.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 pt-2">
+          <p className="text-[11px] text-muted-foreground">
+            After creation, the service selector will switch to this symbol and default to Data & Coverage.
+          </p>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => onSelectService(card.symbol)}
-              className={cn(
-                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors",
-                selectedService === card.symbol
-                  ? "border-primary/40 bg-primary/10 text-primary"
-                  : "border-border/40 text-muted-foreground hover:text-foreground hover:border-border",
-              )}
+              onClick={onClose}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border/40 text-xs text-muted-foreground hover:text-foreground hover:border-border"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => onCreateService(selectedSymbol)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-primary/40 bg-primary/10 text-xs text-primary hover:bg-primary/15"
             >
               <Plus className="w-3.5 h-3.5" />
-              {selectedService === card.symbol ? "Viewing service" : "Open service workflow"}
+              Create Service
             </button>
           </div>
-        ))}
-      </div>
-      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-100">
-        Unsupported templates must still fail loudly until their backend/service template is fully implemented. This card is a controlled workflow entry point, not a silent scaffold fallback.
+        </div>
       </div>
     </div>
   );
@@ -5576,12 +5659,8 @@ function DataCoverageTab({ service }: { service: string }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] gap-4">
-        <CleanCanonicalTab />
-        <HistoricalDownloadCard statusData={dataStatus} />
-      </div>
-
-      <CoverageAllGrid />
+      <HistoricalDownloadCard statusData={dataStatus} lockedSymbol={service} />
+      <CleanCanonicalTab lockedSymbol={service} showCoverageInline />
     </div>
   );
 }
@@ -6333,25 +6412,19 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
     <div className="space-y-4">
       {err && <ErrorBox msg={err} />}
       {notice && <SuccessBox msg={notice} />}
-      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-        <div>
-          <h3 className="text-sm font-semibold">Run Parity &amp; Runtime Trigger Validation</h3>
-          <p className="text-xs text-muted-foreground mt-1">
-            Use this card for parity and runtime-trigger validation runs. It mirrors the synthesis/backtest workflow: action buttons first, then the latest diagnostic outputs underneath.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold">Parity</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Use this card to run parity and compare calibrated moves against runtime candidates for the active service.
+            </p>
+          </div>
           <button type="button" onClick={() => void loadParity()} disabled={busy !== null} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-500/30 text-xs text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/15 disabled:opacity-50">
             {busy === "parity" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
             Run Parity
           </button>
-          <button type="button" onClick={() => void loadValidation()} disabled={busy !== null} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50">
-            {busy === "validation" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
-            Runtime Trigger Validation
-          </button>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1 text-[11px]">
             <p className="text-muted-foreground uppercase tracking-wide">Latest parity output</p>
             <p className="font-mono text-foreground">
               {parity?.generatedAt ? formatRuntimeDate(parity.generatedAt) : "No parity report loaded yet"}
@@ -6360,7 +6433,19 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
               {parity?.totals?.totalMoves ? `${parity.totals.totalMoves} moves reviewed, ${parity.totals.matchedMoves ?? 0} matched.` : "Run parity to compare calibrated moves and runtime candidates."}
             </p>
           </div>
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+        </div>
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold">Runtime Trigger Validation</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Use this card to validate runtime trigger health for the active service and inspect the latest aggregate output.
+            </p>
+          </div>
+          <button type="button" onClick={() => void loadValidation()} disabled={busy !== null || service !== "CRASH300"} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50">
+            {busy === "validation" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+            Runtime Trigger Validation
+          </button>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1 text-[11px]">
             <p className="text-muted-foreground uppercase tracking-wide">Latest trigger validation output</p>
             <p className="font-mono text-foreground">
               {service === "CRASH300"
@@ -6374,6 +6459,8 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
             </p>
           </div>
         </div>
+      </div>
+      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
         <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
           History and export of these diagnostics stay in Reports. Manual tier sweeps and admission-policy backtest experiments remain diagnostics-only and are not part of the normal synthesis/runtime workflow.
         </div>
@@ -6417,6 +6504,51 @@ export default function Research() {
   const [activeTab, setActiveTab] = useState<ResearchTabId>("data");
   const [sharedWindowDays, setSharedWindowDays] = useState<number>(365);
   const [showAddService, setShowAddService] = useState(false);
+  const [customServices, setCustomServices] = useState<string[]>([]);
+
+  useEffect(() => {
+    setCustomServices(readCustomResearchServices());
+  }, []);
+
+  const serviceSelectorOptions = useMemo(() => {
+    const base = SERVICE_SELECTOR_OPTIONS.map((option) => ({
+      symbol: option.symbol,
+      label: option.label,
+      group: option.group,
+    }));
+    const activeSet = new Set<string>(base.map((option) => option.symbol));
+    const additions = customServices
+      .filter((symbol) => !activeSet.has(symbol))
+      .map((symbol) => ({
+        symbol,
+        label: getSymbolLabel(symbol),
+        group: getSymbolGroup(symbol),
+      }));
+    return [...base, ...additions].sort((a, b) => {
+      const groupCompare = a.group.localeCompare(b.group);
+      return groupCompare !== 0 ? groupCompare : a.symbol.localeCompare(b.symbol);
+    });
+  }, [customServices]);
+
+  useEffect(() => {
+    if (serviceSelectorOptions.some((option) => option.symbol === selectedService)) return;
+    setSelectedService(serviceSelectorOptions[0]?.symbol ?? "CRASH300");
+  }, [selectedService, serviceSelectorOptions]);
+
+  const handleSelectService = useCallback((service: string) => {
+    setSelectedService(service);
+    setActiveTab("data");
+    setShowAddService(false);
+  }, []);
+
+  const handleAddService = useCallback((service: string) => {
+    setCustomServices((prev) => {
+      const next = Array.from(new Set([...prev, service]));
+      writeCustomResearchServices(next);
+      return next;
+    });
+    handleSelectService(service);
+  }, [handleSelectService]);
 
   const tabs: { id: ResearchTabId; label: string; icon: React.ReactNode }[] = [
     { id: "data", label: "Data & Coverage", icon: <Activity className="w-3.5 h-3.5" /> },
@@ -6449,9 +6581,9 @@ export default function Research() {
             onChange={(e) => setSelectedService(e.target.value)}
             className="w-full text-xs bg-background border border-border/50 rounded px-2 py-2 text-foreground focus:outline-none focus:border-primary/50"
           >
-            {SERVICE_SELECTOR_OPTIONS.map((option) => (
+            {serviceSelectorOptions.map((option) => (
               <option key={option.symbol} value={option.symbol}>
-                {option.label}
+                {option.symbol} — {option.label}
               </option>
             ))}
           </select>
@@ -6470,28 +6602,25 @@ export default function Research() {
           <span className="text-xs text-muted-foreground uppercase tracking-wide">Service Onboarding</span>
           <button
             type="button"
-            onClick={() => setShowAddService((value) => !value)}
+            onClick={() => setShowAddService(true)}
             className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-xs text-muted-foreground hover:text-foreground hover:border-border"
           >
             <Plus className="w-3.5 h-3.5" />
-            {showAddService ? "Hide Add Service" : "Add New Service"}
+            Add New Service
           </button>
         </div>
       </div>
 
       {showAddService && (
-        <AddServiceWorkflowCard
+        <AddServiceModal
           selectedService={selectedService}
-          onSelectService={(service) => {
-            setSelectedService(service);
-            setShowAddService(false);
-            setActiveTab("data");
-          }}
+          onClose={() => setShowAddService(false)}
+          onCreateService={handleAddService}
         />
       )}
 
-      <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
       <ServicePipelinePanel service={selectedService} onJumpToTab={setActiveTab} />
+      <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
       <ActiveWorkerTasksCard service={selectedService} />
 
       <div className="flex items-center gap-0.5 border-b border-border/30">

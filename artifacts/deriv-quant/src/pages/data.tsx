@@ -166,6 +166,16 @@ function SymbolSelectFull({ value, onChange }: { value: string; onChange: (s: st
   );
 }
 
+function LockedSymbolBadge({ symbol }: { symbol: string }) {
+  return (
+    <div className="inline-flex items-center gap-2 rounded-lg border border-border/40 bg-background px-3 py-2 text-xs">
+      <span className="font-mono text-foreground">{symbol}</span>
+      <span className="text-muted-foreground">— {getSymbolLabel(symbol)}</span>
+      <span className="text-[10px] text-primary">active service</span>
+    </div>
+  );
+}
+
 // ── Stream State Chip ─────────────────────────────────────────────────────────
 
 function StreamState({ state }: { state: string | undefined }) {
@@ -392,18 +402,32 @@ function IntegritySummary({ data }: { data: ResearchDataStatus }) {
 
 // ── Data Operations Tab — Unified Canonical Cleanup ───────────────────────────
 
-export function CleanCanonicalTab() {
-  const [symbol, setSymbol] = useState("CRASH300");
+export function CleanCanonicalTab({
+  lockedSymbol,
+  showAdvancedInline = true,
+  showCoverageInline = false,
+}: {
+  lockedSymbol?: string;
+  showAdvancedInline?: boolean;
+  showCoverageInline?: boolean;
+}) {
+  const [symbol, setSymbol] = useState(lockedSymbol ?? "CRASH300");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<any | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Advanced individual ops state
-  const [advSym, setAdvSym] = useState("CRASH300");
+  const [advSym, setAdvSym] = useState(lockedSymbol ?? "CRASH300");
   const [advOp, setAdvOp]  = useState<"repair"|"reconcile"|"enrich"|null>(null);
   const [advResult, setAdvResult] = useState<OpResult>(null);
   const [advRunning, setAdvRunning] = useState(false);
+
+  useEffect(() => {
+    if (!lockedSymbol) return;
+    setSymbol(lockedSymbol);
+    setAdvSym(lockedSymbol);
+  }, [lockedSymbol]);
 
   const run = async () => {
     setRunning(true); setErr(null); setResult(null);
@@ -461,7 +485,11 @@ export function CleanCanonicalTab() {
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          <SymbolSelectFull value={symbol} onChange={s => { setSymbol(s); setResult(null); setErr(null); }} />
+          {lockedSymbol ? (
+            <LockedSymbolBadge symbol={lockedSymbol} />
+          ) : (
+            <SymbolSelectFull value={symbol} onChange={s => { setSymbol(s); setResult(null); setErr(null); }} />
+          )}
           <button onClick={run} disabled={running}
             className="flex items-center gap-2 px-4 py-2 rounded-lg border border-primary/40 bg-primary/12 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
             {running
@@ -491,9 +519,15 @@ export function CleanCanonicalTab() {
             </div>
           </div>
         )}
+
+        {showCoverageInline && (
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+            <ActiveSymbolCoverageCard symbol={lockedSymbol ?? symbol} compact />
+          </div>
+        )}
       </div>
 
-      {/* Advanced / debug ops */}
+      {showAdvancedInline && (
       <div className="rounded-xl border border-border/40 overflow-hidden">
         <button
           onClick={() => setShowAdvanced(v => !v)}
@@ -510,7 +544,11 @@ export function CleanCanonicalTab() {
               These run on the selected symbol only and do not run the full pipeline.
             </p>
             <div className="flex items-center gap-3 flex-wrap">
-              <SymbolSelectFull value={advSym} onChange={s => { setAdvSym(s); setAdvResult(null); }} />
+              {lockedSymbol ? (
+                <LockedSymbolBadge symbol={lockedSymbol} />
+              ) : (
+                <SymbolSelectFull value={advSym} onChange={s => { setAdvSym(s); setAdvResult(null); }} />
+              )}
               {(["repair", "reconcile", "enrich"] as const).map(op => (
                 <button key={op} onClick={() => runAdv(op)} disabled={advRunning}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
@@ -539,17 +577,29 @@ export function CleanCanonicalTab() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
 
-export function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatus }) {
-  const [symbol, setSymbol] = useState("R_100");
+export function HistoricalDownloadCard({
+  statusData,
+  lockedSymbol,
+}: {
+  statusData?: ResearchDataStatus;
+  lockedSymbol?: string;
+}) {
+  const [symbol, setSymbol] = useState(lockedSymbol ?? "R_100");
   const [running, setRunning] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [tracker, setTracker] = useState<DataTopUpTracker | null>(null);
+
+  useEffect(() => {
+    if (!lockedSymbol) return;
+    setSymbol(lockedSymbol);
+  }, [lockedSymbol]);
 
   const statusBySymbol = useMemo(() => {
     return new Map((statusData?.symbols ?? []).map(s => [s.symbol, s]));
@@ -632,7 +682,11 @@ export function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDa
         </div>
       </div>
       <div className="flex items-center gap-3 flex-wrap">
-        <SymbolSelectFull value={symbol} onChange={setSymbol} />
+        {lockedSymbol ? (
+          <LockedSymbolBadge symbol={lockedSymbol} />
+        ) : (
+          <SymbolSelectFull value={symbol} onChange={setSymbol} />
+        )}
         <button
           onClick={startDownload}
           disabled={running || resetting}
@@ -1103,7 +1157,7 @@ function RuntimeTab() {
 
 // ── Coverage All Grid ──────────────────────────────────────────────────────────
 
-const ALL_TIMEFRAMES = ["1m","5m","10m","20m","40m","1h","2h","4h","8h","1d","2d","4d"] as const;
+export const ALL_TIMEFRAMES = ["1m","5m","10m","20m","40m","1h","2h","4h","8h","1d","2d","4d"] as const;
 
 export function CoverageAllGrid() {
   const { data, isLoading, refetch } = useCoverageAll();
@@ -1207,6 +1261,76 @@ export function CoverageAllGrid() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+export function ActiveSymbolCoverageCard({
+  symbol,
+  compact = false,
+}: {
+  symbol: string;
+  compact?: boolean;
+}) {
+  const { data, isLoading, refetch } = useCoverageAll();
+
+  const rows = useMemo(() => {
+    return (data?.rows ?? [])
+      .filter((row) => row.symbol === symbol)
+      .sort((a, b) => ALL_TIMEFRAMES.indexOf(a.timeframe as typeof ALL_TIMEFRAMES[number]) - ALL_TIMEFRAMES.indexOf(b.timeframe as typeof ALL_TIMEFRAMES[number]));
+  }, [data?.rows, symbol]);
+
+  const rowMap = useMemo(() => {
+    const next = new Map<string, CoverageRow>();
+    rows.forEach((row) => next.set(row.timeframe, row));
+    return next;
+  }, [rows]);
+
+  const statusCls = (count: number, interpCount: number) => {
+    if (!count) return "bg-muted/10 text-muted-foreground/40 border-border/20";
+    const interpRatio = count > 0 ? interpCount / count : 0;
+    if (interpRatio > 0.3) return "bg-amber-500/10 text-amber-300 border-amber-500/25";
+    return "bg-emerald-500/10 text-emerald-300 border-emerald-500/25";
+  };
+
+  return (
+    <div className={cn("rounded-xl border border-border/50 bg-card p-4 space-y-3", compact && "border-border/30 bg-transparent p-0")}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold">{compact ? "Active-Symbol Candle Coverage" : "Multi-Timeframe Candle Coverage"}</h3>
+          <p className="text-xs text-muted-foreground mt-1">
+            Active-service coverage only for {symbol}. Use this after Clean Canonical Data to confirm refreshed counts across derived timeframes.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void refetch()}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-muted-foreground border border-border/40 hover:border-border transition-colors"
+        >
+          <RefreshCw className="w-3 h-3" /> Refresh
+        </button>
+      </div>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading active-symbol coverage...</p>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 text-[11px]">
+          {ALL_TIMEFRAMES.map((timeframe) => {
+            const row = rowMap.get(timeframe);
+            const count = Number(row?.count ?? 0);
+            const interp = Number(row?.interpolatedCount ?? 0);
+            const ratio = count > 0 ? Math.round((interp / count) * 100) : 0;
+            return (
+              <div key={timeframe} className={cn("rounded-lg border p-3 space-y-1", statusCls(count, interp))}>
+                <p className="uppercase tracking-wide text-[10px]">{timeframe}</p>
+                <p className="font-mono text-base">{count > 0 ? count.toLocaleString() : "0"}</p>
+                <p className="text-[10px] opacity-80">
+                  {count > 0 ? `${ratio}% interpolated` : "absent"}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
