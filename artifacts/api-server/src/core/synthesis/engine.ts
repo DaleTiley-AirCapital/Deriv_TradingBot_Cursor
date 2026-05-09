@@ -17,6 +17,7 @@ import type {
   EliteSynthesisResultState,
   EliteSynthesisResult,
   EliteSynthesisSearchProfile,
+  EliteSynthesisTargetProfile,
   EliteSynthesisUnitValidation,
   EliteSynthesisValidationError,
 } from "./types.js";
@@ -445,6 +446,20 @@ const CANONICAL_REBUILT_TRANSITIONS = new Set([
   "failed_recovery_break_down",
 ]);
 
+const RETURN_AMPLIFICATION_BUCKETS = [
+  "5_to_6_pct",
+  "6_to_7_pct",
+  "7_to_8_pct",
+  "8_to_9_pct",
+  "9_to_10_pct",
+  "10_to_11_pct",
+  "11_to_12_pct",
+  "12_to_13_pct",
+  "13_plus_pct",
+] as const;
+
+type ReturnAmplificationBucket = (typeof RETURN_AMPLIFICATION_BUCKETS)[number];
+
 function offsetClusterFromLabel(label: string | null | undefined) {
   switch (label) {
     case "T-10":
@@ -512,6 +527,117 @@ function summarizeExitRulesFromRebuiltCandidates(candidates: SynthesisRebuiltTri
     trailingDistance,
     exitRuleSourceDistribution,
     widenedDistribution,
+  };
+}
+
+function bucketLabelFromPctPoints(pctPoints: number | null | undefined): ReturnAmplificationBucket | null {
+  const value = Math.abs(Number(pctPoints ?? 0));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (value < 6) return "5_to_6_pct";
+  if (value < 7) return "6_to_7_pct";
+  if (value < 8) return "7_to_8_pct";
+  if (value < 9) return "8_to_9_pct";
+  if (value < 10) return "9_to_10_pct";
+  if (value < 11) return "10_to_11_pct";
+  if (value < 12) return "11_to_12_pct";
+  if (value < 13) return "12_to_13_pct";
+  return "13_plus_pct";
+}
+
+function bucketLowerBound(bucket: ReturnAmplificationBucket): number {
+  switch (bucket) {
+    case "5_to_6_pct":
+      return 5;
+    case "6_to_7_pct":
+      return 6;
+    case "7_to_8_pct":
+      return 7;
+    case "8_to_9_pct":
+      return 8;
+    case "9_to_10_pct":
+      return 9;
+    case "10_to_11_pct":
+      return 10;
+    case "11_to_12_pct":
+      return 11;
+    case "12_to_13_pct":
+      return 12;
+    case "13_plus_pct":
+      return 13;
+  }
+}
+
+function bucketUpperBound(bucket: ReturnAmplificationBucket): number {
+  switch (bucket) {
+    case "5_to_6_pct":
+      return 6;
+    case "6_to_7_pct":
+      return 7;
+    case "7_to_8_pct":
+      return 8;
+    case "8_to_9_pct":
+      return 9;
+    case "9_to_10_pct":
+      return 10;
+    case "10_to_11_pct":
+      return 11;
+    case "11_to_12_pct":
+      return 12;
+    case "12_to_13_pct":
+      return 13;
+    case "13_plus_pct":
+      return 15;
+  }
+}
+
+function bucketMidpoint(bucket: ReturnAmplificationBucket): number {
+  return Number((((bucketLowerBound(bucket) + bucketUpperBound(bucket)) / 2)).toFixed(2));
+}
+
+function bucketRank(bucket: string | null | undefined): number {
+  const idx = RETURN_AMPLIFICATION_BUCKETS.indexOf(String(bucket ?? "") as ReturnAmplificationBucket);
+  return idx >= 0 ? idx : -1;
+}
+
+function returnBucketAtLeast(bucket: string | null | undefined, threshold: ReturnAmplificationBucket): boolean {
+  return bucketRank(bucket) >= bucketRank(threshold);
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function candidateFeatureNumber(candidate: SynthesisRebuiltTriggerCandidateRecord, key: string): number | null {
+  return asFiniteNumber(candidate.liveSafeFeatures[key]);
+}
+
+function actualMoveBucketForCandidate(
+  candidate: SynthesisRebuiltTriggerCandidateRecord,
+  moveById: Map<number, UnifiedSynthesisDataset["moves"][number]>,
+): ReturnAmplificationBucket | null {
+  const move = candidate.matchedCalibratedMoveId ? moveById.get(candidate.matchedCalibratedMoveId) ?? null : null;
+  const pctPoints = move?.movePctPoints
+    ?? move?.realisticMfeAfterEntryPctPoints
+    ?? move?.realisticMfeAfterEntry
+    ?? candidate.projectedMovePctPoints
+    ?? candidate.projectedMovePct
+    ?? null;
+  return bucketLabelFromPctPoints(pctPoints);
+}
+
+function computeScenarioEquityMetrics(pnlPctPoints: number[]) {
+  let cumulative = 0;
+  let peak = 0;
+  let maxDrawdown = 0;
+  for (const pnl of pnlPctPoints) {
+    cumulative += pnl;
+    peak = Math.max(peak, cumulative);
+    maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
+  }
+  return {
+    accountReturnPct: Number(cumulative.toFixed(2)),
+    maxDrawdownPct: Number(maxDrawdown.toFixed(2)),
   };
 }
 
@@ -861,10 +987,22 @@ function generatePoliciesFromTriggerRebuild(dataset: UnifiedSynthesisDataset, re
   return seeds;
 }
 
-function targetAchieved(policy: EliteSynthesisPolicySummary | null) {
+function targetAchieved(policy: EliteSynthesisPolicySummary | null, targetProfile: EliteSynthesisTargetProfile = "default") {
+  if (!policy) return false;
+  if (targetProfile === "return_amplification") {
+    const averageMonthlyReturn = Number(policy.averageMonthlyAccountReturnPct ?? 0);
+    return Boolean(
+      policy.winRate >= 0.9
+      && policy.slHitRate <= 0.1
+      && policy.profitFactor >= 2.5
+      && averageMonthlyReturn >= 50
+      && policy.maxDrawdownPct <= 10
+      && policy.trades >= 20
+      && policy.trades <= 45,
+    );
+  }
   return Boolean(
-    policy
-    && policy.winRate >= 0.9
+    policy.winRate >= 0.9
     && policy.slHitRate <= 0.1
     && policy.profitFactor >= 2.5
     && policy.trades >= 45
@@ -1242,6 +1380,7 @@ function buildTargetAchievedBreakdown(params: {
   targetTradeCountMin: number;
   targetTradeCountMax: number;
   maxTradesPerDay: number;
+  targetProfile: EliteSynthesisTargetProfile;
   lateOffsetSafetyAudit: Record<string, unknown> | null;
   exitDerivationAudit: Record<string, unknown> | null;
   monthlyStabilityAssessment: Record<string, unknown>;
@@ -1256,7 +1395,14 @@ function buildTargetAchievedBreakdown(params: {
   const lateOffsetSafetyPassed = Boolean(params.lateOffsetSafetyAudit?.passed ?? false);
   const exitDerivationPassed = Boolean(params.exitDerivationAudit?.passed ?? false);
   const calibratedRelationshipPassed = Boolean(params.calibratedMoveRelationshipSummary?.passed ?? false);
+  const requiredTradeCountMin = params.targetProfile === "return_amplification" ? Math.min(params.targetTradeCountMin, 20) : params.targetTradeCountMin;
+  const requiredTradeCountMax = params.targetProfile === "return_amplification" ? Math.min(Math.max(params.targetTradeCountMax, 30), 45) : params.targetTradeCountMax;
+  const returnProfileTradeCountPassed = Boolean(policy && policy.trades >= requiredTradeCountMin && policy.trades <= requiredTradeCountMax);
+  const monthlyAccountReturnPct = Number(policy?.averageMonthlyAccountReturnPct ?? 0);
+  const monthlyReturnPassed = params.targetProfile === "return_amplification" ? monthlyAccountReturnPct >= 50 : monthlyStabilityPassed;
+  const drawdownPassed = params.targetProfile === "return_amplification" ? Number(policy?.maxDrawdownPct ?? 0) <= 10 : true;
   return {
+    targetProfile: params.targetProfile,
     winRate: policy?.winRate ?? 0,
     requiredWinRate: 0.9,
     winRatePassed: Boolean(policy && policy.winRate >= 0.9),
@@ -1267,13 +1413,19 @@ function buildTargetAchievedBreakdown(params: {
     requiredProfitFactor: 2.5,
     profitFactorPassed: Boolean(policy && policy.profitFactor >= 2.5),
     trades: policy?.trades ?? 0,
-    requiredTradeCountMin: params.targetTradeCountMin,
-    requiredTradeCountMax: params.targetTradeCountMax,
-    tradeCountPassed,
+    requiredTradeCountMin,
+    requiredTradeCountMax,
+    tradeCountPassed: params.targetProfile === "return_amplification" ? returnProfileTradeCountPassed : tradeCountPassed,
     maxTradesPerDay: params.maxTradesPerDay,
     maxTradesPerDayPassed: true,
     phantomCount: policy?.phantomCount ?? 0,
     phantomCountPassed: Boolean((policy?.phantomCount ?? 0) === 0),
+    monthlyAccountReturnPct,
+    requiredMonthlyAccountReturnPct: params.targetProfile === "return_amplification" ? 50 : null,
+    monthlyReturnPassed,
+    maxDrawdownPct: policy?.maxDrawdownPct ?? 0,
+    requiredMaxDrawdownPct: params.targetProfile === "return_amplification" ? 10 : null,
+    drawdownPassed,
     monthlyStabilityPassed,
     leakagePassed,
     lateOffsetSafetyPassed,
@@ -1285,7 +1437,9 @@ function buildTargetAchievedBreakdown(params: {
       && policy.winRate >= 0.9
       && policy.slHitRate <= 0.1
       && policy.profitFactor >= 2.5
-      && tradeCountPassed
+      && (params.targetProfile === "return_amplification" ? returnProfileTradeCountPassed : tradeCountPassed)
+      && monthlyReturnPassed
+      && drawdownPassed
       && leakagePassed
       && lateOffsetSafetyPassed
       && exitDerivationPassed
@@ -1300,6 +1454,7 @@ function buildValidationHardeningGuard(params: {
   rebuiltTriggerDiagnostics: Record<string, unknown>;
   topPolicySummaries: EliteSynthesisPolicySummary[];
   bestPolicySummary: EliteSynthesisPolicySummary | null;
+  bestPolicySelectedTradesSummary: Record<string, unknown> | null;
 }) {
   const invariants: Array<{ ok: boolean; name: string }> = [
     {
@@ -1331,6 +1486,18 @@ function buildValidationHardeningGuard(params: {
       ok: params.topPolicySummaries.every((policy) => !Array.isArray(policy.selectedTriggerTransitions)
         || !(policy.selectedTriggerTransitions as unknown[]).some((value) => ["trending", "recovery", "failed_recovery", "up", "down"].includes(String(value)))),
       name: "generic_trigger_labels_excluded_from_final_policies",
+    },
+    {
+      ok: !params.bestPolicySelectedTradesSummary
+        || !params.bestPolicySummary
+        || Object.values((params.bestPolicySelectedTradesSummary.reportConsistencyChecks as Record<string, unknown> | undefined) ?? {}).every(Boolean),
+      name: "selected_trades_export_reconciles_to_best_policy_summary",
+    },
+    {
+      ok: Number(params.rebuiltTriggerDiagnostics.simulatedTradeCount ?? 0) === 0
+        || params.topPolicySummaries.some((policy) => String(policy.sourcePool ?? "") === "rebuilt_trigger_candidates")
+        || String(params.bestPolicySummary?.sourcePool ?? "") === "rebuilt_trigger_candidates",
+      name: "rebuilt_policy_can_still_surface_in_top_policy_summaries",
     },
   ];
   const failed = invariants.find((invariant) => !invariant.ok) ?? null;
@@ -1365,6 +1532,874 @@ function buildStrategyGradeReadiness(params: {
   };
 }
 
+function buildReturnAmplificationAnalysis(params: {
+  dataset: UnifiedSynthesisDataset;
+  bestPolicyEvaluation: PolicyEvaluationResult | null;
+  bestPolicySummary: EliteSynthesisPolicySummary | null;
+  bestPolicySelectedTradesSummary: Record<string, unknown> | null;
+  bestPolicySelectedTrades: Array<Record<string, unknown>>;
+  policyArtifactReadiness: Record<string, unknown> | null;
+  leakageAudit: EliteSynthesisLeakageAudit | null;
+}) {
+  const simulatedCandidates = params.dataset.rebuiltTriggerCandidates
+    .filter((candidate) => candidate.eligible && candidate.simulatedTrade && !candidate.noTradeReason);
+  const moveById = new Map(params.dataset.moves.map((move) => [move.moveId, move]));
+  const baselineSelectedIds = new Set(
+    Array.isArray(params.bestPolicyEvaluation?.diagnostics?.selectedTradeIds)
+      ? (params.bestPolicyEvaluation?.diagnostics?.selectedTradeIds as string[])
+      : [],
+  );
+  const predictionFeatureKeys = [
+    "confidence",
+    "setupMatch",
+    "triggerStrengthScore",
+    "barsSinceLastCrash",
+    "crashRecencyScore",
+    "rangeExpansionScore60",
+    "compressionToExpansionScore",
+    "atrRank240",
+    "bbWidthRank240",
+    "recoveryQualityScore",
+    "oneBarReturnPct",
+    "threeBarReturnPct",
+    "fiveBarReturnPct",
+    "microBreakStrengthPct",
+  ];
+
+  const countRecord = (values: Array<string | null | undefined>) => values.reduce<Record<string, number>>((acc, value) => {
+    const key = typeof value === "string" && value.trim().length > 0 ? value : "unknown";
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const probabilityDistribution = (values: Array<string | null | undefined>) => {
+    const counts = countRecord(values);
+    const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    const distribution = Object.fromEntries(
+      Object.entries(counts).map(([key, count]) => [key, total > 0 ? Number((count / total).toFixed(4)) : 0]),
+    );
+    return { counts, distribution, total };
+  };
+
+  const actualBucketLookup = new Map<string, ReturnAmplificationBucket | null>();
+  for (const candidate of simulatedCandidates) {
+    actualBucketLookup.set(candidate.candidateId, actualMoveBucketForCandidate(candidate, moveById));
+  }
+
+  const scoreCandidateSimilarity = (
+    subject: SynthesisRebuiltTriggerCandidateRecord,
+    peer: SynthesisRebuiltTriggerCandidateRecord,
+  ) => {
+    let score = 0;
+    if (subject.runtimeFamily && subject.runtimeFamily === peer.runtimeFamily) score += 2.2;
+    if (subject.triggerTransition && subject.triggerTransition === peer.triggerTransition) score += 2.1;
+    if (subject.direction === peer.direction) score += 1.3;
+    if (subject.selectedBucket && subject.selectedBucket === peer.selectedBucket) score += 1.2;
+    if (subject.selectedMoveSizeBucket && subject.selectedMoveSizeBucket === peer.selectedMoveSizeBucket) score += 1.1;
+    if (offsetClusterFromLabel(subject.offsetLabel) === offsetClusterFromLabel(peer.offsetLabel)) score += 0.65;
+    for (const key of predictionFeatureKeys) {
+      const a = key === "confidence"
+        ? subject.confidence
+        : key === "setupMatch"
+          ? subject.setupMatch
+          : key === "triggerStrengthScore"
+            ? subject.triggerStrengthScore
+            : candidateFeatureNumber(subject, key);
+      const b = key === "confidence"
+        ? peer.confidence
+        : key === "setupMatch"
+          ? peer.setupMatch
+          : key === "triggerStrengthScore"
+            ? peer.triggerStrengthScore
+            : candidateFeatureNumber(peer, key);
+      if (a == null || b == null) continue;
+      const delta = Math.abs(a - b);
+      score += Math.max(0, 1 - Math.min(1, delta / 2));
+    }
+    return score;
+  };
+
+  const buildCandidatePrediction = (candidate: SynthesisRebuiltTriggerCandidateRecord) => {
+    const peerPools = [
+      {
+        source: "exact_family_transition_direction",
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && peer.runtimeFamily === candidate.runtimeFamily
+          && peer.triggerTransition === candidate.triggerTransition
+          && peer.direction === candidate.direction
+          && actualBucketLookup.get(peer.candidateId),
+        ),
+      },
+      {
+        source: "family_direction",
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && peer.runtimeFamily === candidate.runtimeFamily
+          && peer.direction === candidate.direction
+          && actualBucketLookup.get(peer.candidateId),
+        ),
+      },
+      {
+        source: "family_only",
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && peer.runtimeFamily === candidate.runtimeFamily
+          && actualBucketLookup.get(peer.candidateId),
+        ),
+      },
+      {
+        source: "direction_only",
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && peer.direction === candidate.direction
+          && actualBucketLookup.get(peer.candidateId),
+        ),
+      },
+      {
+        source: "all_simulated_candidates",
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && actualBucketLookup.get(peer.candidateId),
+        ),
+      },
+    ];
+    const chosenPool = peerPools.find((pool) => pool.peers.length >= 8) ?? peerPools.find((pool) => pool.peers.length > 0) ?? null;
+    if (!chosenPool) {
+      return {
+        candidateId: candidate.candidateId,
+        predictedMoveSizeBucket: null,
+        predictedBucketConfidence: 0,
+        predictedBucketProbabilityDistribution: {},
+        expectedMovePct: null,
+        expectedMfeDistribution: null,
+        expectedMaeDistribution: null,
+        bucketPredictionReason: "no_prediction:no_historical_peers",
+        liveSafeFeaturesUsed: predictionFeatureKeys,
+        noPredictionReason: "no_historical_peers",
+        actualEvaluatedBucket: actualBucketLookup.get(candidate.candidateId),
+      };
+    }
+    const rankedPeers = chosenPool.peers
+      .map((peer) => ({ peer, score: scoreCandidateSimilarity(candidate, peer) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.min(40, chosenPool.peers.length));
+    const peerBuckets = rankedPeers.map(({ peer }) => actualBucketLookup.get(peer.candidateId)).filter((value): value is ReturnAmplificationBucket => Boolean(value));
+    const bucketStats = probabilityDistribution(peerBuckets);
+    const topBucket = Object.entries(bucketStats.counts)
+      .sort((a, b) => b[1] - a[1] || bucketRank(b[0]) - bucketRank(a[0]))[0]?.[0] as ReturnAmplificationBucket | undefined;
+    const topProbability = topBucket ? Number(bucketStats.distribution[topBucket] ?? 0) : 0;
+    const peerMovePct = rankedPeers
+      .map(({ peer }) => moveById.get(peer.matchedCalibratedMoveId ?? -1)?.movePctPoints ?? peer.projectedMovePctPoints ?? null)
+      .filter((value): value is number => Number.isFinite(value));
+    const peerMfe = rankedPeers.map(({ peer }) => Math.abs(peer.mfePctPoints ?? peer.mfePct ?? 0)).filter((value) => value > 0);
+    const peerMae = rankedPeers.map(({ peer }) => Math.abs(peer.maePctPoints ?? peer.maePct ?? 0)).filter((value) => value > 0);
+    const predictedBucketConfidence = Number(Math.min(
+      0.99,
+      topProbability * 0.55
+        + Math.min(1, rankedPeers.length / 20) * 0.2
+        + Math.max(0, Math.min(1, Number(candidate.confidence ?? 0))) * 0.15
+        + Math.max(0, Math.min(1, Number(candidate.setupMatch ?? 0))) * 0.05
+        + Math.max(0, Math.min(1, Number(candidate.triggerStrengthScore ?? 0))) * 0.05,
+    ).toFixed(4));
+    return {
+      candidateId: candidate.candidateId,
+      predictedMoveSizeBucket: topBucket ?? null,
+      predictedBucketConfidence,
+      predictedBucketProbabilityDistribution: bucketStats.distribution,
+      expectedMovePct: peerMovePct.length > 0 ? Number(mean(peerMovePct).toFixed(2)) : null,
+      expectedMfeDistribution: peerMfe.length > 0 ? summarizeDistribution(peerMfe) : null,
+      expectedMaeDistribution: peerMae.length > 0 ? summarizeDistribution(peerMae) : null,
+      bucketPredictionReason: `${chosenPool.source}:${rankedPeers.length}_ranked_peers`,
+      liveSafeFeaturesUsed: predictionFeatureKeys,
+      noPredictionReason: topBucket ? null : "peer_bucket_distribution_empty",
+      actualEvaluatedBucket: actualBucketLookup.get(candidate.candidateId),
+    };
+  };
+
+  const predictions = simulatedCandidates.map((candidate) => buildCandidatePrediction(candidate));
+  const predictionById = new Map(predictions.map((prediction) => [prediction.candidateId, prediction]));
+
+  const buildDynamicExitPlan = (candidate: SynthesisRebuiltTriggerCandidateRecord) => {
+    const prediction = predictionById.get(candidate.candidateId);
+    const predictedBucket = prediction?.predictedMoveSizeBucket ?? null;
+    if (!predictedBucket) {
+      return {
+        available: false,
+        noPredictionReason: prediction?.noPredictionReason ?? "no_prediction",
+      };
+    }
+    const scopes = [
+      {
+        source: "exact_bucket_family_direction",
+        widenedFrom: predictedBucket,
+        widenedTo: predictedBucket,
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && actualBucketLookup.get(peer.candidateId) === predictedBucket
+          && peer.runtimeFamily === candidate.runtimeFamily
+          && peer.direction === candidate.direction,
+        ),
+      },
+      {
+        source: "family_bucket_subset",
+        widenedFrom: predictedBucket,
+        widenedTo: `${candidate.runtimeFamily ?? "unknown"}|${predictedBucket}`,
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && actualBucketLookup.get(peer.candidateId) === predictedBucket
+          && peer.runtimeFamily === candidate.runtimeFamily,
+        ),
+      },
+      {
+        source: "trigger_bucket_subset",
+        widenedFrom: predictedBucket,
+        widenedTo: `${candidate.triggerTransition ?? "unknown"}|${predictedBucket}`,
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && actualBucketLookup.get(peer.candidateId) === predictedBucket
+          && peer.triggerTransition === candidate.triggerTransition,
+        ),
+      },
+      {
+        source: "bucket_direction_subset",
+        widenedFrom: predictedBucket,
+        widenedTo: `${predictedBucket}|${candidate.direction}`,
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && actualBucketLookup.get(peer.candidateId) === predictedBucket
+          && peer.direction === candidate.direction,
+        ),
+      },
+      {
+        source: "bucket_subset",
+        widenedFrom: predictedBucket,
+        widenedTo: predictedBucket,
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && actualBucketLookup.get(peer.candidateId) === predictedBucket,
+        ),
+      },
+      {
+        source: "family_default",
+        widenedFrom: predictedBucket,
+        widenedTo: `${candidate.runtimeFamily ?? "unknown"}|family_default`,
+        peers: simulatedCandidates.filter((peer) =>
+          peer.candidateId !== candidate.candidateId
+          && peer.runtimeFamily === candidate.runtimeFamily,
+        ),
+      },
+      {
+        source: "broad_calibrated_default",
+        widenedFrom: predictedBucket,
+        widenedTo: "broad_calibrated_default",
+        peers: simulatedCandidates.filter((peer) => peer.candidateId !== candidate.candidateId),
+      },
+    ];
+    const chosenScope = scopes.find((scope) => scope.peers.length >= 6) ?? scopes.find((scope) => scope.peers.length >= 3) ?? null;
+    if (!chosenScope) {
+      return {
+        available: false,
+        noPredictionReason: "no_exit_peer_subset",
+      };
+    }
+    const peerMfe = chosenScope.peers.map((peer) => Math.abs(peer.mfePctPoints ?? peer.mfePct ?? 0)).filter((value) => value > 0);
+    const peerMae = chosenScope.peers.map((peer) => Math.abs(peer.maePctPoints ?? peer.maePct ?? 0)).filter((value) => value > 0);
+    const peerProjected = chosenScope.peers.map((peer) => Math.abs(peer.projectedMovePctPoints ?? peer.projectedMovePct ?? 0)).filter((value) => value > 0);
+    const peerHoldBars = chosenScope.peers.map((peer) => Math.max(1, Math.round(((peer.exitTs ?? peer.entryTs) - peer.entryTs) / 60))).filter((value) => Number.isFinite(value) && value > 0);
+    const conf = Number(prediction?.predictedBucketConfidence ?? 0);
+    const tpQuantile = conf >= 0.8 ? 0.6 : conf >= 0.6 ? 0.5 : 0.4;
+    const slQuantile = conf >= 0.8 ? 0.75 : 0.85;
+    const tpTargetPct = Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerProjected.length > 0 ? peerProjected : peerMfe, tpQuantile)).toFixed(2));
+    const slRiskPct = Number(percentile(peerMae, slQuantile).toFixed(2));
+    const trailingActivationPct = Number(percentile(peerMfe, 0.25).toFixed(2));
+    const trailingDistancePct = Number(percentile(peerMae, 0.65).toFixed(2));
+    const runnerAllowed = returnBucketAtLeast(predictedBucket, "9_to_10_pct") && conf >= 0.6;
+    return {
+      available: peerMfe.length > 0 && peerMae.length > 0,
+      predictedMoveSizeBucket: predictedBucket,
+      tpTargetPct,
+      tpTargetSource: `${chosenScope.source}:p${Math.round(tpQuantile * 100)}_projected_or_mfe`,
+      slRiskPct,
+      slRiskSource: `${chosenScope.source}:p${Math.round(slQuantile * 100)}_mae`,
+      trailingActivationPct,
+      trailingActivationSource: `${chosenScope.source}:p25_mfe`,
+      trailingDistancePct,
+      trailingDistanceSource: `${chosenScope.source}:p65_mae`,
+      minHoldBars: peerHoldBars.length > 0 ? Math.max(1, Math.round(percentile(peerHoldBars, 0.25))) : 1,
+      maxHoldBars: peerHoldBars.length > 0 ? Math.max(2, Math.round(percentile(peerHoldBars, 0.75))) : 6,
+      runnerAllowed,
+      runnerTargetPct: runnerAllowed ? Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerMfe, 0.75)).toFixed(2)) : null,
+      partialTakeProfitPlan: runnerAllowed
+        ? [{ takePctOfPosition: 0.5, targetPct: Number(Math.min(bucketMidpoint(predictedBucket), percentile(peerMfe, 0.5)).toFixed(2)) }]
+        : [],
+      exitPlanConfidence: Number(Math.min(0.99, conf * 0.6 + Math.min(1, chosenScope.peers.length / 12) * 0.4).toFixed(4)),
+      derivationNotes: [
+        `predicted_bucket=${predictedBucket}`,
+        `exit_source=${chosenScope.source}`,
+        `peer_count=${chosenScope.peers.length}`,
+      ],
+      widenedFrom: chosenScope.widenedFrom,
+      widenedTo: chosenScope.widenedTo,
+      broadFallback: chosenScope.source === "broad_calibrated_default",
+      subsetStats: {
+        sampleCount: chosenScope.peers.length,
+        winnerCount: chosenScope.peers.filter((peer) => (peer.pnlPctPoints ?? peer.pnlPct) > 0).length,
+        mfeRange: summarizeRange(peerMfe),
+        maeRange: summarizeRange(peerMae),
+      },
+    };
+  };
+
+  const enrichedCandidates = simulatedCandidates.map((candidate) => {
+    const prediction = predictionById.get(candidate.candidateId) ?? {
+      predictedMoveSizeBucket: null,
+      predictedBucketConfidence: 0,
+      predictedBucketProbabilityDistribution: {},
+      expectedMovePct: null,
+      expectedMfeDistribution: null,
+      expectedMaeDistribution: null,
+      bucketPredictionReason: "missing_prediction",
+      liveSafeFeaturesUsed: predictionFeatureKeys,
+      noPredictionReason: "missing_prediction",
+      actualEvaluatedBucket: actualBucketLookup.get(candidate.candidateId),
+    };
+    const dynamicExitPlan = buildDynamicExitPlan(candidate);
+    const liveSafeEliteScore = Number((
+      (candidate.confidence ?? 0) * 0.35
+      + (candidate.setupMatch ?? 0) * 0.25
+      + (candidate.triggerStrengthScore ?? 0) * 0.2
+      + Math.max(0, prediction.predictedBucketConfidence ?? 0) * 0.2
+    ).toFixed(4));
+    return {
+      candidate,
+      prediction,
+      dynamicExitPlan,
+      actualEvaluatedBucket: prediction.actualEvaluatedBucket,
+      liveSafeEliteScore,
+    };
+  });
+
+  const scenarioMonthlyBreakdown = (selected: typeof enrichedCandidates) => {
+    const monthMap = new Map<string, typeof enrichedCandidates>();
+    for (const item of selected) {
+      const month = new Date(item.candidate.entryTs * 1000).toISOString().slice(0, 7);
+      const bucket = monthMap.get(month) ?? [];
+      bucket.push(item);
+      monthMap.set(month, bucket);
+    }
+    return Array.from(monthMap.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([month, bucket]) => {
+      const pnl = bucket.map((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0));
+      const metrics = computeScenarioEquityMetrics(pnl);
+      const wins = bucket.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0).length;
+      const losses = bucket.length - wins;
+      const slHits = bucket.filter((item) => item.candidate.exitReason === "sl_hit").length;
+      const grossProfit = bucket.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0)
+        .reduce((sum, item) => sum + Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0), 0);
+      const grossLoss = Math.abs(bucket.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) <= 0)
+        .reduce((sum, item) => sum + Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0), 0));
+      return {
+        month,
+        trades: bucket.length,
+        wins,
+        losses,
+        slHits,
+        winRate: bucket.length > 0 ? Number((wins / bucket.length).toFixed(4)) : 0,
+        slHitRate: bucket.length > 0 ? Number((slHits / bucket.length).toFixed(4)) : 0,
+        profitFactor: grossLoss > 0 ? Number((grossProfit / grossLoss).toFixed(2)) : grossProfit > 0 ? 99 : 0,
+        accountReturnPct: metrics.accountReturnPct,
+        maxDrawdownPct: metrics.maxDrawdownPct,
+        avgPnlPct: Number(mean(pnl).toFixed(2)),
+        medianPnlPct: Number(percentile(pnl, 0.5).toFixed(2)),
+        exitReasonCounts: countRecord(bucket.map((item) => item.candidate.exitReason)),
+        selectedBucketCounts: countRecord(bucket.map((item) => item.candidate.selectedBucket)),
+        predictedBucketCounts: countRecord(bucket.map((item) => item.prediction.predictedMoveSizeBucket)),
+        offsetCounts: countRecord(bucket.map((item) => item.candidate.offsetLabel)),
+      };
+    });
+  };
+
+  const simulateCapitalModels = (selected: typeof enrichedCandidates) => {
+    const basePnl = selected.map((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0));
+    const fixedAllocations = [0.15, 0.25, 0.4, 0.6, 0.9].map((allocationPct) => {
+      const scaled = basePnl.map((pnl) => pnl * allocationPct);
+      const metrics = computeScenarioEquityMetrics(scaled);
+      return {
+        model: `fixed_${Math.round(allocationPct * 100)}pct`,
+        allocationPct,
+        accountReturnPct: metrics.accountReturnPct,
+        monthlyAccountReturnPct: selected.length > 0 ? Number((metrics.accountReturnPct / Math.max(1, scenarioMonthlyBreakdown(selected).length)).toFixed(2)) : 0,
+        maxDrawdownPct: metrics.maxDrawdownPct,
+        worstTradeLossPctOfAccount: Number(Math.max(0, ...scaled.map((value) => Math.max(0, -value))).toFixed(2)),
+        largestExposurePct: Number((allocationPct * 100).toFixed(2)),
+        averageExposurePct: Number((allocationPct * 100).toFixed(2)),
+        capitalUtilisation: Number((allocationPct * 100).toFixed(2)),
+        riskWarnings: allocationPct >= 0.6 ? ["High single-symbol allocation research scenario."] : [],
+      };
+    });
+    const confidenceWeighted = (() => {
+      const scaled = selected.map((item) => {
+        const allocationPct = Math.min(
+          0.9,
+          Math.max(
+            0.15,
+            0.15 + (item.prediction.predictedBucketConfidence ?? 0) * 0.35 + (item.liveSafeEliteScore * 0.2),
+          ),
+        );
+        return {
+          allocationPct,
+          pnl: Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) * allocationPct,
+        };
+      });
+      const metrics = computeScenarioEquityMetrics(scaled.map((item) => item.pnl));
+      return {
+        model: "confidence_weighted",
+        formula: "allocationPct = clamp(15%, 90%, 15% + predictedBucketConfidence*35% + liveSafeEliteScore*20%)",
+        accountReturnPct: metrics.accountReturnPct,
+        monthlyAccountReturnPct: selected.length > 0 ? Number((metrics.accountReturnPct / Math.max(1, scenarioMonthlyBreakdown(selected).length)).toFixed(2)) : 0,
+        maxDrawdownPct: metrics.maxDrawdownPct,
+        worstTradeLossPctOfAccount: Number(Math.max(0, ...scaled.map((item) => Math.max(0, -item.pnl))).toFixed(2)),
+        largestExposurePct: Number(Math.max(...scaled.map((item) => item.allocationPct * 100), 0).toFixed(2)),
+        averageExposurePct: Number(mean(scaled.map((item) => item.allocationPct * 100)).toFixed(2)),
+        capitalUtilisation: Number(mean(scaled.map((item) => item.allocationPct * 100)).toFixed(2)),
+        riskWarnings: scaled.some((item) => item.allocationPct >= 0.75) ? ["Some high-confidence scenarios use 75%+ allocation."] : [],
+      };
+    })();
+    const leverageScenarios = [1, 1.2, 1.5, 2].map((leverage) => {
+      const scaled = basePnl.map((pnl) => pnl * 0.15 * leverage);
+      const metrics = computeScenarioEquityMetrics(scaled);
+      return {
+        model: `${leverage.toFixed(1)}x`,
+        leverage,
+        accountReturnPct: metrics.accountReturnPct,
+        monthlyAccountReturnPct: selected.length > 0 ? Number((metrics.accountReturnPct / Math.max(1, scenarioMonthlyBreakdown(selected).length)).toFixed(2)) : 0,
+        maxDrawdownPct: metrics.maxDrawdownPct,
+        liquidationRiskWarning: leverage > 1 ? "Research-only leverage scenario. Losses and drawdown scale with exposure." : null,
+      };
+    });
+    return {
+      currentAllocatorModel: fixedAllocations[0],
+      fixedAllocationModels: fixedAllocations,
+      confidenceWeightedAllocation: confidenceWeighted,
+      portfolioCapModel: {
+        maxTotalCapitalPct: 90,
+        singleSymbolCapPct: 90,
+        maxConcurrentTrades: 1,
+        accountReturnPct: fixedAllocations[4]?.accountReturnPct ?? 0,
+        monthlyAccountReturnPct: fixedAllocations[4]?.monthlyAccountReturnPct ?? 0,
+        maxDrawdownPct: fixedAllocations[4]?.maxDrawdownPct ?? 0,
+        warnings: ["Research-only portfolio cap model. Live allocator remains unchanged."],
+      },
+      leverageScenarios,
+    };
+  };
+
+  const simulateCascadeScenarios = (selected: typeof enrichedCandidates) => {
+    const triggers = [1, 1.5, 2];
+    return triggers.map((triggerPct) => {
+      let addedCapitalPct = 0;
+      let worsened = 0;
+      const scenarioReturns: number[] = [];
+      for (const item of selected) {
+        const pnl = Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0);
+        const mfe = Math.abs(Number(item.candidate.mfePctPoints ?? item.candidate.mfePct ?? 0));
+        const cascadeEligible = pnl > 0
+          && mfe >= triggerPct
+          && Boolean(item.dynamicExitPlan.available)
+          && Boolean(item.dynamicExitPlan.runnerAllowed)
+          && Number(item.prediction.predictedBucketConfidence ?? 0) >= 0.6;
+        let cascadeAdd = 0;
+        if (cascadeEligible) {
+          cascadeAdd = Math.min(0.45, 0.1 + Number(item.prediction.predictedBucketConfidence ?? 0) * 0.25);
+          addedCapitalPct += cascadeAdd * 100;
+          const remainingMove = Math.max(0, mfe - triggerPct);
+          const boost = Math.min(remainingMove, Number(item.dynamicExitPlan.runnerTargetPct ?? item.dynamicExitPlan.tpTargetPct ?? triggerPct) - triggerPct);
+          scenarioReturns.push((pnl * 0.15) + (boost * cascadeAdd));
+          if (pnl < triggerPct) worsened += 1;
+        } else {
+          scenarioReturns.push(pnl * 0.15);
+        }
+      }
+      const metrics = computeScenarioEquityMetrics(scenarioReturns);
+      return {
+        cascadeEnabled: true,
+        triggerPct,
+        cascadeCount: scenarioReturns.length,
+        averageAddsPerWinningTrade: selected.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0).length > 0
+          ? Number((addedCapitalPct / 100 / selected.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0).length).toFixed(2))
+          : 0,
+        addedCapitalPct: Number(addedCapitalPct.toFixed(2)),
+        totalExposurePct: Number(Math.min(90, 15 + addedCapitalPct).toFixed(2)),
+        effectiveTP: Number(mean(selected.map((item) => Number(item.dynamicExitPlan.tpTargetPct ?? 0))).toFixed(2)),
+        effectiveSL: Number(mean(selected.map((item) => Number(item.dynamicExitPlan.slRiskPct ?? 0))).toFixed(2)),
+        accountReturnPct: metrics.accountReturnPct,
+        monthlyReturnPct: selected.length > 0 ? Number((metrics.accountReturnPct / Math.max(1, scenarioMonthlyBreakdown(selected).length)).toFixed(2)) : 0,
+        maxDrawdownPct: metrics.maxDrawdownPct,
+        resultingSlExposure: Number(mean(selected.map((item) => Number(item.dynamicExitPlan.slRiskPct ?? 0))).toFixed(2)),
+        worsenedOutcomeCount: worsened,
+        riskWarnings: worsened > 0 ? ["Some winning trades closed below the cascade trigger after reaching it."] : [],
+      };
+    });
+  };
+
+  const buildScenario = (config: {
+    scenarioId: string;
+    label: string;
+    description: string;
+    predicate: (item: typeof enrichedCandidates[number]) => boolean;
+    filterNotes: string[];
+  }) => {
+    const filtered = enrichedCandidates.filter(config.predicate);
+    const groupedByDay = new Map<string, typeof enrichedCandidates>();
+    for (const item of filtered) {
+      const day = new Date(item.candidate.entryTs * 1000).toISOString().slice(0, 10);
+      const bucket = groupedByDay.get(day) ?? [];
+      bucket.push(item);
+      groupedByDay.set(day, bucket);
+    }
+    const selected = Array.from(groupedByDay.values()).map((bucket) => {
+      bucket.sort((a, b) => b.liveSafeEliteScore - a.liveSafeEliteScore || b.prediction.predictedBucketConfidence - a.prediction.predictedBucketConfidence);
+      return bucket[0];
+    }).filter(Boolean);
+    const pnlValues = selected.map((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0));
+    const wins = selected.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0).length;
+    const losses = selected.length - wins;
+    const slHits = selected.filter((item) => item.candidate.exitReason === "sl_hit").length;
+    const grossProfit = selected.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0)
+      .reduce((sum, item) => sum + Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0), 0);
+    const grossLoss = Math.abs(selected.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) <= 0)
+      .reduce((sum, item) => sum + Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0), 0));
+    const metrics = computeScenarioEquityMetrics(pnlValues);
+    const monthlyBreakdown = scenarioMonthlyBreakdown(selected);
+    const capitalAllocationScenarios = simulateCapitalModels(selected);
+    const cascadeScenarios = simulateCascadeScenarios(selected);
+    const predictedBucketDistribution = probabilityDistribution(selected.map((item) => item.prediction.predictedMoveSizeBucket));
+    const actualBucketDistribution = probabilityDistribution(selected.map((item) => item.actualEvaluatedBucket));
+    const dynamicExitPlanSummary = {
+      tpTargetPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.tpTargetPct ?? 0)).filter((value) => value > 0)),
+      slRiskPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.slRiskPct ?? 0)).filter((value) => value > 0)),
+      trailingActivationPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.trailingActivationPct ?? 0)).filter((value) => value > 0)),
+      trailingDistancePct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.trailingDistancePct ?? 0)).filter((value) => value > 0)),
+      sourceDistribution: countRecord(selected.map((item) => String(item.dynamicExitPlan.tpTargetSource ?? item.dynamicExitPlan.noPredictionReason ?? "unknown"))),
+      widenedDistribution: countRecord(selected.map((item) => `${String(item.dynamicExitPlan.widenedFrom ?? "none")}=>${String(item.dynamicExitPlan.widenedTo ?? "none")}`)),
+    };
+    const returnAmplificationBreakdown = {
+      targetProfile: "return_amplification",
+      winRate: selected.length > 0 ? wins / selected.length : 0,
+      requiredWinRate: 0.9,
+      winRatePassed: selected.length > 0 ? wins / selected.length >= 0.9 : false,
+      slHitRate: selected.length > 0 ? slHits / selected.length : 0,
+      requiredMaxSlHitRate: 0.1,
+      slHitRatePassed: selected.length > 0 ? slHits / selected.length <= 0.1 : false,
+      profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : 0,
+      requiredProfitFactor: 2.5,
+      profitFactorPassed: grossLoss > 0 ? grossProfit / grossLoss >= 2.5 : grossProfit > 0,
+      monthlyAccountReturnPct: monthlyBreakdown.length > 0 ? Number(mean(monthlyBreakdown.map((month) => Number(month.accountReturnPct ?? 0))).toFixed(2)) : 0,
+      requiredMonthlyAccountReturnPct: 50,
+      monthlyReturnPassed: monthlyBreakdown.length > 0 ? mean(monthlyBreakdown.map((month) => Number(month.accountReturnPct ?? 0))) >= 50 : false,
+      maxDrawdownPct: metrics.maxDrawdownPct,
+      requiredMaxDrawdownPct: 10,
+      drawdownPassed: metrics.maxDrawdownPct <= 10,
+      trades: selected.length,
+      requiredTradeCountMin: 20,
+      requiredTradeCountMax: 45,
+      sampleSizePassed: selected.length >= 20 && selected.length <= 45,
+      leakagePassed: Boolean(params.leakageAudit?.passed ?? false),
+      liveSafeFilterPassed: selected.every((item) => item.prediction.predictedMoveSizeBucket || item.prediction.noPredictionReason),
+      exitDerivationPassed: selected.every((item) => Boolean(item.dynamicExitPlan.available)),
+      cascadeRiskPassed: cascadeScenarios.every((scenario) => Number(scenario.maxDrawdownPct ?? 0) <= 15),
+    };
+    return {
+      scenarioId: config.scenarioId,
+      label: config.label,
+      description: config.description,
+      sourcePool: "rebuilt_trigger_candidates",
+      trades: selected.length,
+      wins,
+      losses,
+      winRate: selected.length > 0 ? Number((wins / selected.length).toFixed(4)) : 0,
+      slHits,
+      slHitRate: selected.length > 0 ? Number((slHits / selected.length).toFixed(4)) : 0,
+      profitFactor: grossLoss > 0 ? Number((grossProfit / grossLoss).toFixed(2)) : grossProfit > 0 ? 99 : 0,
+      summedTradePnl: Number(pnlValues.reduce((sum, value) => sum + value, 0).toFixed(2)),
+      accountReturnPct: metrics.accountReturnPct,
+      averageMonthlyAccountReturnPct: monthlyBreakdown.length > 0 ? Number(mean(monthlyBreakdown.map((month) => Number(month.accountReturnPct ?? 0))).toFixed(2)) : 0,
+      averageTpAchieved: selected.length > 0
+        ? Number(mean(selected.map((item) => {
+            const target = Number(item.dynamicExitPlan.tpTargetPct ?? 0);
+            const mfe = Math.abs(Number(item.candidate.mfePctPoints ?? item.candidate.mfePct ?? 0));
+            return target > 0 ? Math.min(1.5, mfe / target) : 0;
+          })).toFixed(2))
+        : 0,
+      averageAdverseExcursion: selected.length > 0 ? Number(mean(selected.map((item) => Math.abs(Number(item.candidate.maePctPoints ?? item.candidate.maePct ?? 0)))).toFixed(2)) : 0,
+      averageHoldBars: selected.length > 0 ? Number(mean(selected.map((item) => Math.max(1, ((item.candidate.exitTs ?? item.candidate.entryTs) - item.candidate.entryTs) / 60))).toFixed(2)) : 0,
+      drawdown: metrics.maxDrawdownPct,
+      monthlyBreakdown,
+      selectedBucketDistribution: countRecord(selected.map((item) => item.candidate.selectedBucket)),
+      predictedBucketDistribution: predictedBucketDistribution.counts,
+      predictedBucketProbabilityDistribution: predictedBucketDistribution.distribution,
+      actualEvaluatedBucketDistribution: actualBucketDistribution.counts,
+      selectedTradeIds: selected.map((item) => item.candidate.candidateId),
+      reasonsSelected: config.filterNotes,
+      reasonsRejected: [`filtered_candidates=${Math.max(0, enrichedCandidates.length - selected.length)}`],
+      dynamicExitPlanSummary,
+      capitalAllocationScenarios,
+      cascadeScenarios,
+      targetAchievedBreakdown: {
+        ...returnAmplificationBreakdown,
+        finalTargetAchieved: Boolean(
+          returnAmplificationBreakdown.winRatePassed
+          && returnAmplificationBreakdown.slHitRatePassed
+          && returnAmplificationBreakdown.profitFactorPassed
+          && returnAmplificationBreakdown.monthlyReturnPassed
+          && returnAmplificationBreakdown.drawdownPassed
+          && returnAmplificationBreakdown.sampleSizePassed
+          && returnAmplificationBreakdown.leakagePassed
+          && returnAmplificationBreakdown.liveSafeFilterPassed
+          && returnAmplificationBreakdown.exitDerivationPassed
+          && returnAmplificationBreakdown.cascadeRiskPassed,
+        ),
+      },
+      paperStageability: {
+        reportConsistencyPassed: Boolean(params.bestPolicySelectedTradesSummary?.reportConsistencyChecks && Object.values(params.bestPolicySelectedTradesSummary.reportConsistencyChecks as Record<string, unknown>).every(Boolean)),
+        leakagePassed: Boolean(params.leakageAudit?.passed ?? false),
+        dynamicExitDerivationPassed: selected.every((item) => Boolean(item.dynamicExitPlan.available) && !Boolean(item.dynamicExitPlan.broadFallback)),
+        liveSafeTriggerExpressionExplicit: false,
+        relationshipFiltersLiveSafe: true,
+        canStageForPaper: false,
+        canPromoteRuntime: false,
+        canPromoteLive: false,
+        cascadeRequired: cascadeScenarios.some((scenario) => Number(scenario.monthlyReturnPct ?? 0) >= 50),
+        leverageRequired: (capitalAllocationScenarios.leverageScenarios as Array<Record<string, unknown>>).some((scenario) => Number(scenario.monthlyAccountReturnPct ?? 0) >= 50),
+        blockers: ["runtime_mimic_live_safe_trigger_expression_pending"],
+        warnings: ["Return amplification scenarios are research-only until runtime mimic parity exists."],
+      },
+      exampleSelectedTrades: selected.slice(0, 8).map((item) => ({
+        candidateId: item.candidate.candidateId,
+        entryTs: item.candidate.entryTs,
+        direction: item.candidate.direction,
+        runtimeFamily: item.candidate.runtimeFamily,
+        triggerTransition: item.candidate.triggerTransition,
+        selectedBucket: item.candidate.selectedBucket,
+        offsetLabel: item.candidate.offsetLabel,
+        predictedMoveSizeBucket: item.prediction.predictedMoveSizeBucket,
+        predictedBucketConfidence: item.prediction.predictedBucketConfidence,
+        actualEvaluatedBucket: item.actualEvaluatedBucket,
+        pnlPct: item.candidate.pnlPctPoints ?? item.candidate.pnlPct,
+      })),
+    };
+  };
+
+  const baselineSelected = enrichedCandidates.filter((item) => baselineSelectedIds.has(item.candidate.candidateId));
+  const scenarios = [
+    {
+      scenarioId: "baseline_current_best",
+      label: "Baseline current best policy",
+      description: "Preserves the currently selected low-bucket high-win-rate rebuilt policy.",
+      predicate: (item: typeof enrichedCandidates[number]) => baselineSelectedIds.has(item.candidate.candidateId),
+      filterNotes: ["exact_final_best_policy_selected_trade_ids"],
+    },
+    {
+      scenarioId: "bucket_gte_7_to_8",
+      label: "Bucket >= 7_to_8_pct",
+      description: "Research-only subset of candidates predicted to reach at least the 7-8% move class.",
+      predicate: (item: typeof enrichedCandidates[number]) => returnBucketAtLeast(item.prediction.predictedMoveSizeBucket, "7_to_8_pct"),
+      filterNotes: ["predicted_bucket>=7_to_8_pct"],
+    },
+    {
+      scenarioId: "bucket_gte_8_to_9",
+      label: "Bucket >= 8_to_9_pct",
+      description: "Research-only subset of candidates predicted to reach at least the 8-9% move class.",
+      predicate: (item: typeof enrichedCandidates[number]) => returnBucketAtLeast(item.prediction.predictedMoveSizeBucket, "8_to_9_pct"),
+      filterNotes: ["predicted_bucket>=8_to_9_pct"],
+    },
+    {
+      scenarioId: "bucket_gte_9_to_10",
+      label: "Bucket >= 9_to_10_pct",
+      description: "High-value subset of candidates predicted to reach at least the 9-10% move class.",
+      predicate: (item: typeof enrichedCandidates[number]) => returnBucketAtLeast(item.prediction.predictedMoveSizeBucket, "9_to_10_pct"),
+      filterNotes: ["predicted_bucket>=9_to_10_pct"],
+    },
+    {
+      scenarioId: "bucket_9_to_13_only",
+      label: "Bucket 9_to_13_pct only",
+      description: "High-value target set focused on 9-13% predicted move buckets only.",
+      predicate: (item: typeof enrichedCandidates[number]) =>
+        ["9_to_10_pct", "10_to_11_pct", "11_to_12_pct", "12_to_13_pct"].includes(String(item.prediction.predictedMoveSizeBucket ?? "")),
+      filterNotes: ["predicted_bucket in 9_to_13_pct"],
+    },
+    {
+      scenarioId: "elite_high_value_only",
+      label: "Elite high-value only",
+      description: "High predicted bucket plus high live-safe confidence, setup quality, and trigger strength.",
+      predicate: (item: typeof enrichedCandidates[number]) =>
+        returnBucketAtLeast(item.prediction.predictedMoveSizeBucket, "9_to_10_pct")
+        && Number(item.prediction.predictedBucketConfidence ?? 0) >= 0.7
+        && Number(item.candidate.setupMatch ?? 0) >= 0.6
+        && Number(item.candidate.triggerStrengthScore ?? 0) >= 0.6,
+      filterNotes: [
+        "predicted_bucket>=9_to_10_pct",
+        "predicted_bucket_confidence>=0.70",
+        "setupMatch>=0.60",
+        "triggerStrengthScore>=0.60",
+      ],
+    },
+  ].map((scenario) => buildScenario(scenario));
+
+  const baselineScenario = scenarios.find((scenario) => scenario.scenarioId === "baseline_current_best") ?? null;
+  const relationshipFailedTrades = baselineSelected.filter((item) => {
+    const relationship = relationshipToCalibratedMove(item.candidate, moveById);
+    return relationship.label === "wrong_direction" || relationship.label === "too_late";
+  });
+  const baselineWinners = baselineSelected.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0);
+  const proxyFeatureKeys = [
+    "confidence",
+    "setupMatch",
+    "triggerStrengthScore",
+    "crashRecencyScore",
+    "rangeExpansionScore60",
+    "compressionToExpansionScore",
+    "barsSinceLastCrash",
+    "atrRank240",
+    "bbWidthRank60",
+    "microBreakStrengthPct",
+  ];
+  const liveSafeProxyProposals = proxyFeatureKeys.map((key) => {
+    const winnerValues = baselineWinners.map((item) => key === "confidence"
+      ? Number(item.candidate.confidence ?? 0)
+      : key === "setupMatch"
+        ? Number(item.candidate.setupMatch ?? 0)
+        : key === "triggerStrengthScore"
+          ? Number(item.candidate.triggerStrengthScore ?? 0)
+          : Number(candidateFeatureNumber(item.candidate, key) ?? 0)).filter((value) => Number.isFinite(value));
+    if (winnerValues.length === 0) return null;
+    const threshold = Number(percentile(winnerValues, 0.2).toFixed(3));
+    const filtered = baselineSelected.filter((item) => {
+      const value = key === "confidence"
+        ? Number(item.candidate.confidence ?? 0)
+        : key === "setupMatch"
+          ? Number(item.candidate.setupMatch ?? 0)
+          : key === "triggerStrengthScore"
+            ? Number(item.candidate.triggerStrengthScore ?? 0)
+            : Number(candidateFeatureNumber(item.candidate, key) ?? 0);
+      return value >= threshold;
+    });
+    const removed = baselineSelected.filter((item) => !filtered.includes(item));
+    return {
+      filterExpression: `${key} >= ${threshold}`,
+      expectedEffect: {
+        tradesRemoved: removed.length,
+        winsRemoved: removed.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0).length,
+        lossesRemoved: removed.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) <= 0).length,
+        resultingTrades: filtered.length,
+        resultingWinRate: filtered.length > 0 ? Number((filtered.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0).length / filtered.length).toFixed(4)) : 0,
+        resultingSlRate: filtered.length > 0 ? Number((filtered.filter((item) => item.candidate.exitReason === "sl_hit").length / filtered.length).toFixed(4)) : 0,
+        resultingMonthlyReturn: filtered.length > 0 ? Number((computeScenarioEquityMetrics(filtered.map((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) * 0.15)).accountReturnPct / Math.max(1, scenarioMonthlyBreakdown(filtered).length)).toFixed(2)) : 0,
+        resultingAccountReturn: filtered.length > 0 ? computeScenarioEquityMetrics(filtered.map((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) * 0.15)).accountReturnPct : 0,
+      },
+    };
+  }).filter(Boolean).slice(0, 5);
+
+  const relationshipFailureProxyAnalysis = {
+    relationshipFailedTradeCount: relationshipFailedTrades.length,
+    wrongDirectionCount: relationshipFailedTrades.filter((item) => relationshipToCalibratedMove(item.candidate, moveById).label === "wrong_direction").length,
+    tooLateCount: relationshipFailedTrades.filter((item) => relationshipToCalibratedMove(item.candidate, moveById).label === "too_late").length,
+    featureDeltasVsWinners: Object.fromEntries(proxyFeatureKeys.map((key) => {
+      const failureValues = relationshipFailedTrades.map((item) => key === "confidence"
+        ? Number(item.candidate.confidence ?? 0)
+        : key === "setupMatch"
+          ? Number(item.candidate.setupMatch ?? 0)
+          : key === "triggerStrengthScore"
+            ? Number(item.candidate.triggerStrengthScore ?? 0)
+            : Number(candidateFeatureNumber(item.candidate, key) ?? 0)).filter((value) => Number.isFinite(value));
+      const winnerValues = baselineWinners.map((item) => key === "confidence"
+        ? Number(item.candidate.confidence ?? 0)
+        : key === "setupMatch"
+          ? Number(item.candidate.setupMatch ?? 0)
+          : key === "triggerStrengthScore"
+            ? Number(item.candidate.triggerStrengthScore ?? 0)
+            : Number(candidateFeatureNumber(item.candidate, key) ?? 0)).filter((value) => Number.isFinite(value));
+      return [
+        key,
+        {
+          failureMedian: failureValues.length > 0 ? Number(percentile(failureValues, 0.5).toFixed(3)) : null,
+          winnerMedian: winnerValues.length > 0 ? Number(percentile(winnerValues, 0.5).toFixed(3)) : null,
+          delta: failureValues.length > 0 && winnerValues.length > 0
+            ? Number((percentile(failureValues, 0.5) - percentile(winnerValues, 0.5)).toFixed(3))
+            : null,
+        },
+      ];
+    })),
+    proposedLiveSafeFilters: liveSafeProxyProposals,
+  };
+
+  const scenarioMeeting90Win = scenarios.filter((scenario) => Number(scenario.winRate ?? 0) >= 0.9 && Number(scenario.slHitRate ?? 0) <= 0.1);
+  const scenarioApproaching50Monthly = [...scenarios].sort((a, b) =>
+    Math.abs(50 - Number(a.averageMonthlyAccountReturnPct ?? 0)) - Math.abs(50 - Number(b.averageMonthlyAccountReturnPct ?? 0))
+  )[0] ?? null;
+  const rebuiltPolicySeedCount = Number(
+    ((params.dataset.summary.rebuiltPolicySeedDiagnostics as Record<string, unknown> | undefined)?.rebuiltPolicySeedCount ?? 0),
+  );
+  const recommendedCandidateConfiguration = [...scenarios]
+    .sort((a, b) =>
+      Number(b.targetAchievedBreakdown.finalTargetAchieved ? 1 : 0) - Number(a.targetAchievedBreakdown.finalTargetAchieved ? 1 : 0)
+      || Number(b.averageMonthlyAccountReturnPct ?? 0) - Number(a.averageMonthlyAccountReturnPct ?? 0)
+      || Number(b.winRate ?? 0) - Number(a.winRate ?? 0)
+    )[0] ?? null;
+
+  return {
+    preservedBaselineInvariants: {
+      rebuiltCandidatesGenerated: simulatedCandidates.length > 0,
+      rebuiltCandidatesSimulated: rebuiltPolicySeedCount > 0 || simulatedCandidates.length > 0,
+      rebuiltPolicySeedGroupsPositive: rebuiltPolicySeedCount > 0,
+      selectedTradesExportReconciles: Boolean(params.bestPolicySelectedTradesSummary?.reportConsistencyChecks && Object.values(params.bestPolicySelectedTradesSummary.reportConsistencyChecks as Record<string, unknown>).every(Boolean)),
+      rebuiltTopPolicyPresent: Boolean(params.bestPolicySummary?.sourcePool === "rebuilt_trigger_candidates"),
+    },
+    predictorSummary: {
+      totalSimulatedCandidates: simulatedCandidates.length,
+      predictedCandidates: predictions.filter((prediction) => prediction.predictedMoveSizeBucket).length,
+      noPredictionCandidates: predictions.filter((prediction) => !prediction.predictedMoveSizeBucket).length,
+      predictedBucketDistribution: probabilityDistribution(predictions.map((prediction) => prediction.predictedMoveSizeBucket)).counts,
+      actualEvaluatedBucketDistribution: probabilityDistribution(predictions.map((prediction) => prediction.actualEvaluatedBucket)).counts,
+      noPredictionReasonCounts: countRecord(predictions.map((prediction) => prediction.noPredictionReason)),
+      candidatePredictions: predictions,
+    },
+    dynamicExitDerivationTable: enrichedCandidates.slice(0, 120).map((item) => ({
+      candidateId: item.candidate.candidateId,
+      predictedMoveSizeBucket: item.prediction.predictedMoveSizeBucket,
+      predictedBucketConfidence: item.prediction.predictedBucketConfidence,
+      dynamicExitPlan: item.dynamicExitPlan,
+    })),
+    scenarioPolicies: scenarios,
+    capitalScenarioSummary: scenarios.map((scenario) => ({
+      scenarioId: scenario.scenarioId,
+      currentAllocatorAccountReturnPct: Number((scenario.capitalAllocationScenarios as Record<string, unknown>).currentAllocatorModel && Number((((scenario.capitalAllocationScenarios as Record<string, unknown>).currentAllocatorModel as Record<string, unknown>).accountReturnPct ?? 0))),
+      confidenceWeightedAccountReturnPct: Number((scenario.capitalAllocationScenarios as Record<string, unknown>).confidenceWeightedAllocation && Number((((scenario.capitalAllocationScenarios as Record<string, unknown>).confidenceWeightedAllocation as Record<string, unknown>).accountReturnPct ?? 0))),
+    })),
+    cascadeScenarioSummary: scenarios.map((scenario) => ({
+      scenarioId: scenario.scenarioId,
+      bestCascadeMonthlyReturnPct: Math.max(...((scenario.cascadeScenarios as Array<Record<string, unknown>>).map((item) => Number(item.monthlyReturnPct ?? 0))), 0),
+      cascadeRequired: (scenario.paperStageability as Record<string, unknown>).cascadeRequired,
+    })),
+    relationshipFailureProxyAnalysis,
+    recommendedCandidateConfiguration,
+    summary: {
+      anyScenarioReaches50MonthlyReturn: scenarios.some((scenario) => Number(scenario.averageMonthlyAccountReturnPct ?? 0) >= 50),
+      closestScenarioTo50MonthlyReturn: scenarioApproaching50Monthly
+        ? {
+            scenarioId: scenarioApproaching50Monthly.scenarioId,
+            averageMonthlyAccountReturnPct: scenarioApproaching50Monthly.averageMonthlyAccountReturnPct,
+          }
+        : null,
+      anyScenarioMaintains90WinAndLowSl: scenarioMeeting90Win.length > 0,
+      scenariosMeeting90WinAndLowSl: scenarioMeeting90Win.map((scenario) => scenario.scenarioId),
+      recommendedNextStep: recommendedCandidateConfiguration && Number((recommendedCandidateConfiguration as Record<string, unknown>).averageMonthlyAccountReturnPct ?? 0) > 0
+        ? "Review return amplification analysis in Reports, then rerun CRASH300 90-day balanced with targetProfile=return_amplification if the recommended scenario looks safe."
+        : "No safe return amplification scenario emerged from the current analysis. Keep the baseline rebuilt policy and continue research.",
+    },
+  };
+}
+
 async function markEliteSynthesisJobFailed(jobId: number, error: unknown) {
   await updateEliteSynthesisJob(jobId, {
     status: "failed",
@@ -1391,6 +2426,7 @@ export async function runEliteSynthesisJob(params: {
 }): Promise<EliteSynthesisResult> {
   const adapter = getSynthesisAdapter(params.serviceId);
   const searchProfile: EliteSynthesisSearchProfile = params.request.searchProfile ?? "balanced";
+  const targetProfile: EliteSynthesisTargetProfile = params.request.targetProfile ?? "default";
   const defaults = profileDefaults(searchProfile);
   const maxPasses: number = Number(params.request.maxPasses ?? defaults.maxPasses);
   const patiencePasses: number = Number(params.request.patiencePasses ?? defaults.patiencePasses);
@@ -1818,7 +2854,7 @@ export async function runEliteSynthesisJob(params: {
       resultSummary: { latestPassLog: passLog.slice(-5) },
     });
 
-    if (targetAchieved(bestPolicySummary)) {
+    if (targetAchieved(bestPolicySummary, targetProfile)) {
       bottleneck = "none";
       if (noImprovementPasses >= patiencePasses) {
         stopReason = "target_achieved_and_patience_exhausted";
@@ -1826,7 +2862,7 @@ export async function runEliteSynthesisJob(params: {
       }
     }
 
-    if (!targetAchieved(bestPolicySummary) && !rebuiltTriggerAttempted && passNumber >= Math.max(2, Math.floor(maxPasses / 3))) {
+    if (!targetAchieved(bestPolicySummary, targetProfile) && !rebuiltTriggerAttempted && passNumber >= Math.max(2, Math.floor(maxPasses / 3))) {
       rebuiltTriggerAttempted = true;
       bottleneck = "current_runtime_pool_insufficient";
       await updateEliteSynthesisJob(params.jobId, {
@@ -1913,7 +2949,7 @@ export async function runEliteSynthesisJob(params: {
     }
   }
 
-  if (!targetAchieved(bestPolicySummary)) {
+  if (!targetAchieved(bestPolicySummary, targetProfile)) {
     bottleneck = bottleneck === "rebuilt_trigger_execution_failed"
       ? "rebuilt_trigger_execution_failed"
       : rebuiltTriggerAttempted
@@ -1921,7 +2957,7 @@ export async function runEliteSynthesisJob(params: {
       : "current_runtime_pool_insufficient";
   }
   if (!stopReason) {
-    stopReason = targetAchieved(bestPolicySummary) ? "target_achieved" : "search_space_exhausted";
+    stopReason = targetAchieved(bestPolicySummary, targetProfile) ? "target_achieved" : "search_space_exhausted";
   }
 
   await updateEliteSynthesisJob(params.jobId, {
@@ -1988,6 +3024,7 @@ export async function runEliteSynthesisJob(params: {
     targetTradeCountMin: Number(params.request.targetTradeCountMin ?? defaults.targetTradeCountMin),
     targetTradeCountMax: Number(params.request.targetTradeCountMax ?? defaults.targetTradeCountMax),
     maxTradesPerDay: Number(params.request.maxTradesPerDay ?? defaults.maxTradesPerDay),
+    targetProfile,
     lateOffsetSafetyAudit: bestPolicyValidationArtifacts.lateOffsetSafetyAudit,
     exitDerivationAudit: bestPolicyValidationArtifacts.exitDerivationAudit,
     monthlyStabilityAssessment: bestPolicyValidationArtifacts.monthlyStabilityAssessment,
@@ -2007,13 +3044,23 @@ export async function runEliteSynthesisJob(params: {
     rebuiltTriggerDiagnostics,
     topPolicySummaries,
     bestPolicySummary,
+    bestPolicySelectedTradesSummary: bestPolicyValidationArtifacts.bestPolicySelectedTradesSummary,
+  });
+  const returnAmplificationAnalysis = buildReturnAmplificationAnalysis({
+    dataset,
+    bestPolicyEvaluation,
+    bestPolicySummary,
+    bestPolicySelectedTradesSummary: bestPolicyValidationArtifacts.bestPolicySelectedTradesSummary,
+    bestPolicySelectedTrades: bestPolicyValidationArtifacts.bestPolicySelectedTrades,
+    policyArtifactReadiness,
+    leakageAudit: bestPolicyArtifact?.leakageAudit ?? null,
   });
 
   const result: EliteSynthesisResult = {
     jobId: params.jobId,
     serviceId: params.serviceId,
     status: "completed",
-    resultState: targetAchieved(bestPolicySummary)
+    resultState: targetAchieved(bestPolicySummary, targetProfile)
       ? "completed_target_achieved"
       : bottleneck === "rebuilt_policy_evaluation_failed"
         ? "rebuilt_policy_evaluation_failed"
@@ -2022,7 +3069,7 @@ export async function runEliteSynthesisJob(params: {
       : rebuiltTriggerAttempted || passLog.length >= maxPasses
         ? "completed_exhausted_no_target"
         : "completed_foundation_incomplete",
-    targetAchieved: targetAchieved(bestPolicySummary),
+    targetAchieved: targetAchieved(bestPolicySummary, targetProfile),
     bestPolicySummary: bestPolicySummary
       ? {
           ...bestPolicySummary,
@@ -2032,6 +3079,7 @@ export async function runEliteSynthesisJob(params: {
           monthlyStabilityAssessment: bestPolicyValidationArtifacts.monthlyStabilityAssessment,
           targetAchievedBreakdown: targetBreakdown,
           policyArtifactReadiness,
+          returnAmplificationAnalysis,
           sourcePool: bestPolicyEvaluation?.sourcePool ?? null,
           selectedTradeIds: bestPolicyValidationArtifacts.bestPolicySelectedTradesSummary?.selectedTradeIds ?? [],
         }
@@ -2057,16 +3105,17 @@ export async function runEliteSynthesisJob(params: {
           targetAchievedBreakdown: targetBreakdown,
           strategyGradeReadiness,
           policyArtifactReadiness,
+          returnAmplificationAnalysis,
           bottleneckAnalysis: {
-            targetAchieved: targetAchieved(bestPolicySummary),
+            targetAchieved: targetAchieved(bestPolicySummary, targetProfile),
             triggerRebuildAttempted: rebuiltTriggerAttempted,
             classification: bottleneck,
-            reasons: targetAchieved(bestPolicySummary)
+            reasons: targetAchieved(bestPolicySummary, targetProfile)
               ? ["Configured smoke search found a policy that meets the current target gates."]
               : rebuiltTriggerAttempted
                 ? ["Current runtime pool was insufficient, rebuilt trigger candidates were evaluated, and the configured search still fell short of the target objective."]
                 : ["Current runtime pool did not produce a target-grade policy within the configured smoke search."],
-            futureImplementationRecommendation: targetAchieved(bestPolicySummary)
+            futureImplementationRecommendation: targetAchieved(bestPolicySummary, targetProfile)
               ? "Review the candidate runtime policy artifact before any explicit promotion."
               : bottleneck === "rebuilt_trigger_execution_failed"
                 ? "Repair rebuilt trigger entry simulation or exit derivation before relying on rebuilt trigger search."
@@ -2100,10 +3149,10 @@ export async function runEliteSynthesisJob(params: {
     },
     rebuiltTriggerDiagnostics,
     bottleneckSummary: {
-      targetAchieved: targetAchieved(bestPolicySummary),
+      targetAchieved: targetAchieved(bestPolicySummary, targetProfile),
       triggerRebuildAttempted: rebuiltTriggerAttempted,
       classification: bottleneck,
-      reasons: targetAchieved(bestPolicySummary)
+      reasons: targetAchieved(bestPolicySummary, targetProfile)
         ? ["Configured search reached the requested target gates within the smoke profile."]
         : [
             ...(bottleneck === "rebuilt_trigger_execution_failed"
@@ -2116,7 +3165,7 @@ export async function runEliteSynthesisJob(params: {
               ? "Rebuilt trigger pool was evaluated after the current runtime pool proved insufficient."
               : "Configured smoke profile did not find a target-grade policy in the current runtime pool.",
           ],
-      futureImplementationRecommendation: targetAchieved(bestPolicySummary)
+      futureImplementationRecommendation: targetAchieved(bestPolicySummary, targetProfile)
         ? "Run deeper synthesis on a longer window before considering any paper promotion."
         : bottleneck === "rebuilt_policy_evaluation_failed"
           ? "Repair rebuilt policy grouping and post-group daily selection so simulated rebuilt candidates become valid rebuilt policy trades."
@@ -2140,6 +3189,7 @@ export async function runEliteSynthesisJob(params: {
       endTs: effectiveEndTs,
       windowDays: effectiveWindowDays,
       searchProfile,
+      targetProfile,
       maxPasses,
       patiencePasses,
       jobGrade: searchProfile === "fast" ? "smoke_plumbing_only" : "strategy_grade_review",
@@ -2153,6 +3203,7 @@ export async function runEliteSynthesisJob(params: {
     strategyGradeReadiness,
     policyArtifactReadiness,
     validationHardeningGuard,
+    returnAmplificationAnalysis,
   };
 
   await updateEliteSynthesisJob(params.jobId, {

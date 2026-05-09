@@ -363,6 +363,7 @@ type V3BacktestJobStatus = {
 };
 
 type EliteSynthesisSearchProfileUi = "fast" | "balanced" | "deep";
+type EliteSynthesisTargetProfileUi = "default" | "return_amplification";
 
 type EliteSynthesisJobStatusUi = {
   id: number;
@@ -4940,6 +4941,7 @@ const REPORT_OPTIONS: ReportOption[] = [
   { value: "policy-comparison", label: "Policy Comparison", task: "policy-comparison", runType: "comparison" },
   { value: "elite-synthesis-result", label: "Elite Synthesis Result", task: "integrated-elite-synthesis", runType: "synthesis" },
   { value: "elite-synthesis-selected-trades", label: "Elite Synthesis Selected Trades", task: "integrated-elite-synthesis", runType: "synthesis" },
+  { value: "elite-return-amplification", label: "Return Amplification Analysis", task: "integrated-elite-synthesis", runType: "synthesis" },
 ];
 
 function ReportsTab({ service, windowDays }: { service: string; windowDays: number }) {
@@ -5088,6 +5090,10 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
           if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
           endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/selected-trades`;
           break;
+        case "elite-return-amplification":
+          if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
+          endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/return-amplification`;
+          break;
       }
       const d = await apiFetch(endpoint);
       downloadJsonFile(d, filename);
@@ -5221,7 +5227,7 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
       </button>
       {selectedOption.runType === "synthesis" && synthesisReportResult && (
         <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-3 text-[11px]">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-8 gap-3">
             <div>
               <p className="text-muted-foreground uppercase tracking-wide">Target</p>
               <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.targetAchievedBreakdown as Record<string, unknown> | undefined)?.finalTargetAchieved) ? "Target achieved" : "Target not achieved"}</p>
@@ -5245,6 +5251,22 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
             <div>
               <p className="text-muted-foreground uppercase tracking-wide">Selected trades</p>
               <p className="mt-1 text-foreground">{Number((synthesisReportResult.bestPolicySelectedTradesSummary as Record<string, unknown> | undefined)?.tradeCount ?? 0)} trade(s) in export</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Return amplification</p>
+              <p className="mt-1 text-foreground">
+                {Boolean(((synthesisReportResult.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.summary as Record<string, unknown> | undefined)?.anyScenarioReaches50MonthlyReturn)
+                  ? "50%+ monthly scenario found"
+                  : "No 50% monthly scenario yet"}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">90/10 high-value</p>
+              <p className="mt-1 text-foreground">
+                {Boolean(((synthesisReportResult.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.summary as Record<string, unknown> | undefined)?.anyScenarioMaintains90WinAndLowSl)
+                  ? "90%+ win and <10% SL scenario found"
+                  : "No 90/10 high-value scenario yet"}
+              </p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -5287,6 +5309,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [profile, setProfile] = useState<EliteSynthesisSearchProfileUi>("fast");
+  const [targetProfile, setTargetProfile] = useState<EliteSynthesisTargetProfileUi>("default");
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyJobs, setHistoryJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
@@ -5326,6 +5349,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
           startTs,
           endTs,
           searchProfile: profile,
+          targetProfile,
         }),
       }) as { jobId?: number; symbol?: string };
       const jobId = Number(data.jobId ?? 0);
@@ -5360,6 +5384,14 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
             <option value="fast">Fast smoke profile</option>
             <option value="balanced">Balanced profile</option>
             <option value="deep">Deep profile</option>
+          </select>
+          <select
+            value={targetProfile}
+            onChange={(e) => setTargetProfile(e.target.value as EliteSynthesisTargetProfileUi)}
+            className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground"
+          >
+            <option value="default">Default target profile</option>
+            <option value="return_amplification">Return amplification target</option>
           </select>
           <button
             type="button"

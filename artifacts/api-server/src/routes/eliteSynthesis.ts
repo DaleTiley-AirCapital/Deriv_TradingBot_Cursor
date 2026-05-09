@@ -47,6 +47,9 @@ function parseParams(input: unknown): EliteSynthesisParams {
     searchProfile: (["fast", "balanced", "deep"].includes(String(record.searchProfile))
       ? record.searchProfile
       : "balanced") as EliteSynthesisParams["searchProfile"],
+    targetProfile: (["default", "return_amplification"].includes(String(record.targetProfile))
+      ? record.targetProfile
+      : "default") as EliteSynthesisParams["targetProfile"],
     maxPasses: record.maxPasses == null ? null : Number(record.maxPasses),
     patiencePasses: record.patiencePasses == null ? null : Number(record.patiencePasses),
     targetTradeCountMin: record.targetTradeCountMin == null ? null : Number(record.targetTradeCountMin),
@@ -238,6 +241,7 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
         strategyGradeReadiness: compact.strategyGradeReadiness ?? null,
         policyArtifactReadiness: compact.policyArtifactReadiness ?? null,
         validationHardeningGuard: compact.validationHardeningGuard ?? null,
+        returnAmplificationAnalysis: compact.returnAmplificationAnalysis ?? null,
         candidateRuntimeArtifacts: job.candidateRuntimeArtifacts,
       },
     });
@@ -420,6 +424,33 @@ router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Candidate runtime validation failed" });
+  }
+});
+
+router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/return-amplification", async (req, res): Promise<void> => {
+  try {
+    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+    getSynthesisAdapter(serviceId);
+    const jobId = Number(req.params.id);
+    const job = await getEliteSynthesisJob(jobId);
+    if (!job || job.serviceId !== serviceId) {
+      res.status(404).json({ error: `Elite synthesis job ${jobId} not found for ${serviceId}.` });
+      return;
+    }
+    if (!job.resultArtifact) {
+      res.status(409).json({ error: `Elite synthesis job ${jobId} has no completed result artifact yet.` });
+      return;
+    }
+    res.json({
+      jobId,
+      serviceId,
+      status: job.status,
+      exportedAt: new Date().toISOString(),
+      targetProfile: (job.resultArtifact.windowSummary as Record<string, unknown> | undefined)?.targetProfile ?? "default",
+      returnAmplificationAnalysis: job.resultArtifact.returnAmplificationAnalysis ?? null,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Elite return amplification export failed" });
   }
 });
 

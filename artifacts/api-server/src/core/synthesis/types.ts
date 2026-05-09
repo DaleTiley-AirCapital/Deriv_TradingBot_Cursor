@@ -34,6 +34,8 @@ export type EliteSynthesisStage =
 
 export type EliteSynthesisSearchProfile = "fast" | "balanced" | "deep";
 
+export type EliteSynthesisTargetProfile = "default" | "return_amplification";
+
 export type EliteSynthesisBottleneck =
   | "none"
   | "current_runtime_pool_insufficient"
@@ -88,6 +90,7 @@ export type EliteSynthesisParams = {
   startTs?: number | null;
   endTs?: number | null;
   searchProfile?: EliteSynthesisSearchProfile;
+  targetProfile?: EliteSynthesisTargetProfile | null;
   maxPasses?: number | null;
   patiencePasses?: number | null;
   targetTradeCountMin?: number | null;
