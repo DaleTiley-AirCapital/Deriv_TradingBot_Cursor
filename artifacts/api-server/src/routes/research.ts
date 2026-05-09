@@ -6,6 +6,7 @@ import { getApiSymbol } from "../infrastructure/symbolValidator.js";
 import { runSymbolBacktest } from "../runtimes/backtestEngine.js";
 import { isOpenAIConfigured, chatComplete } from "../infrastructure/openai.js";
 import { retrieveContext } from "../core/ai/contextRetriever.js";
+import { buildServiceLifecycleStatus } from "../core/serviceRuntimeLifecycle.js";
 
 const router: IRouter = Router();
 
@@ -856,6 +857,19 @@ router.post("/research/data-top-up", async (req, res): Promise<void> => {
     }
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : "Data top-up failed" });
+  }
+});
+
+router.get("/research/:serviceId/service-lifecycle", async (req, res): Promise<void> => {
+  try {
+    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+    const serviceLifecycleStatus = await buildServiceLifecycleStatus(serviceId);
+    res.json({
+      serviceId,
+      serviceLifecycleStatus,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Service lifecycle fetch failed" });
   }
 });
 

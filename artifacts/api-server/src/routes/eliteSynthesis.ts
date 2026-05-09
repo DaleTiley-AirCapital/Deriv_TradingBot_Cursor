@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { db, platformStateTable } from "@workspace/db";
 import { buildUnifiedCrash300Dataset } from "../core/synthesis/crash300Adapter.js";
 import { getSynthesisAdapter } from "../core/synthesis/engine.js";
 import {
@@ -13,6 +14,10 @@ import {
 } from "../core/synthesis/jobs.js";
 import type { EliteSynthesisParams } from "../core/synthesis/types.js";
 import { profileDefaults } from "../core/synthesis/types.js";
+import {
+  promoteCandidateArtifactToServiceRuntime,
+  readPromotedServiceRuntimeArtifact,
+} from "../core/serviceRuntimeLifecycle.js";
 
 const router: IRouter = Router();
 
@@ -501,6 +506,70 @@ router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Candidate runtime validation failed" });
+  }
+});
+
+router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/promote-runtime", async (req, res): Promise<void> => {
+  try {
+    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+    getSynthesisAdapter(serviceId);
+    const artifactId = String(req.params.artifactId ?? "");
+    const located = await findCandidateRuntimeArtifact(serviceId, artifactId);
+    if (!located) {
+      res.status(404).json({ error: `Candidate runtime artifact ${artifactId} not found for ${serviceId}.` });
+      return;
+    }
+    const artifact = located.artifact;
+    const readiness = (artifact.readiness && typeof artifact.readiness === "object")
+      ? artifact.readiness as Record<string, unknown>
+      : {};
+    const reportConsistencyChecks = (artifact.reportConsistencyChecks && typeof artifact.reportConsistencyChecks === "object")
+      ? artifact.reportConsistencyChecks as Record<string, unknown>
+      : {};
+    if (reportConsistencyChecks.reportConsistencyPassed === false) {
+      res.status(409).json({
+        error: "Candidate runtime cannot be promoted because report consistency failed.",
+        reportConsistencyChecks,
+      });
+      return;
+    }
+    if (serviceId === "CRASH300" && readiness.canUseForPaper === false) {
+      res.status(409).json({
+        error: "CRASH300 candidate runtime is not approved for Paper staging.",
+        readiness,
+      });
+      return;
+    }
+    const promotedRuntime = await promoteCandidateArtifactToServiceRuntime(serviceId, artifact);
+    await db
+      .insert(platformStateTable)
+      .values({ key: "use_calibrated_runtime_profiles", value: "true" })
+      .onConflictDoUpdate({
+        target: platformStateTable.key,
+        set: { value: "true", updatedAt: new Date() },
+      });
+    res.status(202).json({
+      ok: true,
+      serviceId,
+      promotedRuntime,
+      note: "Promoted runtime is universal to the service. Paper is enabled first; Demo and Real remain blocked.",
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Candidate runtime promotion failed" });
+  }
+});
+
+router.get("/research/:serviceId/promoted-runtime", async (req, res): Promise<void> => {
+  try {
+    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+    getSynthesisAdapter(serviceId);
+    const promotedRuntime = await readPromotedServiceRuntimeArtifact(serviceId);
+    res.json({
+      serviceId,
+      promotedRuntime,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Promoted runtime fetch failed" });
   }
 });
 

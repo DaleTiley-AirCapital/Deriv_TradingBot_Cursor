@@ -78,7 +78,7 @@ interface DataTopUpTracker {
 }
 
 type OpResult = { ok: boolean; msg: string; detail?: Record<string, string> } | null;
-type ViewTab = "runtime" | "streaming" | "coverage" | "ops" | "export" | "live";
+type ViewTab = "streaming" | "live";
 type LiveSubtab = "ticks" | "candles" | "spikes";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1215,7 +1215,7 @@ function CoverageAllGrid() {
 
 export default function DataManager() {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<ViewTab>("runtime");
+  const [tab, setTab] = useState<ViewTab>("streaming");
   const [symbol, setSymbol] = useState("BOOM300");
   const [liveSubtab, setLiveSubtab] = useState<LiveSubtab>("ticks");
 
@@ -1270,11 +1270,7 @@ export default function DataManager() {
   }, [diagSymbols, researchData]);
 
   const tabs: { id: ViewTab; label: string; icon: React.ElementType }[] = [
-    { id: "runtime",   label: "Runtime",          icon: Cpu       },
     { id: "streaming", label: "Symbol State",     icon: Radio     },
-    { id: "coverage",  label: "Coverage",         icon: Database  },
-    { id: "ops",       label: "Data Operations",  icon: Sparkles  },
-    { id: "export",    label: "Export",           icon: Download  },
     { id: "live",      label: "Live View",        icon: Activity  },
   ];
 
@@ -1295,12 +1291,9 @@ export default function DataManager() {
           <Database className="w-6 h-6 text-primary" /> Data Console
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Global data streaming, coverage, exports, and service diagnostics across all tracked symbols
+          Live stream control and feed visibility across tracked symbols. Coverage, data operations, runtime lifecycle, and exports now live in Research.
         </p>
       </div>
-
-      {/* Integrity summary */}
-      {researchData && <IntegritySummary data={researchData} />}
 
       {/* Tab bar */}
       <div className="flex gap-1 border-b border-border/50 overflow-x-auto">
@@ -1399,10 +1392,10 @@ export default function DataManager() {
       )}
 
       {/* ── Coverage Tab ── */}
-      {tab === "coverage" && <CoverageAllGrid />}
+      {false && <CoverageAllGrid />}
 
       {/* ── Data Operations ── */}
-      {tab === "ops" && (
+      {false && (
         <div className="space-y-4">
           <CleanCanonicalTab />
           <HistoricalDownloadCard statusData={researchData} />
@@ -1410,10 +1403,10 @@ export default function DataManager() {
       )}
 
       {/* ── Export ── */}
-      {tab === "export" && <ExportTab />}
+      {false && <ExportTab />}
 
       {/* ── Runtime / Engine State ── */}
-      {tab === "runtime" && <RuntimeTab />}
+      {false && <RuntimeTab />}
 
       {/* ── Live View ── */}
       {tab === "live" && (

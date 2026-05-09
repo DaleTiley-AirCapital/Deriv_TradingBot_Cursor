@@ -174,7 +174,7 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
 const ACTIVE_SYMBOLS: string[] = [...ACTIVE_SERVICE_SYMBOLS];
 const BACKTEST_ACTIVE_SYMBOLS = ["all", ...ACTIVE_SYMBOLS];
 type DomainId = "active";
-type ResearchTabId = "calibration" | "reports" | "runtime" | "backtests" | "diagnostics";
+type ResearchTabId = "data" | "calibration" | "synthesis" | "runtime" | "backtests" | "diagnostics" | "reports";
 const RESEARCH_WINDOWS = [
   { days: 30, label: "1 month" },
   { days: 90, label: "3 months" },
@@ -1877,6 +1877,72 @@ interface RuntimeModelStateUi {
     promotedDynamicTpEnabled?: boolean;
     driftPendingPromotion?: boolean;
   };
+}
+
+interface ServiceLifecycleStatusUi {
+  serviceId: string;
+  symbol: string;
+  dataCoverageStatus: "not_ready" | "stale" | "ready";
+  latestCandleTs: string | null;
+  streamState: "active" | "inactive";
+  calibrationStatus: "not_run" | "complete";
+  latestCalibrationRunId: number | null;
+  synthesisStatus: string;
+  latestSynthesisJobId: number | null;
+  stagedCandidateArtifactId: string | null;
+  promotedRuntimeArtifactId: string | null;
+  promotedRuntimeVersion: string | null;
+  promotedRuntimeSourcePolicyId: string | null;
+  runtimeValidationStatus: "not_run" | "running" | "passed" | "failed";
+  parityStatus: "not_run" | "running" | "passed" | "failed";
+  triggerValidationStatus: "not_run" | "running" | "passed" | "failed";
+  activeMode: "paper" | "demo" | "real" | "idle" | "multi";
+  executionAllowedForActiveMode: boolean;
+  allocatorConnected: boolean;
+  nextRequiredAction: string;
+  blockers: string[];
+  warnings: string[];
+}
+
+interface ServicePromotedRuntimeUi {
+  artifactId: string;
+  version: string;
+  sourcePolicyId: string | null;
+  promotedAt: string;
+  runtimeFamily: string | null;
+  triggerTransition: string | null;
+  selectedBucket: string | null;
+  selectedMoveSizeBucket: string | null;
+  direction: "buy" | "sell" | null;
+  expectedPerformance?: Record<string, unknown>;
+  validationStatus?: {
+    runtimeValidationStatus?: string;
+    parityStatus?: string;
+    triggerValidationStatus?: string;
+    runtimeMimicReady?: boolean;
+  };
+  warnings?: string[];
+  allowedModes?: {
+    paper?: boolean;
+    demo?: boolean;
+    real?: boolean;
+  };
+}
+
+interface ResearchDataStatusUi {
+  symbols: Array<{
+    symbol: string;
+    tier: string;
+    count1m: number;
+    count5m: number;
+    totalCandles: number;
+    oldestDate: string | null;
+    newestDate: string | null;
+    lastBacktestDate: string | null;
+    status: string;
+  }>;
+  totalStorage: number;
+  symbolCount: number;
 }
 
 interface ParityDiagnosticsUi {
@@ -4676,11 +4742,165 @@ function ActiveWorkerTasksCard({ service }: { service: string }) {
   );
 }
 
+function lifecycleTone(status: "complete" | "warning" | "blocked" | "not_run") {
+  return status === "complete"
+    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+    : status === "warning"
+      ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+      : status === "blocked"
+        ? "border-red-500/30 bg-red-500/10 text-red-200"
+        : "border-border/40 bg-muted/20 text-muted-foreground";
+}
+
+function runtimeValidationSummary(status: string | undefined) {
+  switch (status) {
+    case "passed":
+      return "Runtime validation passed";
+    case "running":
+      return "Runtime validation running";
+    case "failed":
+      return "Runtime validation failed";
+    default:
+      return "Runtime validation not run";
+  }
+}
+
+function ServicePipelinePanel({ service }: { service: string }) {
+  const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
+  const [promotedRuntime, setPromotedRuntime] = useState<ServicePromotedRuntimeUi | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const [lifecycleResp, promotedResp] = await Promise.all([
+        apiFetch(`research/${service}/service-lifecycle`),
+        apiFetch(`research/${service}/promoted-runtime`).catch(() => ({ promotedRuntime: null })),
+      ]);
+      setLifecycle(((lifecycleResp as { serviceLifecycleStatus?: ServiceLifecycleStatusUi }).serviceLifecycleStatus) ?? null);
+      setPromotedRuntime(((promotedResp as { promotedRuntime?: ServicePromotedRuntimeUi | null }).promotedRuntime) ?? null);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Failed to load service lifecycle");
+    }
+  }, [service]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const stages = lifecycle ? [
+    {
+      label: "Data Coverage",
+      status: lifecycle.dataCoverageStatus === "ready" ? "complete" : lifecycle.dataCoverageStatus === "stale" ? "warning" : "blocked",
+      detail: lifecycle.latestCandleTs ? formatRuntimeDate(lifecycle.latestCandleTs) : "No candles yet",
+    },
+    {
+      label: "Calibration",
+      status: lifecycle.calibrationStatus === "complete" ? "complete" : "not_run",
+      detail: lifecycle.latestCalibrationRunId ? `run ${lifecycle.latestCalibrationRunId}` : "Not run",
+    },
+    {
+      label: "Elite Synthesis",
+      status: lifecycle.latestSynthesisJobId && lifecycle.synthesisStatus === "completed" ? "complete" : lifecycle.latestSynthesisJobId ? "warning" : "not_run",
+      detail: lifecycle.latestSynthesisJobId ? `job #${lifecycle.latestSynthesisJobId}` : "Not run",
+    },
+    {
+      label: "Candidate Staged",
+      status: lifecycle.stagedCandidateArtifactId ? "complete" : "not_run",
+      detail: lifecycle.stagedCandidateArtifactId ?? "Not staged",
+    },
+    {
+      label: "Runtime Validated",
+      status: lifecycle.runtimeValidationStatus === "passed" ? "complete" : lifecycle.runtimeValidationStatus === "failed" ? "blocked" : lifecycle.runtimeValidationStatus === "running" ? "warning" : "not_run",
+      detail: runtimeValidationSummary(lifecycle.runtimeValidationStatus),
+    },
+    {
+      label: "Runtime Promoted",
+      status: lifecycle.promotedRuntimeArtifactId ? "complete" : "not_run",
+      detail: lifecycle.promotedRuntimeArtifactId ?? "Not promoted",
+    },
+    {
+      label: "Stream Active",
+      status: lifecycle.streamState === "active" ? "complete" : "blocked",
+      detail: lifecycle.streamState === "active" ? "Live stream active" : "Stream inactive",
+    },
+    {
+      label: "Allocator Connected",
+      status: lifecycle.allocatorConnected ? "complete" : "blocked",
+      detail: lifecycle.executionAllowedForActiveMode ? "Ready for Paper allocator" : "Waiting on mode or risk gates",
+    },
+    {
+      label: "Paper Monitoring",
+      status: lifecycle.executionAllowedForActiveMode ? "complete" : "warning",
+      detail: lifecycle.executionAllowedForActiveMode ? "Execution allowed for active mode" : lifecycle.nextRequiredAction,
+    },
+  ] : [];
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold">Service Pipeline</h3>
+          <p className="text-xs text-muted-foreground mt-1">
+            Data Coverage → Calibration → Elite Synthesis → Candidate Staged → Runtime Validated → Runtime Promoted → Stream Active → Allocator Connected → Paper Monitoring
+          </p>
+        </div>
+        {lifecycle ? (
+          <span className={cn("px-2 py-0.5 rounded border text-[11px] font-medium", lifecycle.executionAllowedForActiveMode ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-amber-500/30 bg-amber-500/10 text-amber-200")}>
+            Next: {lifecycle.nextRequiredAction}
+          </span>
+        ) : null}
+      </div>
+      {err && <ErrorBox msg={err} />}
+      {lifecycle ? (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {stages.map((stage) => (
+              <div key={stage.label} className={cn("rounded-lg border p-3 space-y-1", lifecycleTone(stage.status as "complete" | "warning" | "blocked" | "not_run"))}>
+                <p className="text-[10px] uppercase tracking-wide">{stage.label}</p>
+                <p className="font-medium">{stage.detail}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 text-[11px]">
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Current promoted runtime</p>
+              <StatRow label="Policy" value={promotedRuntime?.sourcePolicyId ?? lifecycle.promotedRuntimeSourcePolicyId ?? "n/a"} />
+              <StatRow label="Family" value={promotedRuntime?.runtimeFamily ?? "n/a"} />
+              <StatRow label="Direction" value={promotedRuntime?.direction ?? "n/a"} />
+              <StatRow label="Allowed modes" value={[
+                promotedRuntime?.allowedModes?.paper ? "paper" : null,
+                promotedRuntime?.allowedModes?.demo ? "demo" : null,
+                promotedRuntime?.allowedModes?.real ? "real" : null,
+              ].filter(Boolean).join(", ") || "none"} />
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Blockers</p>
+              {lifecycle.blockers.length > 0 ? lifecycle.blockers.map((blocker) => (
+                <p key={blocker} className="text-red-300">{blocker}</p>
+              )) : <p className="text-emerald-300">No active blockers</p>}
+            </div>
+            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+              <p className="text-muted-foreground uppercase tracking-wide">Warnings</p>
+              {lifecycle.warnings.length > 0 ? lifecycle.warnings.map((warning) => (
+                <p key={warning} className="text-amber-200">{warning}</p>
+              )) : <p className="text-muted-foreground">No current warnings</p>}
+            </div>
+          </div>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">Loading service pipeline status…</p>
+      )}
+    </div>
+  );
+}
+
 function ServiceStatusSummary({ service, windowDays }: { service: string; windowDays: number }) {
   const [runtime, setRuntime] = useState<RuntimeModelStateUi | null>(null);
   const [runs, setRuns] = useState<PassRun[]>([]);
   const [backtests, setBacktests] = useState<PersistedV3BacktestHistoryRun[]>([]);
   const [synthesisJobs, setSynthesisJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
+  const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -4688,17 +4908,19 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
     (async () => {
       setErr(null);
       try {
-        const [runtimeResp, runResp, backtestResp, synthesisResp] = await Promise.all([
+        const [runtimeResp, runResp, backtestResp, synthesisResp, lifecycleResp] = await Promise.all([
           apiFetch(`calibration/runtime-model/${service}`).catch(() => null),
           apiFetch(`calibration/runs/${service}`).catch(() => ({ runs: [] })),
           apiFetch(`backtest/v3/history?symbol=${encodeURIComponent(service)}&limit=5`).catch(() => ({ runs: [] })),
           apiFetch(`research/${service}/elite-synthesis/jobs?limit=10`).catch(() => ({ jobs: [] })),
+          apiFetch(`research/${service}/service-lifecycle`).catch(() => ({ serviceLifecycleStatus: null })),
         ]);
         if (cancelled) return;
         setRuntime(runtimeResp as RuntimeModelStateUi | null);
         setRuns(Array.isArray((runResp as { runs?: PassRun[] } | null)?.runs) ? (runResp as { runs?: PassRun[] }).runs ?? [] : []);
         setBacktests(Array.isArray((backtestResp as { runs?: PersistedV3BacktestHistoryRun[] } | null)?.runs) ? (backtestResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs ?? [] : []);
         setSynthesisJobs(Array.isArray((synthesisResp as { jobs?: EliteSynthesisJobStatusUi[] } | null)?.jobs) ? (synthesisResp as { jobs?: EliteSynthesisJobStatusUi[] }).jobs ?? [] : []);
+        setLifecycle(((lifecycleResp as { serviceLifecycleStatus?: ServiceLifecycleStatusUi | null }).serviceLifecycleStatus) ?? null);
       } catch (e: unknown) {
         if (cancelled) return;
         setErr(e instanceof Error ? e.message : "Failed to load service status");
@@ -4754,7 +4976,7 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
         </div>
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Promoted runtime</p>
-          <p className="font-mono text-foreground">{runtime?.lifecycle?.promotedRunId ?? "none"}</p>
+          <p className="font-mono text-foreground">{lifecycle?.promotedRuntimeArtifactId ?? runtime?.lifecycle?.promotedRunId ?? "none"}</p>
         </div>
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Latest backtest</p>
@@ -4773,16 +4995,40 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
                 : "ready to stage"
               : service === "R_75"
                 ? "next optimisation target"
-                : "not staged"}
+              : "not staged"}
           </p>
         </div>
       </div>
+      {lifecycle ? (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-[11px]">
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Active mode</p>
+            <p className="font-mono text-foreground">{lifecycle.activeMode}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Stream</p>
+            <p className="font-mono text-foreground">{lifecycle.streamState}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Allocator</p>
+            <p className="font-mono text-foreground">{lifecycle.allocatorConnected ? "connected" : "disconnected"}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Next action</p>
+            <p className="font-mono text-foreground">{lifecycle.nextRequiredAction}</p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function RuntimeModelTab({ service }: { service: string }) {
   const [runtime, setRuntime] = useState<RuntimeModelStateUi | null>(null);
+  const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
+  const [promotedRuntime, setPromotedRuntime] = useState<ServicePromotedRuntimeUi | null>(null);
+  const [promoteBusy, setPromoteBusy] = useState(false);
+  const [promoteNotice, setPromoteNotice] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -4790,8 +5036,16 @@ function RuntimeModelTab({ service }: { service: string }) {
     (async () => {
       setErr(null);
       try {
-        const d = await apiFetch(`calibration/runtime-model/${service}`) as RuntimeModelStateUi;
-        if (!cancelled) setRuntime(d);
+        const [runtimeResp, lifecycleResp, promotedResp] = await Promise.all([
+          apiFetch(`calibration/runtime-model/${service}`),
+          apiFetch(`research/${service}/service-lifecycle`).catch(() => ({ serviceLifecycleStatus: null })),
+          apiFetch(`research/${service}/promoted-runtime`).catch(() => ({ promotedRuntime: null })),
+        ]);
+        if (!cancelled) {
+          setRuntime(runtimeResp as RuntimeModelStateUi);
+          setLifecycle(((lifecycleResp as { serviceLifecycleStatus?: ServiceLifecycleStatusUi }).serviceLifecycleStatus) ?? null);
+          setPromotedRuntime(((promotedResp as { promotedRuntime?: ServicePromotedRuntimeUi | null }).promotedRuntime) ?? null);
+        }
       } catch (e: unknown) {
         if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load runtime model");
       }
@@ -4821,9 +5075,32 @@ function RuntimeModelTab({ service }: { service: string }) {
   if (runtime?.lifecycle?.hasStagedModel && runtime?.lifecycle?.promotedMatchesStaged === false) validationErrors.push("Staged model is newer than promoted runtime.");
   if (!promotedBuckets.length && !promotedRuntimeTpBuckets.length) validationErrors.push("Runtime TP bucket model unavailable.");
 
+  const promoteCandidateToRuntime = async () => {
+    if (!lifecycle?.stagedCandidateArtifactId) return;
+    setPromoteBusy(true);
+    setPromoteNotice(null);
+    setErr(null);
+    try {
+      const data = await apiFetch(`research/${service}/elite-synthesis/candidate-runtime/${lifecycle.stagedCandidateArtifactId}/promote-runtime`, {
+        method: "POST",
+      }) as { promotedRuntime?: ServicePromotedRuntimeUi };
+      setPromotedRuntime(data.promotedRuntime ?? null);
+      const lifecycleResp = await apiFetch(`research/${service}/service-lifecycle`).catch(() => ({ serviceLifecycleStatus: null })) as {
+        serviceLifecycleStatus?: ServiceLifecycleStatusUi | null;
+      };
+      setLifecycle(lifecycleResp.serviceLifecycleStatus ?? null);
+      setPromoteNotice("Promoted service runtime updated. Paper can consume it when Paper mode is active and the stream is active.");
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Failed to promote candidate to runtime");
+    } finally {
+      setPromoteBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {err && <ErrorBox msg={err} />}
+      {promoteNotice && <SuccessBox msg={promoteNotice} />}
       <RuntimeLifecyclePanel service={service} />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
@@ -4864,6 +5141,81 @@ function RuntimeModelTab({ service }: { service: string }) {
               R_75 uses the Volatility Series template with continuation, breakout, pullback-continuation, and gated mean reversion research priorities.
             </p>
           ) : null}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-sm font-semibold">Promoted Runtime Summary</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Promoted runtime is universal to the service. Paper, Demo, and Real use the same runtime artifact, with mode permissions controlling execution.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void promoteCandidateToRuntime()}
+            disabled={promoteBusy || !lifecycle?.stagedCandidateArtifactId}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
+            title="Promote the staged synthesis candidate into the universal service runtime path"
+          >
+            {promoteBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            Promote Candidate To Runtime
+          </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-[11px]">
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Promoted artifact</p>
+            <p className="font-mono text-foreground">{promotedRuntime?.artifactId ?? lifecycle?.promotedRuntimeArtifactId ?? "none"}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Source policy</p>
+            <p className="font-mono text-foreground">{promotedRuntime?.sourcePolicyId ?? lifecycle?.promotedRuntimeSourcePolicyId ?? "n/a"}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Mode permissions</p>
+            <p className="font-mono text-foreground">
+              {[
+                promotedRuntime?.allowedModes?.paper ? "paper" : null,
+                promotedRuntime?.allowedModes?.demo ? "demo" : null,
+                promotedRuntime?.allowedModes?.real ? "real" : null,
+              ].filter(Boolean).join(", ") || "none"}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Validation</p>
+            <p className="font-mono text-foreground">{promotedRuntime?.validationStatus?.runtimeValidationStatus ?? lifecycle?.runtimeValidationStatus ?? "not_run"}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-[11px]">
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Strategy</p>
+            <StatRow label="Family" value={promotedRuntime?.runtimeFamily ?? "n/a"} />
+            <StatRow label="Transition" value={promotedRuntime?.triggerTransition ?? "n/a"} />
+            <StatRow label="Direction" value={promotedRuntime?.direction ?? "n/a"} />
+            <StatRow label="Predicted bucket" value={promotedRuntime?.selectedMoveSizeBucket ?? "n/a"} />
+          </div>
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Expected metrics</p>
+            <StatRow label="Trades" value={Number(asUiRecord(promotedRuntime?.expectedPerformance).trades ?? 0)} />
+            <StatRow label="Win rate" value={Number(asUiRecord(promotedRuntime?.expectedPerformance).winRate ?? 0).toFixed(2)} />
+            <StatRow label="SL rate" value={Number(asUiRecord(promotedRuntime?.expectedPerformance).slHitRate ?? 0).toFixed(2)} />
+            <StatRow label="PF" value={Number(asUiRecord(promotedRuntime?.expectedPerformance).profitFactor ?? 0).toFixed(2)} />
+          </div>
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Mode gates</p>
+            <StatRow label="Active mode" value={lifecycle?.activeMode ?? "idle"} />
+            <StatRow label="Service runtime allowed" value={promotedRuntime?.allowedModes?.paper ? "paper yes" : "paper no"} />
+            <StatRow label="Allocator allowed" value={lifecycle?.allocatorConnected ? "connected" : "blocked"} />
+            <StatRow label="Execution allowed" value={lifecycle?.executionAllowedForActiveMode ? "yes" : "no"} />
+          </div>
+          <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Live feed / allocator</p>
+            <StatRow label="Stream" value={lifecycle?.streamState ?? "inactive"} />
+            <StatRow label="Latest candle" value={lifecycle?.latestCandleTs ? formatRuntimeDate(lifecycle.latestCandleTs) : "n/a"} />
+            <StatRow label="Allocator" value={lifecycle?.allocatorConnected ? "connected" : "disconnected"} />
+            <StatRow label="Last decision" value={lifecycle?.nextRequiredAction ?? "n/a"} />
+          </div>
         </div>
       </div>
 
@@ -4989,8 +5341,104 @@ const REPORT_OPTIONS: ReportOption[] = [
   { value: "elite-return-amplification", label: "Return Amplification Analysis", task: "integrated-elite-synthesis", runType: "synthesis" },
 ];
 
-function ReportsTab({ service, windowDays }: { service: string; windowDays: number }) {
-  const [reportTask, setReportTask] = useState<ReportOption["task"]>("full-calibration");
+function DataCoverageTab({ service }: { service: string }) {
+  const [dataStatus, setDataStatus] = useState<ResearchDataStatusUi | null>(null);
+  const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [dataResp, lifecycleResp] = await Promise.all([
+          apiFetch("research/data-status"),
+          apiFetch(`research/${service}/service-lifecycle`),
+        ]);
+        if (cancelled) return;
+        setDataStatus(dataResp as ResearchDataStatusUi);
+        setLifecycle(((lifecycleResp as { serviceLifecycleStatus?: ServiceLifecycleStatusUi }).serviceLifecycleStatus) ?? null);
+      } catch (e: unknown) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load data coverage");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [service]);
+
+  const serviceRow = dataStatus?.symbols.find((row) => row.symbol === service) ?? null;
+
+  return (
+    <div className="space-y-4">
+      {err && <ErrorBox msg={err} />}
+      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold">Data &amp; Coverage</h3>
+          <p className="text-xs text-muted-foreground mt-1">
+            Data readiness, stale/missing history, and service coverage now live in Research. Use the Data page only for stream start/stop and live feed visibility.
+          </p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-[11px]">
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Coverage status</p>
+            <p className="font-mono text-foreground">{lifecycle?.dataCoverageStatus ?? serviceRow?.status ?? "unknown"}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Latest candle</p>
+            <p className="font-mono text-foreground">{lifecycle?.latestCandleTs ? formatRuntimeDate(lifecycle.latestCandleTs) : "n/a"}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">1m candles</p>
+            <p className="font-mono text-foreground">{serviceRow?.count1m?.toLocaleString() ?? "0"}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">5m candles</p>
+            <p className="font-mono text-foreground">{serviceRow?.count5m?.toLocaleString() ?? "0"}</p>
+          </div>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 text-[11px] text-muted-foreground">
+          Next required action from this stage: <span className="text-foreground font-medium">{lifecycle?.nextRequiredAction ?? "Review service lifecycle"}</span>
+        </div>
+      </div>
+      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+        <h3 className="text-sm font-semibold">Add Service</h3>
+        <p className="text-xs text-muted-foreground">
+          Controlled service onboarding is defined for Crash, Boom, Volatility, Step, Range Break, Jump, and Other. UI/backend scaffolding is present as a workflow placeholder; unsupported templates must fail loudly until explicitly implemented.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+            <p className="text-muted-foreground uppercase tracking-wide">Next service</p>
+            <p className="font-mono text-foreground">R_75</p>
+            <p className="mt-1 text-muted-foreground">Volatility family template</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+            <p className="text-muted-foreground uppercase tracking-wide">Later services</p>
+            <p className="font-mono text-foreground">BOOM300, R_100</p>
+            <p className="mt-1 text-muted-foreground">Portfolio contributors after CRASH300 baseline</p>
+          </div>
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-100">
+            <p className="text-[10px] uppercase tracking-wide">Current status</p>
+            <p className="font-medium mt-1">Service-template creation is defined but not self-serve yet.</p>
+            <p className="mt-1 text-[11px]">Unsupported service templates must fail loudly until implemented.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReportsTab({
+  service,
+  windowDays,
+  forcedTask,
+  title = "Reports",
+  description = "Consolidated read-only exports for the selected symbol service. Backtest-heavy artifacts stay here instead of being scattered through calibration and runtime cards.",
+}: {
+  service: string;
+  windowDays: number;
+  forcedTask?: ReportOption["task"];
+  title?: string;
+  description?: string;
+}) {
+  const [reportTask, setReportTask] = useState<ReportOption["task"]>(forcedTask ?? "full-calibration");
   const [reportType, setReportType] = useState<string>("detected-moves");
   const [calibrationRuns, setCalibrationRuns] = useState<PassRun[]>([]);
   const [backtestRuns, setBacktestRuns] = useState<PersistedV3BacktestHistoryRun[]>([]);
@@ -5003,6 +5451,12 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [synthesisReportResult, setSynthesisReportResult] = useState<Record<string, unknown> | null>(null);
+
+  useEffect(() => {
+    if (forcedTask) {
+      setReportTask(forcedTask);
+    }
+  }, [forcedTask]);
 
   useEffect(() => {
     let cancelled = false;
@@ -5197,20 +5651,32 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
   return (
     <div className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
       <div>
-        <h3 className="text-sm font-semibold">Reports</h3>
-        <p className="text-xs text-muted-foreground mt-1">
-          Consolidated read-only exports for the selected symbol service. Backtest-heavy artifacts stay here instead of being scattered through calibration and runtime cards.
-        </p>
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <p className="text-xs text-muted-foreground mt-1">{description}</p>
+        {forcedTask === "integrated-elite-synthesis" ? (
+          <p className="text-xs text-amber-200 mt-2">
+            Deep 12-month run may take long. It runs on worker and will not block the UI.
+          </p>
+        ) : null}
       </div>
       {notice && <SuccessBox msg={notice} />}
       {err && <ErrorBox msg={err} />}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-        <div className="space-y-1">
-          <label className="text-[11px] text-muted-foreground">Function</label>
-          <select value={reportTask} onChange={(e) => setReportTask(e.target.value as ReportOption["task"])} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
-            {REPORT_TASK_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </div>
+        {!forcedTask ? (
+          <div className="space-y-1">
+            <label className="text-[11px] text-muted-foreground">Function</label>
+            <select value={reportTask} onChange={(e) => setReportTask(e.target.value as ReportOption["task"])} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
+              {REPORT_TASK_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <label className="text-[11px] text-muted-foreground">Function</label>
+            <div className="w-full text-xs bg-background border border-primary/30 rounded px-2 py-1.5 text-primary">
+              {REPORT_TASK_OPTIONS.find((option) => option.value === forcedTask)?.label ?? forcedTask}
+            </div>
+          </div>
+        )}
         <div className="space-y-1">
           <label className="text-[11px] text-muted-foreground">Report</label>
           <select value={selectedOption?.value ?? reportType} onChange={(e) => setReportType(e.target.value)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
@@ -5847,11 +6313,13 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
 
 export default function Research() {
   const [selectedService, setSelectedService] = useState<string>("CRASH300");
-  const [activeTab, setActiveTab] = useState<ResearchTabId>("calibration");
+  const [activeTab, setActiveTab] = useState<ResearchTabId>("data");
   const [sharedWindowDays, setSharedWindowDays] = useState<number>(365);
 
   const tabs: { id: ResearchTabId; label: string; icon: React.ReactNode }[] = [
+    { id: "data", label: "Data & Coverage", icon: <Activity className="w-3.5 h-3.5" /> },
     { id: "calibration", label: "Calibration & Research", icon: <Target className="w-3.5 h-3.5" /> },
+    { id: "synthesis", label: "Integrated Elite Synthesis", icon: <TrendingUp className="w-3.5 h-3.5" /> },
     { id: "runtime", label: "Runtime Model", icon: <Zap className="w-3.5 h-3.5" /> },
     { id: "backtests", label: "Backtests", icon: <BarChart2 className="w-3.5 h-3.5" /> },
     { id: "diagnostics", label: "Advanced Diagnostics", icon: <Search className="w-3.5 h-3.5" /> },
@@ -5899,6 +6367,7 @@ export default function Research() {
       </div>
 
       <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
+      <ServicePipelinePanel service={selectedService} />
       <ActiveWorkerTasksCard service={selectedService} />
 
       <div className="flex items-center gap-0.5 border-b border-border/30">
@@ -5919,6 +6388,9 @@ export default function Research() {
         ))}
       </div>
 
+      {activeTab === "data" && (
+        <DataCoverageTab service={selectedService} />
+      )}
       {activeTab === "calibration" && (
         <MoveCalibrationTab
           domain="active"
@@ -5926,6 +6398,15 @@ export default function Research() {
           lockedSymbol={selectedService}
           hideReportsActions
           showAdvancedDiagnostics={false}
+        />
+      )}
+      {activeTab === "synthesis" && (
+        <ReportsTab
+          service={selectedService}
+          windowDays={sharedWindowDays}
+          forcedTask="integrated-elite-synthesis"
+          title="Integrated Elite Synthesis"
+          description="Run Integrated Elite Synthesis, stage the best candidate, inspect return amplification, and prepare 12-month deep exports without leaving the Research workflow."
         />
       )}
       {activeTab === "runtime" && (
