@@ -58,7 +58,7 @@ interface DataStatusSymbol {
   status: string;
 }
 
-interface ResearchDataStatus {
+export interface ResearchDataStatus {
   symbols: DataStatusSymbol[];
   totalStorage: number;
   symbolCount: number;
@@ -110,7 +110,7 @@ function useSymbolDiagnostics() {
   });
 }
 
-function useResearchDataStatus() {
+export function useResearchDataStatus() {
   return useQuery<ResearchDataStatus>({
     queryKey: ["research/data-status"],
     queryFn: () => apiFetch("research/data-status"),
@@ -392,7 +392,7 @@ function IntegritySummary({ data }: { data: ResearchDataStatus }) {
 
 // ── Data Operations Tab — Unified Canonical Cleanup ───────────────────────────
 
-function CleanCanonicalTab() {
+export function CleanCanonicalTab() {
   const [symbol, setSymbol] = useState("CRASH300");
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<any | null>(null);
@@ -543,7 +543,7 @@ function CleanCanonicalTab() {
   );
 }
 
-function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatus }) {
+export function HistoricalDownloadCard({ statusData }: { statusData?: ResearchDataStatus }) {
   const [symbol, setSymbol] = useState("R_100");
   const [running, setRunning] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -1105,7 +1105,7 @@ function RuntimeTab() {
 
 const ALL_TIMEFRAMES = ["1m","5m","10m","20m","40m","1h","2h","4h","8h","1d","2d","4d"] as const;
 
-function CoverageAllGrid() {
+export function CoverageAllGrid() {
   const { data, isLoading, refetch } = useCoverageAll();
 
   const matrix = useMemo(() => {

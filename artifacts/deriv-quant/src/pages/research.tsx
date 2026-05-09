@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect, useCallback, createContext, useContext, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, createContext, useContext, type ReactNode } from "react";
 import {
   FlaskConical, RefreshCw,
   Loader2, CheckCircle, XCircle,
   FileText, Clock, BarChart2, ChevronRight, Download, Activity,
-  Target, Zap, TrendingUp, TrendingDown, Search, ChevronDown, ChevronUp, Trash2,
+  Target, Zap, TrendingUp, TrendingDown, Search, ChevronDown, ChevronUp, Trash2, Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDurationCompact } from "@/lib/time";
@@ -15,6 +15,7 @@ import {
   isEnabledService,
   isScaffoldedService,
 } from "@/lib/symbolCatalog";
+import { CleanCanonicalTab, CoverageAllGrid, HistoricalDownloadCard, useResearchDataStatus } from "./data";
 
 const BASE = import.meta.env.BASE_URL || "/";
 
@@ -2234,12 +2235,14 @@ function MoveCalibrationTab({
   lockedSymbol,
   hideReportsActions = false,
   showAdvancedDiagnostics = false,
+  showIntegratedEliteSynthesis = true,
 }: {
   domain: DomainId;
   windowDays: number;
   lockedSymbol?: string;
   hideReportsActions?: boolean;
   showAdvancedDiagnostics?: boolean;
+  showIntegratedEliteSynthesis?: boolean;
 }) {
   const calibRun = useCalibrationRun();
   const calibrationSymbols = CALIB_ACTIVE_SYMBOLS;
@@ -3487,7 +3490,9 @@ function MoveCalibrationTab({
         </div>
       </div>
 
-      <IntegratedEliteSynthesisCard service={symbol} windowDays={windowDays} />
+      {showIntegratedEliteSynthesis && (
+        <IntegratedEliteSynthesisCard service={symbol} windowDays={windowDays} />
+      )}
 
       {/*  3-Domain Comparison  */}
       <div>
@@ -4765,7 +4770,13 @@ function runtimeValidationSummary(status: string | undefined) {
   }
 }
 
-function ServicePipelinePanel({ service }: { service: string }) {
+function ServicePipelinePanel({
+  service,
+  onJumpToTab,
+}: {
+  service: string;
+  onJumpToTab: (tab: ResearchTabId) => void;
+}) {
   const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
   const [promotedRuntime, setPromotedRuntime] = useState<ServicePromotedRuntimeUi | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -4836,6 +4847,70 @@ function ServicePipelinePanel({ service }: { service: string }) {
     },
   ] : [];
 
+  const nextStepGuide = lifecycle ? (() => {
+    if (lifecycle.dataCoverageStatus !== "ready") {
+      return {
+        tab: "data" as ResearchTabId,
+        action: "Open Data & Coverage",
+        detail: "Review candle coverage first, then run Clean Canonical Data or Download Historical Data before calibration.",
+      };
+    }
+    if (lifecycle.calibrationStatus !== "complete") {
+      return {
+        tab: "calibration" as ResearchTabId,
+        action: "Open Calibration",
+        detail: "Run or review the latest calibration so the service has detected moves, research profile output, and runtime research artifacts.",
+      };
+    }
+    if (lifecycle.synthesisStatus !== "completed") {
+      return {
+        tab: "synthesis" as ResearchTabId,
+        action: "Open Elite Synthesis",
+        detail: "Run Integrated Elite Synthesis from the synthesis tab and use the worker-backed history card below it to monitor progress.",
+      };
+    }
+    if (!lifecycle.stagedCandidateArtifactId) {
+      return {
+        tab: "synthesis" as ResearchTabId,
+        action: "Stage Best Candidate",
+        detail: "Open Elite Synthesis, review the latest result summary, then use the stage button once report consistency and export checks pass.",
+      };
+    }
+    if (!lifecycle.promotedRuntimeArtifactId) {
+      return {
+        tab: "runtime" as ResearchTabId,
+        action: "Promote Candidate To Runtime",
+        detail: "Open Runtime Model and promote the staged candidate into the universal service runtime. Paper can use it when the stream and allocator are healthy.",
+      };
+    }
+    if (lifecycle.runtimeValidationStatus !== "passed") {
+      return {
+        tab: "diagnostics" as ResearchTabId,
+        action: "Run Parity & Runtime Trigger Validation",
+        detail: "Use Advanced Diagnostics to validate the promoted runtime before loosening any mode permissions beyond Paper.",
+      };
+    }
+    if (lifecycle.streamState !== "active") {
+      return {
+        tab: "data" as ResearchTabId,
+        action: "Open Data",
+        detail: "The promoted runtime is ready, but the symbol stream must be active before it can emit candidates into the allocator.",
+      };
+    }
+    if (!lifecycle.executionAllowedForActiveMode) {
+      return {
+        tab: "runtime" as ResearchTabId,
+        action: "Review Runtime Mode Gates",
+        detail: "The service is promoted, but execution is still blocked by the current mode, validation state, or allocator/risk gates.",
+      };
+    }
+    return {
+      tab: "backtests" as ResearchTabId,
+      action: "Monitor Backtests & Paper Behaviour",
+      detail: "The service has completed the core pipeline. Use Backtests, Reports, and live Paper monitoring to compare expected and realised behaviour.",
+    };
+  })() : null;
+
   return (
     <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -4854,6 +4929,25 @@ function ServicePipelinePanel({ service }: { service: string }) {
       {err && <ErrorBox msg={err} />}
       {lifecycle ? (
         <>
+          {nextStepGuide && (
+            <div className="rounded-lg border border-primary/25 bg-primary/5 p-3 space-y-2 text-[11px]">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="text-muted-foreground uppercase tracking-wide">How to do the next task</p>
+                  <p className="mt-1 text-foreground font-medium">{nextStepGuide.action}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onJumpToTab(nextStepGuide.tab)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-primary/30 bg-primary/10 text-xs text-primary hover:bg-primary/15"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                  Go to {nextStepGuide.tab === "data" ? "Data & Coverage" : nextStepGuide.tab === "calibration" ? "Calibration" : nextStepGuide.tab === "synthesis" ? "Elite Synthesis" : nextStepGuide.tab === "runtime" ? "Runtime Model" : nextStepGuide.tab === "diagnostics" ? "Advanced Diagnostics" : "Backtests"}
+                </button>
+              </div>
+              <p className="text-muted-foreground">{nextStepGuide.detail}</p>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {stages.map((stage) => (
               <div key={stage.label} className={cn("rounded-lg border p-3 space-y-1", lifecycleTone(stage.status as "complete" | "warning" | "blocked" | "not_run"))}>
@@ -5101,49 +5195,6 @@ function RuntimeModelTab({ service }: { service: string }) {
     <div className="space-y-4">
       {err && <ErrorBox msg={err} />}
       {promoteNotice && <SuccessBox msg={promoteNotice} />}
-      <RuntimeLifecyclePanel service={service} />
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
-          <h3 className="text-sm font-semibold">Runtime Model</h3>
-          <StatRow label="Service" value={getSymbolLabel(service)} />
-          <StatRow label="Model source" value={runtime?.lifecycle?.runtimeSource ?? "none"} />
-          <StatRow label="Staged runtime" value={runtime?.lifecycle?.stagedRunId ?? "none"} />
-          <StatRow label="Promoted runtime" value={runtime?.lifecycle?.promotedRunId ?? "none"} />
-          <StatRow label="Service research template" value={baseFamily} />
-          <StatRow label="Runtime entry archetypes" value={runtimeArchetypes.join(", ") || "n/a"} />
-          <StatRow label="Promoted model source run" value={runtime?.promotedModel?.sourceRunId ?? "none"} />
-          {service === "CRASH300" ? (
-            <StatRow label="V3.1 baseline" value="Paper-only staged candidate workflow" />
-          ) : null}
-          {service === "R_75" ? (
-            <StatRow label="Next optimisation" value="Volatility-series symbol-service workflow ready" />
-          ) : null}
-        </div>
-        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
-          <h3 className="text-sm font-semibold">Validation</h3>
-          {validationErrors.length === 0 ? (
-            <StatusPill ok yes="Model validated" no="Validation failed" />
-          ) : (
-            <div className="space-y-2">
-              {validationErrors.map((message) => <ErrorBox key={message} msg={message} />)}
-            </div>
-          )}
-          <p className="text-xs text-muted-foreground">
-            Runtime Model owns staged/promoted state, model source, calibrated bucket visibility, and validation status.
-          </p>
-          {service === "CRASH300" ? (
-            <p className="text-xs text-amber-300">
-              CRASH300 V3.1 baseline remains paper-only. Runtime mimic validation must pass before any demo or live promotion path is considered.
-            </p>
-          ) : null}
-          {service === "R_75" ? (
-            <p className="text-xs text-muted-foreground">
-              R_75 uses the Volatility Series template with continuation, breakout, pullback-continuation, and gated mean reversion research priorities.
-            </p>
-          ) : null}
-        </div>
-      </div>
-
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
@@ -5216,6 +5267,48 @@ function RuntimeModelTab({ service }: { service: string }) {
             <StatRow label="Allocator" value={lifecycle?.allocatorConnected ? "connected" : "disconnected"} />
             <StatRow label="Last decision" value={lifecycle?.nextRequiredAction ?? "n/a"} />
           </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
+          <h3 className="text-sm font-semibold">Runtime Model</h3>
+          <StatRow label="Service" value={getSymbolLabel(service)} />
+          <StatRow label="Model source" value={runtime?.lifecycle?.runtimeSource ?? "none"} />
+          <StatRow label="Staged runtime" value={runtime?.lifecycle?.stagedRunId ?? "none"} />
+          <StatRow label="Promoted runtime" value={runtime?.lifecycle?.promotedRunId ?? "none"} />
+          <StatRow label="Service research template" value={baseFamily} />
+          <StatRow label="Runtime entry archetypes" value={runtimeArchetypes.join(", ") || "n/a"} />
+          <StatRow label="Promoted model source run" value={runtime?.promotedModel?.sourceRunId ?? "none"} />
+          {service === "CRASH300" ? (
+            <StatRow label="V3.1 baseline" value="Paper-only staged candidate workflow" />
+          ) : null}
+          {service === "R_75" ? (
+            <StatRow label="Next optimisation" value="Volatility-series symbol-service workflow ready" />
+          ) : null}
+        </div>
+        <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
+          <h3 className="text-sm font-semibold">Validation</h3>
+          {validationErrors.length === 0 ? (
+            <StatusPill ok yes="Model validated" no="Validation failed" />
+          ) : (
+            <div className="space-y-2">
+              {validationErrors.map((message) => <ErrorBox key={message} msg={message} />)}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Runtime Model owns staged/promoted state, mode permissions, calibrated bucket visibility, and validation status.
+          </p>
+          {service === "CRASH300" ? (
+            <p className="text-xs text-amber-300">
+              CRASH300 V3.1 baseline remains paper-only. Runtime mimic validation must pass before any demo or live promotion path is considered.
+            </p>
+          ) : null}
+          {service === "R_75" ? (
+            <p className="text-xs text-muted-foreground">
+              R_75 uses the Volatility Series template with continuation, breakout, pullback-continuation, and gated mean reversion research priorities.
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -5341,8 +5434,81 @@ const REPORT_OPTIONS: ReportOption[] = [
   { value: "elite-return-amplification", label: "Return Amplification Analysis", task: "integrated-elite-synthesis", runType: "synthesis" },
 ];
 
+function AddServiceWorkflowCard({
+  selectedService,
+  onSelectService,
+}: {
+  selectedService: string;
+  onSelectService: (service: string) => void;
+}) {
+  const serviceCards = [
+    {
+      symbol: "R_75",
+      title: "Next service",
+      subtitle: "Volatility family template",
+      note: "Ready for the next optimisation pass using the same V3.1 workflow.",
+    },
+    {
+      symbol: "BOOM300",
+      title: "Later service",
+      subtitle: "Crash/Boom portfolio contributor",
+      note: "Keep as a follow-on candidate after R_75.",
+    },
+    {
+      symbol: "R_100",
+      title: "Later service",
+      subtitle: "Volatility family follow-up",
+      note: "Use after R_75 stabilises and the portfolio allocator has more than one active contributor.",
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold">Add New Service</h3>
+          <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+            Controlled service onboarding belongs at the service selector level. Choose or scaffold the next symbol-service here, then use the Research tabs for data download, calibration, synthesis, runtime promotion, and reports.
+          </p>
+        </div>
+        <span className="px-2 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-200">
+          Controlled onboarding only
+        </span>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
+        {serviceCards.map((card) => (
+          <div key={card.symbol} className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-2">
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">{card.title}</p>
+              <p className="font-mono text-foreground mt-1">{card.symbol}</p>
+              <p className="text-muted-foreground mt-1">{card.subtitle}</p>
+            </div>
+            <p className="text-muted-foreground">{card.note}</p>
+            <button
+              type="button"
+              onClick={() => onSelectService(card.symbol)}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors",
+                selectedService === card.symbol
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border/40 text-muted-foreground hover:text-foreground hover:border-border",
+              )}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              {selectedService === card.symbol ? "Viewing service" : "Open service workflow"}
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-100">
+        Unsupported templates must still fail loudly until their backend/service template is fully implemented. This card is a controlled workflow entry point, not a silent scaffold fallback.
+      </div>
+    </div>
+  );
+}
+
 function DataCoverageTab({ service }: { service: string }) {
-  const [dataStatus, setDataStatus] = useState<ResearchDataStatusUi | null>(null);
+  const { data: dataStatus, isLoading: dataLoading } = useResearchDataStatus();
   const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -5350,12 +5516,8 @@ function DataCoverageTab({ service }: { service: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const [dataResp, lifecycleResp] = await Promise.all([
-          apiFetch("research/data-status"),
-          apiFetch(`research/${service}/service-lifecycle`),
-        ]);
+        const lifecycleResp = await apiFetch(`research/${service}/service-lifecycle`);
         if (cancelled) return;
-        setDataStatus(dataResp as ResearchDataStatusUi);
         setLifecycle(((lifecycleResp as { serviceLifecycleStatus?: ServiceLifecycleStatusUi }).serviceLifecycleStatus) ?? null);
       } catch (e: unknown) {
         if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load data coverage");
@@ -5365,21 +5527,32 @@ function DataCoverageTab({ service }: { service: string }) {
   }, [service]);
 
   const serviceRow = dataStatus?.symbols.find((row) => row.symbol === service) ?? null;
+  const staleLabel = useMemo(() => {
+    if (!serviceRow?.newestDate) return "n/a";
+    const ageMs = Date.now() - new Date(serviceRow.newestDate).getTime();
+    const hours = Math.max(0, Math.floor(ageMs / 3_600_000));
+    return hours < 24 ? `${hours}h old` : `${Math.floor(hours / 24)}d old`;
+  }, [serviceRow?.newestDate]);
 
   return (
     <div className="space-y-4">
       {err && <ErrorBox msg={err} />}
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-        <div>
-          <h3 className="text-sm font-semibold">Data &amp; Coverage</h3>
-          <p className="text-xs text-muted-foreground mt-1">
-            Data readiness, stale/missing history, and service coverage now live in Research. Use the Data page only for stream start/stop and live feed visibility.
-          </p>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-sm font-semibold">Data &amp; Coverage</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              See what candles exist, what enriched candles exist, and run the symbol data operations from inside Research. Use the Data page only for stream start/stop and live feed visibility.
+            </p>
+          </div>
+          <span className="px-2 py-0.5 rounded border border-primary/30 bg-primary/10 text-[11px] text-primary">
+            {getSymbolLabel(service)}
+          </span>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-[11px]">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 text-[11px]">
           <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">Coverage status</p>
-            <p className="font-mono text-foreground">{lifecycle?.dataCoverageStatus ?? serviceRow?.status ?? "unknown"}</p>
+            <p className="font-mono text-foreground">{lifecycle?.dataCoverageStatus ?? serviceRow?.status ?? (dataLoading ? "loading" : "unknown")}</p>
           </div>
           <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">Latest candle</p>
@@ -5393,34 +5566,22 @@ function DataCoverageTab({ service }: { service: string }) {
             <p className="text-muted-foreground uppercase tracking-wide">5m candles</p>
             <p className="font-mono text-foreground">{serviceRow?.count5m?.toLocaleString() ?? "0"}</p>
           </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Freshness</p>
+            <p className="font-mono text-foreground">{staleLabel}</p>
+          </div>
         </div>
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3 text-[11px] text-muted-foreground">
           Next required action from this stage: <span className="text-foreground font-medium">{lifecycle?.nextRequiredAction ?? "Review service lifecycle"}</span>
         </div>
       </div>
-      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-        <h3 className="text-sm font-semibold">Add Service</h3>
-        <p className="text-xs text-muted-foreground">
-          Controlled service onboarding is defined for Crash, Boom, Volatility, Step, Range Break, Jump, and Other. UI/backend scaffolding is present as a workflow placeholder; unsupported templates must fail loudly until explicitly implemented.
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3">
-            <p className="text-muted-foreground uppercase tracking-wide">Next service</p>
-            <p className="font-mono text-foreground">R_75</p>
-            <p className="mt-1 text-muted-foreground">Volatility family template</p>
-          </div>
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3">
-            <p className="text-muted-foreground uppercase tracking-wide">Later services</p>
-            <p className="font-mono text-foreground">BOOM300, R_100</p>
-            <p className="mt-1 text-muted-foreground">Portfolio contributors after CRASH300 baseline</p>
-          </div>
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-100">
-            <p className="text-[10px] uppercase tracking-wide">Current status</p>
-            <p className="font-medium mt-1">Service-template creation is defined but not self-serve yet.</p>
-            <p className="mt-1 text-[11px]">Unsupported service templates must fail loudly until implemented.</p>
-          </div>
-        </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] gap-4">
+        <CleanCanonicalTab />
+        <HistoricalDownloadCard statusData={dataStatus} />
       </div>
+
+      <CoverageAllGrid />
     </div>
   );
 }
@@ -5777,6 +5938,23 @@ function ReportsTab({
               </p>
             </div>
             <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Potential monthly return</p>
+              <p className="mt-1 text-foreground">
+                {(() => {
+                  const returnSummary = ((synthesisReportResult.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.summary as Record<string, unknown> | undefined) ?? {};
+                  const closestScenario = (returnSummary.closestScenarioTo50MonthlyReturn as Record<string, unknown> | undefined) ?? null;
+                  const recommendedScenario = ((synthesisReportResult.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.recommendedCandidateConfiguration as Record<string, unknown> | undefined) ?? null;
+                  const monthlyReturn = Number(
+                    closestScenario?.averageMonthlyAccountReturnPct
+                    ?? recommendedScenario?.averageMonthlyAccountReturnPct
+                    ?? (synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.averageMonthlyAccountReturnPct
+                    ?? 0,
+                  );
+                  return monthlyReturn > 0 ? `${monthlyReturn.toFixed(2)}% avg monthly` : "No monthly return estimate yet";
+                })()}
+              </p>
+            </div>
+            <div>
               <p className="text-muted-foreground uppercase tracking-wide">90/10 high-value</p>
               <p className="mt-1 text-foreground">
                 {Boolean(((synthesisReportResult.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.summary as Record<string, unknown> | undefined)?.anyScenarioMaintains90WinAndLowSl)
@@ -6044,129 +6222,6 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
   );
 }
 
-function RuntimeLifecyclePanel({ service }: { service: string }) {
-  const [runtime, setRuntime] = useState<RuntimeModelStateUi | null>(null);
-  const [researchProfile, setResearchProfile] = useState<SymbolResearchProfileUi | null>(null);
-  const [runtimeBusy, setRuntimeBusy] = useState<"stage" | "promote" | null>(null);
-  const [runtimeErr, setRuntimeErr] = useState<string | null>(null);
-  const [runtimeNotice, setRuntimeNotice] = useState<string | null>(null);
-
-  const loadRuntimeState = useCallback(async () => {
-    const [runtimeResp, researchResp] = await Promise.all([
-      apiFetch(`calibration/runtime-model/${service}`).catch(() => null),
-      apiFetch(`calibration/research-profile/${service}`).catch(() => null),
-    ]);
-    setRuntime((runtimeResp as RuntimeModelStateUi | null) ?? null);
-    setResearchProfile((researchResp as SymbolResearchProfileUi | null) ?? null);
-  }, [service]);
-
-  useEffect(() => {
-    void loadRuntimeState();
-  }, [loadRuntimeState]);
-
-  const updateRuntimeModel = async (action: "stage" | "promote") => {
-    setRuntimeBusy(action);
-    setRuntimeErr(null);
-    setRuntimeNotice(null);
-    try {
-      const result = await apiFetch(`calibration/runtime-model/${service}/${action}`, { method: "POST" }) as {
-        model?: RuntimeSymbolModelUi;
-      };
-      const runtimeResp = await apiFetch(`calibration/runtime-model/${service}`).catch(() => null) as RuntimeModelStateUi | null;
-      setRuntime(runtimeResp ?? null);
-      const model = result?.model;
-      const runId = model?.sourceRunId ?? runtimeResp?.lifecycle?.[action === "stage" ? "stagedRunId" : "promotedRunId"] ?? "n/a";
-      const actionTime = model?.promotedAt ?? runtimeResp?.lifecycle?.[action === "stage" ? "stagedAt" : "promotedAt"] ?? null;
-      const bucketCount = action === "stage"
-        ? runtimeResp?.lifecycle?.stagedTpBucketCount
-        : runtimeResp?.lifecycle?.promotedTpBucketCount;
-      setRuntimeNotice(
-        `${action === "stage" ? "Staged" : "Promoted"} ${service} runtime model from run ${runId} at ${formatRuntimeDate(actionTime)}. ` +
-        `Dynamic TP buckets: ${bucketCount ?? 0}.`,
-      );
-    } catch (e: unknown) {
-      setRuntimeErr(e instanceof Error ? e.message : `Runtime ${action} failed`);
-    } finally {
-      setRuntimeBusy(null);
-    }
-  };
-
-  return (
-    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h3 className="text-sm font-semibold">Runtime Lifecycle</h3>
-        <span
-          className={cn(
-            "text-[11px] px-2 py-0.5 rounded border font-medium",
-            runtime?.lifecycle?.hasPromotedModel
-              ? runtime.lifecycle.driftPendingPromotion
-                ? "text-amber-300 border-amber-500/30 bg-amber-500/10"
-                : "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
-              : "text-slate-300 border-border/40 bg-muted/20",
-          )}
-        >
-          {runtime?.lifecycle?.hasPromotedModel
-            ? runtime.lifecycle.driftPendingPromotion
-              ? "Promotion stale"
-              : "Runtime promoted"
-            : "Research only"}
-        </span>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => void updateRuntimeModel("stage")}
-          disabled={runtimeBusy !== null || !researchProfile}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-sky-500/30 text-xs text-sky-200 bg-sky-500/10 hover:bg-sky-500/15 disabled:opacity-50"
-          title="Compile the latest research profile into a staged runtime model without changing live runtime ownership"
-        >
-          {runtimeBusy === "stage" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
-          Stage Research Model
-        </button>
-        <button
-          type="button"
-          onClick={() => void updateRuntimeModel("promote")}
-          disabled={runtimeBusy !== null || !researchProfile}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
-          title="Promote the currently staged runtime model into the runtime store used by backtest/live"
-        >
-          {runtimeBusy === "promote" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-          Promote To Runtime
-        </button>
-      </div>
-
-      {runtimeErr && <ErrorBox msg={runtimeErr} />}
-      {runtimeNotice && <SuccessBox msg={runtimeNotice} />}
-      {runtime?.lifecycle?.hasStagedModel && runtime?.lifecycle?.hasPromotedModel && runtime.lifecycle.promotedMatchesStaged === false && (
-        <ErrorBox msg="Staged model is newer than promoted runtime. Backtest/live is not using the staged model until you click Promote To Runtime." />
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Latest Research</p>
-          <StatRow label="Run" value={runtime?.lifecycle?.latestRunId ?? researchProfile?.lastRunId ?? "n/a"} />
-          <StatRow label="Entry model" value={runtime?.researchProfile?.recommendedEntryModel ?? researchProfile?.recommendedEntryModel ?? "n/a"} />
-        </div>
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Staged Model</p>
-          <StatRow label="Run" value={runtime?.lifecycle?.stagedRunId ?? "none"} />
-          <StatRow label="Entry model" value={runtime?.stagedModel?.entryModel ?? "n/a"} />
-          <StatRow label="Staged at" value={formatRuntimeDate(runtime?.lifecycle?.stagedAt ?? runtime?.stagedModel?.promotedAt)} />
-          <StatRow label="TP buckets" value={runtime?.lifecycle?.stagedTpBucketCount ?? 0} />
-        </div>
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wide">Promoted Runtime</p>
-          <StatRow label="Run" value={runtime?.lifecycle?.promotedRunId ?? "none"} />
-          <StatRow label="Source" value={runtime?.lifecycle?.runtimeSource ?? "none"} />
-          <StatRow label="Promoted at" value={formatRuntimeDate(runtime?.lifecycle?.promotedAt ?? runtime?.promotedModel?.promotedAt)} />
-          <StatRow label="TP buckets" value={runtime?.lifecycle?.promotedTpBucketCount ?? 0} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; windowDays: number }) {
   const [validation, setValidation] = useState<Record<string, unknown> | null>(null);
   const [parity, setParity] = useState<ParityReportUi | null>(null);
@@ -6252,15 +6307,37 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
 
   const validationAggregates = (validation?.aggregates ?? null) as Record<string, unknown> | null;
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [parityResp, validationResp] = await Promise.all([
+          apiFetch(`calibration/runtime-model/${service}/parity-report?windowDays=${windowDays}`).catch(() => null),
+          service === "CRASH300"
+            ? apiFetch(`calibration/runtime-model/${service}/runtime-trigger-validation?windowDays=${windowDays}`).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        setParity((parityResp as ParityReportUi | null) ?? null);
+        setValidation((validationResp as Record<string, unknown> | null) ?? null);
+      } catch {
+        // Keep the tab usable even if no previous diagnostics exist yet.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [service, windowDays]);
+
   return (
     <div className="space-y-4">
       {err && <ErrorBox msg={err} />}
       {notice && <SuccessBox msg={notice} />}
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
         <div>
-          <h3 className="text-sm font-semibold">Advanced Diagnostics</h3>
+          <h3 className="text-sm font-semibold">Run Parity &amp; Runtime Trigger Validation</h3>
           <p className="text-xs text-muted-foreground mt-1">
-            Parity and runtime-trigger validation live here. Optimiser remains disabled by default and is not part of the normal service workflow.
+            Use this card for parity and runtime-trigger validation runs. It mirrors the synthesis/backtest workflow: action buttons first, then the latest diagnostic outputs underneath.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -6273,8 +6350,32 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
             Runtime Trigger Validation
           </button>
         </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Latest parity output</p>
+            <p className="font-mono text-foreground">
+              {parity?.generatedAt ? formatRuntimeDate(parity.generatedAt) : "No parity report loaded yet"}
+            </p>
+            <p className="text-muted-foreground">
+              {parity?.totals?.totalMoves ? `${parity.totals.totalMoves} moves reviewed, ${parity.totals.matchedMoves ?? 0} matched.` : "Run parity to compare calibrated moves and runtime candidates."}
+            </p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Latest trigger validation output</p>
+            <p className="font-mono text-foreground">
+              {service === "CRASH300"
+                ? validationAggregates ? "Loaded" : "No validation report loaded yet"
+                : "CRASH300-only"}
+            </p>
+            <p className="text-muted-foreground">
+              {service === "CRASH300"
+                ? validationAggregates ? `${Object.keys(validationAggregates).length} aggregate checks available.` : "Run trigger validation to inspect runtime trigger health."
+                : "Runtime trigger validation is currently available for CRASH300 only."}
+            </p>
+          </div>
+        </div>
         <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
-          Manual tier sweeps and admission-policy backtest experiments are diagnostics-only and have been removed from the normal Backtests tab. Use this area and the Reports tab for investigative work.
+          History and export of these diagnostics stay in Reports. Manual tier sweeps and admission-policy backtest experiments remain diagnostics-only and are not part of the normal synthesis/runtime workflow.
         </div>
         <ErrorBox msg="Optimiser is disabled by default in this cleanup pass. Use it only after parity and runtime validation are healthy." />
       </div>
@@ -6315,10 +6416,11 @@ export default function Research() {
   const [selectedService, setSelectedService] = useState<string>("CRASH300");
   const [activeTab, setActiveTab] = useState<ResearchTabId>("data");
   const [sharedWindowDays, setSharedWindowDays] = useState<number>(365);
+  const [showAddService, setShowAddService] = useState(false);
 
   const tabs: { id: ResearchTabId; label: string; icon: React.ReactNode }[] = [
     { id: "data", label: "Data & Coverage", icon: <Activity className="w-3.5 h-3.5" /> },
-    { id: "calibration", label: "Calibration & Research", icon: <Target className="w-3.5 h-3.5" /> },
+    { id: "calibration", label: "Calibration", icon: <Target className="w-3.5 h-3.5" /> },
     { id: "synthesis", label: "Integrated Elite Synthesis", icon: <TrendingUp className="w-3.5 h-3.5" /> },
     { id: "runtime", label: "Runtime Model", icon: <Zap className="w-3.5 h-3.5" /> },
     { id: "backtests", label: "Backtests", icon: <BarChart2 className="w-3.5 h-3.5" /> },
@@ -6339,7 +6441,7 @@ export default function Research() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_auto] gap-3 items-end">
         <div className="space-y-1">
           <span className="text-xs text-muted-foreground uppercase tracking-wide">Service Selector</span>
           <select
@@ -6364,10 +6466,32 @@ export default function Research() {
             {RESEARCH_WINDOWS.map(w => <option key={w.days} value={w.days}>{w.label}</option>)}
           </select>
         </div>
+        <div className="space-y-1">
+          <span className="text-xs text-muted-foreground uppercase tracking-wide">Service Onboarding</span>
+          <button
+            type="button"
+            onClick={() => setShowAddService((value) => !value)}
+            className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded border border-border/50 bg-background text-xs text-muted-foreground hover:text-foreground hover:border-border"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            {showAddService ? "Hide Add Service" : "Add New Service"}
+          </button>
+        </div>
       </div>
 
+      {showAddService && (
+        <AddServiceWorkflowCard
+          selectedService={selectedService}
+          onSelectService={(service) => {
+            setSelectedService(service);
+            setShowAddService(false);
+            setActiveTab("data");
+          }}
+        />
+      )}
+
       <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
-      <ServicePipelinePanel service={selectedService} />
+      <ServicePipelinePanel service={selectedService} onJumpToTab={setActiveTab} />
       <ActiveWorkerTasksCard service={selectedService} />
 
       <div className="flex items-center gap-0.5 border-b border-border/30">
@@ -6398,16 +6522,20 @@ export default function Research() {
           lockedSymbol={selectedService}
           hideReportsActions
           showAdvancedDiagnostics={false}
+          showIntegratedEliteSynthesis={false}
         />
       )}
       {activeTab === "synthesis" && (
-        <ReportsTab
-          service={selectedService}
-          windowDays={sharedWindowDays}
-          forcedTask="integrated-elite-synthesis"
-          title="Integrated Elite Synthesis"
-          description="Run Integrated Elite Synthesis, stage the best candidate, inspect return amplification, and prepare 12-month deep exports without leaving the Research workflow."
-        />
+        <div className="space-y-4">
+          <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} />
+          <ReportsTab
+            service={selectedService}
+            windowDays={sharedWindowDays}
+            forcedTask="integrated-elite-synthesis"
+            title="Elite Synthesis Result"
+            description="Inspect the current elite synthesis result, selected-trades export, return amplification report, and stage candidate artifacts without leaving the synthesis workspace."
+          />
+        </div>
       )}
       {activeTab === "runtime" && (
         <RuntimeModelTab service={selectedService} />
