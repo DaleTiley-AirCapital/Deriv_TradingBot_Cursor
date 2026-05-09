@@ -380,6 +380,8 @@ type EliteSynthesisJobStatusUi = {
   completedAt?: string | null;
   heartbeatAt?: string | null;
   resultSummary?: Record<string, unknown> | null;
+  candidateRuntimeArtifactsCount?: number;
+  baselineRecordsCount?: number;
 };
 
 function synthesisResultStateLabel(job: EliteSynthesisJobStatusUi): string {
@@ -4678,6 +4680,7 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
   const [runtime, setRuntime] = useState<RuntimeModelStateUi | null>(null);
   const [runs, setRuns] = useState<PassRun[]>([]);
   const [backtests, setBacktests] = useState<PersistedV3BacktestHistoryRun[]>([]);
+  const [synthesisJobs, setSynthesisJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -4685,15 +4688,17 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
     (async () => {
       setErr(null);
       try {
-        const [runtimeResp, runResp, backtestResp] = await Promise.all([
+        const [runtimeResp, runResp, backtestResp, synthesisResp] = await Promise.all([
           apiFetch(`calibration/runtime-model/${service}`).catch(() => null),
           apiFetch(`calibration/runs/${service}`).catch(() => ({ runs: [] })),
           apiFetch(`backtest/v3/history?symbol=${encodeURIComponent(service)}&limit=5`).catch(() => ({ runs: [] })),
+          apiFetch(`research/${service}/elite-synthesis/jobs?limit=10`).catch(() => ({ jobs: [] })),
         ]);
         if (cancelled) return;
         setRuntime(runtimeResp as RuntimeModelStateUi | null);
         setRuns(Array.isArray((runResp as { runs?: PassRun[] } | null)?.runs) ? (runResp as { runs?: PassRun[] }).runs ?? [] : []);
         setBacktests(Array.isArray((backtestResp as { runs?: PersistedV3BacktestHistoryRun[] } | null)?.runs) ? (backtestResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs ?? [] : []);
+        setSynthesisJobs(Array.isArray((synthesisResp as { jobs?: EliteSynthesisJobStatusUi[] } | null)?.jobs) ? (synthesisResp as { jobs?: EliteSynthesisJobStatusUi[] }).jobs ?? [] : []);
       } catch (e: unknown) {
         if (cancelled) return;
         setErr(e instanceof Error ? e.message : "Failed to load service status");
@@ -4704,6 +4709,12 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
 
   const latestRun = runs[0] ?? null;
   const latestBacktest = backtests[0] ?? null;
+  const latestBaselineJob = synthesisJobs.find((job) => Number(job.baselineRecordsCount ?? 0) > 0) ?? null;
+  const latestReportsLabel = service === "CRASH300"
+    ? "v3.1 baseline, synthesis, return amplification"
+    : service === "R_75"
+      ? "volatility-series prep, runtime, reports"
+      : "service reports";
 
   return (
     <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
@@ -4728,7 +4739,7 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
         </div>
       </div>
       {err && <ErrorBox msg={err} />}
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3 text-[11px]">
+      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-7 gap-3 text-[11px]">
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Calibration status</p>
           <p className="font-mono text-foreground">{latestRun?.status ?? "not run"}</p>
@@ -4751,7 +4762,19 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
         </div>
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Latest reports</p>
-          <p className="font-mono text-foreground">{service === "CRASH300" ? "parity, phase, attribution" : "service reports"}</p>
+          <p className="font-mono text-foreground">{latestReportsLabel}</p>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+          <p className="text-muted-foreground uppercase tracking-wide">V3.1 baseline</p>
+          <p className="font-mono text-foreground">
+            {service === "CRASH300"
+              ? latestBaselineJob
+                ? `paper-only staged candidate`
+                : "ready to stage"
+              : service === "R_75"
+                ? "next optimisation target"
+                : "not staged"}
+          </p>
         </div>
       </div>
     </div>
@@ -4776,7 +4799,13 @@ function RuntimeModelTab({ service }: { service: string }) {
     return () => { cancelled = true; };
   }, [service]);
 
-  const baseFamily = service === "CRASH300" ? "crash_expansion" : "service-specific";
+  const baseFamily = service === "CRASH300"
+    ? "crash_family"
+    : service === "R_75" || service === "R_100"
+      ? "volatility_series"
+      : service === "BOOM300"
+        ? "boom_family"
+        : "service-specific";
   const promotedBuckets = extractCalibratedBucketEntries(runtime?.promotedModel ?? null);
   const stagedBuckets = extractCalibratedBucketEntries(runtime?.stagedModel ?? null);
   const promotedRuntimeTpBuckets = extractRuntimeTpBucketEntries(runtime?.promotedModel ?? null);
@@ -4803,9 +4832,15 @@ function RuntimeModelTab({ service }: { service: string }) {
           <StatRow label="Model source" value={runtime?.lifecycle?.runtimeSource ?? "none"} />
           <StatRow label="Staged runtime" value={runtime?.lifecycle?.stagedRunId ?? "none"} />
           <StatRow label="Promoted runtime" value={runtime?.lifecycle?.promotedRunId ?? "none"} />
-          <StatRow label="Calibrated move family" value={baseFamily} />
+          <StatRow label="Service research template" value={baseFamily} />
           <StatRow label="Runtime entry archetypes" value={runtimeArchetypes.join(", ") || "n/a"} />
           <StatRow label="Promoted model source run" value={runtime?.promotedModel?.sourceRunId ?? "none"} />
+          {service === "CRASH300" ? (
+            <StatRow label="V3.1 baseline" value="Paper-only staged candidate workflow" />
+          ) : null}
+          {service === "R_75" ? (
+            <StatRow label="Next optimisation" value="Volatility-series symbol-service workflow ready" />
+          ) : null}
         </div>
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
           <h3 className="text-sm font-semibold">Validation</h3>
@@ -4819,6 +4854,16 @@ function RuntimeModelTab({ service }: { service: string }) {
           <p className="text-xs text-muted-foreground">
             Runtime Model owns staged/promoted state, model source, calibrated bucket visibility, and validation status.
           </p>
+          {service === "CRASH300" ? (
+            <p className="text-xs text-amber-300">
+              CRASH300 V3.1 baseline remains paper-only. Runtime mimic validation must pass before any demo or live promotion path is considered.
+            </p>
+          ) : null}
+          {service === "R_75" ? (
+            <p className="text-xs text-muted-foreground">
+              R_75 uses the Volatility Series template with continuation, breakout, pullback-continuation, and gated mean reversion research priorities.
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -5112,6 +5157,11 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
     try {
       const data = await apiFetch(`research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/stage-candidate-runtime`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          manualStageApproved: service === "CRASH300",
+          manualStageReason: "Portfolio baseline handover; CRASH300 candidate is high-quality but not final/live-approved.",
+        }),
       }) as { artifact?: { artifactId?: string } };
       setNotice(`Paper-only candidate staged${data.artifact?.artifactId ? ` (${data.artifact.artifactId})` : ""}.`);
       const refreshed = await apiFetch(`research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/result`) as {
@@ -5270,14 +5320,17 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.canStageForPaper) && (
+            {(service === "CRASH300"
+              ? Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.reportConsistencyPassed)
+                  && Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.selectedTradesExportPassed)
+              : Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.canStageForPaper)) && (
               <button
                 type="button"
                 onClick={() => void stageBestSynthesisCandidate()}
                 disabled={busy}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
               >
-                Stage Best Synthesis Candidate
+                {service === "CRASH300" ? "Stage Current Best CRASH300 Candidate" : "Stage Best Synthesis Candidate"}
               </button>
             )}
             <span className="text-[11px] text-amber-300">Paper-only candidate. Not live-approved.</span>
@@ -5286,6 +5339,9 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
               <>
                 <span className="text-[11px] text-muted-foreground">
                   Candidate artifact: {String(((synthesisReportResult.candidateRuntimeArtifacts as Array<Record<string, unknown>>).slice(-1)[0]?.artifactId ?? "n/a"))}
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  Runtime mimic validation: {String(((synthesisReportResult.candidateRuntimeArtifacts as Array<Record<string, unknown>>).slice(-1)[0]?.runtimeMimicValidationStatus ?? "not_run"))}
                 </span>
                 <button
                   type="button"
@@ -5297,7 +5353,18 @@ function ReportsTab({ service, windowDays }: { service: string; windowDays: numb
                 </button>
               </>
             )}
+            {Array.isArray((synthesisReportResult.baselineRecords as unknown[] | undefined))
+              && (synthesisReportResult.baselineRecords as Array<Record<string, unknown>>).length > 0 && (
+              <span className="text-[11px] text-cyan-200">
+                V3.1 baseline staged. Next optimisation deferred.
+              </span>
+            )}
           </div>
+          {service === "CRASH300" ? (
+            <p className="text-[11px] text-muted-foreground">
+              CRASH300 synthesis, selected-trades, and return-amplification exports are V3.1 baseline research artifacts only. They remain paper-only and are not live-approved.
+            </p>
+          ) : null}
         </div>
       )}
     </div>

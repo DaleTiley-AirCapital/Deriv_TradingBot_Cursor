@@ -35,6 +35,7 @@ export type EliteSynthesisJobRow = {
   resultSummary: Record<string, unknown> | null;
   resultArtifact: EliteSynthesisResult | null;
   candidateRuntimeArtifacts: Array<Record<string, unknown>>;
+  baselineRecords: Array<Record<string, unknown>>;
   createdAt: string | null;
 };
 
@@ -62,6 +63,9 @@ function hydrateEliteSynthesisJob(row: WorkerJobRow | null): EliteSynthesisJobRo
     candidateRuntimeArtifacts: Array.isArray(taskState.candidateRuntimeArtifacts)
       ? (taskState.candidateRuntimeArtifacts as Array<Record<string, unknown>>)
       : [],
+    baselineRecords: Array.isArray(taskState.baselineRecords)
+      ? (taskState.baselineRecords as Array<Record<string, unknown>>)
+      : [],
     createdAt: row.createdAt,
   };
 }
@@ -86,6 +90,7 @@ export async function createEliteSynthesisJob(params: {
       maxPasses: params.maxPasses,
       bestSummary: null,
       candidateRuntimeArtifacts: [],
+      baselineRecords: [],
     },
     message: "Queued for integrated elite synthesis",
   });

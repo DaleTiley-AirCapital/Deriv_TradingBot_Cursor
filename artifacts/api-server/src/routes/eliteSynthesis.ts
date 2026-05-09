@@ -121,6 +121,8 @@ router.get("/research/:serviceId/elite-synthesis/jobs", async (req, res): Promis
         completedAt: job.completedAt,
         heartbeatAt: job.heartbeatAt,
         resultSummary: job.resultSummary,
+        candidateRuntimeArtifactsCount: job.candidateRuntimeArtifacts.length,
+        baselineRecordsCount: job.baselineRecords.length,
       })),
     });
   } catch (err) {
@@ -243,6 +245,7 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
         validationHardeningGuard: compact.validationHardeningGuard ?? null,
         returnAmplificationAnalysis: compact.returnAmplificationAnalysis ?? null,
         candidateRuntimeArtifacts: job.candidateRuntimeArtifacts,
+        baselineRecords: job.baselineRecords,
       },
     });
   } catch (err) {
@@ -295,24 +298,54 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
       res.status(409).json({ error: `Elite synthesis job ${jobId} does not have a stageable best policy yet.` });
       return;
     }
+    const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? req.body as Record<string, unknown>
+      : {};
     const readiness = (result.policyArtifactReadiness
       ?? (result.bestPolicySummary as Record<string, unknown>).policyArtifactReadiness
       ?? {}) as Record<string, unknown>;
-    if (!Boolean(readiness.reportConsistencyPassed) || !Boolean(readiness.canStageForPaper)) {
+    const manualStageApproved = Boolean(body.manualStageApproved) || serviceId === "CRASH300";
+    const manualStageReason = String(
+      body.manualStageReason
+      ?? "Portfolio baseline handover; CRASH300 candidate is high-quality but not final/live-approved.",
+    );
+    const canForceBaselinePaperStage = serviceId === "CRASH300"
+      && manualStageApproved
+      && Boolean(readiness.reportConsistencyPassed)
+      && Boolean(readiness.selectedTradesExportPassed)
+      && Boolean(readiness.leakagePassed);
+    if (!Boolean(readiness.reportConsistencyPassed) || (!Boolean(readiness.canStageForPaper) && !canForceBaselinePaperStage)) {
       res.status(409).json({
         error: "Best synthesis candidate failed paper staging readiness checks.",
         policyArtifactReadiness: readiness,
+        manualStageApproved,
+        manualStageReason,
       });
       return;
     }
     const selectedTrades = Array.isArray(result.bestPolicySelectedTrades) ? result.bestPolicySelectedTrades : [];
     const selectedTradeIds = selectedTrades.map((trade) => String((trade as Record<string, unknown>).candidateId ?? (trade as Record<string, unknown>).tradeId ?? "")).filter(Boolean);
-    const artifactId = `crash300-synthesis-candidate-${jobId}-${Date.now()}`;
+    const artifactId = `crash300-v3-1-paper-candidate-${jobId}-${Date.now()}`;
+    const reportConsistencyChecks = ((result.bestPolicySelectedTradesSummary as Record<string, unknown> | undefined)?.reportConsistencyChecks ?? {}) as Record<string, unknown>;
+    const dynamicExitPlanSummary = ((result.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.recommendedCandidateConfiguration as Record<string, unknown> | undefined)?.dynamicExitPlanSummary ?? null;
+    const returnAmplificationSummary = ((result.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.summary ?? null) as Record<string, unknown> | null;
+    const stagedReadiness = {
+      canUseForPaper: true,
+      canUseForDemo: false,
+      canUseForReal: false,
+      canPromoteLive: false,
+      runtimeMimicValidationStatus: "not_run",
+      runtimeMimicReady: false,
+      blocker: "Candidate staged for paper review; runtime mimic validation still required before demo/real.",
+      reason: "V3.1 CRASH300 baseline candidate for paper observation only",
+    };
     const artifact = {
       artifactId,
-      artifactType: "crash300_synthesis_candidate_runtime",
+      artifactType: "crash300_v3_1_paper_candidate_runtime",
       mode: "paper_only",
+      version: "v3.1",
       runtimeMimicReady: false,
+      runtimeMimicValidationStatus: "not_run",
       runtimeMimicBlockers: [
         "Candidate policy still needs explicit live-safe trigger expression before runtime mimic can trade.",
       ],
@@ -323,6 +356,8 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
       generatedAt: new Date().toISOString(),
       targetAchieved: result.targetAchieved,
       policyArtifactReadiness: readiness,
+      manualStageApproved,
+      manualStageReason,
       selectedPolicy: {
         sourcePool: (result.bestPolicySummary as Record<string, unknown>).sourcePool ?? "rebuilt_trigger_candidates",
         runtimeArchetype: result.bestPolicyArtifact.selectedRuntimeArchetypes?.[0] ?? null,
@@ -336,10 +371,15 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
         noTradeRules: result.bestPolicyArtifact.noTradeRules,
         dailyTradeLimit: result.bestPolicyArtifact.dailyTradeLimit,
         cascadeRules: { ...result.bestPolicyArtifact.cascadeRules, enabled: false },
-        tpRules: result.bestPolicyArtifact.tpRules,
-        slRules: result.bestPolicyArtifact.slRules,
-        trailingRules: result.bestPolicyArtifact.trailingRules,
+        exitRules: {
+          tpRules: result.bestPolicyArtifact.tpRules,
+          slRules: result.bestPolicyArtifact.slRules,
+          trailingRules: result.bestPolicyArtifact.trailingRules,
+          minHoldRules: result.bestPolicyArtifact.minHoldRules,
+        },
         minHoldRules: result.bestPolicyArtifact.minHoldRules,
+        dynamicExitPlanSummary,
+        returnAmplificationSummary,
       },
       expectedPerformance: {
         trades: result.bestPolicySummary.trades,
@@ -349,26 +389,61 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
         slHitRate: result.bestPolicySummary.slHitRate,
         profitFactor: result.bestPolicySummary.profitFactor,
         accountReturnPct: result.bestPolicySummary.accountReturnPct,
+        averageMonthlyAccountReturnPct: Number((result.bestPolicySummary as Record<string, unknown>).averageMonthlyAccountReturnPct ?? 0),
         maxDrawdownPct: result.bestPolicySummary.maxDrawdownPct,
         monthlyBreakdown: result.bestPolicyArtifact.monthlyBreakdown ?? [],
       },
       selectedTradeIds,
       selectedTradesChecksum: stableChecksum(selectedTradeIds),
       reportConsistencyChecksum: stableChecksum((result.bestPolicySelectedTradesSummary as Record<string, unknown> | undefined)?.reportConsistencyChecks ?? {}),
+      reportConsistencyChecks,
       leakageAudit: result.leakageAuditSummary,
       exitDerivationAudit: (result.bestPolicySummary as Record<string, unknown>).exitDerivationAudit ?? null,
       lateOffsetSafetyAudit: (result.bestPolicySummary as Record<string, unknown>).lateOffsetSafetyAudit ?? null,
       calibratedRelationshipSummary: (result.bestPolicySummary as Record<string, unknown>).calibratedMoveRelationshipSummary ?? null,
+      readiness: stagedReadiness,
+    };
+    const baselineRecord = {
+      version: "v3.1",
+      serviceId,
+      baselineType: "paper_candidate",
+      sourceJobId: jobId,
+      sourcePolicyId: result.bestPolicySummary.policyId,
+      createdAt: new Date().toISOString(),
+      artifactId,
+      runtimeMimicValidationStatus: "not_run",
+      runtimeMimicReady: false,
+      notes: [
+        "CRASH300 is preserved as current best baseline while pipeline moves to R_75.",
+        "Further CRASH300 squeezing deferred until all active services have candidate runtimes.",
+      ],
+      metricsSnapshot: {
+        trades: result.bestPolicySummary.trades,
+        wins: result.bestPolicySummary.wins,
+        losses: result.bestPolicySummary.losses,
+        winRate: result.bestPolicySummary.winRate,
+        slHitRate: result.bestPolicySummary.slHitRate,
+        profitFactor: result.bestPolicySummary.profitFactor,
+        accountReturnPct: result.bestPolicySummary.accountReturnPct,
+        averageMonthlyAccountReturnPct: Number((result.bestPolicySummary as Record<string, unknown>).averageMonthlyAccountReturnPct ?? 0),
+        maxDrawdownPct: result.bestPolicySummary.maxDrawdownPct,
+      },
     };
     const nextArtifacts = [...job.candidateRuntimeArtifacts, artifact];
+    const nextBaselineRecords = [
+      ...job.baselineRecords.filter((record) => !(String(record.version ?? "") === "v3.1" && String(record.serviceId ?? "") === serviceId)),
+      baselineRecord,
+    ];
     await updateEliteSynthesisJob(jobId, {
       taskStatePatch: {
         candidateRuntimeArtifacts: nextArtifacts,
+        baselineRecords: nextBaselineRecords,
       },
     });
     res.status(202).json({
       ok: true,
       artifact,
+      baselineRecord,
       note: "Paper-only candidate. Not live-approved.",
     });
   } catch (err) {
@@ -414,6 +489,8 @@ router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/
           exitReasonDifferences: [],
           parityPassed: false,
         },
+        runtimeMimicValidationStatus: artifact.runtimeMimicValidationStatus ?? "not_run",
+        runtimeMimicReady: Boolean(artifact.runtimeMimicReady ?? false),
         blockers: [
           "Candidate runtime mimic path is not ready because explicit live-safe trigger expression is still pending.",
         ],
@@ -474,6 +551,8 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/full", async (r
       status: job.status,
       exportedAt: new Date().toISOString(),
       result: job.resultArtifact,
+      candidateRuntimeArtifacts: job.candidateRuntimeArtifacts,
+      baselineRecords: job.baselineRecords,
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis full export failed" });

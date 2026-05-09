@@ -1,8 +1,10 @@
-export const APP_VERSION = "3.0.1";
-export const APP_NAME = "Deriv Trading - Long Hold V3";
-export const LAST_UPDATED = "2026-04-21";
-export const DEPLOYED_AT = new Date().toISOString();
+export const APP_VERSION = process.env.APP_VERSION ?? "3.1.0";
+export const APP_NAME = "Deriv Trading - Long Hold V3.1";
+export const LAST_UPDATED = "2026-05-09";
+export const DEPLOYED_AT = process.env.DEPLOYED_AT ?? new Date().toISOString();
 export const DEPLOYMENT_ID = process.env.RAILWAY_DEPLOYMENT_ID ?? null;
+export const GIT_COMMIT_SHA = process.env.GIT_COMMIT_SHA ?? process.env.RAILWAY_GIT_COMMIT_SHA ?? null;
+export const GIT_COMMIT_MESSAGE = process.env.GIT_COMMIT_MESSAGE ?? process.env.RAILWAY_GIT_COMMIT_MESSAGE ?? null;
 
 export interface ReleaseEntry {
   version: string;
@@ -12,6 +14,18 @@ export interface ReleaseEntry {
 }
 
 export const RELEASES: ReleaseEntry[] = [
+  {
+    version: "3.1.0",
+    date: "2026-05-09",
+    title: "V3.1 baseline handover and portfolio workflow hardening",
+    changes: [
+      "CRASH300 best rebuilt synthesis candidate can now be staged as a paper-only V3.1 baseline with explicit manual warnings preserved",
+      "Return amplification remains research-only and is exported separately from baseline candidate staging",
+      "Help page now explains portfolio-level objectives, active services, and per-symbol workflow handover to R_75",
+      "Deploy metadata now prefers live-since, commit summary, and deployed timestamp instead of a raw deployment GUID",
+      "Crash Family and Volatility Series deep research guidance are surfaced directly inside Help for operator review",
+    ],
+  },
   {
     version: "3.0.1",
     date: "2026-04-21",
@@ -27,15 +41,15 @@ export const RELEASES: ReleaseEntry[] = [
   {
     version: "3.0.0",
     date: "2026-04-14",
-    title: "V3 Symbol-Native Engine System — Live Path Rewrite",
+    title: "V3 Symbol-Native Engine System - Live Path Rewrite",
     changes: [
       "9 symbol-native engines replace all V2 shared-scoring: boom_expansion, boom_expansion_long, crash_expansion, r75x3 (continuation/reversal/breakout), r100x3",
-      "Per-engine 6-component native scores (0–100) — no shared generic composite scoring path in live system",
+      "Per-engine 6-component native scores (0-100) with no shared generic composite scoring path in live system",
       "Symbol Coordinator resolves multi-engine conflicts (R_75, R_100): priority breakout>continuation>reversal",
       "3-stage hybrid trade manager: entry SL, breakeven promotion at 20% TP, ATR trailing from 30% TP",
-      "Current score gates: Paper≥60, Demo≥65, Real≥70 — will raise as calibration data supports higher values",
-      "Signal visibility threshold set to 50, blocked/rejected signals surfaced in Engine Decisions",
-      "V3 Isolated Backtest Engine in Research tab with JSON export",
+      "Current score gates: Paper>=60, Demo>=65, Real>=70 and raised only when calibration evidence supports it",
+      "Signal visibility threshold set to 50, blocked and rejected signals surfaced in Engine Decisions",
+      "V3 isolated backtest engine in Research tab with JSON export",
       "Railway rebuild script for deterministic clean deploys",
     ],
   },
@@ -65,8 +79,8 @@ export const RELEASES: ReleaseEntry[] = [
       "5 strategy families: trend continuation, mean reversion, spike cluster recovery, swing exhaustion, trendline breakout",
       "Regime-first architecture with 8 market regime classifications",
       "Multi-mode trading: Paper, Demo, Real with independent configuration",
-      "30% trailing stop safety net (no time-based exits)",
-      "Multi-window signal confirmation (3 windows, 90min gaps)",
+      "30% trailing stop safety net with no time-based exits",
+      "Multi-window signal confirmation (3 windows, 90 minute gaps)",
       "Pyramiding support up to 3 positions per symbol",
       "AI verification via GPT-5.1",
       "Comprehensive backtesting engine with walk-forward testing",
@@ -74,4 +88,3 @@ export const RELEASES: ReleaseEntry[] = [
     ],
   },
 ];
-
