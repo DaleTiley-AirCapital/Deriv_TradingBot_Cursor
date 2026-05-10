@@ -35,6 +35,18 @@ function apiFetch(path: string, opts?: RequestInit) {
 
 const CALIB_PASS_SESSION_KEY = "deriv_calib_pass_run";
 const RESEARCH_CUSTOM_SERVICES_KEY = "deriv_research_custom_services_v1";
+const RESEARCH_DIAGNOSTIC_HISTORY_KEY = "deriv_research_diagnostic_history_v1";
+
+type DiagnosticHistoryEntry = {
+  id: string;
+  service: string;
+  action: "parity" | "runtime-trigger-validation" | "optimiser";
+  status: string;
+  detail: string;
+  at: string;
+};
+
+type ServiceStatusDisclosureKey = "runtime" | "blockers" | "warnings";
 
 interface PassStatusResult {
   id: number;
@@ -210,6 +222,31 @@ function writeCustomResearchServices(services: string[]): void {
     localStorage.setItem(RESEARCH_CUSTOM_SERVICES_KEY, JSON.stringify(Array.from(new Set(services))));
   } catch {
     // Ignore storage failures and keep the current session usable.
+  }
+}
+
+function readDiagnosticHistory(service: string, action: DiagnosticHistoryEntry["action"]): DiagnosticHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(RESEARCH_DIAGNOSTIC_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as DiagnosticHistoryEntry[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry) => entry.service === service && entry.action === action);
+  } catch {
+    return [];
+  }
+}
+
+function appendDiagnosticHistory(entry: DiagnosticHistoryEntry): DiagnosticHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(RESEARCH_DIAGNOSTIC_HISTORY_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    const existing = Array.isArray(parsed) ? (parsed as DiagnosticHistoryEntry[]) : [];
+    const next = [entry, ...existing].slice(0, 60);
+    localStorage.setItem(RESEARCH_DIAGNOSTIC_HISTORY_KEY, JSON.stringify(next));
+    return next;
+  } catch {
+    return [entry];
   }
 }
 
@@ -2119,6 +2156,91 @@ function StatRow({ label, value }: { label: string; value: string | number }) {
       <span className="text-xs font-mono font-medium text-foreground text-right max-w-[70%] break-words whitespace-normal">
         {value}
       </span>
+    </div>
+  );
+}
+
+function CompactDisclosure({
+  title,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-border/30 bg-background/40 overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left hover:bg-muted/10 transition-colors"
+      >
+        <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{title}</span>
+        {open ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+      </button>
+      {open && <div className="px-3 pb-3">{children}</div>}
+    </div>
+  );
+}
+
+function DiagnosticHistoryPanel({
+  entries,
+  expanded,
+  onToggle,
+  emptyMessage,
+}: {
+  entries: DiagnosticHistoryEntry[];
+  expanded: boolean;
+  onToggle: () => void;
+  emptyMessage: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border/30 bg-background/40 overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left hover:bg-muted/10 transition-colors"
+      >
+        <span className="inline-flex items-center gap-2 text-xs font-medium text-foreground">
+          <Clock className="w-3.5 h-3.5 text-muted-foreground" />
+          Run History
+        </span>
+        <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+          {expanded ? "Hide history" : "Show history"}
+          {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border/20 px-3 py-3">
+          {entries.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">{emptyMessage}</p>
+          ) : (
+            <div className="space-y-2">
+              {entries.map((entry) => (
+                <div key={entry.id} className="rounded border border-border/30 bg-muted/10 px-3 py-2 text-[11px]">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className={cn(
+                      "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium",
+                      entry.status === "failed"
+                        ? "border-red-500/30 bg-red-500/10 text-red-300"
+                        : entry.status === "completed"
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                          : "border-primary/30 bg-primary/10 text-primary"
+                    )}>
+                      {entry.status}
+                    </span>
+                    <span className="text-muted-foreground">{formatRuntimeDate(entry.at)}</span>
+                  </div>
+                  <p className="mt-1 text-foreground">{entry.detail}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -5034,6 +5156,11 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
   const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
   const [promotedRuntime, setPromotedRuntime] = useState<ServicePromotedRuntimeUi | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [openSections, setOpenSections] = useState<Record<ServiceStatusDisclosureKey, boolean>>({
+    runtime: false,
+    blockers: false,
+    warnings: false,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -5071,6 +5198,9 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
     : service === "R_75"
       ? "volatility-series prep, runtime, reports"
       : "service reports";
+  const toggleSection = (section: ServiceStatusDisclosureKey) => {
+    setOpenSections((current) => ({ ...current, [section]: !current[section] }));
+  };
 
   return (
     <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
@@ -5095,7 +5225,7 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
         </div>
       </div>
       {err && <ErrorBox msg={err} />}
-      <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-7 gap-3 text-[11px]">
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2.5 text-[11px]">
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Calibration status</p>
           <p className="font-mono text-foreground">{latestRun?.status ?? "not run"}</p>
@@ -5135,7 +5265,7 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
       </div>
       {lifecycle ? (
         <div className="space-y-3 text-[11px]">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
             <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
               <p className="text-muted-foreground uppercase tracking-wide">Active mode</p>
               <p className="font-mono text-foreground">{lifecycle.activeMode}</p>
@@ -5153,9 +5283,12 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
               <p className="font-mono text-foreground">{lifecycle.nextRequiredAction}</p>
             </div>
           </div>
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-              <p className="text-muted-foreground uppercase tracking-wide">Current promoted runtime</p>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-2.5">
+            <CompactDisclosure
+              title="Current Promoted Runtime"
+              open={openSections.runtime}
+              onToggle={() => toggleSection("runtime")}
+            >
               <StatRow label="Policy" value={promotedRuntime?.sourcePolicyId ?? lifecycle.promotedRuntimeSourcePolicyId ?? "n/a"} />
               <StatRow label="Family" value={promotedRuntime?.runtimeFamily ?? "n/a"} />
               <StatRow label="Direction" value={promotedRuntime?.direction ?? "n/a"} />
@@ -5164,19 +5297,29 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
                 promotedRuntime?.allowedModes?.demo ? "demo" : null,
                 promotedRuntime?.allowedModes?.real ? "real" : null,
               ].filter(Boolean).join(", ") || "none"} />
-            </div>
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-              <p className="text-muted-foreground uppercase tracking-wide">Blockers</p>
-              {lifecycle.blockers.length > 0 ? lifecycle.blockers.map((blocker) => (
-                <p key={blocker} className="text-red-300">{blocker}</p>
-              )) : <p className="text-emerald-300">No active blockers</p>}
-            </div>
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
-              <p className="text-muted-foreground uppercase tracking-wide">Warnings</p>
-              {lifecycle.warnings.length > 0 ? lifecycle.warnings.map((warning) => (
-                <p key={warning} className="text-amber-200">{warning}</p>
-              )) : <p className="text-muted-foreground">No current warnings</p>}
-            </div>
+            </CompactDisclosure>
+            <CompactDisclosure
+              title={`Blockers${lifecycle.blockers.length > 0 ? ` (${lifecycle.blockers.length})` : ""}`}
+              open={openSections.blockers}
+              onToggle={() => toggleSection("blockers")}
+            >
+              <div className="space-y-1 text-[11px]">
+                {lifecycle.blockers.length > 0 ? lifecycle.blockers.map((blocker) => (
+                  <p key={blocker} className="text-red-300">{blocker}</p>
+                )) : <p className="text-emerald-300">No active blockers</p>}
+              </div>
+            </CompactDisclosure>
+            <CompactDisclosure
+              title={`Warnings${lifecycle.warnings.length > 0 ? ` (${lifecycle.warnings.length})` : ""}`}
+              open={openSections.warnings}
+              onToggle={() => toggleSection("warnings")}
+            >
+              <div className="space-y-1 text-[11px]">
+                {lifecycle.warnings.length > 0 ? lifecycle.warnings.map((warning) => (
+                  <p key={warning} className="text-amber-200">{warning}</p>
+                )) : <p className="text-muted-foreground">No current warnings</p>}
+              </div>
+            </CompactDisclosure>
           </div>
         </div>
       ) : null}
@@ -6304,9 +6447,20 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
 function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; windowDays: number }) {
   const [validation, setValidation] = useState<Record<string, unknown> | null>(null);
   const [parity, setParity] = useState<ParityReportUi | null>(null);
+  const [runtimeModel, setRuntimeModel] = useState<RuntimeModelStateUi | null>(null);
   const [busy, setBusy] = useState<"validation" | "parity" | null>(null);
+  const [optimiserBusy, setOptimiserBusy] = useState<"run" | "stage" | "refresh" | "cancel" | null>(null);
+  const [optimiserRunId, setOptimiserRunId] = useState<number | null>(null);
+  const [optimiserStatus, setOptimiserStatus] = useState<Record<string, unknown> | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [optimiserErr, setOptimiserErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [parityHistoryExpanded, setParityHistoryExpanded] = useState(false);
+  const [validationHistoryExpanded, setValidationHistoryExpanded] = useState(false);
+  const [optimiserHistoryExpanded, setOptimiserHistoryExpanded] = useState(false);
+  const [parityHistory, setParityHistory] = useState<DiagnosticHistoryEntry[]>([]);
+  const [validationHistory, setValidationHistory] = useState<DiagnosticHistoryEntry[]>([]);
+  const [optimiserHistory, setOptimiserHistory] = useState<DiagnosticHistoryEntry[]>([]);
 
   const pollWorkerJobUntilTerminal = async (
     workerJobId: number,
@@ -6334,6 +6488,40 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
     }
   };
 
+  const refreshOptimiserStatus = async (runId = optimiserRunId, silent = false) => {
+    if (!runId) return;
+    if (!silent) {
+      setOptimiserBusy("refresh");
+      setOptimiserErr(null);
+    }
+    try {
+      const status = await apiFetch(`calibration/runtime-model/${service}/optimise-backtest/${runId}`) as Record<string, unknown>;
+      setOptimiserStatus(status);
+    } catch (e: unknown) {
+      setOptimiserErr(e instanceof Error ? e.message : "Optimiser status failed");
+    } finally {
+      if (!silent) setOptimiserBusy(null);
+    }
+  };
+
+  const recordHistory = (
+    action: DiagnosticHistoryEntry["action"],
+    status: string,
+    detail: string,
+  ) => {
+    const next = appendDiagnosticHistory({
+      id: `${action}-${service}-${Date.now()}`,
+      service,
+      action,
+      status,
+      detail,
+      at: new Date().toISOString(),
+    });
+    if (action === "parity") setParityHistory(next.filter((entry) => entry.service === service && entry.action === "parity"));
+    if (action === "runtime-trigger-validation") setValidationHistory(next.filter((entry) => entry.service === service && entry.action === "runtime-trigger-validation"));
+    if (action === "optimiser") setOptimiserHistory(next.filter((entry) => entry.service === service && entry.action === "optimiser"));
+  };
+
   const loadValidation = async () => {
     setBusy("validation");
     setErr(null);
@@ -6348,12 +6536,17 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
       if (!Number.isInteger(workerJobId) || workerJobId <= 0) {
         throw new Error("Runtime trigger validation did not return a worker job id.");
       }
-      setNotice(`Runtime trigger validation queued for ${getSymbolLabel(service)} (worker job #${workerJobId}).`);
+      const queuedMessage = `Runtime trigger validation queued for ${getSymbolLabel(service)} (worker job #${workerJobId}).`;
+      setNotice(queuedMessage);
+      recordHistory("runtime-trigger-validation", "queued", queuedMessage);
       await pollWorkerJobUntilTerminal(workerJobId, (artifact) => {
         setValidation(artifact as Record<string, unknown>);
+        recordHistory("runtime-trigger-validation", "completed", `Runtime trigger validation completed for ${getSymbolLabel(service)}.`);
       });
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Runtime trigger validation failed");
+      const message = e instanceof Error ? e.message : "Runtime trigger validation failed";
+      setErr(message);
+      recordHistory("runtime-trigger-validation", "failed", message);
     } finally {
       setBusy(null);
     }
@@ -6373,32 +6566,127 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
       if (!Number.isInteger(workerJobId) || workerJobId <= 0) {
         throw new Error("Parity report did not return a worker job id.");
       }
-      setNotice(`Parity report queued for ${getSymbolLabel(service)} (worker job #${workerJobId}).`);
+      const queuedMessage = `Parity report queued for ${getSymbolLabel(service)} (worker job #${workerJobId}).`;
+      setNotice(queuedMessage);
+      recordHistory("parity", "queued", queuedMessage);
       await pollWorkerJobUntilTerminal(workerJobId, (artifact) => {
         setParity(artifact as ParityReportUi);
+        recordHistory("parity", "completed", `Parity completed for ${getSymbolLabel(service)}.`);
       });
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Parity report failed");
+      const message = e instanceof Error ? e.message : "Parity report failed";
+      setErr(message);
+      recordHistory("parity", "failed", message);
     } finally {
       setBusy(null);
     }
   };
 
+  const runOptimiser = async () => {
+    setOptimiserBusy("run");
+    setOptimiserErr(null);
+    setNotice(null);
+    try {
+      const started = await apiFetch(`calibration/runtime-model/${service}/optimise-backtest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ windowDays, maxIterations: 5, enableAiReview: false }),
+      }) as { runId?: number };
+      const runId = Number(started.runId ?? 0);
+      if (!Number.isInteger(runId) || runId <= 0) {
+        throw new Error("Optimiser did not return a run id.");
+      }
+      setOptimiserRunId(runId);
+      setOptimiserStatus(started as unknown as Record<string, unknown>);
+      const message = `Optimiser started for ${getSymbolLabel(service)} (run ${runId}).`;
+      setNotice(message);
+      recordHistory("optimiser", "queued", message);
+      window.setTimeout(() => { void refreshOptimiserStatus(runId); }, 2500);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Optimiser start failed";
+      setOptimiserErr(message);
+      recordHistory("optimiser", "failed", message);
+    } finally {
+      setOptimiserBusy(null);
+    }
+  };
+
+  const cancelOptimiser = async () => {
+    if (!optimiserRunId) return;
+    setOptimiserBusy("cancel");
+    setOptimiserErr(null);
+    try {
+      await apiFetch(`calibration/runtime-model/${service}/optimise-backtest/${optimiserRunId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "cancelled_from_research_ui" }),
+      });
+      await refreshOptimiserStatus(optimiserRunId);
+      const message = `Optimiser cancellation requested for ${getSymbolLabel(service)} (run ${optimiserRunId}).`;
+      setNotice(message);
+      recordHistory("optimiser", "completed", message);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Optimiser cancel failed";
+      setOptimiserErr(message);
+      recordHistory("optimiser", "failed", message);
+    } finally {
+      setOptimiserBusy(null);
+    }
+  };
+
+  const stageOptimiserWinner = async () => {
+    if (!optimiserRunId) return;
+    setOptimiserBusy("stage");
+    setOptimiserErr(null);
+    try {
+      const staged = await apiFetch(`calibration/runtime-model/${service}/optimise-backtest/${optimiserRunId}/stage-winner`, {
+        method: "POST",
+      }) as Record<string, unknown>;
+      setOptimiserStatus(staged);
+      const runtime = await apiFetch(`calibration/runtime-model/${service}`).catch(() => null) as RuntimeModelStateUi | null;
+      setRuntimeModel(runtime ?? null);
+      const message = "Optimised winner staged. Runtime is not promoted until you click Promote To Runtime.";
+      setNotice(message);
+      recordHistory("optimiser", "completed", message);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Stage optimiser winner failed";
+      setOptimiserErr(message);
+      recordHistory("optimiser", "failed", message);
+    } finally {
+      setOptimiserBusy(null);
+    }
+  };
+
   const validationAggregates = (validation?.aggregates ?? null) as Record<string, unknown> | null;
+  const optimiserRun = asUiRecord(optimiserStatus?.run);
+  const optimiserWinner = asUiRecord(optimiserStatus?.selectedWinner);
+  const optimiserPhase = String(optimiserRun.phase ?? optimiserStatus?.phase ?? "not run");
+  const optimiserHeartbeat = optimiserRun.heartbeatAt ? formatRuntimeDate(String(optimiserRun.heartbeatAt)) : "n/a";
+  const optimiserIsRunning = ["queued", "running"].includes(String(optimiserRun.status ?? optimiserStatus?.status ?? ""));
+  const optimiserSelected = optimiserWinner && Object.keys(optimiserWinner).length > 0;
+  const optimiserHasExistingRun = Boolean(optimiserRunId || optimiserRun.id || optimiserStatus?.runId);
+  const optimiserReady = Boolean(parity) && (service !== "CRASH300" || Boolean(validationAggregates));
+  const optimiserEnableReason = optimiserReady
+    ? "Parity and runtime trigger validation are ready."
+    : service === "CRASH300"
+      ? "Run parity and runtime trigger validation first."
+      : "Run parity first before using the optimiser.";
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [parityResp, validationResp] = await Promise.all([
+        const [parityResp, validationResp, runtimeResp] = await Promise.all([
           apiFetch(`calibration/runtime-model/${service}/parity-report?windowDays=${windowDays}`).catch(() => null),
           service === "CRASH300"
             ? apiFetch(`calibration/runtime-model/${service}/runtime-trigger-validation?windowDays=${windowDays}`).catch(() => null)
             : Promise.resolve(null),
+          apiFetch(`calibration/runtime-model/${service}`).catch(() => null),
         ]);
         if (cancelled) return;
         setParity((parityResp as ParityReportUi | null) ?? null);
         setValidation((validationResp as Record<string, unknown> | null) ?? null);
+        setRuntimeModel((runtimeResp as RuntimeModelStateUi | null) ?? null);
       } catch {
         // Keep the tab usable even if no previous diagnostics exist yet.
       }
@@ -6408,9 +6696,24 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
     };
   }, [service, windowDays]);
 
+  useEffect(() => {
+    setParityHistory(readDiagnosticHistory(service, "parity"));
+    setValidationHistory(readDiagnosticHistory(service, "runtime-trigger-validation"));
+    setOptimiserHistory(readDiagnosticHistory(service, "optimiser"));
+  }, [service]);
+
+  useEffect(() => {
+    if (!optimiserRunId || !optimiserIsRunning) return;
+    const id = window.setInterval(() => {
+      void refreshOptimiserStatus(optimiserRunId, true);
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [optimiserRunId, optimiserIsRunning]);
+
   return (
     <div className="space-y-4">
       {err && <ErrorBox msg={err} />}
+      {optimiserErr && <ErrorBox msg={optimiserErr} />}
       {notice && <SuccessBox msg={notice} />}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
@@ -6433,6 +6736,12 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
               {parity?.totals?.totalMoves ? `${parity.totals.totalMoves} moves reviewed, ${parity.totals.matchedMoves ?? 0} matched.` : "Run parity to compare calibrated moves and runtime candidates."}
             </p>
           </div>
+          <DiagnosticHistoryPanel
+            entries={parityHistory}
+            expanded={parityHistoryExpanded}
+            onToggle={() => setParityHistoryExpanded((value) => !value)}
+            emptyMessage={`No parity runs recorded yet for ${getSymbolLabel(service)}.`}
+          />
         </div>
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
           <div>
@@ -6458,13 +6767,90 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
                 : "Runtime trigger validation is currently available for CRASH300 only."}
             </p>
           </div>
+          <DiagnosticHistoryPanel
+            entries={validationHistory}
+            expanded={validationHistoryExpanded}
+            onToggle={() => setValidationHistoryExpanded((value) => !value)}
+            emptyMessage={`No runtime trigger validation runs recorded yet for ${getSymbolLabel(service)}.`}
+          />
         </div>
       </div>
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
-        <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
-          History and export of these diagnostics stay in Reports. Manual tier sweeps and admission-policy backtest experiments remain diagnostics-only and are not part of the normal synthesis/runtime workflow.
+        <div>
+          <h3 className="text-sm font-semibold">Optimiser</h3>
+          <p className="text-xs text-muted-foreground mt-1">
+            This card stays visible throughout the workflow. It remains disabled until parity and runtime-trigger validation are available for the active service.
+          </p>
         </div>
-        <ErrorBox msg="Optimiser is disabled by default in this cleanup pass. Use it only after parity and runtime validation are healthy." />
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void runOptimiser()}
+            disabled={optimiserBusy !== null || !runtimeModel?.lifecycle?.hasPromotedModel || !optimiserReady}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
+          >
+            {optimiserBusy === "run" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart2 className="w-3.5 h-3.5" />}
+            Run Optimiser
+          </button>
+          <button
+            type="button"
+            onClick={() => void refreshOptimiserStatus()}
+            disabled={optimiserBusy !== null || !optimiserRunId}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/40 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
+            {optimiserBusy === "refresh" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => void cancelOptimiser()}
+            disabled={optimiserBusy !== null || !optimiserRunId || !optimiserIsRunning}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/30 text-xs text-red-300 bg-red-500/10 hover:bg-red-500/15 disabled:opacity-50"
+          >
+            {optimiserBusy === "cancel" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void stageOptimiserWinner()}
+            disabled={optimiserBusy !== null || !optimiserRunId || !optimiserSelected}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
+          >
+            {optimiserBusy === "stage" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            Stage Optimised Winner
+          </button>
+        </div>
+        <div className="rounded-lg border border-border/30 bg-background/40 p-3 text-[11px] space-y-1">
+          <p className="text-muted-foreground uppercase tracking-wide">Optimiser readiness</p>
+          <p className={cn("font-medium", optimiserReady ? "text-emerald-200" : "text-amber-200")}>{optimiserEnableReason}</p>
+          {!runtimeModel?.lifecycle?.hasPromotedModel && (
+            <p className="text-muted-foreground">Promote a runtime model before running the optimiser.</p>
+          )}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-2 text-[11px]">
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Status</p>
+            <p className="font-mono text-foreground">{String(optimiserRun.status ?? optimiserStatus?.status ?? "not run")}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Phase</p>
+            <p className="font-mono text-foreground">{optimiserPhase}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Run</p>
+            <p className="font-mono text-foreground">{String(optimiserRunId ?? optimiserRun.id ?? optimiserStatus?.runId ?? "n/a")}</p>
+          </div>
+          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <p className="text-muted-foreground uppercase tracking-wide">Heartbeat</p>
+            <p className="font-mono text-foreground">{optimiserHeartbeat}</p>
+          </div>
+        </div>
+        <DiagnosticHistoryPanel
+          entries={optimiserHistory}
+          expanded={optimiserHistoryExpanded}
+          onToggle={() => setOptimiserHistoryExpanded((value) => !value)}
+          emptyMessage={`No optimiser runs recorded yet for ${getSymbolLabel(service)}.`}
+        />
       </div>
 
       {parity && (
