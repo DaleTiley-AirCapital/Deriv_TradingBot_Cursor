@@ -279,7 +279,7 @@ function LockedSymbolBadge({ symbol }: { symbol: string }) {
   return (
     <div className="inline-flex items-center gap-2 rounded-lg border border-border/40 bg-background px-3 py-2 text-xs">
       <span className="font-mono text-foreground">{symbol}</span>
-      <span className="text-muted-foreground">— {getSymbolLabel(symbol)}</span>
+      <span className="text-muted-foreground">- {getSymbolLabel(symbol)}</span>
       <span className="text-[10px] text-primary">current service</span>
     </div>
   );
@@ -606,8 +606,8 @@ export function CleanCanonicalTab({
           <div>
             <h3 className="text-sm font-semibold">Clean Canonical Data</h3>
             <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed max-w-xl">
-              Runs the full pipeline: detect &amp; fill gaps from API → re-check existing interpolated
-              candles and replace with real data → derive all timeframes. Interpolation is only used
+              Runs the full pipeline: detect &amp; fill gaps from API -&gt; re-check existing interpolated
+              candles and replace with real data -&gt; derive all timeframes. Interpolation is only used
               as last resort when the API has no data.
             </p>
           </div>
@@ -622,14 +622,14 @@ export function CleanCanonicalTab({
           <button onClick={run} disabled={running}
             className="flex items-center gap-2 px-4 py-2 rounded-lg border border-primary/40 bg-primary/12 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
             {running
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Cleaning… (may take 2–5 min)</>
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Cleaning... (may take 2-5 min)</>
               : <><Sparkles className="w-4 h-4" /> Clean Canonical Data for {symbol}</>}
           </button>
         </div>
 
         {running && (
           <div className="rounded-lg bg-muted/20 border border-border/30 px-4 py-3 text-xs text-muted-foreground space-y-1">
-            <p className="font-medium text-foreground">Starting pipeline…</p>
+            <p className="font-medium text-foreground">Starting pipeline...</p>
             <p>Launching gap repair, interpolation recovery, and enrichment in background</p>
           </div>
         )}
@@ -640,10 +640,10 @@ export function CleanCanonicalTab({
           <div className="space-y-2">
             <SuccessBox msg={`Pipeline launched for ${result.symbol ?? symbol}`} />
             <div className="rounded-lg bg-muted/20 border border-border/30 px-4 py-3 text-xs text-muted-foreground space-y-1.5">
-              <p className="font-medium text-foreground">Running in background — typically 2–5 min</p>
+              <p className="font-medium text-foreground">Running in background - typically 2-5 min</p>
               <p>1. Detecting and filling gaps from Deriv API</p>
-              <p>2. Re-checking interpolated candles → replacing with real API data</p>
-              <p>3. Running multi-timeframe enrichment (5m → 1d)</p>
+              <p>2. Re-checking interpolated candles -&gt; replacing with real API data</p>
+              <p>3. Running multi-timeframe enrichment (5m -&gt; 1d)</p>
               <p className="pt-1">Refresh the <span className="font-medium text-foreground">Coverage</span> tab after a few minutes to see updated counts.</p>
             </div>
           </div>
@@ -669,7 +669,7 @@ export function CleanCanonicalTab({
           onClick={() => setShowAdvanced(v => !v)}
           className="w-full flex items-center justify-between px-4 py-3 bg-muted/10 hover:bg-muted/20 transition-colors text-xs font-medium text-muted-foreground">
           <span className="flex items-center gap-1.5">
-            <Wrench className="w-3.5 h-3.5" /> Advanced — Individual Operations
+            <Wrench className="w-3.5 h-3.5" /> Advanced - Individual Operations
           </span>
           <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", showAdvanced && "rotate-180")} />
         </button>
@@ -888,7 +888,7 @@ export function HistoricalDownloadCard({
         {selectedStatus && (
           <span className="text-[11px] text-muted-foreground">
             Selected M1: <span className="font-semibold text-foreground">{selectedStatus.count1m.toLocaleString()}</span>
-            {selectedStatus.newestDate ? ` · latest ${formatAge(selectedStatus.newestDate)}` : ""}
+            {selectedStatus.newestDate ? ` - latest ${formatAge(selectedStatus.newestDate)}` : ""}
           </span>
         )}
       </div>
@@ -1691,8 +1691,8 @@ export default function DataManager() {
           </div>
           <div className="px-4 py-2 border-t border-border/20 bg-muted/5">
             <p className="text-[10px] text-muted-foreground">
-              <span className="text-green-400 font-medium">Streaming</span> = live tick feed is running �
-              <span className="text-blue-400 font-medium ml-1">Registered</span> = symbol is available in the system and ready for history or streaming �
+              <span className="text-green-400 font-medium">Streaming</span> = live tick feed is running -
+              <span className="text-blue-400 font-medium ml-1">Registered</span> = symbol is available in the system and ready for history or streaming -
               <span className="ml-1">No data</span> = not yet bootstrapped
             </p>
           </div>
@@ -1892,7 +1892,5 @@ export default function DataManager() {
     </div>
   );
 }
-
-
 
 
