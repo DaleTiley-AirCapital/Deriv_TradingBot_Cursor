@@ -1,5 +1,5 @@
 import { db, candlesTable, platformStateTable } from "@workspace/db";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { getActiveModes } from "../infrastructure/deriv.js";
 import { getLatestSymbolResearchProfile } from "./calibration/symbolResearchProfile.js";
 import {
@@ -83,6 +83,14 @@ export interface ServiceLifecycleStatus {
   warnings: string[];
 }
 
+export interface StagedSynthesisCandidateState {
+  serviceId: string;
+  artifactId: string;
+  jobId: number;
+  sourcePolicyId: string | null;
+  stagedAt: string;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -96,6 +104,12 @@ function asStringArray(value: unknown): string[] {
 function serviceRuntimeKey(serviceId: string): string {
   return `promoted_service_runtime_${serviceId.toUpperCase()}`;
 }
+
+function stagedSynthesisCandidateKey(serviceId: string): string {
+  return `staged_synthesis_candidate_${serviceId.toUpperCase()}`;
+}
+
+const STAGED_SYNTHESIS_REPAIR_KEY = "v3_1_staged_synthesis_candidate_state_repair_complete";
 
 function readNumeric(value: unknown): number | null {
   const num = Number(value);
@@ -111,6 +125,23 @@ function normaliseMode(activeModes: string[]): "paper" | "demo" | "real" | "idle
 
 function bool(value: unknown, fallback = false): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+async function ensureStagedSynthesisCandidateStateRepaired(): Promise<void> {
+  const rows = await db
+    .select()
+    .from(platformStateTable)
+    .where(eq(platformStateTable.key, STAGED_SYNTHESIS_REPAIR_KEY))
+    .limit(1);
+  if (rows[0]?.value === "true") return;
+  await db.execute(sql`DELETE FROM ${platformStateTable} WHERE ${platformStateTable.key} LIKE 'staged_synthesis_candidate_%'`);
+  await db
+    .insert(platformStateTable)
+    .values({ key: STAGED_SYNTHESIS_REPAIR_KEY, value: "true" })
+    .onConflictDoUpdate({
+      target: platformStateTable.key,
+      set: { value: "true", updatedAt: new Date() },
+    });
 }
 
 function buildCrash300RuntimeAdapter(
@@ -202,6 +233,40 @@ export async function readPromotedServiceRuntimeArtifact(serviceId: string): Pro
   } catch {
     return null;
   }
+}
+
+export async function readStagedSynthesisCandidateState(serviceId: string): Promise<StagedSynthesisCandidateState | null> {
+  await ensureStagedSynthesisCandidateStateRepaired();
+  const rows = await db
+    .select()
+    .from(platformStateTable)
+    .where(eq(platformStateTable.key, stagedSynthesisCandidateKey(serviceId)))
+    .limit(1);
+  const raw = rows[0]?.value;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as StagedSynthesisCandidateState;
+  } catch {
+    return null;
+  }
+}
+
+export async function writeStagedSynthesisCandidateState(state: StagedSynthesisCandidateState): Promise<void> {
+  await ensureStagedSynthesisCandidateStateRepaired();
+  await db
+    .insert(platformStateTable)
+    .values({ key: stagedSynthesisCandidateKey(state.serviceId), value: JSON.stringify(state) })
+    .onConflictDoUpdate({
+      target: platformStateTable.key,
+      set: { value: JSON.stringify(state), updatedAt: new Date() },
+    });
+}
+
+export async function clearStagedSynthesisCandidateState(serviceId: string): Promise<void> {
+  await ensureStagedSynthesisCandidateStateRepaired();
+  await db
+    .delete(platformStateTable)
+    .where(eq(platformStateTable.key, stagedSynthesisCandidateKey(serviceId)));
 }
 
 export async function writePromotedServiceRuntimeArtifact(artifact: ServicePromotedRuntimeArtifact): Promise<void> {
@@ -302,7 +367,7 @@ export async function promoteCandidateArtifactToServiceRuntime(serviceId: string
 
 export async function buildServiceLifecycleStatus(serviceId: string): Promise<ServiceLifecycleStatus> {
   const upperServiceId = serviceId.toUpperCase();
-  const [stateRows, latestCandleRows, researchProfile, stagedModel, promotedModel, promotedRuntimeArtifact, synthesisJobs] = await Promise.all([
+  const [stateRows, latestCandleRows, researchProfile, stagedModel, promotedModel, promotedRuntimeArtifact, synthesisJobs, stagedCandidateState] = await Promise.all([
     db.select().from(platformStateTable),
     db.select({ closeTs: candlesTable.closeTs })
       .from(candlesTable)
@@ -314,6 +379,7 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
     getPromotedSymbolRuntimeModel(upperServiceId).catch(() => null),
     readPromotedServiceRuntimeArtifact(upperServiceId).catch(() => null),
     listEliteSynthesisJobs(upperServiceId, 20).catch(() => [] as Awaited<ReturnType<typeof listEliteSynthesisJobs>>),
+    readStagedSynthesisCandidateState(upperServiceId).catch(() => null),
   ]);
 
   const stateMap: Record<string, string> = {};
@@ -331,7 +397,12 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
   const streamState = stateMap.streaming === "true" && streamingSymbols.includes(upperServiceId) ? "active" : "inactive";
   const synthesisJob = (synthesisJobs as Awaited<ReturnType<typeof listEliteSynthesisJobs>>)
     .find((job) => job.status === "completed") ?? synthesisJobs[0] ?? null;
-  const stagedCandidateArtifact = synthesisJob?.candidateRuntimeArtifacts?.[synthesisJob.candidateRuntimeArtifacts.length - 1] ?? null;
+  const stagedCandidateArtifact = stagedCandidateState
+    ? synthesisJobs
+        .flatMap((job) => job.candidateRuntimeArtifacts)
+        .find((artifact) => String(artifact.artifactId ?? "") === stagedCandidateState.artifactId)
+      ?? null
+    : null;
 
   const latestCandleAgeMs = latestCandleTs ? Date.now() - new Date(latestCandleTs).getTime() : Number.POSITIVE_INFINITY;
   const dataCoverageStatus: ServiceLifecycleStatus["dataCoverageStatus"] = !latestCandleTs
@@ -355,6 +426,9 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
   if (!stagedCandidateArtifact) blockers.push("No staged candidate artifact yet.");
   if (!promotedRuntimeArtifact) blockers.push("No promoted service runtime yet.");
   if (streamState !== "active") blockers.push("Symbol stream inactive.");
+  if (stagedCandidateState && !stagedCandidateArtifact) {
+    warnings.push("Staged synthesis candidate reference exists, but its historical artifact could not be resolved.");
+  }
   if (activeMode !== "paper") warnings.push(`Active mode is ${activeMode}. Paper runtime is ready first; Demo/Real remain blocked.`);
   if (promotedRuntimeArtifact && !promotedRuntimeArtifact.allowedModes.paper) blockers.push("Promoted runtime is not allowed for Paper mode.");
   if (promotedRuntimeArtifact?.allowedModes.demo === false) warnings.push("Demo mode remains blocked pending runtime validation.");
@@ -386,7 +460,7 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
     latestCalibrationRunId: researchProfile?.lastRunId ?? null,
     synthesisStatus: synthesisJob?.status ?? "not_run",
     latestSynthesisJobId: synthesisJob?.id ?? null,
-    stagedCandidateArtifactId: stagedCandidateArtifact ? String(stagedCandidateArtifact.artifactId ?? "") : null,
+    stagedCandidateArtifactId: stagedCandidateState?.artifactId ?? null,
     promotedRuntimeArtifactId: promotedRuntimeArtifact?.artifactId ?? null,
     promotedRuntimeVersion: promotedRuntimeArtifact?.version ?? null,
     promotedRuntimeSourcePolicyId: promotedRuntimeArtifact?.sourcePolicyId ?? null,

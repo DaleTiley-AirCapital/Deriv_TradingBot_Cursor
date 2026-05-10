@@ -204,6 +204,23 @@ function windowLabel(days: number): string {
   return RESEARCH_WINDOWS.find(w => w.days === days)?.label ?? `${days} days`;
 }
 
+function targetProfileLabel(profile: string | null | undefined): string {
+  switch (profile) {
+    case "return_first":
+      return "return-first";
+    case "return_amplification":
+      return "return amplification";
+    case "default":
+      return "default";
+    default:
+      return profile ? String(profile).replaceAll("_", " ") : "default";
+  }
+}
+
+function searchProfileLabel(profile: string | null | undefined): string {
+  return profile ? String(profile).replaceAll("_", " ") : "n/a";
+}
+
 function readCustomResearchServices(): string[] {
   try {
     const raw = localStorage.getItem(RESEARCH_CUSTOM_SERVICES_KEY);
@@ -426,7 +443,7 @@ type V3BacktestJobStatus = {
 };
 
 type EliteSynthesisSearchProfileUi = "fast" | "balanced" | "deep";
-type EliteSynthesisTargetProfileUi = "default" | "return_amplification";
+type EliteSynthesisTargetProfileUi = "default" | "return_amplification" | "return_first";
 
 type EliteSynthesisJobStatusUi = {
   id: number;
@@ -442,12 +459,19 @@ type EliteSynthesisJobStatusUi = {
   startedAt?: string | null;
   completedAt?: string | null;
   heartbeatAt?: string | null;
+  windowDays?: number | null;
+  searchProfile?: string | null;
+  targetProfile?: string | null;
+  displayState?: string | null;
+  artifactStatus?: Record<string, unknown> | null;
+  artifactDiagnostics?: string[] | null;
   resultSummary?: Record<string, unknown> | null;
   candidateRuntimeArtifactsCount?: number;
   baselineRecordsCount?: number;
 };
 
 function synthesisResultStateLabel(job: EliteSynthesisJobStatusUi): string {
+  if (job.displayState) return job.displayState.replaceAll("_", " ");
   const resultState = job.resultSummary && typeof job.resultSummary === "object"
     ? String((job.resultSummary as Record<string, unknown>).resultState ?? "")
     : "";
@@ -456,6 +480,9 @@ function synthesisResultStateLabel(job: EliteSynthesisJobStatusUi): string {
 }
 
 function synthesisStatusTone(job: EliteSynthesisJobStatusUi): string {
+  if (job.displayState === "completed_missing_artifact") {
+    return "bg-red-500/15 text-red-300 border-red-500/30";
+  }
   const resultState = job.resultSummary && typeof job.resultSummary === "object"
     ? String((job.resultSummary as Record<string, unknown>).resultState ?? "")
     : "";
@@ -5203,7 +5230,7 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
   };
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+    <div className="rounded-xl border border-border/50 bg-card p-3 space-y-2.5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h3 className="text-sm font-semibold">{getSymbolLabel(service)} Service Status</h3>
@@ -5225,32 +5252,32 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
         </div>
       </div>
       {err && <ErrorBox msg={err} />}
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2.5 text-[11px]">
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2 text-[11px]">
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Calibration status</p>
           <p className="font-mono text-foreground">{latestRun?.status ?? "not run"}</p>
         </div>
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Latest research run</p>
           <p className="font-mono text-foreground">{runtime?.lifecycle?.latestRunId ?? latestRun?.id ?? "none"}</p>
         </div>
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Staged model</p>
           <p className="font-mono text-foreground">{runtime?.lifecycle?.stagedRunId ?? "none"}</p>
         </div>
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Promoted runtime</p>
           <p className="font-mono text-foreground">{lifecycle?.promotedRuntimeArtifactId ?? runtime?.lifecycle?.promotedRunId ?? "none"}</p>
         </div>
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Latest backtest</p>
           <p className="font-mono text-foreground">{latestBacktest?.id ? `#${latestBacktest.id}` : "none"}</p>
         </div>
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Latest reports</p>
           <p className="font-mono text-foreground">{latestReportsLabel}</p>
         </div>
-        <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
+        <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">V3.1 baseline</p>
           <p className="font-mono text-foreground">
             {service === "CRASH300"
@@ -5265,20 +5292,20 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
       </div>
       {lifecycle ? (
         <div className="space-y-3 text-[11px]">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="rounded-lg border border-border/30 bg-background/40 p-2.5 space-y-1">
               <p className="text-muted-foreground uppercase tracking-wide">Active mode</p>
               <p className="font-mono text-foreground">{lifecycle.activeMode}</p>
             </div>
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <div className="rounded-lg border border-border/30 bg-background/40 p-2.5 space-y-1">
               <p className="text-muted-foreground uppercase tracking-wide">Stream</p>
               <p className="font-mono text-foreground">{lifecycle.streamState}</p>
             </div>
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <div className="rounded-lg border border-border/30 bg-background/40 p-2.5 space-y-1">
               <p className="text-muted-foreground uppercase tracking-wide">Allocator</p>
               <p className="font-mono text-foreground">{lifecycle.allocatorConnected ? "connected" : "disconnected"}</p>
             </div>
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+            <div className="rounded-lg border border-border/30 bg-background/40 p-2.5 space-y-1">
               <p className="text-muted-foreground uppercase tracking-wide">Next action</p>
               <p className="font-mono text-foreground">{lifecycle.nextRequiredAction}</p>
             </div>
@@ -6031,6 +6058,23 @@ function ReportsTab({
     }
   };
 
+  const selectedSynthesisJobMeta = (synthesisReportResult?.selectedJob as Record<string, unknown> | undefined) ?? null;
+  const artifactStatusMeta = (synthesisReportResult?.artifactStatus as Record<string, unknown> | undefined) ?? null;
+  const artifactDiagnostics = Array.isArray(synthesisReportResult?.artifactDiagnostics)
+    ? synthesisReportResult?.artifactDiagnostics.map((value) => String(value))
+    : [];
+  const currentStagedCandidate = (synthesisReportResult?.currentStagedCandidate as Record<string, unknown> | undefined) ?? null;
+  const bestPolicySummary = (synthesisReportResult?.bestPolicySummary as Record<string, unknown> | undefined) ?? null;
+  const bestPolicyReadiness = (synthesisReportResult?.policyArtifactReadiness as Record<string, unknown> | undefined) ?? {};
+  const returnAmplificationAnalysis = (synthesisReportResult?.returnAmplificationAnalysis as Record<string, unknown> | undefined) ?? {};
+  const returnSummary = (returnAmplificationAnalysis.summary as Record<string, unknown> | undefined) ?? {};
+  const recommendedScenario = (returnAmplificationAnalysis.recommendedCandidateConfiguration as Record<string, unknown> | undefined) ?? null;
+  const bestLifecycleReturnPct = Number(recommendedScenario?.totalAccountReturnPct ?? recommendedScenario?.accountReturnPct ?? 0);
+  const bestLifecycleMonthlyPct = Number(recommendedScenario?.averageMonthlyAccountReturnPct ?? 0);
+  const stageButtonAllowed = service === "CRASH300"
+    ? Boolean(bestPolicyReadiness.reportConsistencyPassed) && Boolean(bestPolicyReadiness.selectedTradesExportPassed)
+    : Boolean(bestPolicyReadiness.canStageForPaper);
+
   return (
     <div className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
       <div>
@@ -6098,7 +6142,11 @@ function ReportsTab({
             <label className="text-[11px] text-muted-foreground">Elite synthesis job</label>
             <select value={selectedSynthesisJobId ? String(selectedSynthesisJobId) : ""} onChange={(e) => setSelectedSynthesisJobId(Number(e.target.value) || null)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
               <option value="">Select a synthesis job</option>
-              {synthesisJobs.map((job) => <option key={job.id} value={String(job.id)}>#{job.id}  {job.status}  {job.stage}</option>)}
+              {synthesisJobs.map((job) => (
+                <option key={job.id} value={String(job.id)}>
+                  #{job.id}  {searchProfileLabel(job.searchProfile)}  {targetProfileLabel(job.targetProfile)}  {synthesisResultStateLabel(job)}
+                </option>
+              ))}
             </select>
           </div>
         )}
@@ -6126,7 +6174,37 @@ function ReportsTab({
       </button>
       {selectedOption.runType === "synthesis" && synthesisReportResult && (
         <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-3 text-[11px]">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-8 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Selected job</p>
+              <p className="mt-1 text-foreground">
+                #{String(selectedSynthesisJobMeta?.jobId ?? selectedSynthesisJobId ?? "n/a")}  {windowLabel(Number(selectedSynthesisJobMeta?.windowDays ?? windowDays))}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Profile / target</p>
+              <p className="mt-1 text-foreground">
+                {searchProfileLabel(String(selectedSynthesisJobMeta?.searchProfile ?? ""))} / {targetProfileLabel(String(selectedSynthesisJobMeta?.targetProfile ?? ""))}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Artifact health</p>
+              <p className="mt-1 text-foreground">{String(artifactStatusMeta?.artifactStatus ?? "unknown").replaceAll("_", " ")}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Best policy</p>
+              <p className="mt-1 text-foreground">{String(bestPolicySummary?.policyId ?? "n/a")}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Trades / win / SL</p>
+              <p className="mt-1 text-foreground">
+                {Number(bestPolicySummary?.trades ?? 0)} / {(Number(bestPolicySummary?.winRate ?? 0) * 100).toFixed(2)}% / {(Number(bestPolicySummary?.slHitRate ?? 0) * 100).toFixed(2)}%
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Base return</p>
+              <p className="mt-1 text-foreground">{Number(bestPolicySummary?.accountReturnPct ?? 0).toFixed(2)}% total</p>
+            </div>
             <div>
               <p className="text-muted-foreground uppercase tracking-wide">Target</p>
               <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.targetAchievedBreakdown as Record<string, unknown> | undefined)?.finalTargetAchieved) ? "Target achieved" : "Target not achieved"}</p>
@@ -6152,66 +6230,61 @@ function ReportsTab({
               <p className="mt-1 text-foreground">{Number((synthesisReportResult.bestPolicySelectedTradesSummary as Record<string, unknown> | undefined)?.tradeCount ?? 0)} trade(s) in export</p>
             </div>
             <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Return amplification</p>
+              <p className="text-muted-foreground uppercase tracking-wide">Return-first search</p>
               <p className="mt-1 text-foreground">
-                {Boolean(((synthesisReportResult.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.summary as Record<string, unknown> | undefined)?.anyScenarioReaches50MonthlyReturn)
+                {Boolean(returnSummary.anyScenarioReaches50MonthlyReturn)
                   ? "50%+ monthly scenario found"
                   : "No 50% monthly scenario yet"}
               </p>
             </div>
             <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Potential monthly return</p>
+              <p className="text-muted-foreground uppercase tracking-wide">Best lifecycle return</p>
               <p className="mt-1 text-foreground">
-                {(() => {
-                  const returnSummary = ((synthesisReportResult.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.summary as Record<string, unknown> | undefined) ?? {};
-                  const closestScenario = (returnSummary.closestScenarioTo50MonthlyReturn as Record<string, unknown> | undefined) ?? null;
-                  const recommendedScenario = ((synthesisReportResult.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.recommendedCandidateConfiguration as Record<string, unknown> | undefined) ?? null;
-                  const monthlyReturn = Number(
-                    closestScenario?.averageMonthlyAccountReturnPct
-                    ?? recommendedScenario?.averageMonthlyAccountReturnPct
-                    ?? (synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.averageMonthlyAccountReturnPct
-                    ?? 0,
-                  );
-                  return monthlyReturn > 0 ? `${monthlyReturn.toFixed(2)}% avg monthly` : "No monthly return estimate yet";
-                })()}
+                {bestLifecycleReturnPct > 0
+                  ? `${bestLifecycleReturnPct.toFixed(2)}% total / ${bestLifecycleMonthlyPct.toFixed(2)}% avg monthly`
+                  : "No lifecycle return estimate yet"}
               </p>
             </div>
             <div>
-              <p className="text-muted-foreground uppercase tracking-wide">90/10 high-value</p>
+              <p className="text-muted-foreground uppercase tracking-wide">Scenario config</p>
               <p className="mt-1 text-foreground">
-                {Boolean(((synthesisReportResult.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.summary as Record<string, unknown> | undefined)?.anyScenarioMaintains90WinAndLowSl)
-                  ? "90%+ win and <10% SL scenario found"
-                  : "No 90/10 high-value scenario yet"}
+                {recommendedScenario
+                  ? `${String(recommendedScenario.allocationModel ?? "base")} / ${String(recommendedScenario.leverageModel ?? "1.0x")} / ${String(recommendedScenario.cascadeModel ?? "no_cascade")}`
+                  : "No recommended scenario yet"}
               </p>
             </div>
           </div>
+          {artifactDiagnostics.length > 0 ? (
+            <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] text-red-200 space-y-1">
+              {artifactDiagnostics.map((diagnostic) => <p key={diagnostic}>{diagnostic}</p>)}
+            </div>
+          ) : null}
           <div className="flex flex-wrap items-center gap-2">
-            {(service === "CRASH300"
-              ? Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.reportConsistencyPassed)
-                  && Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.selectedTradesExportPassed)
-              : Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.canStageForPaper)) && (
+            {stageButtonAllowed && (
               <button
                 type="button"
                 onClick={() => void stageBestSynthesisCandidate()}
                 disabled={busy}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
               >
-                {service === "CRASH300" ? "Stage Current Best CRASH300 Candidate" : "Stage Best Synthesis Candidate"}
+                {service === "CRASH300" ? "Stage This CRASH300 Candidate" : "Stage This Candidate"}
               </button>
             )}
             <span className="text-[11px] text-amber-300">Paper-only candidate. Not live-approved.</span>
-            {Array.isArray((synthesisReportResult.candidateRuntimeArtifacts as unknown[] | undefined))
-              && (synthesisReportResult.candidateRuntimeArtifacts as Array<Record<string, unknown>>).length > 0 && (
+            <span className="text-[11px] text-muted-foreground">
+              Current staged candidate: {currentStagedCandidate ? `job #${String(currentStagedCandidate.jobId ?? "n/a")}` : "none"}
+            </span>
+            {currentStagedCandidate && (
               <>
                 <span className="text-[11px] text-muted-foreground">
-                  Candidate artifact: {String(((synthesisReportResult.candidateRuntimeArtifacts as Array<Record<string, unknown>>).slice(-1)[0]?.artifactId ?? "n/a"))}
+                  Candidate artifact: {String(currentStagedCandidate.artifactId ?? "n/a")}
                 </span>
                 <span className="text-[11px] text-muted-foreground">
-                  Runtime mimic validation: {String(((synthesisReportResult.candidateRuntimeArtifacts as Array<Record<string, unknown>>).slice(-1)[0]?.runtimeMimicValidationStatus ?? "not_run"))}
+                  Runtime mimic validation: {String(currentStagedCandidate.runtimeMimicValidationStatus ?? "not_run")}
                 </span>
                 <button
                   type="button"
-                  onClick={() => void validateCandidateRuntime(String(((synthesisReportResult.candidateRuntimeArtifacts as Array<Record<string, unknown>>).slice(-1)[0]?.artifactId ?? "")))}
+                  onClick={() => void validateCandidateRuntime(String(currentStagedCandidate.artifactId ?? ""))}
                   disabled={busy}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
                 >
@@ -6324,7 +6397,8 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
             className="text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground"
           >
             <option value="default">Default target profile</option>
-            <option value="return_amplification">Return amplification target</option>
+            <option value="return_first">Return-first / profit amplification</option>
+            <option value="return_amplification">Return amplification target (legacy alias)</option>
           </select>
           <button
             type="button"
@@ -6402,6 +6476,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
                       <th className="text-left py-2 pr-3 font-medium">ID</th>
                       <th className="text-left px-3 py-2 font-medium">Profile</th>
                       <th className="text-left px-3 py-2 font-medium">Status</th>
+                      <th className="text-left px-3 py-2 font-medium">Target</th>
                       <th className="text-left px-3 py-2 font-medium">Result</th>
                       <th className="text-left px-3 py-2 font-medium">Passes</th>
                       <th className="text-left px-3 py-2 font-medium">Started</th>
@@ -6415,13 +6490,16 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
                         <tr key={job.id} className="border-b border-border/10 last:border-b-0">
                           <td className="py-2 pr-3 text-foreground font-medium">#{job.id}</td>
                           <td className="px-3 py-2 text-muted-foreground">
-                            {Number(job.maxPasses ?? 0) >= 24 ? "Deep" : Number(job.maxPasses ?? 0) >= 12 ? "Balanced" : "Fast"}
+                            {searchProfileLabel(job.searchProfile) !== "n/a"
+                              ? searchProfileLabel(job.searchProfile)
+                              : Number(job.maxPasses ?? 0) >= 24 ? "deep" : Number(job.maxPasses ?? 0) >= 12 ? "balanced" : "fast"}
                           </td>
                           <td className="px-3 py-2">
                             <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium", synthesisStatusTone(job))}>
-                              {job.status}
+                              {job.displayState ?? job.status}
                             </span>
                           </td>
+                          <td className="px-3 py-2 text-muted-foreground">{targetProfileLabel(job.targetProfile)}</td>
                           <td className="px-3 py-2 text-muted-foreground">{resultLabel}</td>
                           <td className="px-3 py-2 text-muted-foreground">
                             {Number(job.currentPass ?? 0) > 0 || Number(job.maxPasses ?? 0) > 0

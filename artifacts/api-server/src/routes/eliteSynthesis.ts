@@ -11,12 +11,15 @@ import {
   listEliteSynthesisJobs,
   markEliteSynthesisJobCancelled,
   updateEliteSynthesisJob,
+  type EliteSynthesisJobRow,
 } from "../core/synthesis/jobs.js";
 import type { EliteSynthesisParams } from "../core/synthesis/types.js";
 import { profileDefaults } from "../core/synthesis/types.js";
 import {
   promoteCandidateArtifactToServiceRuntime,
   readPromotedServiceRuntimeArtifact,
+  readStagedSynthesisCandidateState,
+  writeStagedSynthesisCandidateState,
 } from "../core/serviceRuntimeLifecycle.js";
 
 const router: IRouter = Router();
@@ -52,7 +55,7 @@ function parseParams(input: unknown): EliteSynthesisParams {
     searchProfile: (["fast", "balanced", "deep"].includes(String(record.searchProfile))
       ? record.searchProfile
       : "balanced") as EliteSynthesisParams["searchProfile"],
-    targetProfile: (["default", "return_amplification"].includes(String(record.targetProfile))
+    targetProfile: (["default", "return_amplification", "return_first"].includes(String(record.targetProfile))
       ? record.targetProfile
       : "default") as EliteSynthesisParams["targetProfile"],
     maxPasses: record.maxPasses == null ? null : Number(record.maxPasses),
@@ -65,6 +68,94 @@ function parseParams(input: unknown): EliteSynthesisParams {
     objectiveWeights: record.objectiveWeights && typeof record.objectiveWeights === "object" && !Array.isArray(record.objectiveWeights)
       ? (record.objectiveWeights as EliteSynthesisParams["objectiveWeights"])
       : null,
+  };
+}
+
+function jobDisplayState(job: EliteSynthesisJobRow): "completed_with_artifact" | "completed_missing_artifact" | "running" | "queued" | "failed" | "cancelled" {
+  if (job.status === "completed") {
+    return job.resultArtifact ? "completed_with_artifact" : "completed_missing_artifact";
+  }
+  if (job.status === "failed" || job.status === "cancelled" || job.status === "queued" || job.status === "running") {
+    return job.status;
+  }
+  return "running";
+}
+
+function artifactHealth(job: EliteSynthesisJobRow) {
+  const resultArtifact = job.resultArtifact;
+  const bestSelectedTrades = Array.isArray(resultArtifact?.bestPolicySelectedTrades)
+    ? resultArtifact.bestPolicySelectedTrades
+    : [];
+  const returnAmplification = resultArtifact?.returnAmplificationAnalysis ?? null;
+  const diagnostics: string[] = [];
+  if (job.status === "completed" && !resultArtifact) {
+    diagnostics.push("Job status is completed but the result artifact is missing.");
+  }
+  if (resultArtifact && !resultArtifact.bestPolicySummary) {
+    diagnostics.push("Result artifact exists but the best policy summary is missing.");
+  }
+  if (resultArtifact && bestSelectedTrades.length === 0) {
+    diagnostics.push("Result artifact exists but the selected trades artifact is empty or missing.");
+  }
+  if (resultArtifact && !returnAmplification) {
+    diagnostics.push("Result artifact exists but the return/lifecycle amplification report is missing.");
+  }
+  return {
+    displayState: jobDisplayState(job),
+    artifactStatus: {
+      resultArtifact: Boolean(resultArtifact),
+      selectedTradesArtifact: bestSelectedTrades.length > 0,
+      returnAmplificationArtifact: Boolean(returnAmplification),
+      candidateRuntimeArtifacts: job.candidateRuntimeArtifacts.length,
+      baselineRecords: job.baselineRecords.length,
+    },
+    artifactDiagnostics: diagnostics,
+  };
+}
+
+function synthesisJobMetadata(job: EliteSynthesisJobRow) {
+  const params = (job.params ?? {}) as Record<string, unknown>;
+  return {
+    windowDays: Number(params.windowDays ?? 0) || null,
+    searchProfile: String(params.searchProfile ?? "balanced"),
+    targetProfile: String(params.targetProfile ?? "default"),
+    startedAt: job.startedAt ?? null,
+    completedAt: job.completedAt ?? null,
+  };
+}
+
+function buildExportMetadata(job: EliteSynthesisJobRow, reportType: string) {
+  const meta = synthesisJobMetadata(job);
+  const health = artifactHealth(job);
+  return {
+    serviceId: job.serviceId,
+    jobId: job.id,
+    reportType,
+    windowDays: meta.windowDays,
+    searchProfile: meta.searchProfile,
+    targetProfile: meta.targetProfile,
+    startedAt: meta.startedAt,
+    completedAt: meta.completedAt,
+    exportedAt: new Date().toISOString(),
+    artifactStatus: health.artifactStatus,
+    artifactDiagnostics: health.artifactDiagnostics,
+  };
+}
+
+async function resolveCurrentStagedCandidate(serviceId: string) {
+  const stagedState = await readStagedSynthesisCandidateState(serviceId);
+  if (!stagedState) return null;
+  const located = await findCandidateRuntimeArtifact(serviceId, stagedState.artifactId);
+  if (!located) {
+    return {
+      ...stagedState,
+      artifactMissing: true,
+    };
+  }
+  return {
+    ...stagedState,
+    artifactMissing: false,
+    artifact: located.artifact,
   };
 }
 
@@ -122,12 +213,12 @@ router.get("/research/:serviceId/elite-synthesis/jobs", async (req, res): Promis
         maxPasses: job.maxPasses,
         message: job.message,
         createdAt: job.createdAt,
-        startedAt: job.startedAt,
-        completedAt: job.completedAt,
         heartbeatAt: job.heartbeatAt,
         resultSummary: job.resultSummary,
         candidateRuntimeArtifactsCount: job.candidateRuntimeArtifacts.length,
         baselineRecordsCount: job.baselineRecords.length,
+        ...synthesisJobMetadata(job),
+        ...artifactHealth(job),
       })),
     });
   } catch (err) {
@@ -204,6 +295,8 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
       res.status(404).json({ error: `Elite synthesis job ${jobId} not found for ${serviceId}.` });
       return;
     }
+    const stagedCandidate = await resolveCurrentStagedCandidate(serviceId);
+    const health = artifactHealth(job);
     if (!job.resultArtifact) {
       res.json({
         jobId,
@@ -211,6 +304,14 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
         status: job.status,
         stage: job.stage,
         message: job.message,
+        selectedJob: {
+          jobId: job.id,
+          ...synthesisJobMetadata(job),
+          displayState: health.displayState,
+        },
+        artifactStatus: health.artifactStatus,
+        artifactDiagnostics: health.artifactDiagnostics,
+        currentStagedCandidate: stagedCandidate,
         result: null,
       });
       return;
@@ -220,6 +321,14 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
       jobId,
       serviceId,
       status: job.status,
+      selectedJob: {
+        jobId: job.id,
+        ...synthesisJobMetadata(job),
+        displayState: health.displayState,
+      },
+      artifactStatus: health.artifactStatus,
+      artifactDiagnostics: health.artifactDiagnostics,
+      currentStagedCandidate: stagedCandidate,
       result: {
         jobId: compact.jobId,
         serviceId: compact.serviceId,
@@ -251,6 +360,14 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
         returnAmplificationAnalysis: compact.returnAmplificationAnalysis ?? null,
         candidateRuntimeArtifacts: job.candidateRuntimeArtifacts,
         baselineRecords: job.baselineRecords,
+        selectedJob: {
+          jobId: job.id,
+          ...synthesisJobMetadata(job),
+          displayState: health.displayState,
+        },
+        artifactStatus: health.artifactStatus,
+        artifactDiagnostics: health.artifactDiagnostics,
+        currentStagedCandidate: stagedCandidate,
       },
     });
   } catch (err) {
@@ -273,10 +390,8 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/selected-trades
       return;
     }
     res.json({
-      jobId,
-      serviceId,
+      ...buildExportMetadata(job, "selected_trades"),
       status: job.status,
-      exportedAt: new Date().toISOString(),
       policyId: (job.resultArtifact.bestPolicySummary as Record<string, unknown> | undefined)?.policyId ?? null,
       sourcePool: (job.resultArtifact.bestPolicySummary as Record<string, unknown> | undefined)?.sourcePool ?? null,
       policyArtifactReadiness: job.resultArtifact.policyArtifactReadiness ?? null,
@@ -434,7 +549,23 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
         maxDrawdownPct: result.bestPolicySummary.maxDrawdownPct,
       },
     };
-    const nextArtifacts = [...job.candidateRuntimeArtifacts, artifact];
+    const serviceJobs = await listEliteSynthesisJobs(serviceId, 200);
+    for (const serviceJob of serviceJobs) {
+      if (!Array.isArray(serviceJob.candidateRuntimeArtifacts) || serviceJob.candidateRuntimeArtifacts.length === 0) continue;
+      const normalized = serviceJob.candidateRuntimeArtifacts.map((item) => ({
+        ...item,
+        staged: false,
+      }));
+      const changed = normalized.some((item, index) => item.staged !== serviceJob.candidateRuntimeArtifacts[index]?.staged);
+      if (changed) {
+        await updateEliteSynthesisJob(serviceJob.id, {
+          taskStatePatch: {
+            candidateRuntimeArtifacts: normalized,
+          },
+        });
+      }
+    }
+    const nextArtifacts = [...job.candidateRuntimeArtifacts.map((item) => ({ ...item, staged: false })), { ...artifact, staged: true }];
     const nextBaselineRecords = [
       ...job.baselineRecords.filter((record) => !(String(record.version ?? "") === "v3.1" && String(record.serviceId ?? "") === serviceId)),
       baselineRecord,
@@ -444,6 +575,13 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
         candidateRuntimeArtifacts: nextArtifacts,
         baselineRecords: nextBaselineRecords,
       },
+    });
+    await writeStagedSynthesisCandidateState({
+      serviceId,
+      artifactId,
+      jobId,
+      sourcePolicyId: result.bestPolicySummary.policyId ?? null,
+      stagedAt: new Date().toISOString(),
     });
     res.status(202).json({
       ok: true,
@@ -461,6 +599,14 @@ router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/
     const serviceId = String(req.params.serviceId ?? "").toUpperCase();
     getSynthesisAdapter(serviceId);
     const artifactId = String(req.params.artifactId ?? "");
+    const stagedState = await readStagedSynthesisCandidateState(serviceId);
+    if (!stagedState || String(stagedState.artifactId ?? "") !== artifactId) {
+      res.status(409).json({
+        error: "Candidate runtime promotion must use the currently staged synthesis candidate for the service.",
+        stagedCandidateArtifactId: stagedState?.artifactId ?? null,
+      });
+      return;
+    }
     const located = await findCandidateRuntimeArtifact(serviceId, artifactId);
     if (!located) {
       res.status(404).json({ error: `Candidate runtime artifact ${artifactId} not found for ${serviceId}.` });
@@ -588,10 +734,8 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/return-amplific
       return;
     }
     res.json({
-      jobId,
-      serviceId,
+      ...buildExportMetadata(job, "return_lifecycle_amplification"),
       status: job.status,
-      exportedAt: new Date().toISOString(),
       targetProfile: (job.resultArtifact.windowSummary as Record<string, unknown> | undefined)?.targetProfile ?? "default",
       returnAmplificationAnalysis: job.resultArtifact.returnAmplificationAnalysis ?? null,
     });
@@ -615,10 +759,8 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/full", async (r
       return;
     }
     res.json({
-      jobId,
-      serviceId,
+      ...buildExportMetadata(job, "elite_synthesis_full"),
       status: job.status,
-      exportedAt: new Date().toISOString(),
       result: job.resultArtifact,
       candidateRuntimeArtifacts: job.candidateRuntimeArtifacts,
       baselineRecords: job.baselineRecords,

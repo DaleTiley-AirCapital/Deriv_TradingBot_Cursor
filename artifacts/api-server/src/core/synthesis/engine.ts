@@ -460,6 +460,10 @@ const RETURN_AMPLIFICATION_BUCKETS = [
 
 type ReturnAmplificationBucket = (typeof RETURN_AMPLIFICATION_BUCKETS)[number];
 
+function isReturnFirstObjective(targetProfile: EliteSynthesisTargetProfile): boolean {
+  return targetProfile === "return_amplification" || targetProfile === "return_first";
+}
+
 function offsetClusterFromLabel(label: string | null | undefined) {
   switch (label) {
     case "T-10":
@@ -989,7 +993,7 @@ function generatePoliciesFromTriggerRebuild(dataset: UnifiedSynthesisDataset, re
 
 function targetAchieved(policy: EliteSynthesisPolicySummary | null, targetProfile: EliteSynthesisTargetProfile = "default") {
   if (!policy) return false;
-  if (targetProfile === "return_amplification") {
+  if (isReturnFirstObjective(targetProfile)) {
     const averageMonthlyReturn = Number(policy.averageMonthlyAccountReturnPct ?? 0);
     return Boolean(
       policy.winRate >= 0.9
@@ -1395,14 +1399,16 @@ function buildTargetAchievedBreakdown(params: {
   const lateOffsetSafetyPassed = Boolean(params.lateOffsetSafetyAudit?.passed ?? false);
   const exitDerivationPassed = Boolean(params.exitDerivationAudit?.passed ?? false);
   const calibratedRelationshipPassed = Boolean(params.calibratedMoveRelationshipSummary?.passed ?? false);
-  const requiredTradeCountMin = params.targetProfile === "return_amplification" ? Math.min(params.targetTradeCountMin, 20) : params.targetTradeCountMin;
-  const requiredTradeCountMax = params.targetProfile === "return_amplification" ? Math.min(Math.max(params.targetTradeCountMax, 30), 45) : params.targetTradeCountMax;
+  const targetProfile = params.targetProfile;
+  const returnFirstObjective = isReturnFirstObjective(targetProfile);
+  const requiredTradeCountMin = returnFirstObjective ? Math.min(params.targetTradeCountMin, 20) : params.targetTradeCountMin;
+  const requiredTradeCountMax = returnFirstObjective ? Math.min(Math.max(params.targetTradeCountMax, 30), 45) : params.targetTradeCountMax;
   const returnProfileTradeCountPassed = Boolean(policy && policy.trades >= requiredTradeCountMin && policy.trades <= requiredTradeCountMax);
   const monthlyAccountReturnPct = Number(policy?.averageMonthlyAccountReturnPct ?? 0);
-  const monthlyReturnPassed = params.targetProfile === "return_amplification" ? monthlyAccountReturnPct >= 50 : monthlyStabilityPassed;
-  const drawdownPassed = params.targetProfile === "return_amplification" ? Number(policy?.maxDrawdownPct ?? 0) <= 10 : true;
+  const monthlyReturnPassed = returnFirstObjective ? monthlyAccountReturnPct >= 50 : monthlyStabilityPassed;
+  const drawdownPassed = returnFirstObjective ? Number(policy?.maxDrawdownPct ?? 0) <= 10 : true;
   return {
-    targetProfile: params.targetProfile,
+    targetProfile,
     winRate: policy?.winRate ?? 0,
     requiredWinRate: 0.9,
     winRatePassed: Boolean(policy && policy.winRate >= 0.9),
@@ -1415,16 +1421,16 @@ function buildTargetAchievedBreakdown(params: {
     trades: policy?.trades ?? 0,
     requiredTradeCountMin,
     requiredTradeCountMax,
-    tradeCountPassed: params.targetProfile === "return_amplification" ? returnProfileTradeCountPassed : tradeCountPassed,
+    tradeCountPassed: returnFirstObjective ? returnProfileTradeCountPassed : tradeCountPassed,
     maxTradesPerDay: params.maxTradesPerDay,
     maxTradesPerDayPassed: true,
     phantomCount: policy?.phantomCount ?? 0,
     phantomCountPassed: Boolean((policy?.phantomCount ?? 0) === 0),
     monthlyAccountReturnPct,
-    requiredMonthlyAccountReturnPct: params.targetProfile === "return_amplification" ? 50 : null,
+    requiredMonthlyAccountReturnPct: returnFirstObjective ? 50 : null,
     monthlyReturnPassed,
     maxDrawdownPct: policy?.maxDrawdownPct ?? 0,
-    requiredMaxDrawdownPct: params.targetProfile === "return_amplification" ? 10 : null,
+    requiredMaxDrawdownPct: returnFirstObjective ? 10 : null,
     drawdownPassed,
     monthlyStabilityPassed,
     leakagePassed,
@@ -1437,7 +1443,7 @@ function buildTargetAchievedBreakdown(params: {
       && policy.winRate >= 0.9
       && policy.slHitRate <= 0.1
       && policy.profitFactor >= 2.5
-      && (params.targetProfile === "return_amplification" ? returnProfileTradeCountPassed : tradeCountPassed)
+      && (returnFirstObjective ? returnProfileTradeCountPassed : tradeCountPassed)
       && monthlyReturnPassed
       && drawdownPassed
       && leakagePassed
@@ -1534,6 +1540,7 @@ function buildStrategyGradeReadiness(params: {
 
 function buildReturnAmplificationAnalysis(params: {
   dataset: UnifiedSynthesisDataset;
+  targetProfile: EliteSynthesisTargetProfile;
   bestPolicyEvaluation: PolicyEvaluationResult | null;
   bestPolicySummary: EliteSynthesisPolicySummary | null;
   bestPolicySelectedTradesSummary: Record<string, unknown> | null;
@@ -2084,7 +2091,7 @@ function buildReturnAmplificationAnalysis(params: {
       widenedDistribution: countRecord(selected.map((item) => `${String(item.dynamicExitPlan.widenedFrom ?? "none")}=>${String(item.dynamicExitPlan.widenedTo ?? "none")}`)),
     };
     const returnAmplificationBreakdown = {
-      targetProfile: "return_amplification",
+      targetProfile: isReturnFirstObjective(params.targetProfile) ? "return_first" : "return_amplification",
       winRate: selected.length > 0 ? wins / selected.length : 0,
       requiredWinRate: 0.9,
       winRatePassed: selected.length > 0 ? wins / selected.length >= 0.9 : false,
@@ -2344,7 +2351,12 @@ function buildReturnAmplificationAnalysis(params: {
     .sort((a, b) =>
       Number(b.targetAchievedBreakdown.finalTargetAchieved ? 1 : 0) - Number(a.targetAchievedBreakdown.finalTargetAchieved ? 1 : 0)
       || Number(b.averageMonthlyAccountReturnPct ?? 0) - Number(a.averageMonthlyAccountReturnPct ?? 0)
+      || Number(b.accountReturnPct ?? 0) - Number(a.accountReturnPct ?? 0)
+      || Number(a.drawdown ?? Number.POSITIVE_INFINITY) - Number(b.drawdown ?? Number.POSITIVE_INFINITY)
+      || Number(a.slHitRate ?? Number.POSITIVE_INFINITY) - Number(b.slHitRate ?? Number.POSITIVE_INFINITY)
+      || Number(b.profitFactor ?? 0) - Number(a.profitFactor ?? 0)
       || Number(b.winRate ?? 0) - Number(a.winRate ?? 0)
+      || Number(b.trades ?? 0) - Number(a.trades ?? 0)
     )[0] ?? null;
 
   return {
@@ -2394,7 +2406,7 @@ function buildReturnAmplificationAnalysis(params: {
       anyScenarioMaintains90WinAndLowSl: scenarioMeeting90Win.length > 0,
       scenariosMeeting90WinAndLowSl: scenarioMeeting90Win.map((scenario) => scenario.scenarioId),
       recommendedNextStep: recommendedCandidateConfiguration && Number((recommendedCandidateConfiguration as Record<string, unknown>).averageMonthlyAccountReturnPct ?? 0) > 0
-        ? "Review return amplification analysis in Reports, then rerun CRASH300 90-day balanced with targetProfile=return_amplification if the recommended scenario looks safe."
+        ? "Review the lifecycle and return-first analysis in Reports, then rerun the deep search with targetProfile=return_first if the recommended scenario looks safe."
         : "No safe return amplification scenario emerged from the current analysis. Keep the baseline rebuilt policy and continue research.",
     },
   };
@@ -3048,6 +3060,7 @@ export async function runEliteSynthesisJob(params: {
   });
   const returnAmplificationAnalysis = buildReturnAmplificationAnalysis({
     dataset,
+    targetProfile: params.request.targetProfile ?? "default",
     bestPolicyEvaluation,
     bestPolicySummary,
     bestPolicySelectedTradesSummary: bestPolicyValidationArtifacts.bestPolicySelectedTradesSummary,

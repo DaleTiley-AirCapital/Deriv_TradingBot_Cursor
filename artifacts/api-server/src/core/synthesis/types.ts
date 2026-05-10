@@ -34,7 +34,7 @@ export type EliteSynthesisStage =
 
 export type EliteSynthesisSearchProfile = "fast" | "balanced" | "deep";
 
-export type EliteSynthesisTargetProfile = "default" | "return_amplification";
+export type EliteSynthesisTargetProfile = "default" | "return_amplification" | "return_first";
 
 export type EliteSynthesisBottleneck =
   | "none"
