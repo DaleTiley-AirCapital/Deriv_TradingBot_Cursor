@@ -6,6 +6,8 @@ export * from "./modelRuns";
 export * from "./backtestRuns";
 export * from "./backtestTrades";
 export * from "./trades";
+export * from "./serviceCandidates";
+export * from "./allocatorDecisions";
 export * from "./signalLog";
 export * from "./platformState";
 export * from "./behaviorEvents";

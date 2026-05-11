@@ -686,6 +686,13 @@ export async function manageOpenPositions(): Promise<void> {
  */
 export async function openPositionV3(params: {
   symbol: string;
+  serviceId: string;
+  serviceCandidateId: string;
+  allocatorDecisionId: string;
+  runtimeArtifactId: string;
+  lifecyclePlanId: string;
+  sourcePolicyId: string | null;
+  attributionPath: string;
   engineName: string;
   direction: "buy" | "sell";
   confidence: number;
@@ -699,7 +706,35 @@ export async function openPositionV3(params: {
     trailingDistancePct?: number;
   } | null;
 }): Promise<number | null> {
-  const { symbol, engineName, direction, confidence, capitalAmount, features, mode, runtimeCalibration } = params;
+  const {
+    symbol,
+    serviceId,
+    serviceCandidateId,
+    allocatorDecisionId,
+    runtimeArtifactId,
+    lifecyclePlanId,
+    sourcePolicyId,
+    attributionPath,
+    engineName,
+    direction,
+    confidence,
+    capitalAmount,
+    features,
+    mode,
+    runtimeCalibration,
+  } = params;
+
+  if (!serviceId || !serviceCandidateId || !allocatorDecisionId || !runtimeArtifactId || !lifecyclePlanId || !attributionPath) {
+    throw new Error(
+      `V3 execution provenance missing for ${symbol}. ` +
+      `serviceId=${serviceId || "missing"} ` +
+      `candidate=${serviceCandidateId || "missing"} ` +
+      `decision=${allocatorDecisionId || "missing"} ` +
+      `runtime=${runtimeArtifactId || "missing"} ` +
+      `lifecycle=${lifecyclePlanId || "missing"} ` +
+      `attribution=${attributionPath || "missing"}`,
+    );
+  }
 
   const client = await getDerivClientForMode(mode);
   const states = await db.select().from(platformStateTable);
@@ -795,6 +830,13 @@ export async function openPositionV3(params: {
       const [inserted] = await db.insert(tradesTable).values({
         brokerTradeId: String(result.contractId),
         symbol,
+        serviceId,
+        serviceCandidateId,
+        allocatorDecisionId,
+        runtimeArtifactId,
+        lifecyclePlanId,
+        sourcePolicyId,
+        attributionPath,
         strategyName: engineName,
         side: direction,
         entryPrice: result.entrySpot,
@@ -819,6 +861,13 @@ export async function openPositionV3(params: {
   // Paper mode
   const [inserted] = await db.insert(tradesTable).values({
     symbol,
+    serviceId,
+    serviceCandidateId,
+    allocatorDecisionId,
+    runtimeArtifactId,
+    lifecyclePlanId,
+    sourcePolicyId,
+    attributionPath,
     strategyName: engineName,
     side: direction,
     entryPrice: spotPrice,

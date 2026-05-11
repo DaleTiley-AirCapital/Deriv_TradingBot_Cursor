@@ -1,17 +1,13 @@
 import { manageOpenPositions, openPositionV3 } from "../core/tradeEngine.js";
-import { verifySignal } from "./openai.js";
-import { db, platformStateTable, tradesTable, candlesTable, signalLogTable } from "@workspace/db";
-import { eq, desc, and, gte, sql } from "drizzle-orm";
-import { getActiveModes, isAnyModeActive } from "./deriv.js";
-import type { TradingMode } from "./deriv.js";
+import { db, platformStateTable, tradesTable } from "@workspace/db";
+import { eq, sql } from "drizzle-orm";
+import { isAnyModeActive } from "./deriv.js";
 import { ACTIVE_TRADING_SYMBOLS } from "./deriv.js";
 import { syncLatestCanonical1mForSymbol } from "./deriv.js";
 import { scanSymbolV3 } from "../core/engineRouterV3.js";
 import { allocateV3Signal } from "../core/portfolioAllocatorV3.js";
-import { getLiveCalibrationProfile } from "../core/calibration/liveCalibrationProfile.js";
+import type { LiveCalibrationProfile } from "../core/calibration/liveCalibrationProfile.js";
 import {
-  updateCandidate,
-  markCandidateExecuted,
   getSymbolsNeedingWatchScan,
   getWatchedCandidates,
   cleanupStale,
@@ -19,7 +15,9 @@ import {
 import { buildSymbolTradeCandidate } from "../core/symbolModels/candidateBuilder.js";
 import type { BehaviorProfileSummary } from "../core/backtest/behaviorProfiler.js";
 import { isSymbolStreamingDisabled } from "./symbolValidator.js";
-import { getEnabledRegisteredSymbols } from "../symbol-services/shared/SymbolServiceRegistry.js";
+import { getEnabledRegisteredSymbols, getSymbolService } from "../symbol-services/shared/SymbolServiceRegistry.js";
+import { createAllocatorDecisionRecord, createServiceCandidateRecord, attachTradeToExecutionRecords } from "../core/serviceExecutionRecords.js";
+import { resolvePromotedServiceRuntimeAdapter, resolveServiceExecutionGate } from "../core/serviceExecutionGate.js";
 
 const DEFAULT_SYMBOLS = ACTIVE_TRADING_SYMBOLS;
 const DEFAULT_SCAN_INTERVAL_MS = 300_000;
@@ -72,12 +70,12 @@ function parseRuntimeWindowMs(raw: string | undefined, fallbackMs: number): numb
   return Math.max(30, Math.round(minutes)) * 60_000;
 }
 
-function runtimeCandidateAgeMs(runtimeCalibration: Awaited<ReturnType<typeof getLiveCalibrationProfile>>): number {
+function runtimeCandidateAgeMs(runtimeCalibration: LiveCalibrationProfile | null): number {
   if (!runtimeCalibration) return 0;
   return parseRuntimeWindowMs(runtimeCalibration.confirmationWindow, 2 * 60 * 60_000);
 }
 
-function runtimeCandidateCooldownMs(runtimeCalibration: Awaited<ReturnType<typeof getLiveCalibrationProfile>>): number {
+function runtimeCandidateCooldownMs(runtimeCalibration: LiveCalibrationProfile | null): number {
   if (!runtimeCalibration) return 2 * 60 * 60_000;
   const confirmationMs = runtimeCandidateAgeMs(runtimeCalibration);
   const minHoldMinutes = Number(runtimeCalibration.trailingModel?.["minHoldMinutesBeforeTrail"] ?? 0);
@@ -137,44 +135,55 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     );
   }
 
-  const aiEnabled = stateMap["ai_verification_enabled"] === "true";
-  const activeModes = getActiveModes(stateMap);
-  const modesToProcess: TradingMode[] = activeModes.length > 0 ? activeModes : ["paper" as TradingMode];
-  const isIntelOnly = activeModes.length === 0;
-  const paperModeInUse = isIntelOnly || modesToProcess.includes("paper");
-  const runtimeCalibration = (paperModeInUse || symbol === "CRASH300")
-    ? await getLiveCalibrationProfile(symbol, "paper", stateMap).catch(() => null)
-    : null;
-  if (symbol === "CRASH300" && !runtimeCalibration) {
-    throw new Error("CRASH300 runtime model missing/invalid. Cannot evaluate symbol service.");
+  const serviceId = getSymbolService(symbol)?.symbol?.toUpperCase() ?? symbol.toUpperCase();
+  const gate = await resolveServiceExecutionGate(serviceId, symbol);
+
+  if (!gate.candidateEmissionAllowed) {
+    console.log(
+      `[V3Scan] ${symbol} | GATE_BLOCKED | reason=${gate.blockedReason ?? "unknown"}${gate.warnings.length ? ` | warnings=${gate.warnings.join(",")}` : ""}`,
+    );
+    return;
   }
 
-  const crash300ServiceNative = symbol === "CRASH300";
-  const useRuntimeCandidateLifecycle = Boolean(runtimeCalibration && paperModeInUse && !crash300ServiceNative);
-
-  if (runtimeCalibration && paperModeInUse) {
-    const watchSymbols = new Set(getSymbolsNeedingWatchScan().filter((watchSymbol) => watchSymbol !== "CRASH300"));
-    const cadenceMs = Math.max(30_000, Math.min(15 * 60_000, runtimeCalibration.recommendedScanIntervalSeconds * 1000));
-    const nowMs = Date.now();
-    const lastMs = calibratedLastScanMs[symbol] ?? 0;
-    if (!watchSymbols.has(symbol) && (nowMs - lastMs) < cadenceMs) {
-      console.log(
-        `[V3Scan] ${symbol} | SKIP | reason=calibrated_scan_cadence_guard(${Math.round((cadenceMs - (nowMs - lastMs)) / 1000)}s_remaining)`,
-      );
-      return;
-    }
-    calibratedLastScanMs[symbol] = nowMs;
+  const activeMode = gate.activeMode;
+  if (activeMode !== "paper" && activeMode !== "demo" && activeMode !== "real") {
+    console.log(`[V3Scan] ${symbol} | GATE_BLOCKED | reason=active_mode_not_executable(${activeMode})`);
+    return;
   }
+
+  const runtimeResolution = await resolvePromotedServiceRuntimeAdapter(serviceId, activeMode);
+  const runtimeArtifact = runtimeResolution.artifact;
+  if (!runtimeArtifact || runtimeResolution.blockedReason) {
+    console.log(
+      `[V3Scan] ${symbol} | GATE_BLOCKED | reason=${runtimeResolution.blockedReason ?? "promoted_service_runtime_missing"}`,
+    );
+    return;
+  }
+
+  const runtimeCalibration = runtimeArtifact.runtimeModelAdapter;
+  if (!runtimeCalibration) {
+    console.log(`[V3Scan] ${symbol} | GATE_BLOCKED | reason=promoted_service_runtime_missing_runtime_adapter`);
+    return;
+  }
+
+  const cadenceMs = Math.max(30_000, Math.min(15 * 60_000, runtimeCalibration.recommendedScanIntervalSeconds * 1000));
+  const nowMs = Date.now();
+  const lastMs = calibratedLastScanMs[symbol] ?? 0;
+  if ((nowMs - lastMs) < cadenceMs) {
+    console.log(
+      `[V3Scan] ${symbol} | SKIP | reason=calibrated_scan_cadence_guard(${Math.round((cadenceMs - (nowMs - lastMs)) / 1000)}s_remaining)`,
+    );
+    return;
+  }
+  calibratedLastScanMs[symbol] = nowMs;
 
   const result = await scanSymbolV3(symbol, runtimeCalibration);
-
   if (result.skipped) {
     console.log(`[V3Scan] ${symbol} | SKIP | reason=${result.skipReason ?? "unknown"}`);
     return;
   }
 
   const { coordinatorOutput, features, operationalRegime, regimeConfidence, engineResults } = result;
-
   if (!coordinatorOutput || !features) {
     const engineCount = engineResults.length;
     console.log(`[V3Scan] ${symbol} | regime=${operationalRegime} | engines=${engineCount} | SKIP=no_coordinator_output`);
@@ -194,32 +203,22 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   }
 
   const { winner } = coordinatorOutput;
-  console.log(`[V3Scan] ${symbol} | regime=${operationalRegime}(${regimeConfidence.toFixed(2)}) | engine=${winner.engineName} | dir=${coordinatorOutput.resolvedDirection} | conf=${coordinatorOutput.coordinatorConfidence.toFixed(3)} | move=${(winner.projectedMovePct * 100).toFixed(1)}%`);
+  console.log(
+    `[V3Scan] ${symbol} | service=${serviceId} | mode=${activeMode} | regime=${operationalRegime}(${regimeConfidence.toFixed(2)}) | engine=${winner.engineName} | dir=${coordinatorOutput.resolvedDirection} | conf=${coordinatorOutput.coordinatorConfidence.toFixed(3)} | move=${(winner.projectedMovePct * 100).toFixed(1)}%`,
+  );
 
-  // Store per-symbol scan context for live trade management (tradeEngine.manageOpenPositions).
-  // The adaptive trailing stop uses emaSlope and spikeCount4h to adjust the trail multiplier.
-  // Writing these per scan ensures live management uses the most recent market context
-  // rather than placeholder 0-values.
-  const emaKey      = `${symbol}_scan_ema_slope`;
-  const spikeKey    = `${symbol}_scan_spike_count_4h`;
+  const emaKey = `${symbol}_scan_ema_slope`;
+  const spikeKey = `${symbol}_scan_spike_count_4h`;
   const trailActivationKey = `${symbol}_scan_trail_activation_pct`;
-  const trailDistanceKey   = `${symbol}_scan_trail_distance_pct`;
+  const trailDistanceKey = `${symbol}_scan_trail_distance_pct`;
   const trailMinHoldBarsKey = `${symbol}_scan_trail_min_hold_bars`;
-  const calibCadenceKey    = `${symbol}_scan_calibrated_interval_seconds`;
-  const emaVal      = String(features.emaSlope ?? 0);
-  const spikeVal    = String(features.spikeCount4h ?? 0);
-  const trailActivationVal = String(
-    Number(runtimeCalibration?.trailingModel?.["activationProfitPct"] ?? 0) || 0,
-  );
-  const trailDistanceVal = String(
-    Number(runtimeCalibration?.trailingModel?.["trailingDistancePct"] ?? 0) || 0,
-  );
-  const trailMinHoldBarsVal = String(
-    Number(runtimeCalibration?.trailingModel?.["minHoldMinutesBeforeTrail"] ?? 0) || 0,
-  );
-  const calibCadenceVal = String(
-    Number(runtimeCalibration?.recommendedScanIntervalSeconds ?? 0) || 0,
-  );
+  const calibCadenceKey = `${symbol}_scan_calibrated_interval_seconds`;
+  const emaVal = String(features.emaSlope ?? 0);
+  const spikeVal = String(features.spikeCount4h ?? 0);
+  const trailActivationVal = String(Number(runtimeCalibration.trailingModel?.["activationProfitPct"] ?? 0) || 0);
+  const trailDistanceVal = String(Number(runtimeCalibration.trailingModel?.["trailingDistancePct"] ?? 0) || 0);
+  const trailMinHoldBarsVal = String(Number(runtimeCalibration.trailingModel?.["minHoldMinutesBeforeTrail"] ?? 0) || 0);
+  const calibCadenceVal = String(Number(runtimeCalibration.recommendedScanIntervalSeconds ?? 0) || 0);
   Promise.all([
     db.insert(platformStateTable).values({ key: emaKey, value: emaVal })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: emaVal, updatedAt: new Date() } }),
@@ -233,389 +232,101 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: trailMinHoldBarsVal, updatedAt: new Date() } }),
     db.insert(platformStateTable).values({ key: calibCadenceKey, value: calibCadenceVal })
       .onConflictDoUpdate({ target: platformStateTable.key, set: { value: calibCadenceVal, updatedAt: new Date() } }),
-  ]).catch(() => {/* non-fatal */});
+  ]).catch(() => { /* non-fatal */ });
 
-  for (const mode of modesToProcess) {
-    const modePrefix = mode === "paper" ? "paper" : mode === "demo" ? "demo" : "real";
-
-    if (!isIntelOnly) {
-      const modeSymbolsRaw = stateMap[`${modePrefix}_enabled_symbols`] || stateMap["enabled_symbols"] || "";
-      const modeSymbols = modeSymbolsRaw ? modeSymbolsRaw.split(",").map((s: string) => s.trim()).filter(Boolean) : null;
-      if (modeSymbols && !modeSymbols.includes(symbol)) continue;
-    }
-
-    const effectiveMode: TradingMode = isIntelOnly ? "paper" : mode;
-
-    // ── Allocator decision ───────────────────────────────────────────────────
-    const modeCalibration = effectiveMode === "paper" ? runtimeCalibration : null;
-    const minCandidateAgeMs = useRuntimeCandidateLifecycle ? runtimeCandidateAgeMs(modeCalibration) : 0;
-    const minCandidateScans = useRuntimeCandidateLifecycle && modeCalibration ? 2 : 1;
-
-    const v3Decision = await allocateV3Signal(
-      coordinatorOutput,
-      effectiveMode,
-      stateMap,
-      modeCalibration,
-    );
-
-    // ── Extract engine-native score and component breakdown ─────────────────
-    const candidateScoringDims = (winner.metadata?.["componentScores"] as Record<string, number> | null) ?? null;
-    const signalScoringDimensions = (() => {
-      if (symbol === "CRASH300") {
-        const decision = winner.metadata?.["symbolServiceDecision"] as Record<string, unknown> | undefined;
-        const componentScores = winner.metadata?.["componentScores"] as Record<string, number> | undefined;
-        if (decision && typeof decision === "object") {
-          return {
-            ...(componentScores ?? {}),
-            selectedRuntimeFamily: decision["setupFamily"] ?? null,
-            selectedBucket: decision["moveBucket"] ?? null,
-            setupMatch: decision["setupMatch"] ?? null,
-            confidence: decision["confidence"] ?? null,
-            failReasons: decision["failReasons"] ?? [],
-            candidateProduced: decision["valid"] ?? false,
-            candidateDirection: decision["direction"] ?? null,
-            promotedModelRunId: winner.metadata?.["runtimeModelRunId"] ?? null,
-            generatedAt: (decision["evidence"] && typeof decision["evidence"] === "object")
-              ? (decision["evidence"] as Record<string, unknown>)["generatedAt"] ?? null
-              : null,
-            featureSnapshot: decision["featureSnapshot"] ?? null,
-          } as Record<string, unknown>;
-        }
-      }
-      return candidateScoringDims;
-    })();
-    const candidateNativeScore = (() => {
-      if (symbol === "CRASH300") {
-        const runtimeEvidenceScore = winner.metadata?.["crash300CalibratedRuntimeScore"];
-        if (runtimeEvidenceScore == null) {
-          throw new Error(
-            "CRASH300 runtime model missing/invalid. Cannot evaluate symbol service. crash300_runtime_evidence_score_missing",
-          );
-        }
-        return runtimeEvidenceScore as number;
-      }
-      return winner.metadata?.["boom300NativeScore"] != null ? (winner.metadata["boom300NativeScore"] as number)
-        : winner.metadata?.["r75ReversalNativeScore"] != null ? (winner.metadata["r75ReversalNativeScore"] as number)
-        : winner.metadata?.["r75ContinuationNativeScore"] != null ? (winner.metadata["r75ContinuationNativeScore"] as number)
-        : winner.metadata?.["r75BreakoutNativeScore"] != null ? (winner.metadata["r75BreakoutNativeScore"] as number)
-        : winner.metadata?.["r100ReversalNativeScore"] != null ? (winner.metadata["r100ReversalNativeScore"] as number)
-        : winner.metadata?.["r100BreakoutNativeScore"] != null ? (winner.metadata["r100BreakoutNativeScore"] as number)
-        : winner.metadata?.["r100ContinuationNativeScore"] != null ? (winner.metadata["r100ContinuationNativeScore"] as number)
-        : Math.round(coordinatorOutput.coordinatorConfidence * 100);
-    })();
-
-    const builtCandidate = buildSymbolTradeCandidate({
-      symbol,
-      mode: effectiveMode,
-      coordinatorOutput,
-      winner,
-      features,
-      spotPrice: features.latestClose,
-      runtimeCalibration: modeCalibration,
-    });
-    if (!builtCandidate) {
-      if (isIntelOnly) break;
-      continue;
-    }
-    const setupEvidence = builtCandidate.candidate.runtimeSetup;
-    const setupSignature = builtCandidate.setupSignature;
-
-    // Engine gate passed = the rejection is NOT score-based (score cleared engine gate but something else blocked)
-    const rejReason = v3Decision.rejectionReason ?? "";
-    const isScoreRejection = rejReason.includes("_score_below_mode_threshold") || rejReason.includes("confidence_below_threshold");
-    const engineGatePassed = v3Decision.allowed || !isScoreRejection;
-
-    if (!v3Decision.allowed) {
-      console.log(`[V3Scan] ${symbol} | ${effectiveMode} | engine=${winner.engineName} | BLOCKED | ${rejReason}`);
-
-      // ── Lifecycle update: only log on material state change ─────────────
-      if (useRuntimeCandidateLifecycle) {
-        const lcResult = updateCandidate({
-          symbol,
-          engineName: winner.engineName,
-          direction: coordinatorOutput.resolvedDirection,
-          nativeScore: candidateNativeScore,
-          breakdown: candidateScoringDims,
-          engineGatePassed,
-          allocatorAllowed: false,
-          rejectionReason: rejReason,
-          regime: operationalRegime,
-          regimeConfidence,
-          minTradeableAgeMs: minCandidateAgeMs,
-          minTradeableScans: minCandidateScans,
-          setupSignature,
-          setupEvidenceAllowed: setupEvidence.allowed,
-          setupEvidenceReason: setupEvidence.reason,
-          setupEvidenceScore: setupEvidence.evidenceScore,
-        });
-
-        if (lcResult.shouldLog) {
-          const lcStatus = lcResult.candidate.status;
-          console.log(`[V3Lifecycle] ${symbol} | ${winner.engineName} | ${coordinatorOutput.resolvedDirection} | ${lcResult.logReason} | status=${lcStatus} | score=${candidateNativeScore}`);
-          try {
-            await db.insert(signalLogTable).values({
-              symbol,
-              strategyName: winner.engineName,
-              strategyFamily: "v3_engine",
-              direction: coordinatorOutput.resolvedDirection,
-              legacyDiagnosticScore: coordinatorOutput.coordinatorConfidence,
-              runtimeEvidence: candidateNativeScore,
-              expectedValue: winner.projectedMovePct,
-              allowedFlag: false,
-              admissionReason: rejReason,
-              mode: effectiveMode,
-              aiVerdict: "skipped",
-              aiReasoning: `lifecycle:${lcResult.logReason} | lifecycle_state:${lcStatus}`,
-              regime: operationalRegime,
-              regimeConfidence,
-              executionStatus: "blocked",
-              runtimeEvidenceDimensions: signalScoringDimensions,
-            });
-            totalDecisionsLogged++;
-          } catch (logErr) {
-            console.error(`[V3Scan] Lifecycle log error:`, logErr instanceof Error ? logErr.message : logErr);
-          }
-        }
-      }
-
-      if (isIntelOnly) break;
-      continue;
-    }
-
-    if (!setupEvidence.allowed) {
-      const setupRejectReason = `runtime_setup_evidence:${setupEvidence.reason}`;
-      console.log(`[V3Scan] ${symbol} | ${effectiveMode} | engine=${winner.engineName} | MONITORING | ${setupRejectReason}`);
-
-      if (useRuntimeCandidateLifecycle) {
-        const lcResult = updateCandidate({
-          symbol,
-          engineName: winner.engineName,
-          direction: coordinatorOutput.resolvedDirection,
-          nativeScore: candidateNativeScore,
-          breakdown: candidateScoringDims,
-          engineGatePassed: true,
-          allocatorAllowed: false,
-          rejectionReason: setupRejectReason,
-          regime: operationalRegime,
-          regimeConfidence,
-          minTradeableAgeMs: minCandidateAgeMs,
-          minTradeableScans: minCandidateScans,
-          setupSignature,
-          setupEvidenceAllowed: false,
-          setupEvidenceReason: setupEvidence.reason,
-          setupEvidenceScore: setupEvidence.evidenceScore,
-        });
-
-        if (lcResult.shouldLog) {
-          try {
-            await db.insert(signalLogTable).values({
-              symbol,
-              strategyName: winner.engineName,
-              strategyFamily: "v3_engine",
-              direction: coordinatorOutput.resolvedDirection,
-              legacyDiagnosticScore: coordinatorOutput.coordinatorConfidence,
-              runtimeEvidence: candidateNativeScore,
-              expectedValue: winner.projectedMovePct,
-              allowedFlag: false,
-              admissionReason: setupRejectReason,
-              mode: effectiveMode,
-              aiVerdict: "skipped",
-              aiReasoning: `lifecycle:${lcResult.logReason || "setup_evidence"} | lifecycle_state:${lcResult.candidate.status} | setup:${setupSignature}`,
-              regime: operationalRegime,
-              regimeConfidence,
-              executionStatus: "blocked",
-              runtimeEvidenceDimensions: signalScoringDimensions,
-            });
-            totalDecisionsLogged++;
-          } catch (logErr) {
-            console.error(`[V3Scan] Runtime setup evidence log error:`, logErr instanceof Error ? logErr.message : logErr);
-          }
-        }
-      }
-
-      if (isIntelOnly) break;
-      continue;
-    }
-
-    // Allowed path — update lifecycle with allocatorAllowed=true
-    if (useRuntimeCandidateLifecycle) {
-      const allowedLifecycle = updateCandidate({
-        symbol,
-        engineName: winner.engineName,
-        direction: coordinatorOutput.resolvedDirection,
-        nativeScore: candidateNativeScore,
-        breakdown: candidateScoringDims,
-        engineGatePassed: true,
-        allocatorAllowed: true,
-        rejectionReason: null,
-        regime: operationalRegime,
-        regimeConfidence,
-        minTradeableAgeMs: minCandidateAgeMs,
-        minTradeableScans: minCandidateScans,
-        setupSignature,
-        setupEvidenceAllowed: true,
-        setupEvidenceReason: setupEvidence.reason,
-        setupEvidenceScore: setupEvidence.evidenceScore,
-      });
-
-      if (modeCalibration && allowedLifecycle.candidate.status !== "tradeable") {
-        const readyAt = allowedLifecycle.candidate.tradeableAfterAt?.toISOString() ?? "next_confirmation";
-        console.log(`[V3Lifecycle] ${symbol} | ${winner.engineName} | ${coordinatorOutput.resolvedDirection} | MONITORING | status=${allowedLifecycle.candidate.status} | score=${candidateNativeScore} | tradeableAfter=${readyAt}`);
-
-        if (allowedLifecycle.shouldLog) {
-          try {
-            await db.insert(signalLogTable).values({
-              symbol,
-              strategyName: winner.engineName,
-              strategyFamily: "v3_engine",
-              direction: coordinatorOutput.resolvedDirection,
-              legacyDiagnosticScore: coordinatorOutput.coordinatorConfidence,
-              runtimeEvidence: candidateNativeScore,
-              expectedValue: winner.projectedMovePct,
-              allowedFlag: false,
-              admissionReason: `runtime_candidate_window:${allowedLifecycle.candidate.status}`,
-              mode: effectiveMode,
-              aiVerdict: "skipped",
-              aiReasoning: `lifecycle:${allowedLifecycle.logReason || "monitoring"} | lifecycle_state:${allowedLifecycle.candidate.status} | tradeable_after:${readyAt}`,
-              regime: operationalRegime,
-              regimeConfidence,
-              executionStatus: "blocked",
-              runtimeEvidenceDimensions: signalScoringDimensions,
-            });
-            totalDecisionsLogged++;
-          } catch (logErr) {
-            console.error(`[V3Scan] Runtime candidate lifecycle log error:`, logErr instanceof Error ? logErr.message : logErr);
-          }
-        }
-        if (isIntelOnly) break;
-        continue;
-      }
-    }
-
-    // ── Optional AI verification ─────────────────────────────────────────────
-    let aiVerdict: string | undefined;
-    let aiBlocked = false;
-
-    if (aiEnabled && !isIntelOnly) {
-      try {
-        const recentTrades = await db.select().from(tradesTable)
-          .where(eq(tradesTable.symbol, symbol))
-          .orderBy(desc(tradesTable.entryTs))
-          .limit(5);
-        const recentWinLoss = recentTrades.length > 0
-          ? recentTrades.map(t => `${t.side} ${t.status} PnL:${(t.pnl ?? 0).toFixed(2)}`).join("; ")
-          : "No recent trades";
-
-        const last5Candles = await db.select().from(candlesTable)
-          .where(and(eq(candlesTable.symbol, symbol), eq(candlesTable.timeframe, "1m")))
-          .orderBy(desc(candlesTable.openTs))
-          .limit(5);
-        const candleDescriptions = last5Candles.length > 0
-          ? last5Candles.map((c, i) => `[${i + 1}] O:${c.open.toFixed(2)} H:${c.high.toFixed(2)} L:${c.low.toFixed(2)} C:${c.close.toFixed(2)}`).join("; ")
-          : "No recent candles";
-
-        const verdict = await verifySignal({
-          symbol,
-          direction: coordinatorOutput.resolvedDirection,
-          mode: effectiveMode,
-          confidence: coordinatorOutput.coordinatorConfidence,
-          score: coordinatorOutput.coordinatorConfidence,
-          strategyName: winner.engineName,
-          strategyFamily: "v3_engine",
-          reason: winner.reason,
-          rsi14: features.rsi14 ?? 50,
-          atr14: features.atr14 ?? 0.01,
-          ema20: features.latestClose,
-          bbWidth: features.bbWidth ?? 0,
-          zScore: features.zScore ?? 0,
-          recentCandles: candleDescriptions,
-          recentWinLoss,
-          regimeState: operationalRegime,
-          regimeConfidence,
-          instrumentFamily: symbol.startsWith("BOOM") ? "boom_crash" : symbol.startsWith("CRASH") ? "boom_crash" : "volatility",
-          macroBiasModifier: 0,
-          compositeScore: Math.round(coordinatorOutput.coordinatorConfidence * 100),
-          expectedValue: winner.projectedMovePct,
-          latestClose: features.latestClose,
-        });
-
-        if (verdict) {
-          aiVerdict = verdict.verdict;
-          if (verdict.verdict === "disagree") {
-            aiBlocked = true;
-            console.log(`[V3Scan] ${symbol} | ${effectiveMode} | AI DISAGREE | ${verdict.reasoning}`);
-          } else if (verdict.verdict === "uncertain") {
-            v3Decision.capitalAmount = v3Decision.capitalAmount * 0.5;
-            console.log(`[V3Scan] ${symbol} | ${effectiveMode} | AI UNCERTAIN | size halved to $${v3Decision.capitalAmount.toFixed(2)}`);
-          }
-        }
-      } catch (err) {
-        console.error(`[V3Scan] AI verification error for ${symbol}:`, err instanceof Error ? err.message : err);
-        aiBlocked = true;
-      }
-    }
-
-    if (isIntelOnly) {
-      console.log(`[V3Scan] ${symbol} | intel-only | engine=${winner.engineName} | dir=${coordinatorOutput.resolvedDirection} | alloc=$${v3Decision.capitalAmount.toFixed(2)} | INTELLIGENCE_ONLY`);
-      break;
-    }
-
-    if (aiBlocked) {
-      if (isIntelOnly) break;
-      continue;
-    }
-
-    // ── Log execution to signal_log (uses candidateNativeScore/candidateScoringDims) ──
-    try {
-      await db.insert(signalLogTable).values({
-        symbol,
-        strategyName: winner.engineName,
-        strategyFamily: "v3_engine",
-        direction: coordinatorOutput.resolvedDirection,
-        legacyDiagnosticScore: coordinatorOutput.coordinatorConfidence,
-        runtimeEvidence: candidateNativeScore,
-        expectedValue: winner.projectedMovePct,
-        allowedFlag: true,
-        allocationPct: v3Decision.capitalAllocationPct,
-        mode: effectiveMode,
-        aiVerdict: aiVerdict ?? "skipped",
-        aiReasoning: aiVerdict ? `AI: ${aiVerdict}` : "AI check skipped",
-        regime: operationalRegime,
-        regimeConfidence,
-        executionStatus: "executed",
-        runtimeEvidenceDimensions: signalScoringDimensions,
-      });
-      totalDecisionsLogged++;
-    } catch (logErr) {
-      console.error(`[V3Scan] Signal log error:`, logErr instanceof Error ? logErr.message : logErr);
-    }
-
-    // ── Open position ────────────────────────────────────────────────────────
-    const tradeId = await openPositionV3({
-      symbol,
-      engineName: winner.engineName,
-      direction: coordinatorOutput.resolvedDirection,
-      confidence: coordinatorOutput.coordinatorConfidence,
-      capitalAmount: v3Decision.capitalAmount,
-      features,
-      mode: effectiveMode,
-      runtimeCalibration: modeCalibration,
-      exitPolicy: builtCandidate.candidate.exitPolicy,
-    });
-
-    if (tradeId && useRuntimeCandidateLifecycle) {
-      markCandidateExecuted(
-        symbol,
-        winner.engineName,
-        coordinatorOutput.resolvedDirection,
-        setupSignature,
-        runtimeCandidateCooldownMs(modeCalibration),
-      );
-      console.log(`[V3Exec] ${symbol} | ${effectiveMode} | ${coordinatorOutput.resolvedDirection} | engine=${winner.engineName} | alloc=$${v3Decision.capitalAmount.toFixed(2)} | tradeId=${tradeId} | EXECUTED`);
-    }
-
-    if (isIntelOnly) break;
+  const builtCandidate = buildSymbolTradeCandidate({
+    symbol,
+    mode: activeMode,
+    coordinatorOutput,
+    winner,
+    features,
+    spotPrice: features.latestClose,
+    runtimeCalibration,
+  });
+  if (!builtCandidate) {
+    console.log(`[V3Scan] ${symbol} | NO_SERVICE_CANDIDATE | reason=candidate_builder_returned_null`);
+    return;
   }
+
+  if (!builtCandidate.candidate.runtimeSetup.allowed) {
+    console.log(
+      `[V3Scan] ${symbol} | CANDIDATE_BLOCKED | reason=runtime_setup:${builtCandidate.candidate.runtimeSetup.reason}`,
+    );
+    return;
+  }
+
+  const lifecyclePlanId = `${serviceId.toLowerCase()}-lifecycle-${runtimeArtifact.artifactId}`;
+  const candidateId = await createServiceCandidateRecord({
+    serviceId,
+    symbol,
+    mode: activeMode,
+    gate,
+    runtimeArtifact,
+    coordinatorOutput,
+    builtCandidate,
+    sourcePolicyId: runtimeArtifact.sourcePolicyId ?? null,
+    sourceSynthesisJobId: runtimeArtifact.sourceSynthesisJobId ?? null,
+    lifecyclePlanId,
+  });
+
+  console.log(`[V3Scan] ${symbol} | SERVICE_CANDIDATE_EMITTED | candidateId=${candidateId}`);
+
+  const allocatorDecision = await allocateV3Signal(
+    coordinatorOutput,
+    activeMode,
+    stateMap,
+    runtimeCalibration,
+  );
+  const decisionId = await createAllocatorDecisionRecord({
+    candidateId,
+    serviceId,
+    symbol,
+    mode: activeMode,
+    allocationDecision: allocatorDecision,
+    builtCandidate,
+    lifecyclePlanId,
+  });
+  totalDecisionsLogged++;
+
+  if (!allocatorDecision.allowed) {
+    console.log(
+      `[V3Scan] ${symbol} | ALLOCATOR_REJECTED | candidateId=${candidateId} | decisionId=${decisionId} | reason=${allocatorDecision.rejectionReason ?? "unknown"}`,
+    );
+    return;
+  }
+
+  const tradeId = await openPositionV3({
+    symbol,
+    engineName: `${serviceId} Service Runtime`,
+    direction: coordinatorOutput.resolvedDirection,
+    confidence: coordinatorOutput.coordinatorConfidence,
+    capitalAmount: allocatorDecision.capitalAmount,
+    features,
+    mode: activeMode,
+    runtimeCalibration,
+    exitPolicy: builtCandidate.candidate.exitPolicy,
+    serviceId,
+    serviceCandidateId: candidateId,
+    allocatorDecisionId: decisionId,
+    runtimeArtifactId: runtimeArtifact.artifactId,
+    lifecyclePlanId,
+    sourcePolicyId: runtimeArtifact.sourcePolicyId ?? null,
+    attributionPath: "v3_service_runtime_allocator_execution",
+  });
+
+  if (!tradeId) {
+    throw new Error(`Allocator-approved trade did not open for ${symbol} (candidateId=${candidateId}, decisionId=${decisionId})`);
+  }
+
+  await attachTradeToExecutionRecords({
+    tradeId,
+    candidateId,
+    decisionId,
+  });
+
+  console.log(
+    `[V3Exec] ${symbol} | ${activeMode} | service=${serviceId} | candidateId=${candidateId} | decisionId=${decisionId} | tradeId=${tradeId} | alloc=$${allocatorDecision.capitalAmount.toFixed(2)} | EXECUTED`,
+  );
 }
 
 async function scheduleStaggeredScan(symbols: string[], staggerMs: number): Promise<void> {
@@ -1114,3 +825,4 @@ export function stopScheduler(): void {
     staggerTimerHandle = null;
   }
 }
+

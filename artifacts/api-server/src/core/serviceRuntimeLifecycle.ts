@@ -4,9 +4,6 @@ import { getActiveModes } from "../infrastructure/deriv.js";
 import { getLatestSymbolResearchProfile } from "./calibration/symbolResearchProfile.js";
 import {
   getPromotedSymbolRuntimeModel,
-  getStagedSymbolRuntimeModel,
-  stageSymbolRuntimeModel,
-  promoteStagedSymbolRuntimeModel,
   type PromotedSymbolRuntimeModel,
 } from "./calibration/promotedSymbolModel.js";
 import { listEliteSynthesisJobs } from "./synthesis/jobs.js";
@@ -281,10 +278,6 @@ export async function writePromotedServiceRuntimeArtifact(artifact: ServicePromo
 
 export async function promoteCandidateArtifactToServiceRuntime(serviceId: string, artifact: Record<string, unknown>): Promise<ServicePromotedRuntimeArtifact> {
   const adapter = serviceId === "CRASH300" ? buildCrash300RuntimeAdapter(artifact, serviceId) : null;
-  if (adapter) {
-    await stageSymbolRuntimeModel(adapter);
-    await promoteStagedSymbolRuntimeModel(serviceId);
-  }
 
   const selectedPolicy = asRecord(artifact.selectedPolicy);
   const readiness = asRecord(artifact.policyArtifactReadiness);
@@ -367,7 +360,7 @@ export async function promoteCandidateArtifactToServiceRuntime(serviceId: string
 
 export async function buildServiceLifecycleStatus(serviceId: string): Promise<ServiceLifecycleStatus> {
   const upperServiceId = serviceId.toUpperCase();
-  const [stateRows, latestCandleRows, researchProfile, stagedModel, promotedModel, promotedRuntimeArtifact, synthesisJobs, stagedCandidateState] = await Promise.all([
+  const [stateRows, latestCandleRows, researchProfile, promotedModel, promotedRuntimeArtifact, synthesisJobs, stagedCandidateState] = await Promise.all([
     db.select().from(platformStateTable),
     db.select({ closeTs: candlesTable.closeTs })
       .from(candlesTable)
@@ -375,7 +368,6 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
       .orderBy(desc(candlesTable.closeTs))
       .limit(1),
     getLatestSymbolResearchProfile(upperServiceId).catch(() => null),
-    getStagedSymbolRuntimeModel(upperServiceId).catch(() => null),
     getPromotedSymbolRuntimeModel(upperServiceId).catch(() => null),
     readPromotedServiceRuntimeArtifact(upperServiceId).catch(() => null),
     listEliteSynthesisJobs(upperServiceId, 20).catch(() => [] as Awaited<ReturnType<typeof listEliteSynthesisJobs>>),
@@ -425,6 +417,7 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
   if (!synthesisJob?.resultArtifact) blockers.push("Elite synthesis complete step not captured yet.");
   if (!stagedCandidateArtifact) blockers.push("No staged candidate artifact yet.");
   if (!promotedRuntimeArtifact) blockers.push("No promoted service runtime yet.");
+  if (promotedModel && !promotedRuntimeArtifact) warnings.push("Legacy promoted symbol model present without executable V3.1 service runtime.");
   if (streamState !== "active") blockers.push("Symbol stream inactive.");
   if (stagedCandidateState && !stagedCandidateArtifact) {
     warnings.push("Staged synthesis candidate reference exists, but its historical artifact could not be resolved.");

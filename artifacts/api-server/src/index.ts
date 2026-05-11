@@ -133,6 +133,13 @@ async function initDb(): Promise<void> {
       id                SERIAL PRIMARY KEY,
       broker_trade_id   TEXT,
       symbol            TEXT NOT NULL,
+      service_id        TEXT,
+      service_candidate_id TEXT,
+      allocator_decision_id TEXT,
+      runtime_artifact_id TEXT,
+      lifecycle_plan_id TEXT,
+      source_policy_id  TEXT,
+      attribution_path  TEXT,
       strategy_name     TEXT NOT NULL,
       side              TEXT NOT NULL,
       entry_ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -155,6 +162,83 @@ async function initDb(): Promise<void> {
       created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_trades_status ON trades (status);
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS service_id TEXT;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS service_candidate_id TEXT;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS allocator_decision_id TEXT;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS runtime_artifact_id TEXT;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS lifecycle_plan_id TEXT;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS source_policy_id TEXT;
+    ALTER TABLE trades ADD COLUMN IF NOT EXISTS attribution_path TEXT;
+
+    CREATE TABLE IF NOT EXISTS service_candidates (
+      id SERIAL PRIMARY KEY,
+      candidate_id TEXT NOT NULL UNIQUE,
+      service_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      active_mode TEXT NOT NULL,
+      runtime_artifact_id TEXT,
+      source_policy_id TEXT,
+      source_synthesis_job_id INTEGER,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      candle_ts TIMESTAMPTZ,
+      direction TEXT NOT NULL,
+      runtime_family TEXT,
+      trigger_transition TEXT,
+      predicted_move_size_bucket TEXT,
+      expected_move_pct DOUBLE PRECISION,
+      confidence DOUBLE PRECISION,
+      setup_match DOUBLE PRECISION,
+      trigger_strength_score DOUBLE PRECISION,
+      win_rate_estimate DOUBLE PRECISION,
+      sl_hit_rate_estimate DOUBLE PRECISION,
+      profit_factor_estimate DOUBLE PRECISION,
+      expected_monthly_contribution_pct DOUBLE PRECISION,
+      tp1_pct DOUBLE PRECISION,
+      tp2_pct DOUBLE PRECISION,
+      hard_sl_pct DOUBLE PRECISION,
+      lifecycle_plan_id TEXT,
+      requested_allocation_pct DOUBLE PRECISION,
+      requested_leverage DOUBLE PRECISION,
+      live_safe_features JSONB,
+      warnings JSONB,
+      blockers JSONB,
+      emission_gate JSONB,
+      execution_status TEXT NOT NULL DEFAULT 'emitted',
+      opened_trade_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_service_candidates_service_generated_at ON service_candidates (service_id, generated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_service_candidates_symbol_generated_at ON service_candidates (symbol, generated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS allocator_decisions (
+      id SERIAL PRIMARY KEY,
+      decision_id TEXT NOT NULL UNIQUE,
+      candidate_id TEXT NOT NULL,
+      service_id TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      approved BOOLEAN NOT NULL DEFAULT FALSE,
+      rejection_reason TEXT,
+      requested_allocation_pct DOUBLE PRECISION,
+      approved_allocation_pct DOUBLE PRECISION,
+      approved_capital_amount DOUBLE PRECISION,
+      requested_leverage DOUBLE PRECISION,
+      approved_leverage DOUBLE PRECISION,
+      final_tp1_pct DOUBLE PRECISION,
+      final_tp2_pct DOUBLE PRECISION,
+      final_hard_sl_pct DOUBLE PRECISION,
+      lifecycle_plan_id TEXT,
+      execution_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+      active_mode TEXT NOT NULL,
+      portfolio_exposure_before DOUBLE PRECISION,
+      portfolio_exposure_after DOUBLE PRECISION,
+      warnings JSONB,
+      opened_trade_id INTEGER,
+      trade_id INTEGER,
+      decided_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_allocator_decisions_service_decided_at ON allocator_decisions (service_id, decided_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_allocator_decisions_candidate_id ON allocator_decisions (candidate_id);
 
     CREATE TABLE IF NOT EXISTS signal_log (
       id                 SERIAL PRIMARY KEY,

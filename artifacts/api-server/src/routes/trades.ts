@@ -1,8 +1,66 @@
 import { Router, type IRouter } from "express";
 import { and, desc, eq } from "drizzle-orm";
-import { db, tradesTable, platformStateTable, signalLogTable } from "@workspace/db";
+import {
+  allocatorDecisionsTable,
+  db,
+  platformStateTable,
+  serviceCandidatesTable,
+  signalLogTable,
+  tradesTable,
+} from "@workspace/db";
+import { listAllocatorExecutionFeed } from "../core/serviceExecutionRecords.js";
 
 const router: IRouter = Router();
+
+type TradeRecord = typeof tradesTable.$inferSelect;
+
+function deriveTradeAttribution(
+  trade: TradeRecord,
+): "v3_service_allocator_path" | "legacy_pre_v3_1_allocator_path" {
+  return trade.serviceId
+    && trade.serviceCandidateId
+    && trade.allocatorDecisionId
+    && trade.runtimeArtifactId
+    && trade.lifecyclePlanId
+    ? "v3_service_allocator_path"
+    : "legacy_pre_v3_1_allocator_path";
+}
+
+function serializeTrade(r: TradeRecord) {
+  const attribution = deriveTradeAttribution(r);
+  return {
+    id: r.id,
+    brokerTradeId: r.brokerTradeId,
+    symbol: r.symbol,
+    serviceId: r.serviceId,
+    serviceCandidateId: r.serviceCandidateId,
+    allocatorDecisionId: r.allocatorDecisionId,
+    runtimeArtifactId: r.runtimeArtifactId,
+    lifecyclePlanId: r.lifecyclePlanId,
+    sourcePolicyId: r.sourcePolicyId,
+    attributionPath: r.attributionPath,
+    attribution,
+    strategyName: r.strategyName,
+    side: r.side,
+    entryTs: r.entryTs.toISOString(),
+    exitTs: r.exitTs?.toISOString() ?? null,
+    entryPrice: r.entryPrice,
+    exitPrice: r.exitPrice,
+    sl: r.sl,
+    tp: r.tp,
+    size: r.size,
+    pnl: r.pnl,
+    status: r.status,
+    mode: r.mode,
+    notes: r.notes,
+    confidence: r.confidence,
+    trailingStopPct: r.trailingStopPct,
+    peakPrice: r.peakPrice,
+    maxExitTs: r.maxExitTs?.toISOString() ?? null,
+    exitReason: r.exitReason,
+    currentPrice: r.currentPrice,
+  };
+}
 
 router.post("/trade/mode/toggle", async (req, res): Promise<void> => {
   const { mode, active, confirmed } = req.body ?? {};
@@ -33,7 +91,7 @@ router.post("/trade/mode/toggle", async (req, res): Promise<void> => {
     if ((!tokenRow.length || !tokenRow[0].value) && (!legacyTokenRow.length || !legacyTokenRow[0].value)) {
       res.status(403).json({
         success: false,
-        message: `${mode === "demo" ? "Demo" : "Real"} trading requires a Deriv API token. Set it in Settings → API Keys first.`,
+        message: `${mode === "demo" ? "Demo" : "Real"} trading requires a Deriv API token. Set it in Settings -> API Keys first.`,
       });
       return;
     }
@@ -87,7 +145,7 @@ router.post("/trade/live/start", async (req, res): Promise<void> => {
   const tokenRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token")).limit(1);
   const demoTokenRow = await db.select().from(platformStateTable).where(eq(platformStateTable.key, "deriv_api_token_demo")).limit(1);
   if ((!tokenRow.length || !tokenRow[0].value) && (!demoTokenRow.length || !demoTokenRow[0].value)) {
-    res.status(403).json({ success: false, message: "Live trading requires a Deriv API token. Set it in Settings → API Keys first." });
+    res.status(403).json({ success: false, message: "Live trading requires a Deriv API token. Set it in Settings -> API Keys first." });
     return;
   }
   await db.insert(platformStateTable).values({ key: "demo_mode_active", value: "true" })
@@ -107,33 +165,6 @@ router.post("/trade/stop", async (_req, res): Promise<void> => {
   res.json({ success: true, message: "Trading stopped. All new signals will be rejected." });
 });
 
-function serializeTrade(r: typeof tradesTable.$inferSelect) {
-  return {
-    id: r.id,
-    brokerTradeId: r.brokerTradeId,
-    symbol: r.symbol,
-    strategyName: r.strategyName,
-    side: r.side,
-    entryTs: r.entryTs.toISOString(),
-    exitTs: r.exitTs?.toISOString() ?? null,
-    entryPrice: r.entryPrice,
-    exitPrice: r.exitPrice,
-    sl: r.sl,
-    tp: r.tp,
-    size: r.size,
-    pnl: r.pnl,
-    status: r.status,
-    mode: r.mode,
-    notes: r.notes,
-    confidence: r.confidence,
-    trailingStopPct: r.trailingStopPct,
-    peakPrice: r.peakPrice,
-    maxExitTs: r.maxExitTs?.toISOString() ?? null,
-    exitReason: r.exitReason,
-    currentPrice: r.currentPrice,
-  };
-}
-
 router.get("/trade/open", async (_req, res): Promise<void> => {
   const rows = await db.select().from(tradesTable)
     .where(eq(tradesTable.status, "open"))
@@ -148,20 +179,28 @@ router.get("/trade/positions", async (_req, res): Promise<void> => {
 
   const now = new Date();
 
-  const positions = rows.map(r => {
+  const positions = rows.map((r) => {
     const currentPrice = r.currentPrice ?? r.entryPrice;
     const direction = r.side as "buy" | "sell";
     const floatingPnlPct = direction === "buy"
       ? (currentPrice - r.entryPrice) / r.entryPrice
       : (r.entryPrice - currentPrice) / r.entryPrice;
     const floatingPnl = floatingPnlPct * r.size;
-
     const maxExitTs = r.maxExitTs ?? new Date(r.entryTs.getTime() + 120 * 60 * 60 * 1000);
     const hoursRemaining = Math.max(0, (maxExitTs.getTime() - now.getTime()) / (1000 * 60 * 60));
+    const attribution = deriveTradeAttribution(r);
 
     return {
       id: r.id,
       symbol: r.symbol,
+      serviceId: r.serviceId,
+      serviceCandidateId: r.serviceCandidateId,
+      allocatorDecisionId: r.allocatorDecisionId,
+      runtimeArtifactId: r.runtimeArtifactId,
+      lifecyclePlanId: r.lifecyclePlanId,
+      sourcePolicyId: r.sourcePolicyId,
+      attributionPath: r.attributionPath,
+      attribution,
       strategyName: r.strategyName,
       side: r.side,
       entryTs: r.entryTs.toISOString(),
@@ -198,9 +237,21 @@ router.get("/trade/history", async (req, res): Promise<void> => {
   res.json(rows.map(serializeTrade));
 });
 
+router.get("/trade/allocator-feed", async (req, res): Promise<void> => {
+  const limit = Math.min(Math.max(Number(req.query.limit || 100), 1), 500);
+  const feed = await listAllocatorExecutionFeed(limit);
+  res.json(feed.map((entry) => ({
+    decision: entry.decision,
+    candidate: entry.candidate,
+    trade: entry.trade ? serializeTrade(entry.trade) : null,
+  })));
+});
+
 router.post("/trade/paper/reset", async (_req, res): Promise<void> => {
   try {
     await db.delete(tradesTable).where(eq(tradesTable.mode, "paper"));
+    await db.delete(allocatorDecisionsTable).where(eq(allocatorDecisionsTable.activeMode, "paper"));
+    await db.delete(serviceCandidatesTable).where(eq(serviceCandidatesTable.activeMode, "paper"));
     await db.delete(signalLogTable).where(eq(signalLogTable.mode, "paper"));
 
     await db.insert(platformStateTable).values({ key: "paper_capital", value: "600" })
@@ -214,9 +265,11 @@ router.post("/trade/paper/reset", async (_req, res): Promise<void> => {
 
     res.json({
       success: true,
-      message: "Paper trading reset complete. Trades and engine decisions cleared, paper capital reset to 600 USD.",
+      message: "Paper trading reset complete. Trades, allocator decisions, and service candidates cleared. Paper capital reset to 600 USD.",
       reset: {
         clearedTradesMode: "paper",
+        clearedAllocatorDecisionMode: "paper",
+        clearedServiceCandidateMode: "paper",
         clearedSignalLogMode: "paper",
         paperCapital: 600,
       },

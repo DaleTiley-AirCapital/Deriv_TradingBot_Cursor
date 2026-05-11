@@ -204,12 +204,15 @@ function windowLabel(days: number): string {
   return RESEARCH_WINDOWS.find(w => w.days === days)?.label ?? `${days} days`;
 }
 
+function normalizeTargetProfile(profile: string | null | undefined): string {
+  if (profile === "return_amplification") return "return_first";
+  return profile ?? "default";
+}
+
 function targetProfileLabel(profile: string | null | undefined): string {
-  switch (profile) {
+  switch (normalizeTargetProfile(profile)) {
     case "return_first":
-      return "return-first";
-    case "return_amplification":
-      return "return amplification";
+      return "return-first / profit amplification";
     case "default":
       return "default";
     default:
@@ -6174,6 +6177,11 @@ function ReportsTab({
       </button>
       {selectedOption.runType === "synthesis" && synthesisReportResult && (
         <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-3 text-[11px]">
+          {String(selectedSynthesisJobMeta?.targetProfile ?? "") === "return_amplification" && (
+            <div className="rounded-md border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-amber-200">
+              Historical target profile `return_amplification` is normalized to `return_first` in V3.1.
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
             <div>
               <p className="text-muted-foreground uppercase tracking-wide">Selected job</p>
@@ -6185,6 +6193,9 @@ function ReportsTab({
               <p className="text-muted-foreground uppercase tracking-wide">Profile / target</p>
               <p className="mt-1 text-foreground">
                 {searchProfileLabel(String(selectedSynthesisJobMeta?.searchProfile ?? ""))} / {targetProfileLabel(String(selectedSynthesisJobMeta?.targetProfile ?? ""))}
+              </p>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                raw: {String(selectedSynthesisJobMeta?.targetProfile ?? "default")} - normalized: {normalizeTargetProfile(String(selectedSynthesisJobMeta?.targetProfile ?? "default"))}
               </p>
             </div>
             <div>
@@ -6398,7 +6409,6 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
           >
             <option value="default">Default target profile</option>
             <option value="return_first">Return-first / profit amplification</option>
-            <option value="return_amplification">Return amplification target (legacy alias)</option>
           </select>
           <button
             type="button"
@@ -7047,7 +7057,7 @@ export default function Research() {
           >
             {serviceSelectorOptions.map((option) => (
               <option key={option.symbol} value={option.symbol}>
-                {option.symbol} — {option.label}
+                {option.symbol} - {option.label}
               </option>
             ))}
           </select>

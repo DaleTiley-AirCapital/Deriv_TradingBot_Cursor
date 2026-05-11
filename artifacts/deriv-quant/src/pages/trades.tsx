@@ -1,17 +1,32 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowUpRight, ArrowDownRight, Clock, BarChart2, Target, Shield,
-  TrendingUp, TrendingDown, Activity, CircleSlash, ChevronDown, ChevronUp,
-  Zap, Timer, AlertTriangle, RotateCcw, Loader2,
+  Activity,
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
+  BarChart2,
+  ChevronDown,
+  ChevronUp,
+  CircleSlash,
+  Clock,
+  Loader2,
+  RotateCcw,
+  Shield,
+  Target,
+  Timer,
+  TrendingDown,
+  TrendingUp,
+  Zap,
 } from "lucide-react";
 import { ACTIVE_SERVICE_SYMBOLS, getSymbolLabel } from "@/lib/symbolCatalog";
 
 const BASE = import.meta.env.BASE_URL || "/";
+
 function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
-  return fetch(`${BASE}${path.replace(/^\//, "")}`, opts).then(async r => {
-    if (!r.ok) throw new Error(`${r.status}`);
-    return r.json();
+  return fetch(`${BASE}${path.replace(/^\//, "")}`, opts).then(async (response) => {
+    if (!response.ok) throw new Error(`${response.status}`);
+    return response.json();
   });
 }
 
@@ -19,11 +34,17 @@ function cn(...classes: (string | undefined | false)[]) {
   return classes.filter(Boolean).join(" ");
 }
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
 interface OpenPosition {
   id: number;
   symbol: string;
+  serviceId: string | null;
+  serviceCandidateId: string | null;
+  allocatorDecisionId: string | null;
+  runtimeArtifactId: string | null;
+  lifecyclePlanId: string | null;
+  sourcePolicyId: string | null;
+  attributionPath: string | null;
+  attribution: "v3_service_allocator_path" | "legacy_pre_v3_1_allocator_path";
   strategyName: string;
   side: string;
   entryTs: string;
@@ -44,6 +65,14 @@ interface OpenPosition {
 interface ClosedTrade {
   id: number;
   symbol: string;
+  serviceId: string | null;
+  serviceCandidateId: string | null;
+  allocatorDecisionId: string | null;
+  runtimeArtifactId: string | null;
+  lifecyclePlanId: string | null;
+  sourcePolicyId: string | null;
+  attributionPath: string | null;
+  attribution: "v3_service_allocator_path" | "legacy_pre_v3_1_allocator_path";
   strategyName: string;
   side: string;
   entryTs: string;
@@ -61,22 +90,34 @@ interface ClosedTrade {
   exitReason: string | null;
   trailingStopPct: number | null;
   peakPrice: number | null;
-  maxExitTs: string | null;
-  currentPrice: number | null;
 }
 
 interface OverviewMode {
   mode: string;
-  paperModeActive: boolean;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+type TradeProvenance = {
+  serviceId: string | null;
+  serviceCandidateId: string | null;
+  allocatorDecisionId: string | null;
+  runtimeArtifactId: string | null;
+  lifecyclePlanId: string | null;
+  sourcePolicyId: string | null;
+  attributionPath: string | null;
+  attribution: "v3_service_allocator_path" | "legacy_pre_v3_1_allocator_path";
+};
+
+function isLegacyAttribution(value: string | null | undefined) {
+  return value === "legacy_pre_v3_1_allocator_path";
+}
 
 function formatTs(ts: string | null | undefined) {
-  if (!ts) return "—";
+  if (!ts) return "-";
   return new Date(ts).toLocaleString(undefined, {
-    month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
@@ -85,67 +126,57 @@ function formatHoldTime(entryTs: string, exitTs?: string | null) {
   const to = exitTs ? new Date(exitTs).getTime() : Date.now();
   const diff = to - from;
   const hrs = Math.floor(diff / 3_600_000);
-  if (hrs < 1) return `${Math.floor(diff / 60000)}m`;
+  if (hrs < 1) return `${Math.floor(diff / 60_000)}m`;
   if (hrs < 24) return `${hrs}h`;
   return `${Math.floor(hrs / 24)}d ${hrs % 24}h`;
 }
 
-function formatPnl(pnl: number | null | undefined) {
-  if (pnl == null) return { text: "—", cls: "text-muted-foreground/50" };
-  const pos = pnl >= 0;
+function formatPnl(value: number | null | undefined) {
+  if (value == null) return { text: "-", cls: "text-muted-foreground/50" };
+  const positive = value >= 0;
   return {
-    text: `${pos ? "+" : ""}$${Math.abs(pnl).toFixed(2)}`,
-    cls: pos ? "text-green-400 font-semibold" : "text-red-400 font-semibold",
+    text: `${positive ? "+" : ""}$${Math.abs(value).toFixed(2)}`,
+    cls: positive ? "text-green-400 font-semibold" : "text-red-400 font-semibold",
   };
 }
 
 function exitReasonLabel(reason: string | null | undefined): { text: string; cls: string } {
-  if (!reason) return { text: "—", cls: "text-muted-foreground" };
-  const r = reason.toLowerCase();
-  if (r.includes("tp") || r.includes("take_profit") || r.includes("take profit"))
-    return { text: "TP hit", cls: "text-green-400" };
-  if (r.includes("sl") || r.includes("stop_loss") || r.includes("stop loss"))
-    return { text: "SL hit", cls: "text-red-400" };
-  if (r.includes("trailing"))
-    return { text: "Trailing stop", cls: "text-amber-400" };
-  if (r.includes("timeout") || r.includes("max_time"))
-    return { text: "Timeout", cls: "text-muted-foreground" };
-  if (r.includes("manual"))
-    return { text: "Manual close", cls: "text-muted-foreground" };
+  if (!reason) return { text: "-", cls: "text-muted-foreground" };
+  const value = reason.toLowerCase();
+  if (value.includes("tp")) return { text: "TP hit", cls: "text-green-400" };
+  if (value.includes("sl") || value.includes("stop")) return { text: "SL hit", cls: "text-red-400" };
+  if (value.includes("trail")) return { text: "Trailing exit", cls: "text-amber-400" };
+  if (value.includes("timeout") || value.includes("time")) return { text: "Time exit", cls: "text-muted-foreground" };
   return { text: reason.replace(/_/g, " "), cls: "text-muted-foreground" };
 }
 
-// ── Chips & Micro Components ─────────────────────────────────────────────────
-
 function SideChip({ side }: { side: string }) {
-  const up = side?.toUpperCase();
+  const upper = side.toUpperCase();
   return (
-    <span className={cn("inline-flex items-center gap-0.5 text-xs font-bold uppercase",
-      up === "BUY" ? "text-green-400" : "text-red-400")}>
-      {up === "BUY"
-        ? <ArrowUpRight className="w-3.5 h-3.5" />
-        : <ArrowDownRight className="w-3.5 h-3.5" />}
-      {up}
+    <span className={cn("inline-flex items-center gap-0.5 text-xs font-bold uppercase", upper === "BUY" ? "text-green-400" : "text-red-400")}>
+      {upper === "BUY" ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
+      {upper}
     </span>
   );
 }
 
 function ModeChip({ mode }: { mode: string }) {
-  const m = mode?.toUpperCase();
-  const cls = m === "PAPER" ? "bg-amber-500/10 text-amber-400 border-amber-500/25"
-    : m === "DEMO" ? "bg-blue-500/10 text-blue-400 border-blue-500/25"
-    : m === "REAL" ? "bg-green-500/10 text-green-400 border-green-500/25"
-    : "bg-muted/30 text-muted-foreground border-border/40";
-  return (
-    <span className={cn("inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border", cls)}>{m}</span>
-  );
+  const upper = mode.toUpperCase();
+  const cls = upper === "PAPER"
+    ? "bg-amber-500/10 text-amber-400 border-amber-500/25"
+    : upper === "DEMO"
+      ? "bg-blue-500/10 text-blue-400 border-blue-500/25"
+      : upper === "REAL"
+        ? "bg-green-500/10 text-green-400 border-green-500/25"
+        : "bg-muted/30 text-muted-foreground border-border/40";
+  return <span className={cn("inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold", cls)}>{upper}</span>;
 }
 
 function StrategyLabel({ name }: { name: string }) {
   const label = name
     .replace(/_engine.*$/i, "")
     .replace(/_/g, " ")
-    .replace(/\b\w/g, c => c.toUpperCase())
+    .replace(/\b\w/g, (char) => char.toUpperCase())
     .replace(/R(\d+)/g, "R$1")
     .trim();
   return <span className="text-[11px] text-muted-foreground">{label}</span>;
@@ -154,193 +185,146 @@ function StrategyLabel({ name }: { name: string }) {
 function PnlPctBar({ pct, positive }: { pct: number; positive: boolean }) {
   const width = Math.min(Math.abs(pct), 100);
   return (
-    <div className="h-1 w-full bg-muted/30 rounded-full overflow-hidden">
-      <div
-        className={cn("h-full rounded-full transition-all", positive ? "bg-green-500" : "bg-red-500")}
-        style={{ width: `${width}%` }} />
+    <div className="h-1 w-full overflow-hidden rounded-full bg-muted/30">
+      <div className={cn("h-full rounded-full transition-all", positive ? "bg-green-500" : "bg-red-500")} style={{ width: `${width}%` }} />
     </div>
   );
 }
 
-// ── Open Position Card ────────────────────────────────────────────────────────
+function formatField(value: string | number | null | undefined) {
+  if (value == null) return "-";
+  const text = String(value).trim();
+  return text.length > 0 ? text : "-";
+}
+
+function ProvenanceBlock(props: TradeProvenance) {
+  const legacy = isLegacyAttribution(props.attribution);
+
+  return (
+    <div className="space-y-3">
+      {legacy && (
+        <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+          This trade was not opened through the current V3.1 service-runtime allocator path.
+        </div>
+      )}
+      <div className="space-y-1.5 text-xs">
+        <div className="flex justify-between"><span className="text-muted-foreground">Service</span><span className="font-medium">{formatField(props.serviceId)}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Service candidate</span><span className="font-mono text-[11px]">{formatField(props.serviceCandidateId)}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Allocator decision</span><span className="font-mono text-[11px]">{formatField(props.allocatorDecisionId)}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Runtime artifact</span><span className="font-mono text-[11px]">{formatField(props.runtimeArtifactId)}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Lifecycle plan</span><span className="font-mono text-[11px]">{formatField(props.lifecyclePlanId)}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Source policy</span><span className="font-mono text-[11px]">{formatField(props.sourcePolicyId)}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Attribution</span><span className={cn("font-medium", legacy ? "text-amber-300" : "text-green-400")}>{formatField(props.attribution)}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Path</span><span className="font-mono text-[11px]">{formatField(props.attributionPath)}</span></div>
+      </div>
+    </div>
+  );
+}
 
 function OpenPositionRow({ pos }: { pos: OpenPosition }) {
   const [expanded, setExpanded] = useState(false);
-  const pnl = pos.floatingPnl;
-  const pnlPct = pos.floatingPnlPct;
-  const positive = pnl >= 0;
-  const pnlFmt = formatPnl(pnl);
+  const positive = pos.floatingPnl >= 0;
+  const pnlFmt = formatPnl(pos.floatingPnl);
   const holdTime = formatHoldTime(pos.entryTs);
-  const urgency = pos.hoursRemaining < 4 ? "amber" : pos.hoursRemaining < 1 ? "red" : null;
-
+  const urgency = pos.hoursRemaining < 1 ? "red" : pos.hoursRemaining < 4 ? "amber" : null;
   const progressToTp = pos.side === "buy"
     ? (pos.currentPrice - pos.entryPrice) / (pos.tp - pos.entryPrice)
     : (pos.entryPrice - pos.currentPrice) / (pos.entryPrice - pos.tp);
   const tpProgressPct = Math.max(0, Math.min(progressToTp * 100, 100));
 
   return (
-    <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
-      <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/10 transition-colors"
-        onClick={() => setExpanded(e => !e)}>
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <SideChip side={pos.side} />
-          <span className="font-bold text-sm text-foreground">{pos.symbol}</span>
-          <ModeChip mode={pos.mode} />
-          <div className="hidden sm:block ml-1">
-            <StrategyLabel name={pos.strategyName} />
+    <div className="overflow-hidden rounded-xl border border-border/50 bg-card">
+      <div className="flex cursor-pointer items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/10" onClick={() => setExpanded((value) => !value)}>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <SideChip side={pos.side} />
+            <span className="text-sm font-bold text-foreground">{pos.symbol}</span>
+            <ModeChip mode={pos.mode} />
+            <div className="hidden sm:block"><StrategyLabel name={pos.strategyName} /></div>
           </div>
         </div>
 
-        <div className="hidden md:flex items-center gap-6 text-xs text-muted-foreground shrink-0">
-          <div className="text-right">
-            <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">Entry</div>
-            <div className="tabular-nums font-medium text-foreground">{pos.entryPrice.toFixed(4)}</div>
-          </div>
-          <div className="text-right">
-            <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">Current</div>
-            <div className="tabular-nums font-medium text-foreground">{pos.currentPrice.toFixed(4)}</div>
-          </div>
-          <div className="text-right">
-            <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wide">Hold</div>
-            <div className="tabular-nums font-medium text-foreground">{holdTime}</div>
-          </div>
+        <div className="hidden shrink-0 items-center gap-6 text-xs text-muted-foreground md:flex">
+          <div className="text-right"><div className="text-[10px] uppercase tracking-wide text-muted-foreground/60">Entry</div><div className="tabular-nums font-medium text-foreground">{pos.entryPrice.toFixed(4)}</div></div>
+          <div className="text-right"><div className="text-[10px] uppercase tracking-wide text-muted-foreground/60">Current</div><div className="tabular-nums font-medium text-foreground">{pos.currentPrice.toFixed(4)}</div></div>
+          <div className="text-right"><div className="text-[10px] uppercase tracking-wide text-muted-foreground/60">Hold</div><div className="tabular-nums font-medium text-foreground">{holdTime}</div></div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
           <div className="text-right">
             <div className={cn("text-base font-bold tabular-nums", pnlFmt.cls)}>{pnlFmt.text}</div>
             <div className={cn("text-[10px] tabular-nums", positive ? "text-green-400/70" : "text-red-400/70")}>
-              {positive ? "+" : ""}{pnlPct.toFixed(2)}%
+              {positive ? "+" : ""}{pos.floatingPnlPct.toFixed(2)}%
             </div>
           </div>
-          {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
         </div>
       </div>
 
-      {/* Floating PnL progress bar */}
       <div className="px-4 pb-2">
-        <PnlPctBar pct={Math.abs(pnlPct)} positive={positive} />
+        <PnlPctBar pct={Math.abs(pos.floatingPnlPct)} positive={positive} />
       </div>
 
       {expanded && (
-        <div className="border-t border-border/30 bg-muted/5 px-4 py-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {/* Trade Rationale */}
+        <div className="grid grid-cols-1 gap-4 border-t border-border/30 bg-muted/5 px-4 py-4 xl:grid-cols-4">
           <div className="space-y-3">
-            <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-              <Zap className="w-3.5 h-3.5 text-primary" /> Why Opened
-            </h4>
+            <h4 className="flex items-center gap-1.5 text-xs font-semibold text-foreground"><Zap className="h-3.5 w-3.5 text-primary" /> Why Opened</h4>
             <div className="space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Strategy</span>
-                <StrategyLabel name={pos.strategyName} />
-              </div>
-              {pos.confidence != null && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Confidence score</span>
-                  <span className={cn("tabular-nums font-semibold",
-                    pos.confidence >= 85 ? "text-green-400" : pos.confidence >= 70 ? "text-amber-400" : "text-red-400")}>
-                    {Math.round(pos.confidence)}
-                  </span>
-                </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Entry time</span>
-                <span className="tabular-nums font-medium">{formatTs(pos.entryTs)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Size (allocated)</span>
-                <span className="tabular-nums font-medium">${pos.size.toFixed(2)}</span>
-              </div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Strategy</span><StrategyLabel name={pos.strategyName} /></div>
+              {pos.confidence != null && <div className="flex justify-between"><span className="text-muted-foreground">Confidence score</span><span className="font-semibold text-foreground">{Math.round(pos.confidence)}</span></div>}
+              <div className="flex justify-between"><span className="text-muted-foreground">Entry time</span><span className="tabular-nums font-medium">{formatTs(pos.entryTs)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Size allocated</span><span className="tabular-nums font-medium">${pos.size.toFixed(2)}</span></div>
             </div>
           </div>
 
-          {/* Target Tracking */}
           <div className="space-y-3">
-            <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-              <Target className="w-3.5 h-3.5 text-primary" /> Target Progress
-            </h4>
+            <h4 className="flex items-center gap-1.5 text-xs font-semibold text-foreground"><Target className="h-3.5 w-3.5 text-primary" /> Target Progress</h4>
             <div className="space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Take Profit</span>
-                <span className="tabular-nums font-medium text-green-400">{pos.tp.toFixed(4)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Stop Loss</span>
-                <span className="tabular-nums font-medium text-red-400">{pos.sl.toFixed(4)}</span>
-              </div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Take Profit</span><span className="tabular-nums font-medium text-green-400">{pos.tp.toFixed(4)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Stop Loss</span><span className="tabular-nums font-medium text-red-400">{pos.sl.toFixed(4)}</span></div>
               <div>
-                <div className="flex justify-between mb-1">
-                  <span className="text-muted-foreground">Progress to TP</span>
-                  <span className="tabular-nums text-muted-foreground">{tpProgressPct.toFixed(0)}%</span>
-                </div>
-                <div className="h-1.5 bg-muted/40 rounded-full overflow-hidden">
-                  <div className="h-full bg-green-500 rounded-full transition-all"
-                    style={{ width: `${tpProgressPct}%` }} />
-                </div>
+                <div className="mb-1 flex justify-between"><span className="text-muted-foreground">Progress to TP</span><span className="tabular-nums text-muted-foreground">{tpProgressPct.toFixed(0)}%</span></div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-muted/40"><div className="h-full rounded-full bg-green-500" style={{ width: `${tpProgressPct}%` }} /></div>
               </div>
-              {pos.peakPrice != null && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Peak price</span>
-                  <span className="tabular-nums font-medium">{pos.peakPrice.toFixed(4)}</span>
-                </div>
-              )}
+              {pos.peakPrice != null && <div className="flex justify-between"><span className="text-muted-foreground">Peak price</span><span className="tabular-nums font-medium">{pos.peakPrice.toFixed(4)}</span></div>}
             </div>
           </div>
 
-          {/* Time & Risk */}
           <div className="space-y-3">
-            <h4 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-              <Timer className="w-3.5 h-3.5 text-primary" /> Hold & Risk
-            </h4>
+            <h4 className="flex items-center gap-1.5 text-xs font-semibold text-foreground"><Timer className="h-3.5 w-3.5 text-primary" /> Hold & Risk</h4>
             <div className="space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Time in trade</span>
-                <span className="tabular-nums font-medium">{holdTime}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Hours remaining</span>
-                <span className={cn("tabular-nums font-semibold",
-                  urgency === "red" ? "text-red-400" : urgency === "amber" ? "text-amber-400" : "text-foreground")}>
-                  {pos.hoursRemaining.toFixed(1)}h
-                </span>
-              </div>
-              {pos.maxExitTs && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Max exit by</span>
-                  <span className="tabular-nums font-medium">{formatTs(pos.maxExitTs)}</span>
-                </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Float P&L</span>
-                <span className={cn("tabular-nums font-bold", pnlFmt.cls)}>{pnlFmt.text}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Float P&L %</span>
-                <span className={cn("tabular-nums font-semibold", positive ? "text-green-400" : "text-red-400")}>
-                  {positive ? "+" : ""}{pnlPct.toFixed(2)}%
-                </span>
-              </div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Time in trade</span><span className="tabular-nums font-medium">{holdTime}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Hours remaining</span><span className={cn("tabular-nums font-semibold", urgency === "red" ? "text-red-400" : urgency === "amber" ? "text-amber-400" : "text-foreground")}>{pos.hoursRemaining.toFixed(1)}h</span></div>
+              {pos.maxExitTs && <div className="flex justify-between"><span className="text-muted-foreground">Max exit by</span><span className="tabular-nums font-medium">{formatTs(pos.maxExitTs)}</span></div>}
+              <div className="flex justify-between"><span className="text-muted-foreground">Float P&L</span><span className={cn("tabular-nums font-bold", pnlFmt.cls)}>{pnlFmt.text}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Float P&L %</span><span className={cn("tabular-nums font-semibold", positive ? "text-green-400" : "text-red-400")}>{positive ? "+" : ""}{pos.floatingPnlPct.toFixed(2)}%</span></div>
             </div>
             {urgency && (
-              <div className={cn(
-                "rounded-md px-2.5 py-1.5 text-[11px] flex items-center gap-1.5",
-                urgency === "red" ? "bg-red-500/8 border border-red-500/20 text-red-400" : "bg-amber-500/8 border border-amber-500/20 text-amber-400"
-              )}>
-                <AlertTriangle className="w-3 h-3 shrink-0" />
-                {urgency === "red"
-                  ? "Less than 1h before forced exit"
-                  : `${pos.hoursRemaining.toFixed(1)}h before max hold expires`}
+              <div className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px]", urgency === "red" ? "border border-red-500/20 bg-red-500/8 text-red-400" : "border border-amber-500/20 bg-amber-500/8 text-amber-400")}>
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+                {urgency === "red" ? "Less than 1h before forced exit" : `${pos.hoursRemaining.toFixed(1)}h before max hold expires`}
               </div>
             )}
+          </div>
+
+          <div className="space-y-3">
+            <h4 className="flex items-center gap-1.5 text-xs font-semibold text-foreground"><Shield className="h-3.5 w-3.5 text-primary" /> V3.1 Provenance</h4>
+            <ProvenanceBlock
+              serviceId={pos.serviceId}
+              serviceCandidateId={pos.serviceCandidateId}
+              allocatorDecisionId={pos.allocatorDecisionId}
+              runtimeArtifactId={pos.runtimeArtifactId}
+              lifecyclePlanId={pos.lifecyclePlanId}
+              sourcePolicyId={pos.sourcePolicyId}
+              attributionPath={pos.attributionPath}
+              attribution={pos.attribution}
+            />
           </div>
         </div>
       )}
     </div>
   );
 }
-
-// ── Closed Trade Row ──────────────────────────────────────────────────────────
 
 function ClosedTradeRow({ t }: { t: ClosedTrade }) {
   const [expanded, setExpanded] = useState(false);
@@ -351,111 +335,66 @@ function ClosedTradeRow({ t }: { t: ClosedTrade }) {
 
   return (
     <>
-      <tr
-        className="border-b border-border/20 hover:bg-muted/10 transition-colors cursor-pointer"
-        onClick={() => setExpanded(e => !e)}>
-        <td className="py-2.5 px-4">
+      <tr className="cursor-pointer border-b border-border/20 transition-colors hover:bg-muted/10" onClick={() => setExpanded((value) => !value)}>
+        <td className="px-4 py-2.5">
           <div className="flex items-center gap-2">
             <SideChip side={t.side} />
-            <span className="font-semibold text-sm">{t.symbol}</span>
+            <span className="text-sm font-semibold">{t.symbol}</span>
             <ModeChip mode={t.mode} />
           </div>
           <StrategyLabel name={t.strategyName} />
         </td>
-        <td className="py-2.5 px-3 text-xs text-muted-foreground whitespace-nowrap">{formatTs(t.entryTs)}</td>
-        <td className="py-2.5 px-3 tabular-nums text-sm font-medium">{t.entryPrice.toFixed(4)}</td>
-        <td className="py-2.5 px-3 tabular-nums text-sm text-muted-foreground">{t.exitPrice?.toFixed(4) ?? "—"}</td>
-        <td className="py-2.5 px-3 text-xs text-center">
-          <span className={exitLbl.cls}>{exitLbl.text}</span>
-        </td>
-        <td className="py-2.5 px-3 text-xs text-muted-foreground text-center">{holdTime}</td>
-        <td className="py-2.5 px-4 text-right">
+        <td className="whitespace-nowrap px-3 py-2.5 text-xs text-muted-foreground">{formatTs(t.entryTs)}</td>
+        <td className="px-3 py-2.5 text-sm font-medium tabular-nums">{t.entryPrice.toFixed(4)}</td>
+        <td className="px-3 py-2.5 text-sm tabular-nums text-muted-foreground">{t.exitPrice?.toFixed(4) ?? "-"}</td>
+        <td className="px-3 py-2.5 text-center text-xs"><span className={exitLbl.cls}>{exitLbl.text}</span></td>
+        <td className="px-3 py-2.5 text-center text-xs text-muted-foreground">{holdTime}</td>
+        <td className="px-4 py-2.5 text-right">
           <span className={pnlFmt.cls}>{pnlFmt.text}</span>
-          {pnlPct != null && (
-            <div className={cn("text-[10px] tabular-nums", pnlPct >= 0 ? "text-green-400/60" : "text-red-400/60")}>
-              {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%
-            </div>
-          )}
+          {pnlPct != null && <div className={cn("text-[10px] tabular-nums", pnlPct >= 0 ? "text-green-400/60" : "text-red-400/60")}>{pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%</div>}
         </td>
       </tr>
       {expanded && (
         <tr className="bg-muted/5">
           <td colSpan={7} className="px-4 py-3">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+            <div className="grid grid-cols-1 gap-4 text-xs sm:grid-cols-3">
               <div className="space-y-1">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Entry Context</p>
-                {t.confidence != null && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Confidence score</span>
-                    <span className={cn("tabular-nums font-semibold",
-                      t.confidence >= 85 ? "text-green-400" : t.confidence >= 70 ? "text-amber-400" : "text-red-400")}>
-                      {Math.round(t.confidence)}
-                    </span>
-                  </div>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Strategy</span>
-                  <StrategyLabel name={t.strategyName} />
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Mode</span>
-                  <ModeChip mode={t.mode} />
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Size allocated</span>
-                  <span className="tabular-nums">${t.size.toFixed(2)}</span>
-                </div>
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Entry Context</p>
+                {t.confidence != null && <div className="flex justify-between"><span className="text-muted-foreground">Confidence score</span><span className="font-semibold text-foreground">{Math.round(t.confidence)}</span></div>}
+                <div className="flex justify-between"><span className="text-muted-foreground">Strategy</span><StrategyLabel name={t.strategyName} /></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Mode</span><ModeChip mode={t.mode} /></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Size allocated</span><span className="tabular-nums">${t.size.toFixed(2)}</span></div>
               </div>
 
               <div className="space-y-1">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Targets & Stops</p>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">TP</span>
-                  <span className="tabular-nums text-green-400">{t.tp.toFixed(4)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">SL</span>
-                  <span className="tabular-nums text-red-400">{t.sl.toFixed(4)}</span>
-                </div>
-                {t.trailingStopPct != null && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Trailing stop</span>
-                    <span className="tabular-nums">{t.trailingStopPct.toFixed(1)}%</span>
-                  </div>
-                )}
-                {t.peakPrice != null && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Peak price</span>
-                    <span className="tabular-nums">{t.peakPrice.toFixed(4)}</span>
-                  </div>
-                )}
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Targets & Stops</p>
+                <div className="flex justify-between"><span className="text-muted-foreground">TP</span><span className="tabular-nums text-green-400">{t.tp.toFixed(4)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">SL</span><span className="tabular-nums text-red-400">{t.sl.toFixed(4)}</span></div>
+                {t.trailingStopPct != null && <div className="flex justify-between"><span className="text-muted-foreground">Trailing stop</span><span className="tabular-nums">{t.trailingStopPct.toFixed(1)}%</span></div>}
+                {t.peakPrice != null && <div className="flex justify-between"><span className="text-muted-foreground">Peak price</span><span className="tabular-nums">{t.peakPrice.toFixed(4)}</span></div>}
               </div>
 
               <div className="space-y-1">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Outcome</p>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Exit reason</span>
-                  <span className={exitLbl.cls}>{exitLbl.text}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Exit time</span>
-                  <span className="tabular-nums">{formatTs(t.exitTs)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Hold time</span>
-                  <span className="tabular-nums">{holdTime}</span>
-                </div>
-                {t.pnl != null && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Final P&L</span>
-                    <span className={pnlFmt.cls}>{pnlFmt.text}</span>
-                  </div>
-                )}
-                {t.notes && (
-                  <div className="mt-1.5 rounded-md bg-muted/20 px-2.5 py-1.5">
-                    <p className="text-[11px] text-muted-foreground leading-relaxed">{t.notes}</p>
-                  </div>
-                )}
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Outcome</p>
+                <div className="flex justify-between"><span className="text-muted-foreground">Exit reason</span><span className={exitLbl.cls}>{exitLbl.text}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Exit time</span><span className="tabular-nums">{formatTs(t.exitTs)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Hold time</span><span className="tabular-nums">{holdTime}</span></div>
+                {t.pnl != null && <div className="flex justify-between"><span className="text-muted-foreground">Final P&L</span><span className={pnlFmt.cls}>{pnlFmt.text}</span></div>}
+                {t.notes && <div className="mt-1.5 rounded-md bg-muted/20 px-2.5 py-1.5"><p className="text-[11px] leading-relaxed text-muted-foreground">{t.notes}</p></div>}
+              </div>
+
+              <div className="space-y-1 sm:col-span-3">
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">V3.1 Provenance</p>
+                <ProvenanceBlock
+                  serviceId={t.serviceId}
+                  serviceCandidateId={t.serviceCandidateId}
+                  allocatorDecisionId={t.allocatorDecisionId}
+                  runtimeArtifactId={t.runtimeArtifactId}
+                  lifecyclePlanId={t.lifecyclePlanId}
+                  sourcePolicyId={t.sourcePolicyId}
+                  attributionPath={t.attributionPath}
+                  attribution={t.attribution}
+                />
               </div>
             </div>
           </td>
@@ -465,53 +404,48 @@ function ClosedTradeRow({ t }: { t: ClosedTrade }) {
   );
 }
 
-// ── Attribution Tab ───────────────────────────────────────────────────────────
-
 function AttributionSection({ closed }: { closed: ClosedTrade[] }) {
   const bySymbol: Record<string, { count: number; pnl: number; wins: number }> = {};
-  for (const t of closed) {
-    if (!bySymbol[t.symbol]) bySymbol[t.symbol] = { count: 0, pnl: 0, wins: 0 };
-    bySymbol[t.symbol].count++;
-    bySymbol[t.symbol].pnl += t.pnl ?? 0;
-    if ((t.pnl ?? 0) > 0) bySymbol[t.symbol].wins++;
+  const byStrategy: Record<string, { count: number; pnl: number; wins: number }> = {};
+
+  for (const trade of closed) {
+    if (!bySymbol[trade.symbol]) bySymbol[trade.symbol] = { count: 0, pnl: 0, wins: 0 };
+    if (!byStrategy[trade.strategyName]) byStrategy[trade.strategyName] = { count: 0, pnl: 0, wins: 0 };
+    bySymbol[trade.symbol].count += 1;
+    bySymbol[trade.symbol].pnl += trade.pnl ?? 0;
+    byStrategy[trade.strategyName].count += 1;
+    byStrategy[trade.strategyName].pnl += trade.pnl ?? 0;
+    if ((trade.pnl ?? 0) > 0) {
+      bySymbol[trade.symbol].wins += 1;
+      byStrategy[trade.strategyName].wins += 1;
+    }
   }
 
-  const byEngine: Record<string, { count: number; pnl: number; wins: number }> = {};
-  for (const t of closed) {
-    const eng = t.strategyName;
-    if (!byEngine[eng]) byEngine[eng] = { count: 0, pnl: 0, wins: 0 };
-    byEngine[eng].count++;
-    byEngine[eng].pnl += t.pnl ?? 0;
-    if ((t.pnl ?? 0) > 0) byEngine[eng].wins++;
-  }
-
-  const syms = Object.entries(bySymbol).sort((a, b) => Math.abs(b[1].pnl) - Math.abs(a[1].pnl));
-  const engs = Object.entries(byEngine).sort((a, b) => b[1].count - a[1].count);
+  const symbols = Object.entries(bySymbol).sort((a, b) => Math.abs(b[1].pnl) - Math.abs(a[1].pnl));
+  const strategies = Object.entries(byStrategy).sort((a, b) => b[1].count - a[1].count);
 
   if (closed.length === 0) {
     return (
-      <div className="text-center py-10">
-        <BarChart2 className="w-8 h-8 text-muted-foreground/20 mx-auto mb-2" />
+      <div className="py-10 text-center">
+        <BarChart2 className="mx-auto mb-2 h-8 w-8 text-muted-foreground/20" />
         <p className="text-sm text-muted-foreground">No closed trades to attribute</p>
       </div>
     );
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div className="rounded-xl border border-border/50 bg-card p-4">
-        <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
-          <Activity className="w-3.5 h-3.5 text-primary" /> By Symbol
-        </h3>
+        <h3 className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-foreground"><Activity className="h-3.5 w-3.5 text-primary" /> By Symbol</h3>
         <div className="space-y-2">
-          {syms.map(([sym, stats]) => {
+          {symbols.map(([symbol, stats]) => {
             const pnlFmt = formatPnl(stats.pnl);
-            const wr = stats.count > 0 ? ((stats.wins / stats.count) * 100).toFixed(0) : "0";
+            const winRate = stats.count > 0 ? ((stats.wins / stats.count) * 100).toFixed(0) : "0";
             return (
-              <div key={sym} className="flex items-center justify-between text-xs">
-                <span className="font-mono font-semibold text-foreground w-20 shrink-0">{sym}</span>
-                <span className="text-muted-foreground tabular-nums">{stats.count} trades</span>
-                <span className="text-muted-foreground tabular-nums">{wr}% WR</span>
+              <div key={symbol} className="flex items-center justify-between text-xs">
+                <span className="w-20 shrink-0 font-mono font-semibold text-foreground">{symbol}</span>
+                <span className="tabular-nums text-muted-foreground">{stats.count} trades</span>
+                <span className="tabular-nums text-muted-foreground">{winRate}% WR</span>
                 <span className={cn("tabular-nums font-semibold", pnlFmt.cls)}>{pnlFmt.text}</span>
               </div>
             );
@@ -520,20 +454,18 @@ function AttributionSection({ closed }: { closed: ClosedTrade[] }) {
       </div>
 
       <div className="rounded-xl border border-border/50 bg-card p-4">
-        <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
-          <Zap className="w-3.5 h-3.5 text-primary" /> By Engine
-        </h3>
+        <h3 className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-foreground"><Zap className="h-3.5 w-3.5 text-primary" /> By Strategy</h3>
         <div className="space-y-2">
-          {engs.map(([eng, stats]) => {
+          {strategies.map(([strategy, stats]) => {
             const pnlFmt = formatPnl(stats.pnl);
-            const label = eng.replace(/_engine.*$/i, "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-            const wr = stats.count > 0 ? ((stats.wins / stats.count) * 100).toFixed(0) : "0";
+            const label = strategy.replace(/_engine.*$/i, "").replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+            const winRate = stats.count > 0 ? ((stats.wins / stats.count) * 100).toFixed(0) : "0";
             return (
-              <div key={eng} className="flex items-center justify-between text-xs gap-2">
-                <span className="text-foreground flex-1 truncate">{label}</span>
-                <span className="text-muted-foreground tabular-nums shrink-0">{stats.count} trades</span>
-                <span className="text-muted-foreground tabular-nums shrink-0">{wr}%</span>
-                <span className={cn("tabular-nums font-semibold shrink-0", pnlFmt.cls)}>{pnlFmt.text}</span>
+              <div key={strategy} className="flex items-center justify-between gap-2 text-xs">
+                <span className="flex-1 truncate text-foreground">{label}</span>
+                <span className="shrink-0 tabular-nums text-muted-foreground">{stats.count} trades</span>
+                <span className="shrink-0 tabular-nums text-muted-foreground">{winRate}%</span>
+                <span className={cn("shrink-0 tabular-nums font-semibold", pnlFmt.cls)}>{pnlFmt.text}</span>
               </div>
             );
           })}
@@ -542,8 +474,6 @@ function AttributionSection({ closed }: { closed: ClosedTrade[] }) {
     </div>
   );
 }
-
-// ── Main Component ────────────────────────────────────────────────────────────
 
 type Tab = "open" | "closed" | "attribution";
 
@@ -560,7 +490,7 @@ export default function Trades() {
     queryKey: ["api/trade/positions"],
     queryFn: () => apiFetch("api/trade/positions"),
     refetchInterval: 10_000,
-    staleTime: 5000,
+    staleTime: 5_000,
   });
 
   const { data: closedTrades = [], isLoading: closedLoading } = useQuery<ClosedTrade[]>({
@@ -578,21 +508,22 @@ export default function Trades() {
     queryKey: ["api/overview-mode"],
     queryFn: () => apiFetch("api/overview"),
     refetchInterval: 10_000,
-    staleTime: 5000,
+    staleTime: 5_000,
   });
 
-  const winners = closedTrades.filter(t => (t.pnl ?? 0) > 0);
-  const losers = closedTrades.filter(t => (t.pnl ?? 0) < 0);
-  const totalPnl = closedTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  const winners = closedTrades.filter((trade) => (trade.pnl ?? 0) > 0);
+  const losers = closedTrades.filter((trade) => (trade.pnl ?? 0) < 0);
+  const totalPnl = closedTrades.reduce((sum, trade) => sum + (trade.pnl ?? 0), 0);
   const winRate = closedTrades.length > 0 ? (winners.length / closedTrades.length) * 100 : null;
-  const avgWin = winners.length > 0 ? winners.reduce((s, t) => s + (t.pnl ?? 0), 0) / winners.length : null;
-  const avgLoss = losers.length > 0 ? losers.reduce((s, t) => s + (t.pnl ?? 0), 0) / losers.length : null;
+  const avgWin = winners.length > 0 ? winners.reduce((sum, trade) => sum + (trade.pnl ?? 0), 0) / winners.length : null;
+  const avgLoss = losers.length > 0 ? losers.reduce((sum, trade) => sum + (trade.pnl ?? 0), 0) / losers.length : null;
+  const floatingPnl = openPositions.reduce((sum, trade) => sum + trade.floatingPnl, 0);
 
-  const floatingPnl = openPositions.reduce((s, p) => s + p.floatingPnl, 0);
   const filteredOpenPositions = openPositions.filter((position) => serviceFilter === "all" || position.symbol === serviceFilter);
   const filteredClosedTrades = closedTrades.filter((trade) => serviceFilter === "all" || trade.symbol === serviceFilter);
+  const legacyOpenPositions = filteredOpenPositions.filter((position) => isLegacyAttribution(position.attribution));
 
-  const tabs: { id: Tab; label: string; count?: number }[] = [
+  const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: "open", label: "Open Positions", count: filteredOpenPositions.length },
     { id: "closed", label: "Closed Trades", count: filteredClosedTrades.length },
     { id: "attribution", label: "Attribution" },
@@ -603,30 +534,26 @@ export default function Trades() {
     setResetErr(null);
     setResetMsg(null);
     try {
-      const d = await apiFetch<{ message?: string }>("api/trade/paper/reset", {
-        method: "POST",
-      });
-      setResetMsg(d.message ?? "Paper trading reset complete.");
+      const response = await apiFetch<{ message?: string }>("api/trade/paper/reset", { method: "POST" });
+      setResetMsg(response.message ?? "Paper trading reset complete.");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["api/trade/positions"] }),
         queryClient.invalidateQueries({ queryKey: ["api/trade/history"] }),
         queryClient.invalidateQueries({ queryKey: ["api/overview-mode"] }),
       ]);
-    } catch (e) {
-      setResetErr(e instanceof Error ? e.message : "Paper reset failed");
+    } catch (error) {
+      setResetErr(error instanceof Error ? error.message : "Paper reset failed");
     } finally {
       setResetBusy(false);
     }
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl">
-
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3 flex-wrap">
+    <div className="max-w-7xl space-y-6 p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Trade Lifecycle</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
+          <p className="mt-0.5 text-sm text-muted-foreground">
             Service-filtered positions, closed trades, allocator outcomes, and symbol-service attribution
           </p>
         </div>
@@ -634,118 +561,73 @@ export default function Trades() {
           <button
             onClick={() => void resetPaperTrading()}
             disabled={resetBusy}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 text-xs font-semibold hover:bg-amber-500/20 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-300 transition-colors hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {resetBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+            {resetBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
             {resetBusy ? "Resetting Paper..." : "Reset Paper Trading"}
           </button>
         )}
       </div>
+
       {resetMsg && <div className="rounded-lg border border-green-500/20 bg-green-500/10 px-4 py-3 text-xs text-green-400">{resetMsg}</div>}
       {resetErr && <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-xs text-red-400">{resetErr}</div>}
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <div className="rounded-xl border border-border/50 bg-card p-4">
-          <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
-            <Clock className="w-3 h-3" /> Open
-          </p>
-          <p className="text-2xl font-bold tabular-nums text-amber-400">{openPositions.length}</p>
-        </div>
-        <div className="rounded-xl border border-border/50 bg-card p-4">
-          <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5">Float P&L</p>
-          <p className={cn("text-2xl font-bold tabular-nums", floatingPnl >= 0 ? "text-green-400" : "text-red-400")}>
-            {floatingPnl >= 0 ? "+" : ""}${floatingPnl.toFixed(2)}
-          </p>
-        </div>
-        <div className="rounded-xl border border-border/50 bg-card p-4">
-          <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
-            <BarChart2 className="w-3 h-3" /> Closed
-          </p>
-          <p className="text-2xl font-bold tabular-nums">{closedTrades.length}</p>
-        </div>
-        <div className="rounded-xl border border-border/50 bg-card p-4">
-          <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
-            <TrendingUp className="w-3 h-3" /> Win Rate
-          </p>
-          <p className="text-2xl font-bold tabular-nums">
-            {winRate != null ? `${winRate.toFixed(0)}%` : "—"}
-          </p>
-          {avgWin != null && avgLoss != null && (
-            <p className="text-[10px] text-muted-foreground mt-0.5">
-              W: +${avgWin.toFixed(2)} / L: ${avgLoss.toFixed(2)}
-            </p>
-          )}
-        </div>
-        <div className="rounded-xl border border-border/50 bg-card p-4">
-          <p className="text-[11px] text-muted-foreground uppercase tracking-wider mb-1.5 flex items-center gap-1">
-            <TrendingDown className="w-3 h-3" /> Realised P&L
-          </p>
-          <p className={cn("text-2xl font-bold tabular-nums", totalPnl >= 0 ? "text-green-400" : "text-red-400")}>
-            {totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}
-          </p>
-        </div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="rounded-xl border border-border/50 bg-card p-4"><p className="mb-1.5 flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground"><Clock className="h-3 w-3" /> Open</p><p className="text-2xl font-bold tabular-nums text-amber-400">{openPositions.length}</p></div>
+        <div className="rounded-xl border border-border/50 bg-card p-4"><p className="mb-1.5 text-[11px] uppercase tracking-wider text-muted-foreground">Float P&amp;L</p><p className={cn("text-2xl font-bold tabular-nums", floatingPnl >= 0 ? "text-green-400" : "text-red-400")}>{floatingPnl >= 0 ? "+" : ""}${floatingPnl.toFixed(2)}</p></div>
+        <div className="rounded-xl border border-border/50 bg-card p-4"><p className="mb-1.5 flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground"><BarChart2 className="h-3 w-3" /> Closed</p><p className="text-2xl font-bold tabular-nums">{closedTrades.length}</p></div>
+        <div className="rounded-xl border border-border/50 bg-card p-4"><p className="mb-1.5 flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground"><TrendingUp className="h-3 w-3" /> Win Rate</p><p className="text-2xl font-bold tabular-nums">{winRate != null ? `${winRate.toFixed(0)}%` : "-"}</p>{avgWin != null && avgLoss != null && <p className="mt-0.5 text-[10px] text-muted-foreground">W: +${avgWin.toFixed(2)} / L: ${avgLoss.toFixed(2)}</p>}</div>
+        <div className="rounded-xl border border-border/50 bg-card p-4"><p className="mb-1.5 flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground"><TrendingDown className="h-3 w-3" /> Realised P&amp;L</p><p className={cn("text-2xl font-bold tabular-nums", totalPnl >= 0 ? "text-green-400" : "text-red-400")}>{totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}</p></div>
       </div>
 
-      {/* Tabs */}
       <div className="flex gap-1 border-b border-border/50">
-        {tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium whitespace-nowrap border-b-2 transition-colors",
-              tab === t.id
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border/50"
-            )}>
-            {t.label}
-            {t.count != null && t.count > 0 && (
-              <span className="tabular-nums text-muted-foreground/70">({t.count})</span>
-            )}
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => setTab(item.id)}
+            className={cn("flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-xs font-medium whitespace-nowrap transition-colors", tab === item.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:border-border/50 hover:text-foreground")}
+          >
+            {item.label}
+            {item.count != null && item.count > 0 && <span className="tabular-nums text-muted-foreground/70">({item.count})</span>}
           </button>
         ))}
       </div>
 
-      {/* Open Positions */}
       {tab === "open" && (
         <div className="space-y-3">
+          {legacyOpenPositions.length > 0 && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+              {legacyOpenPositions.length} open trade(s) were not opened through the current V3.1 service-runtime allocator path and are shown here as legacy attribution.
+            </div>
+          )}
           <div className="flex items-center gap-3">
-            <select value={serviceFilter} onChange={e => setServiceFilter(e.target.value)}
-              className="bg-card border border-border/50 rounded-md px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
+            <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)} className="rounded-md border border-border/50 bg-card px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
               <option value="all">All Services</option>
-              {ACTIVE_SERVICE_SYMBOLS.map((symbol) => (
-                <option key={symbol} value={symbol}>{symbol} — {getSymbolLabel(symbol)}</option>
-              ))}
+              {ACTIVE_SERVICE_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol} - {getSymbolLabel(symbol)}</option>)}
             </select>
           </div>
           {openLoading ? (
-            <p className="text-sm text-muted-foreground text-center py-8">Loading positions…</p>
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading positions...</p>
           ) : filteredOpenPositions.length === 0 ? (
-            <div className="text-center py-14">
-              <CircleSlash className="w-10 h-10 text-muted-foreground/15 mx-auto mb-3" />
+            <div className="py-14 text-center">
+              <CircleSlash className="mx-auto mb-3 h-10 w-10 text-muted-foreground/15" />
               <p className="text-sm text-muted-foreground">No open positions</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">
-                No selected service positions are currently open.
-              </p>
+              <p className="mt-1 text-xs text-muted-foreground/60">No selected service positions are currently open.</p>
             </div>
           ) : (
-            filteredOpenPositions.map(pos => <OpenPositionRow key={pos.id} pos={pos} />)
+            filteredOpenPositions.map((position) => <OpenPositionRow key={position.id} pos={position} />)
           )}
         </div>
       )}
 
-      {/* Closed Trades */}
       {tab === "closed" && (
         <div className="space-y-4">
           <div className="flex items-center gap-3">
-            <select value={serviceFilter} onChange={e => setServiceFilter(e.target.value)}
-              className="bg-card border border-border/50 rounded-md px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
+            <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)} className="rounded-md border border-border/50 bg-card px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
               <option value="all">All Services</option>
-              {ACTIVE_SERVICE_SYMBOLS.map((symbol) => (
-                <option key={symbol} value={symbol}>{symbol} — {getSymbolLabel(symbol)}</option>
-              ))}
+              {ACTIVE_SERVICE_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol} - {getSymbolLabel(symbol)}</option>)}
             </select>
-            <select value={modeFilter} onChange={e => setModeFilter(e.target.value)}
-              className="bg-card border border-border/50 rounded-md px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
+            <select value={modeFilter} onChange={(event) => setModeFilter(event.target.value)} className="rounded-md border border-border/50 bg-card px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
               <option value="">All Modes</option>
               <option value="paper">Paper</option>
               <option value="demo">Demo</option>
@@ -754,30 +636,30 @@ export default function Trades() {
           </div>
 
           {closedLoading ? (
-            <p className="text-sm text-muted-foreground text-center py-8">Loading trade history…</p>
+            <p className="py-8 text-center text-sm text-muted-foreground">Loading trade history...</p>
           ) : filteredClosedTrades.length === 0 ? (
-            <div className="text-center py-14">
-              <BarChart2 className="w-10 h-10 text-muted-foreground/15 mx-auto mb-3" />
+            <div className="py-14 text-center">
+              <BarChart2 className="mx-auto mb-3 h-10 w-10 text-muted-foreground/15" />
               <p className="text-sm text-muted-foreground">No closed trades{modeFilter || serviceFilter !== "all" ? " matching filters" : ""}</p>
-              <p className="text-xs text-muted-foreground/60 mt-1">Closed trades show symbol-service decision fields separately from portfolio execution results.</p>
+              <p className="mt-1 text-xs text-muted-foreground/60">Closed trades show symbol-service decision fields separately from portfolio execution results.</p>
             </div>
           ) : (
-            <div className="rounded-xl border border-border/50 bg-card overflow-hidden">
+            <div className="overflow-hidden rounded-xl border border-border/50 bg-card">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-[11px] text-muted-foreground uppercase tracking-wide border-b border-border/40 bg-muted/10">
-                      <th className="text-left py-2.5 px-4 font-medium">Symbol / Strategy</th>
-                      <th className="text-left py-2.5 px-3 font-medium">Entry</th>
-                      <th className="text-left py-2.5 px-3 font-medium">Entry Price</th>
-                      <th className="text-left py-2.5 px-3 font-medium">Exit Price</th>
-                      <th className="text-center py-2.5 px-3 font-medium">Exit Reason</th>
-                      <th className="text-center py-2.5 px-3 font-medium">Hold</th>
-                      <th className="text-right py-2.5 px-4 font-medium">P&L</th>
+                    <tr className="border-b border-border/40 bg-muted/10 text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <th className="px-4 py-2.5 text-left font-medium">Symbol / Strategy</th>
+                      <th className="px-3 py-2.5 text-left font-medium">Entry</th>
+                      <th className="px-3 py-2.5 text-left font-medium">Entry Price</th>
+                      <th className="px-3 py-2.5 text-left font-medium">Exit Price</th>
+                      <th className="px-3 py-2.5 text-center font-medium">Exit Reason</th>
+                      <th className="px-3 py-2.5 text-center font-medium">Hold</th>
+                      <th className="px-4 py-2.5 text-right font-medium">P&amp;L</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredClosedTrades.map(t => <ClosedTradeRow key={t.id} t={t} />)}
+                    {filteredClosedTrades.map((trade) => <ClosedTradeRow key={trade.id} t={trade} />)}
                   </tbody>
                 </table>
               </div>
@@ -786,7 +668,6 @@ export default function Trades() {
         </div>
       )}
 
-      {/* Attribution */}
       {tab === "attribution" && <AttributionSection closed={filteredClosedTrades} />}
     </div>
   );

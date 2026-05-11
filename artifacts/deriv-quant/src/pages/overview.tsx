@@ -93,6 +93,12 @@ interface ServiceLifecycleStatus {
   nextRequiredAction?: string | null;
 }
 
+interface TradeAttributionPosition {
+  id: number;
+  symbol: string;
+  attribution: "v3_service_allocator_path" | "legacy_pre_v3_1_allocator_path";
+}
+
 const EMPTY_SERVICE_LIFECYCLE = (serviceId: string): ServiceLifecycleStatus => ({
   serviceId,
   stagedCandidateArtifactId: null,
@@ -269,6 +275,13 @@ export default function Overview() {
     staleTime: 8_000,
   });
 
+  const { data: openTrades = [] } = useQuery<TradeAttributionPosition[]>({
+    queryKey: ["api/trade/positions"],
+    queryFn: () => apiFetch("api/trade/positions"),
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  });
+
   const mode = overview?.mode ?? "idle";
   const diagnosticsBySymbol = new Map((diagnostics?.symbols ?? []).map((entry) => [entry.symbol, entry]));
   const streamingSymbols = (diagnostics?.symbols ?? []).filter((entry) => entry.streamingState === "streaming");
@@ -279,6 +292,7 @@ export default function Overview() {
   const lifecycleCards: ServiceLifecycleStatus[] = serviceLifecycles ?? ACTIVE_SERVICE_SYMBOLS.map((serviceId) => EMPTY_SERVICE_LIFECYCLE(serviceId));
   const promotedServiceCount = lifecycleCards.filter((entry) => Boolean(entry.promotedRuntimeArtifactId)).length;
   const stagedServiceCount = lifecycleCards.filter((entry) => Boolean(entry.stagedCandidateArtifactId)).length;
+  const legacyOpenTrades = openTrades.filter((trade) => trade.attribution === "legacy_pre_v3_1_allocator_path");
 
   const warnings: string[] = [];
   if (overview?.killSwitchActive) warnings.push("Kill switch is active - all new signals are being rejected.");
@@ -286,6 +300,8 @@ export default function Overview() {
   if (overview?.scannerRunning === false) warnings.push("Signal scanner is not running - no new decisions will be logged.");
   if (staleStreamingSymbols.length > 0) warnings.push(`${staleStreamingSymbols.length} streaming symbol(s) have stale candle data: ${staleStreamingSymbols.map((entry) => entry.symbol).join(", ")}.`);
   if (portfolio?.suggestWithdrawal) warnings.push(`Capital has grown above the withdrawal threshold ($${portfolio.withdrawalThreshold.toLocaleString()}) - consider extracting profits.`);
+  if (promotedServiceCount === 0) warnings.push("No promoted service runtimes are active. Candidate emission is disabled and no new trades can open.");
+  if (legacyOpenTrades.length > 0) warnings.push(`${legacyOpenTrades.length} open trade(s) still use legacy pre-V3.1 attribution and were not opened through the current service-runtime allocator path.`);
 
   const scanAge = overview?.lastScanTime ? formatAge(overview.lastScanTime) : "never";
   const dataAge = overview?.lastDataSyncAt ? formatAge(overview.lastDataSyncAt) : "never";
@@ -355,15 +371,15 @@ export default function Overview() {
             icon={Activity}
           />
           <KpiCard
-            label="Total Scans Run"
+            label="Platform Orchestration Scans"
             value={overviewLoading ? "..." : (overview?.totalScansRun ?? 0).toLocaleString()}
             sub={overviewLoading ? undefined : `Last: ${scanAge}`}
             icon={Scan}
           />
           <KpiCard
-            label="Total Decisions"
+            label="Allocator Decisions"
             value={overviewLoading ? "..." : (overview?.totalDecisionsLogged ?? 0).toLocaleString()}
-            sub={overviewLoading ? undefined : `Last symbol: ${overview?.lastScanSymbol ?? "-"}`}
+            sub={overviewLoading ? undefined : `Last scanned symbol: ${overview?.lastScanSymbol ?? "-"}`}
             icon={BarChart2}
           />
           <KpiCard
@@ -416,9 +432,9 @@ export default function Overview() {
         {overview?.scannerRunning && overview.lastScanTime && (
           <div className="mt-3 pt-3 border-t border-border/20 flex flex-wrap items-center gap-4 text-[11px] text-muted-foreground">
             <span><Clock className="w-3 h-3 inline mr-1" />Last scan: <span className="text-foreground font-medium">{scanAge}</span></span>
-            <span><Target className="w-3 h-3 inline mr-1" />Last symbol: <span className="text-foreground font-medium font-mono">{overview.lastScanSymbol ?? "-"}</span></span>
-            <span><Scan className="w-3 h-3 inline mr-1" />Total scans run: <span className="text-foreground font-medium tabular-nums">{overview.totalScansRun.toLocaleString()}</span></span>
-            <span><BarChart2 className="w-3 h-3 inline mr-1" />Decisions logged: <span className="text-foreground font-medium tabular-nums">{overview.totalDecisionsLogged.toLocaleString()}</span></span>
+            <span><Target className="w-3 h-3 inline mr-1" />Last scanned symbol: <span className="text-foreground font-medium font-mono">{overview.lastScanSymbol ?? "-"}</span></span>
+            <span><Scan className="w-3 h-3 inline mr-1" />Platform scans: <span className="text-foreground font-medium tabular-nums">{overview.totalScansRun.toLocaleString()}</span></span>
+            <span><BarChart2 className="w-3 h-3 inline mr-1" />Allocator decisions: <span className="text-foreground font-medium tabular-nums">{overview.totalDecisionsLogged.toLocaleString()}</span></span>
           </div>
         )}
       </div>
@@ -578,6 +594,12 @@ export default function Overview() {
           title="Service Runtime Status"
           sub={`${promotedServiceCount} promoted runtime(s) - ${stagedServiceCount} staged candidate(s) across registered services`}
         />
+        {promotedServiceCount === 0 && (
+          <div className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/8 px-3.5 py-2.5 text-xs text-amber-300">
+            Candidate emission is disabled because no promoted service runtimes are active. No new V3.1 trades can open until a service runtime is promoted.
+            {legacyOpenTrades.length > 0 ? " Legacy open trades remain visible until they close or are reset." : ""}
+          </div>
+        )}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {lifecycleCards.map((service) => (
             <div key={service.serviceId} className="rounded-lg border border-border/40 bg-muted/10 p-3">
