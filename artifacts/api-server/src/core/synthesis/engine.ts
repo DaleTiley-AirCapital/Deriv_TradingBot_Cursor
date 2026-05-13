@@ -3328,6 +3328,34 @@ async function markEliteSynthesisJobFailed(jobId: number, error: unknown) {
   });
 }
 
+function normalizedEliteTargetProfile(targetProfile: EliteSynthesisTargetProfile): "default" | "return_first" {
+  return isReturnFirstObjective(targetProfile) ? "return_first" : "default";
+}
+
+function deriveNoTargetReason(params: {
+  resultState: EliteSynthesisResultState;
+  targetAchieved: boolean;
+  targetProfile: EliteSynthesisTargetProfile;
+  recommendedPolicyStatus: string | null;
+  bestReturnFirstPolicyPresent: boolean;
+  guardrailsPassedCount: number;
+  passLogLength: number;
+  maxPasses: number;
+}): string | null {
+  if (params.targetAchieved) return null;
+  if (normalizedEliteTargetProfile(params.targetProfile) !== "return_first") return null;
+  if (params.resultState !== "completed_exhausted_no_target") return null;
+  if (params.bestReturnFirstPolicyPresent) return null;
+  if (params.guardrailsPassedCount > 0) return null;
+  if (params.passLogLength < params.maxPasses) {
+    return "return_first_search_stopped_before_full_exhaustion";
+  }
+  if (params.recommendedPolicyStatus === "baseline_only") {
+    return "no_policy_passed_return_first_guardrails";
+  }
+  return "no_policy_survived_return_first_search";
+}
+
 export function getSynthesisAdapter(serviceId: string): SymbolSynthesisAdapter {
   if (serviceId === "CRASH300") return new Crash300SynthesisAdapter();
   throw new Error(`Elite synthesis adapter missing for service ${serviceId}.`);
@@ -3411,6 +3439,13 @@ export async function runEliteSynthesisJob(params: {
       status: "completed",
       resultState,
       targetAchieved: false,
+      failureType: resultState === "failed_validation" ? "validation_failed" : "none",
+      exceptionMessage: null,
+      noTargetReason: null,
+      passesCompleted: 0,
+      maxPasses,
+      targetProfile,
+      targetProfileNormalized: normalizedEliteTargetProfile(targetProfile),
       bestPolicySummary: null,
       topPolicySummaries: [],
       bestPolicyArtifact: null,
@@ -3456,10 +3491,20 @@ export async function runEliteSynthesisJob(params: {
       heartbeatAt: nowIso(),
       completedAt: nowIso(),
       errorSummary: {
+        failureType: validationResult.failureType,
         validationErrors,
+        targetProfile,
+        targetProfileNormalized: validationResult.targetProfileNormalized,
       },
       resultSummary: {
         resultState,
+        failureType: validationResult.failureType,
+        exceptionMessage: validationResult.exceptionMessage,
+        noTargetReason: validationResult.noTargetReason,
+        passesCompleted: validationResult.passesCompleted,
+        maxPasses: validationResult.maxPasses,
+        targetProfile: validationResult.targetProfile,
+        targetProfileNormalized: validationResult.targetProfileNormalized,
         validationErrors,
       },
       resultArtifact: validationResult,
@@ -3508,6 +3553,13 @@ export async function runEliteSynthesisJob(params: {
         status: "cancelled",
         resultState: "cancelled",
         targetAchieved: false,
+        failureType: "cancelled",
+        exceptionMessage: null,
+        noTargetReason: null,
+        passesCompleted: passLog.length,
+        maxPasses,
+        targetProfile,
+        targetProfileNormalized: normalizedEliteTargetProfile(targetProfile),
         bestPolicySummary,
         topPolicySummaries: topPolicies.slice(0, 20),
         bestPolicyArtifact,
@@ -3544,7 +3596,18 @@ export async function runEliteSynthesisJob(params: {
         message: "Elite synthesis cancelled",
         heartbeatAt: nowIso(),
         completedAt: nowIso(),
-        resultSummary: { targetAchieved: false, cancelled: true },
+        resultSummary: {
+          resultState: cancelledResult.resultState,
+          targetAchieved: false,
+          cancelled: true,
+          failureType: cancelledResult.failureType,
+          exceptionMessage: cancelledResult.exceptionMessage,
+          noTargetReason: cancelledResult.noTargetReason,
+          passesCompleted: cancelledResult.passesCompleted,
+          maxPasses: cancelledResult.maxPasses,
+          targetProfile: cancelledResult.targetProfile,
+          targetProfileNormalized: cancelledResult.targetProfileNormalized,
+        },
         resultArtifact: cancelledResult,
       });
       return cancelledResult;
@@ -3970,21 +4033,53 @@ export async function runEliteSynthesisJob(params: {
     policyArtifactReadiness,
     leakageAudit: bestPolicyArtifact?.leakageAudit ?? null,
   });
+  const normalizedTargetProfile = normalizedEliteTargetProfile(targetProfile);
+  const recommendedPolicy = (returnAmplificationAnalysis as Record<string, unknown>).recommendedPolicy as Record<string, unknown> | null;
+  const bestReturnFirstPolicy = (returnAmplificationAnalysis as Record<string, unknown>).bestReturnFirstPolicy as Record<string, unknown> | null;
+  const policyComparisonTable = Array.isArray((returnAmplificationAnalysis as Record<string, unknown>).policyComparisonTable)
+    ? ((returnAmplificationAnalysis as Record<string, unknown>).policyComparisonTable as Array<Record<string, unknown>>)
+    : [];
+  const guardrailsPassedCount = policyComparisonTable.filter((scenario) => Boolean(scenario.guardrailsPassed)).length;
+  const resolvedResultState: EliteSynthesisResultState = targetAchieved(bestPolicySummary, targetProfile)
+    ? "completed_target_achieved"
+    : bottleneck === "rebuilt_policy_evaluation_failed"
+      ? "rebuilt_policy_evaluation_failed"
+    : bottleneck === "rebuilt_trigger_execution_failed"
+      ? "completed_foundation_incomplete"
+    : rebuiltTriggerAttempted || passLog.length >= maxPasses
+      ? "completed_exhausted_no_target"
+      : "completed_foundation_incomplete";
+  const noTargetReason = deriveNoTargetReason({
+    resultState: resolvedResultState,
+    targetAchieved: targetAchieved(bestPolicySummary, targetProfile),
+    targetProfile,
+    recommendedPolicyStatus: recommendedPolicy ? String(recommendedPolicy.status ?? "") : null,
+    bestReturnFirstPolicyPresent: Boolean(bestReturnFirstPolicy),
+    guardrailsPassedCount,
+    passLogLength: passLog.length,
+    maxPasses,
+  });
+  const completionMessage = targetAchieved(bestPolicySummary, targetProfile)
+    ? "Integrated elite synthesis completed with a target-grade candidate policy"
+    : normalizedTargetProfile === "return_first" && noTargetReason
+      ? "Integrated elite synthesis completed without finding a return-first target policy"
+      : normalizedTargetProfile === "return_first" && recommendedPolicy && String(recommendedPolicy.status ?? "") === "baseline_only"
+        ? "Integrated elite synthesis completed with a baseline-only return-first diagnostic outcome"
+        : "Integrated elite synthesis completed without reaching the target objective";
 
   const result: EliteSynthesisResult = {
     jobId: params.jobId,
     serviceId: params.serviceId,
     status: "completed",
-    resultState: targetAchieved(bestPolicySummary, targetProfile)
-      ? "completed_target_achieved"
-      : bottleneck === "rebuilt_policy_evaluation_failed"
-        ? "rebuilt_policy_evaluation_failed"
-      : bottleneck === "rebuilt_trigger_execution_failed"
-        ? "completed_foundation_incomplete"
-      : rebuiltTriggerAttempted || passLog.length >= maxPasses
-        ? "completed_exhausted_no_target"
-        : "completed_foundation_incomplete",
+    resultState: resolvedResultState,
     targetAchieved: targetAchieved(bestPolicySummary, targetProfile),
+    failureType: noTargetReason ? "no_target_exhausted" : "none",
+    exceptionMessage: null,
+    noTargetReason,
+    passesCompleted: passLog.length,
+    maxPasses,
+    targetProfile,
+    targetProfileNormalized: normalizedTargetProfile,
     bestPolicySummary: bestPolicySummary
       ? {
           ...bestPolicySummary,
@@ -4125,15 +4220,32 @@ export async function runEliteSynthesisJob(params: {
     status: "completed",
     stage: "completed",
     progressPct: 100,
-    message: result.targetAchieved
-      ? "Integrated elite synthesis completed with a target-grade candidate policy"
-      : "Integrated elite synthesis completed without reaching the target objective",
+    message: completionMessage,
     heartbeatAt: nowIso(),
     completedAt: nowIso(),
     bestSummary: bestSummaryFromPolicy(bestPolicySummary, evaluatedPolicyCount, topPolicies.length),
+    errorSummary: noTargetReason
+      ? {
+          failureType: "no_target_exhausted",
+          noTargetReason,
+          passesCompleted: passLog.length,
+          maxPasses,
+          targetProfile,
+          targetProfileNormalized: normalizedTargetProfile,
+        }
+      : undefined,
     resultSummary: {
       resultState: result.resultState,
       targetAchieved: result.targetAchieved,
+      failureType: result.failureType,
+      exceptionMessage: result.exceptionMessage,
+      noTargetReason: result.noTargetReason,
+      passesCompleted: result.passesCompleted,
+      maxPasses: result.maxPasses,
+      targetProfile: result.targetProfile,
+      targetProfileNormalized: result.targetProfileNormalized,
+      recommendedPolicyStatus: recommendedPolicy ? String(recommendedPolicy.status ?? "") : null,
+      guardrailsPassedCount,
       topPolicyCount: result.topPolicySummaries.length,
       bottleneck: result.bottleneckSummary.classification,
       validationErrors: result.validationErrors,

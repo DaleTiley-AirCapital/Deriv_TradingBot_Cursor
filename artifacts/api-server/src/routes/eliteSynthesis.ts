@@ -76,9 +76,29 @@ function parseParams(input: unknown): EliteSynthesisParams {
   };
 }
 
-function jobDisplayState(job: EliteSynthesisJobRow): "completed_with_artifact" | "completed_missing_artifact" | "running" | "queued" | "failed" | "cancelled" {
+function jobDisplayState(job: EliteSynthesisJobRow): string {
+  const resultSummary = job.resultSummary && typeof job.resultSummary === "object"
+    ? job.resultSummary as Record<string, unknown>
+    : {};
+  const resultArtifact = job.resultArtifact && typeof job.resultArtifact === "object"
+    ? job.resultArtifact as Record<string, unknown>
+    : {};
+  const resultState = String(resultSummary.resultState ?? resultArtifact.resultState ?? "");
+  const targetProfileNormalized = String(resultSummary.targetProfileNormalized ?? resultArtifact.targetProfileNormalized ?? "");
+  const recommendedPolicyStatus = String(
+    resultSummary.recommendedPolicyStatus
+      ?? ((resultArtifact.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.recommendedPolicy as Record<string, unknown> | undefined)?.status
+      ?? "",
+  );
   if (job.status === "completed") {
-    return job.resultArtifact ? "completed_with_artifact" : "completed_missing_artifact";
+    if (!job.resultArtifact) return "completed_missing_artifact";
+    if (resultState === "completed_target_achieved") return "completed_target_achieved";
+    if (resultState === "completed_exhausted_no_target") {
+      if (recommendedPolicyStatus === "baseline_only") return "completed_baseline_only";
+      if (targetProfileNormalized === "return_first") return "completed_exhausted_no_target";
+    }
+    if (resultState) return resultState;
+    return "completed_with_artifact";
   }
   if (job.status === "failed" || job.status === "cancelled" || job.status === "queued" || job.status === "running") {
     return job.status;
@@ -88,6 +108,11 @@ function jobDisplayState(job: EliteSynthesisJobRow): "completed_with_artifact" |
 
 function artifactHealth(job: EliteSynthesisJobRow) {
   const resultArtifact = job.resultArtifact;
+  const resultSummary = job.resultSummary && typeof job.resultSummary === "object"
+    ? job.resultSummary as Record<string, unknown>
+    : {};
+  const resultState = String(resultSummary.resultState ?? resultArtifact?.resultState ?? "");
+  const noTargetDiagnosticRun = resultState === "completed_exhausted_no_target";
   const bestSelectedTrades = Array.isArray(resultArtifact?.bestPolicySelectedTrades)
     ? resultArtifact.bestPolicySelectedTrades
     : [];
@@ -96,10 +121,10 @@ function artifactHealth(job: EliteSynthesisJobRow) {
   if (job.status === "completed" && !resultArtifact) {
     diagnostics.push("Job status is completed but the result artifact is missing.");
   }
-  if (resultArtifact && !resultArtifact.bestPolicySummary) {
+  if (resultArtifact && !resultArtifact.bestPolicySummary && !noTargetDiagnosticRun) {
     diagnostics.push("Result artifact exists but the best policy summary is missing.");
   }
-  if (resultArtifact && bestSelectedTrades.length === 0) {
+  if (resultArtifact && bestSelectedTrades.length === 0 && !noTargetDiagnosticRun) {
     diagnostics.push("Result artifact exists but the selected trades artifact is empty or missing.");
   }
   if (resultArtifact && !returnAmplification) {
@@ -132,6 +157,9 @@ function synthesisJobMetadata(job: EliteSynthesisJobRow) {
 function buildExportMetadata(job: EliteSynthesisJobRow, reportType: string) {
   const meta = synthesisJobMetadata(job);
   const health = artifactHealth(job);
+  const resultSummary = job.resultSummary && typeof job.resultSummary === "object"
+    ? job.resultSummary as Record<string, unknown>
+    : {};
   return {
     serviceId: job.serviceId,
     jobId: job.id,
@@ -139,6 +167,7 @@ function buildExportMetadata(job: EliteSynthesisJobRow, reportType: string) {
     windowDays: meta.windowDays,
     searchProfile: meta.searchProfile,
     targetProfile: meta.targetProfile,
+    targetProfileNormalized: String(resultSummary.targetProfileNormalized ?? ""),
     startedAt: meta.startedAt,
     completedAt: meta.completedAt,
     exportedAt: new Date().toISOString(),
@@ -481,6 +510,48 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/selected-trades
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis selected-trades export failed" });
+  }
+});
+
+router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/policy-comparison", async (req, res): Promise<void> => {
+  try {
+    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+    getSynthesisAdapter(serviceId);
+    const jobId = Number(req.params.id);
+    const job = await getEliteSynthesisJob(jobId);
+    if (!job || job.serviceId !== serviceId) {
+      res.status(404).json({ error: `Elite synthesis job ${jobId} not found for ${serviceId}.` });
+      return;
+    }
+    if (!job.resultArtifact) {
+      res.status(409).json({ error: `Elite synthesis job ${jobId} has no completed result artifact yet.` });
+      return;
+    }
+    const hydrated = await buildHydratedResultArtifact(job);
+    const returnAmplificationAnalysis = hydrated?.returnAmplificationAnalysis && typeof hydrated.returnAmplificationAnalysis === "object"
+      ? hydrated.returnAmplificationAnalysis as Record<string, unknown>
+      : {};
+    res.json({
+      ...buildExportMetadata(job, "return_first_policy_comparison"),
+      status: job.status,
+      resultState: hydrated?.resultState ?? null,
+      targetAchieved: hydrated?.targetAchieved ?? false,
+      targetProfile: (hydrated?.windowSummary as Record<string, unknown> | undefined)?.targetProfile ?? "default",
+      targetProfileNormalized: String(returnAmplificationAnalysis.targetProfileNormalized ?? hydrated?.targetProfileNormalized ?? "default"),
+      rankingObjective: returnAmplificationAnalysis.rankingObjective ?? null,
+      swingCaptureGuardrails: returnAmplificationAnalysis.swingCaptureGuardrails ?? null,
+      safestHighWinPolicy: returnAmplificationAnalysis.safestHighWinPolicy ?? null,
+      bestReturnFirstPolicy: returnAmplificationAnalysis.bestReturnFirstPolicy ?? null,
+      bestRejectedProfitPolicy: returnAmplificationAnalysis.bestRejectedProfitPolicy ?? null,
+      recommendedPolicy: returnAmplificationAnalysis.recommendedPolicy ?? null,
+      policyComparisonTable: Array.isArray(returnAmplificationAnalysis.policyComparisonTable)
+        ? returnAmplificationAnalysis.policyComparisonTable
+        : [],
+      tradeLifecycleReplayReport: returnAmplificationAnalysis.tradeLifecycleReplayReport ?? null,
+      summary: returnAmplificationAnalysis.summary ?? null,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis policy comparison export failed" });
   }
 });
 

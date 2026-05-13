@@ -473,22 +473,56 @@ type EliteSynthesisJobStatusUi = {
   baselineRecordsCount?: number;
 };
 
+function synthesisResultStateCode(job: EliteSynthesisJobStatusUi): string {
+  if (job.resultSummary && typeof job.resultSummary === "object") {
+    const code = String((job.resultSummary as Record<string, unknown>).resultState ?? "");
+    if (code) return code;
+  }
+  return job.displayState ? String(job.displayState) : "";
+}
+
 function synthesisResultStateLabel(job: EliteSynthesisJobStatusUi): string {
-  if (job.displayState) return job.displayState.replaceAll("_", " ");
-  const resultState = job.resultSummary && typeof job.resultSummary === "object"
-    ? String((job.resultSummary as Record<string, unknown>).resultState ?? "")
-    : "";
+  const resultState = synthesisResultStateCode(job);
+  const resultSummary = job.resultSummary && typeof job.resultSummary === "object"
+    ? job.resultSummary as Record<string, unknown>
+    : {};
+  const targetProfileNormalized = String(resultSummary.targetProfileNormalized ?? "");
   if (!resultState) return "n/a";
-  return resultState.replaceAll("_", " ");
+  switch (resultState) {
+    case "completed_target_achieved":
+      return "Completed - target achieved";
+    case "completed_exhausted_no_target":
+      return targetProfileNormalized === "return_first"
+        ? "Completed - no return-first target found"
+        : "Completed - target not achieved";
+    case "completed_baseline_only":
+      return "Completed - baseline only";
+    case "completed_foundation_incomplete":
+      return "Completed - foundation incomplete";
+    case "completed_missing_artifact":
+      return "Completed - artifact missing";
+    case "failed_validation":
+      return "Failed - validation";
+    case "rebuilt_policy_evaluation_failed":
+      return "Completed - rebuilt policy evaluation failed";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+    case "queued":
+      return "Queued";
+    case "running":
+      return "Running";
+    default:
+      return resultState.replaceAll("_", " ");
+  }
 }
 
 function synthesisStatusTone(job: EliteSynthesisJobStatusUi): string {
-  if (job.displayState === "completed_missing_artifact") {
+  const resultState = synthesisResultStateCode(job);
+  if (resultState === "completed_missing_artifact" || resultState === "failed_validation") {
     return "bg-red-500/15 text-red-300 border-red-500/30";
   }
-  const resultState = job.resultSummary && typeof job.resultSummary === "object"
-    ? String((job.resultSummary as Record<string, unknown>).resultState ?? "")
-    : "";
   if (job.status === "completed" && resultState === "completed_target_achieved") {
     return "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
   }
@@ -5672,6 +5706,7 @@ const REPORT_OPTIONS: ReportOption[] = [
   { value: "elite-synthesis-result", label: "Elite Synthesis Result", task: "integrated-elite-synthesis", runType: "synthesis" },
   { value: "elite-synthesis-selected-trades", label: "Elite Synthesis Selected Trades", task: "integrated-elite-synthesis", runType: "synthesis" },
   { value: "elite-return-amplification", label: "Return Amplification Analysis", task: "integrated-elite-synthesis", runType: "synthesis" },
+  { value: "elite-policy-comparison", label: "Policy Comparison", task: "integrated-elite-synthesis", runType: "synthesis" },
   { value: "trade-lifecycle-replay", label: "Trade Lifecycle Replay Report", task: "integrated-elite-synthesis", runType: "synthesis" },
 ];
 
@@ -6006,6 +6041,10 @@ function ReportsTab({
         case "elite-return-amplification":
           if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
           endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/return-amplification`;
+          break;
+        case "elite-policy-comparison":
+          if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
+          endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/policy-comparison`;
           break;
         case "trade-lifecycle-replay":
           if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
@@ -6543,7 +6582,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
                           </td>
                           <td className="px-3 py-2">
                             <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium", synthesisStatusTone(job))}>
-                              {job.displayState ?? job.status}
+                              {synthesisResultStateLabel(job)}
                             </span>
                           </td>
                           <td className="px-3 py-2 text-muted-foreground">{targetProfileLabel(job.targetProfile)}</td>
