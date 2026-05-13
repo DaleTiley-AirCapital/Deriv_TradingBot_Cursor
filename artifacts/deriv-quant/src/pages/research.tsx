@@ -6077,6 +6077,10 @@ function ReportsTab({
   const returnAmplificationAnalysis = (synthesisReportResult?.returnAmplificationAnalysis as Record<string, unknown> | undefined) ?? {};
   const returnSummary = (returnAmplificationAnalysis.summary as Record<string, unknown> | undefined) ?? {};
   const recommendedScenario = (returnAmplificationAnalysis.recommendedCandidateConfiguration as Record<string, unknown> | undefined) ?? null;
+  const safestHighWinPolicy = (returnAmplificationAnalysis.safestHighWinPolicy as Record<string, unknown> | undefined) ?? null;
+  const bestReturnFirstPolicy = (returnAmplificationAnalysis.bestReturnFirstPolicy as Record<string, unknown> | undefined) ?? null;
+  const bestRejectedProfitPolicy = (returnAmplificationAnalysis.bestRejectedProfitPolicy as Record<string, unknown> | undefined) ?? null;
+  const recommendedPolicyMeta = (returnAmplificationAnalysis.recommendedPolicy as Record<string, unknown> | undefined) ?? null;
   const bestLifecycleReturnPct = Number(recommendedScenario?.totalAccountReturnPct ?? recommendedScenario?.accountReturnPct ?? 0);
   const bestLifecycleMonthlyPct = Number(recommendedScenario?.averageMonthlyAccountReturnPct ?? 0);
   const stageButtonAllowed = service === "CRASH300"
@@ -6269,7 +6273,35 @@ function ReportsTab({
                   : "No recommended scenario yet"}
               </p>
             </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Safest high-win policy</p>
+              <p className="mt-1 text-foreground">{String(safestHighWinPolicy?.policyId ?? safestHighWinPolicy?.scenarioId ?? "n/a")}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Best return-first policy</p>
+              <p className="mt-1 text-foreground">{String(bestReturnFirstPolicy?.policyId ?? bestReturnFirstPolicy?.scenarioId ?? "none passed")}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Best rejected profit policy</p>
+              <p className="mt-1 text-foreground">{String(bestRejectedProfitPolicy?.policyId ?? bestRejectedProfitPolicy?.scenarioId ?? "n/a")}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Capture thresholds</p>
+              <p className="mt-1 text-foreground">
+                {Array.isArray(returnSummary.policiesWithMedianLifecyclePnlAbove5) ? `${(returnSummary.policiesWithMedianLifecyclePnlAbove5 as unknown[]).length}` : 0}
+                {" / "}
+                {Array.isArray(returnSummary.policiesWithMedianLifecyclePnlAbove7) ? `${(returnSummary.policiesWithMedianLifecyclePnlAbove7 as unknown[]).length}` : 0}
+                {" / "}
+                {Array.isArray(returnSummary.policiesWithMedianLifecyclePnlAbove9) ? `${(returnSummary.policiesWithMedianLifecyclePnlAbove9 as unknown[]).length}` : 0}
+                <span className="text-muted-foreground"> above 5% / 7% / 9%</span>
+              </p>
+            </div>
           </div>
+          {recommendedPolicyMeta?.explanation ? (
+            <div className="rounded-lg border border-border/30 bg-background/30 px-3 py-2 text-[11px] text-muted-foreground">
+              {String(recommendedPolicyMeta.explanation)}
+            </div>
+          ) : null}
           {artifactDiagnostics.length > 0 ? (
             <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] text-red-200 space-y-1">
               {artifactDiagnostics.map((diagnostic) => <p key={diagnostic}>{diagnostic}</p>)}

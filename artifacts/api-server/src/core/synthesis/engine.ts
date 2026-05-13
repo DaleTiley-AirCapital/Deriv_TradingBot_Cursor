@@ -2158,6 +2158,42 @@ function buildReturnAmplificationAnalysis(params: {
     "microBreakStrengthPct",
   ];
 
+  const swingCaptureGuardrails = (() => {
+    const base = {
+      serviceId: params.dataset.serviceId,
+      series: params.dataset.serviceId.startsWith("CRASH") ? "crash" : "generic",
+      rankingObjective: isReturnFirstObjective(params.targetProfile)
+        ? "maximize_lifecycle_monthly_return_before_perfect_win_rate"
+        : "maximize_safe_research_readiness",
+      minWinRate: 0.9,
+      maxSlHitRate: 0.1,
+      minProfitFactor: 2.5,
+      maxDrawdownPct: 10,
+      minMedianLifecyclePnlPct: 5,
+      minAverageLifecyclePnlPct: 5,
+      minMedianMfePct: 6,
+      minLifecycleMfeCaptureRatio: 0.75,
+      preferredMedianLifecyclePnlPctFor10Plus: 7,
+      preferredAverageLifecyclePnlPctFor10Plus: 7,
+      notScalpLike: true,
+    };
+    if (params.dataset.serviceId === "CRASH300") return base;
+    return {
+      ...base,
+      minMedianLifecyclePnlPct: 4.5,
+      minAverageLifecyclePnlPct: 4.5,
+      minMedianMfePct: 5.5,
+      preferredMedianLifecyclePnlPctFor10Plus: 6.5,
+      preferredAverageLifecyclePnlPctFor10Plus: 6.5,
+    };
+  })();
+
+  const captureThresholds = [5, 7, 9] as const;
+
+  const dominantLabel = (values: Array<string | null | undefined>) =>
+    Object.entries(countRecord(values))
+      .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0] ?? "unknown";
+
   const countRecord = (values: Array<string | null | undefined>) => values.reduce<Record<string, number>>((acc, value) => {
     const key = typeof value === "string" && value.trim().length > 0 ? value : "unknown";
     acc[key] = (acc[key] ?? 0) + 1;
@@ -2472,6 +2508,42 @@ function buildReturnAmplificationAnalysis(params: {
     };
   });
 
+  const candidateLooksHighValue = (item: typeof enrichedCandidates[number]) => {
+    const selectedBucket = String(item.candidate.selectedBucket ?? "");
+    const moveSizeBucket = String(item.candidate.selectedMoveSizeBucket ?? "");
+    const predictedBucket = String(item.prediction.predictedMoveSizeBucket ?? "");
+    return selectedBucket.includes("10_plus_pct")
+      || moveSizeBucket.includes("10_plus_pct")
+      || returnBucketAtLeast(predictedBucket, "9_to_10_pct");
+  };
+
+  const lifecycleReplayByCandidateId = new Map<string, TradeLifecycleReplayTradeResult>();
+  if (lifecycleCandles.length > 0) {
+    for (const item of enrichedCandidates) {
+      const expectedMovePct = Math.max(
+        safeNumber(item.dynamicExitPlan?.runnerTargetPct, 0),
+        safeNumber(item.dynamicExitPlan?.tpTargetPct, 0),
+        safeNumber(item.prediction.expectedMovePct, 0),
+        safeNumber(item.candidate.projectedMovePctPoints ?? item.candidate.projectedMovePct, 0),
+      );
+      const replay = replayLifecycleTrade({
+        candidate: item.candidate,
+        candles: lifecycleCandles,
+        expectedMovePct,
+        exitPlan: buildLifecycleExitPlan({
+          candidate: item.candidate,
+          dynamicExitPlan: item.dynamicExitPlan,
+          expectedMovePct,
+        }),
+        serviceId: params.dataset.serviceId,
+        sourceJobId: null,
+        sourcePolicyId: params.bestPolicySummary?.policyId ?? null,
+        maxReplayTs: safeNumber(item.candidate.sourceMoveEndTs ?? item.candidate.exitTs, 0) || null,
+      });
+      if (replay) lifecycleReplayByCandidateId.set(item.candidate.candidateId, replay);
+    }
+  }
+
   const scenarioMonthlyBreakdown = (selected: typeof enrichedCandidates) => {
     const monthMap = new Map<string, typeof enrichedCandidates>();
     for (const item of selected) {
@@ -2663,32 +2735,9 @@ function buildReturnAmplificationAnalysis(params: {
       .reduce((sum, item) => sum + Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0), 0));
     const metrics = computeScenarioEquityMetrics(pnlValues);
     const monthlyBreakdown = scenarioMonthlyBreakdown(selected);
-    const lifecycleReplayTrades = lifecycleCandles.length > 0
-      ? selected.map((item) => replayLifecycleTrade({
-          candidate: item.candidate,
-          candles: lifecycleCandles,
-          expectedMovePct: Math.max(
-            safeNumber(item.dynamicExitPlan?.runnerTargetPct, 0),
-            safeNumber(item.dynamicExitPlan?.tpTargetPct, 0),
-            safeNumber(item.prediction.expectedMovePct, 0),
-            safeNumber(item.candidate.projectedMovePctPoints ?? item.candidate.projectedMovePct, 0),
-          ),
-          exitPlan: buildLifecycleExitPlan({
-            candidate: item.candidate,
-            dynamicExitPlan: item.dynamicExitPlan,
-            expectedMovePct: Math.max(
-              safeNumber(item.dynamicExitPlan?.runnerTargetPct, 0),
-              safeNumber(item.dynamicExitPlan?.tpTargetPct, 0),
-              safeNumber(item.prediction.expectedMovePct, 0),
-              safeNumber(item.candidate.projectedMovePctPoints ?? item.candidate.projectedMovePct, 0),
-            ),
-          }),
-          serviceId: params.dataset.serviceId,
-          sourceJobId: null,
-          sourcePolicyId: params.bestPolicySummary?.policyId ?? null,
-          maxReplayTs: safeNumber(item.candidate.sourceMoveEndTs ?? item.candidate.exitTs, 0) || null,
-        })).filter((value): value is TradeLifecycleReplayTradeResult => Boolean(value))
-      : [];
+    const lifecycleReplayTrades = selected
+      .map((item) => lifecycleReplayByCandidateId.get(item.candidate.candidateId) ?? null)
+      .filter((value): value is TradeLifecycleReplayTradeResult => Boolean(value));
     const lifecycleReplayReport = buildTradeLifecycleReplayReport({
       serviceId: params.dataset.serviceId,
       sourceJobId: null,
@@ -2710,6 +2759,61 @@ function buildReturnAmplificationAnalysis(params: {
     const cascadeScenarios = simulateCascadeScenarios(selected);
     const predictedBucketDistribution = probabilityDistribution(selected.map((item) => item.prediction.predictedMoveSizeBucket));
     const actualBucketDistribution = probabilityDistribution(selected.map((item) => item.actualEvaluatedBucket));
+    const lifecycleMedianPnlPct = lifecycleReplayReport.lifecycleMedianPnlPct;
+    const lifecycleAveragePnlPct = lifecycleReplayReport.lifecycleAveragePnlPct;
+    const medianMfePct = lifecycleReplayTrades.length > 0
+      ? Number(percentile(lifecycleReplayTrades.map((trade) => Number(trade.maxMfeSeenBeforeExit ?? 0)), 0.5).toFixed(4))
+      : 0;
+    const medianHoldMinutes = lifecycleReplayTrades.length > 0
+      ? Number(percentile(lifecycleReplayTrades.map((trade) => Number(trade.timeInTradeLifecycle ?? 0)), 0.5).toFixed(2))
+      : 0;
+    const dominantPredictedBucket = dominantLabel(selected.map((item) => String(item.prediction.predictedMoveSizeBucket ?? "")));
+    const dominantSelectedBucket = dominantLabel(selected.map((item) => String(item.candidate.selectedBucket ?? "")));
+    const dominantRuntimeFamily = dominantLabel(selected.map((item) => String(item.candidate.runtimeFamily ?? "")));
+    const dominantTriggerTransition = dominantLabel(selected.map((item) => String(item.candidate.triggerTransition ?? "")));
+    const dominantDirection = dominantLabel(selected.map((item) => String(item.candidate.direction ?? "")));
+    const dominantOffsetCluster = dominantLabel(selected.map((item) => offsetClusterFromLabel(item.candidate.offsetLabel)));
+    const highValueScenario = selected.some((item) => candidateLooksHighValue(item));
+    const preferredMedianThreshold = highValueScenario
+      ? swingCaptureGuardrails.preferredMedianLifecyclePnlPctFor10Plus
+      : swingCaptureGuardrails.minMedianLifecyclePnlPct;
+    const preferredAverageThreshold = highValueScenario
+      ? swingCaptureGuardrails.preferredAverageLifecyclePnlPctFor10Plus
+      : swingCaptureGuardrails.minAverageLifecyclePnlPct;
+    const scalpLike = highValueScenario
+      ? lifecycleMedianPnlPct < swingCaptureGuardrails.minMedianLifecyclePnlPct
+      : lifecycleMedianPnlPct < swingCaptureGuardrails.minMedianLifecyclePnlPct
+        || lifecycleAveragePnlPct < swingCaptureGuardrails.minAverageLifecyclePnlPct;
+    const rejectionReasons: string[] = [];
+    if (selected.length === 0) rejectionReasons.push("no_selected_trades");
+    if ((selected.length > 0 ? wins / selected.length : 0) < swingCaptureGuardrails.minWinRate) rejectionReasons.push("win_rate_below_guardrail");
+    if ((selected.length > 0 ? slHits / selected.length : 0) > swingCaptureGuardrails.maxSlHitRate) rejectionReasons.push("sl_hit_rate_above_guardrail");
+    if ((grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : 0) < swingCaptureGuardrails.minProfitFactor) rejectionReasons.push("profit_factor_below_guardrail");
+    if (effectiveDrawdown > swingCaptureGuardrails.maxDrawdownPct) rejectionReasons.push("drawdown_above_guardrail");
+    if (lifecycleMedianPnlPct < swingCaptureGuardrails.minMedianLifecyclePnlPct) rejectionReasons.push("median_lifecycle_pnl_below_guardrail");
+    if (lifecycleAveragePnlPct < swingCaptureGuardrails.minAverageLifecyclePnlPct) rejectionReasons.push("average_lifecycle_pnl_below_guardrail");
+    if (medianMfePct < swingCaptureGuardrails.minMedianMfePct) rejectionReasons.push("median_mfe_below_guardrail");
+    if (Number(lifecycleReplayReport.lifecycleMfeCaptureRatio ?? 0) < swingCaptureGuardrails.minLifecycleMfeCaptureRatio) rejectionReasons.push("mfe_capture_ratio_below_guardrail");
+    if (scalpLike) rejectionReasons.push("insufficient_move_capture");
+    const guardrailsPassed = isReturnFirstObjective(params.targetProfile)
+      ? rejectionReasons.length === 0
+      : Boolean(
+          selected.length > 0
+          && (selected.length > 0 ? wins / selected.length : 0) >= swingCaptureGuardrails.minWinRate
+          && (selected.length > 0 ? slHits / selected.length : 0) <= swingCaptureGuardrails.maxSlHitRate
+          && effectiveDrawdown <= swingCaptureGuardrails.maxDrawdownPct,
+        );
+    const rankingScore = Number((
+      (guardrailsPassed ? 1000 : 0)
+      + (effectiveMonthlyAccountReturnPct * 25)
+      + (effectiveAccountReturnPct * 5)
+      + (lifecycleMedianPnlPct * 10)
+      + (lifecycleAveragePnlPct * 8)
+      + (Number(lifecycleReplayReport.lifecycleMfeCaptureRatio ?? 0) * 100)
+      + ((selected.length > 0 ? wins / selected.length : 0) * 20)
+      - (effectiveDrawdown * 4)
+      - ((selected.length > 0 ? slHits / selected.length : 0) * 40)
+    ).toFixed(4));
     const dynamicExitPlanSummary = {
       tpTargetPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.tpTargetPct ?? 0)).filter((value) => value > 0)),
       slRiskPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.slRiskPct ?? 0)).filter((value) => value > 0)),
@@ -2763,9 +2867,25 @@ function buildReturnAmplificationAnalysis(params: {
       baseAverageMonthlyAccountReturnPct: monthlyBreakdown.length > 0 ? Number(mean(monthlyBreakdown.map((month) => Number(month.accountReturnPct ?? 0))).toFixed(2)) : 0,
       lifecycleAccountReturnPct: lifecycleReplayReport.lifecycleTotalAccountReturnPct,
       lifecycleAverageMonthlyAccountReturnPct: lifecycleReplayReport.lifecycleAverageMonthlyReturnPct,
-      lifecycleMedianPnlPct: lifecycleReplayReport.lifecycleMedianPnlPct,
-      lifecycleAveragePnlPct: lifecycleReplayReport.lifecycleAveragePnlPct,
+      lifecycleMedianPnlPct,
+      lifecycleAveragePnlPct,
       lifecycleMfeCaptureRatio: lifecycleReplayReport.lifecycleMfeCaptureRatio,
+      medianMfePct,
+      medianHoldMinutes,
+      runtimeFamily: dominantRuntimeFamily,
+      triggerTransition: dominantTriggerTransition,
+      bucket: dominantPredictedBucket !== "unknown" ? dominantPredictedBucket : dominantSelectedBucket,
+      direction: dominantDirection,
+      offsetCluster: dominantOffsetCluster,
+      scalpLike,
+      guardrailsPassed,
+      rejectionReasons,
+      rankingScore,
+      swingCaptureExplanation: scalpLike
+        ? `Policy has high win rate but captures only ${lifecycleMedianPnlPct.toFixed(4)}% median, below swing threshold.`
+        : `Lifecycle median ${lifecycleMedianPnlPct.toFixed(4)}% and average ${lifecycleAveragePnlPct.toFixed(4)}% satisfy current capture expectations.`,
+      preferredMedianLifecyclePnlPct: preferredMedianThreshold,
+      preferredAverageLifecyclePnlPct: preferredAverageThreshold,
       averageTpAchieved: selected.length > 0
         ? Number(mean(selected.map((item) => {
             const target = Number(item.dynamicExitPlan.tpTargetPct ?? 0);
@@ -2809,12 +2929,15 @@ function buildReturnAmplificationAnalysis(params: {
         dynamicExitDerivationPassed: selected.every((item) => Boolean(item.dynamicExitPlan.available) && !Boolean(item.dynamicExitPlan.broadFallback)),
         liveSafeTriggerExpressionExplicit: false,
         relationshipFiltersLiveSafe: true,
-        canStageForPaper: false,
+        canStageForPaper: !isReturnFirstObjective(params.targetProfile) ? false : guardrailsPassed,
         canPromoteRuntime: false,
         canPromoteLive: false,
         cascadeRequired: cascadeScenarios.some((scenario) => Number(scenario.monthlyReturnPct ?? 0) >= 50),
         leverageRequired: (capitalAllocationScenarios.leverageScenarios as Array<Record<string, unknown>>).some((scenario) => Number(scenario.monthlyAccountReturnPct ?? 0) >= 50),
-        blockers: ["runtime_mimic_live_safe_trigger_expression_pending"],
+        blockers: [
+          ...(guardrailsPassed ? [] : rejectionReasons),
+          "runtime_mimic_live_safe_trigger_expression_pending",
+        ],
         warnings: ["Return amplification scenarios are research-only until runtime mimic parity exists."],
       },
       exampleSelectedTrades: selected.slice(0, 8).map((item) => ({
@@ -2864,6 +2987,15 @@ function buildReturnAmplificationAnalysis(params: {
       filterNotes: ["predicted_bucket>=9_to_10_pct"],
     },
     {
+      scenarioId: "bucket_10_plus_only",
+      label: "Bucket 10_plus_pct only",
+      description: "Policies explicitly aligned to 10_plus_pct selected move-size buckets.",
+      predicate: (item: typeof enrichedCandidates[number]) =>
+        String(item.candidate.selectedBucket ?? "").includes("10_plus_pct")
+        || String(item.candidate.selectedMoveSizeBucket ?? "").includes("10_plus_pct"),
+      filterNotes: ["selected_move_size_bucket=10_plus_pct"],
+    },
+    {
       scenarioId: "bucket_9_to_13_only",
       label: "Bucket 9_to_13_pct only",
       description: "High-value target set focused on 9-13% predicted move buckets only.",
@@ -2886,6 +3018,30 @@ function buildReturnAmplificationAnalysis(params: {
         "setupMatch>=0.60",
         "triggerStrengthScore>=0.60",
       ],
+    },
+    {
+      scenarioId: "lifecycle_capture_gte_5",
+      label: "Lifecycle capture >= 5%",
+      description: "Evaluation-only filter keeping candidates whose lifecycle replay captured at least 5% PnL historically.",
+      predicate: (item: typeof enrichedCandidates[number]) =>
+        Number(lifecycleReplayByCandidateId.get(item.candidate.candidateId)?.lifecyclePnlPct ?? 0) >= 5,
+      filterNotes: ["evaluation_only:lifecycle_capture>=5pct"],
+    },
+    {
+      scenarioId: "lifecycle_capture_gte_7",
+      label: "Lifecycle capture >= 7%",
+      description: "Evaluation-only filter keeping candidates whose lifecycle replay captured at least 7% PnL historically.",
+      predicate: (item: typeof enrichedCandidates[number]) =>
+        Number(lifecycleReplayByCandidateId.get(item.candidate.candidateId)?.lifecyclePnlPct ?? 0) >= 7,
+      filterNotes: ["evaluation_only:lifecycle_capture>=7pct"],
+    },
+    {
+      scenarioId: "lifecycle_capture_gte_9",
+      label: "Lifecycle capture >= 9%",
+      description: "Evaluation-only filter keeping candidates whose lifecycle replay captured at least 9% PnL historically.",
+      predicate: (item: typeof enrichedCandidates[number]) =>
+        Number(lifecycleReplayByCandidateId.get(item.candidate.candidateId)?.lifecyclePnlPct ?? 0) >= 9,
+      filterNotes: ["evaluation_only:lifecycle_capture>=9pct"],
     },
   ].map((scenario) => buildScenario(scenario));
 
@@ -2983,18 +3139,99 @@ function buildReturnAmplificationAnalysis(params: {
   const rebuiltPolicySeedCount = Number(
     ((params.dataset.summary.rebuiltPolicySeedDiagnostics as Record<string, unknown> | undefined)?.rebuiltPolicySeedCount ?? 0),
   );
-  const recommendedCandidateConfiguration = [...scenarios]
+  const rankedScenarios = [...scenarios].sort((a, b) =>
+    Number(b.guardrailsPassed ? 1 : 0) - Number(a.guardrailsPassed ? 1 : 0)
+    || Number(b.lifecycleAverageMonthlyAccountReturnPct ?? b.averageMonthlyAccountReturnPct ?? 0) - Number(a.lifecycleAverageMonthlyAccountReturnPct ?? a.averageMonthlyAccountReturnPct ?? 0)
+    || Number(b.lifecycleAccountReturnPct ?? b.accountReturnPct ?? 0) - Number(a.lifecycleAccountReturnPct ?? a.accountReturnPct ?? 0)
+    || Number(b.lifecycleMedianPnlPct ?? 0) - Number(a.lifecycleMedianPnlPct ?? 0)
+    || Number(b.lifecycleAveragePnlPct ?? 0) - Number(a.lifecycleAveragePnlPct ?? 0)
+    || Number(b.lifecycleMfeCaptureRatio ?? 0) - Number(a.lifecycleMfeCaptureRatio ?? 0)
+    || Number(b.winRate ?? 0) - Number(a.winRate ?? 0)
+    || Number(a.drawdown ?? Number.POSITIVE_INFINITY) - Number(b.drawdown ?? Number.POSITIVE_INFINITY)
+    || Number(b.trades ?? 0) - Number(a.trades ?? 0)
+  );
+  const recommendedCandidateConfiguration = rankedScenarios[0] ?? null;
+  const safestHighWinPolicy = [...scenarios].sort((a, b) =>
+    Number(b.winRate ?? 0) - Number(a.winRate ?? 0)
+    || Number(a.slHitRate ?? Number.POSITIVE_INFINITY) - Number(b.slHitRate ?? Number.POSITIVE_INFINITY)
+    || Number(b.profitFactor ?? 0) - Number(a.profitFactor ?? 0)
+    || Number(b.lifecycleMedianPnlPct ?? 0) - Number(a.lifecycleMedianPnlPct ?? 0)
+  )[0] ?? null;
+  const bestReturnFirstPolicy = rankedScenarios.find((scenario) => Boolean(scenario.guardrailsPassed)) ?? null;
+  const bestRejectedProfitPolicy = [...scenarios]
+    .filter((scenario) => !Boolean(scenario.guardrailsPassed))
     .sort((a, b) =>
-      Number(b.targetAchievedBreakdown.finalTargetAchieved ? 1 : 0) - Number(a.targetAchievedBreakdown.finalTargetAchieved ? 1 : 0)
-      || Number(b.averageMonthlyAccountReturnPct ?? 0) - Number(a.averageMonthlyAccountReturnPct ?? 0)
-      || Number(b.accountReturnPct ?? 0) - Number(a.accountReturnPct ?? 0)
-      || Number(a.drawdown ?? Number.POSITIVE_INFINITY) - Number(b.drawdown ?? Number.POSITIVE_INFINITY)
-      || Number(a.slHitRate ?? Number.POSITIVE_INFINITY) - Number(b.slHitRate ?? Number.POSITIVE_INFINITY)
-      || Number(b.profitFactor ?? 0) - Number(a.profitFactor ?? 0)
-      || Number(b.winRate ?? 0) - Number(a.winRate ?? 0)
-      || Number(b.lifecycleMfeCaptureRatio ?? 0) - Number(a.lifecycleMfeCaptureRatio ?? 0)
-      || Number(b.trades ?? 0) - Number(a.trades ?? 0)
+      Number(b.lifecycleAverageMonthlyAccountReturnPct ?? 0) - Number(a.lifecycleAverageMonthlyAccountReturnPct ?? 0)
+      || Number(b.lifecycleAccountReturnPct ?? 0) - Number(a.lifecycleAccountReturnPct ?? 0)
+      || Number(b.lifecycleMedianPnlPct ?? 0) - Number(a.lifecycleMedianPnlPct ?? 0)
     )[0] ?? null;
+  const scenarioByCaptureThreshold = Object.fromEntries(captureThresholds.map((threshold) => [
+    threshold,
+    rankedScenarios.filter((scenario) => Number(scenario.lifecycleMedianPnlPct ?? 0) >= threshold),
+  ])) as Record<typeof captureThresholds[number], typeof scenarios>;
+  const policiesWithMedianLifecyclePnlAbove5 = scenarioByCaptureThreshold[5].map((scenario) => scenario.scenarioId);
+  const policiesWithMedianLifecyclePnlAbove7 = scenarioByCaptureThreshold[7].map((scenario) => scenario.scenarioId);
+  const policiesWithMedianLifecyclePnlAbove9 = scenarioByCaptureThreshold[9].map((scenario) => scenario.scenarioId);
+  const bestAbove5 = scenarioByCaptureThreshold[5][0] ?? null;
+  const bestAbove7 = scenarioByCaptureThreshold[7][0] ?? null;
+  const bestAbove9 = scenarioByCaptureThreshold[9][0] ?? null;
+  const whyHigherCaptureFailed = captureThresholds.map((threshold) => {
+    const failing = rankedScenarios
+      .filter((scenario) => Number(scenario.lifecycleMedianPnlPct ?? 0) < threshold)
+      .sort((a, b) => Number(b.lifecycleAverageMonthlyAccountReturnPct ?? 0) - Number(a.lifecycleAverageMonthlyAccountReturnPct ?? 0))[0] ?? null;
+    return {
+      thresholdPct: threshold,
+      available: (scenarioByCaptureThreshold[threshold] ?? []).length > 0,
+      topFailingScenarioId: failing?.scenarioId ?? null,
+      topFailingMedianLifecyclePnlPct: Number(failing?.lifecycleMedianPnlPct ?? 0),
+      rejectionReasons: Array.isArray(failing?.rejectionReasons) ? failing.rejectionReasons : [],
+    };
+  });
+  const recommendedPolicy = bestReturnFirstPolicy
+    ? {
+        status: "guardrails_passed",
+        policy: bestReturnFirstPolicy,
+        explanation: `Selected for return_first because it passed swing capture guardrails and delivered ${Number(bestReturnFirstPolicy.lifecycleAverageMonthlyAccountReturnPct ?? 0).toFixed(2)}% average monthly return.`,
+      }
+    : safestHighWinPolicy
+      ? {
+          status: "baseline_only",
+          policy: safestHighWinPolicy,
+          explanation: "No CRASH300 return-first swing policy found. Current best is high-win low-capture baseline.",
+        }
+      : {
+          status: "no_policy",
+          policy: null,
+          explanation: "No CRASH300 return-first swing policy found. Current best is high-win low-capture baseline.",
+        };
+  const policyComparisonTable = rankedScenarios.map((scenario) => ({
+    policyId: String(scenario.scenarioId ?? "unknown"),
+    runtimeFamily: String(scenario.runtimeFamily ?? "unknown"),
+    triggerTransition: String(scenario.triggerTransition ?? "unknown"),
+    bucket: String(scenario.bucket ?? "unknown"),
+    direction: String(scenario.direction ?? "unknown"),
+    offsetCluster: String(scenario.offsetCluster ?? "unknown"),
+    trades: Number(scenario.trades ?? 0),
+    wins: Number(scenario.wins ?? 0),
+    losses: Number(scenario.losses ?? 0),
+    winRate: Number(scenario.winRate ?? 0),
+    slHitRate: Number(scenario.slHitRate ?? 0),
+    profitFactor: Number(scenario.profitFactor ?? 0),
+    oldMedianPnlPct: Number((scenario.tradeLifecycleReplayReport as Record<string, unknown> | undefined)?.oldMedianPnlPct ?? 0),
+    lifecycleMedianPnlPct: Number(scenario.lifecycleMedianPnlPct ?? 0),
+    lifecycleAveragePnlPct: Number(scenario.lifecycleAveragePnlPct ?? 0),
+    medianMfePct: Number(scenario.medianMfePct ?? 0),
+    lifecycleMfeCaptureRatio: Number(scenario.lifecycleMfeCaptureRatio ?? 0),
+    lifecycleTotalAccountReturnPct: Number(scenario.lifecycleAccountReturnPct ?? scenario.accountReturnPct ?? 0),
+    lifecycleAverageMonthlyReturnPct: Number(scenario.lifecycleAverageMonthlyAccountReturnPct ?? scenario.averageMonthlyAccountReturnPct ?? 0),
+    maxDrawdownPct: Number(scenario.drawdown ?? 0),
+    medianHoldMinutes: Number(scenario.medianHoldMinutes ?? 0),
+    exitReasonDistribution: (scenario.tradeLifecycleReplayReport as Record<string, unknown> | undefined)?.exitReasonDistribution ?? {},
+    scalpLike: Boolean(scenario.scalpLike),
+    guardrailsPassed: Boolean(scenario.guardrailsPassed),
+    rejectionReasons: Array.isArray(scenario.rejectionReasons) ? scenario.rejectionReasons : [],
+    rankingScore: Number(scenario.rankingScore ?? 0),
+  }));
   const baselineLifecycleReplayReport = baselineScenario?.tradeLifecycleReplayReport ?? buildTradeLifecycleReplayReport({
     serviceId: params.dataset.serviceId,
     sourceJobId: null,
@@ -3037,7 +3274,16 @@ function buildReturnAmplificationAnalysis(params: {
       cascadeRequired: (scenario.paperStageability as Record<string, unknown>).cascadeRequired,
     })),
     relationshipFailureProxyAnalysis,
+    targetProfileRaw: params.targetProfile,
+    targetProfileNormalized: isReturnFirstObjective(params.targetProfile) ? "return_first" : "default",
+    rankingObjective: swingCaptureGuardrails.rankingObjective,
+    swingCaptureGuardrails,
+    safestHighWinPolicy,
+    bestReturnFirstPolicy,
+    bestRejectedProfitPolicy,
+    recommendedPolicy,
     recommendedCandidateConfiguration,
+    policyComparisonTable,
     tradeLifecycleReplayReport: baselineLifecycleReplayReport,
     summary: {
       anyScenarioReaches50MonthlyReturn: scenarios.some((scenario) => Number(scenario.averageMonthlyAccountReturnPct ?? 0) >= 50),
@@ -3049,6 +3295,13 @@ function buildReturnAmplificationAnalysis(params: {
         : null,
       anyScenarioMaintains90WinAndLowSl: scenarioMeeting90Win.length > 0,
       scenariosMeeting90WinAndLowSl: scenarioMeeting90Win.map((scenario) => scenario.scenarioId),
+      policiesWithMedianLifecyclePnlAbove5,
+      policiesWithMedianLifecyclePnlAbove7,
+      policiesWithMedianLifecyclePnlAbove9,
+      bestAbove5,
+      bestAbove7,
+      bestAbove9,
+      whyHigherCaptureFailed,
       lifecycleReplayImprovedTrades: baselineLifecycleReplayReport.improvedTradeCount,
       lifecycleOldMedianPnlPct: baselineLifecycleReplayReport.oldMedianPnlPct,
       lifecycleNewMedianPnlPct: baselineLifecycleReplayReport.lifecycleMedianPnlPct,
@@ -3056,7 +3309,7 @@ function buildReturnAmplificationAnalysis(params: {
       lifecycleNewAveragePnlPct: baselineLifecycleReplayReport.lifecycleAveragePnlPct,
       recommendedNextStep: recommendedCandidateConfiguration && Number((recommendedCandidateConfiguration as Record<string, unknown>).averageMonthlyAccountReturnPct ?? 0) > 0
         ? "Review the lifecycle and return-first analysis in Reports, then rerun the deep search with targetProfile=return_first if the recommended scenario looks safe."
-        : "No safe return amplification scenario emerged from the current analysis. Keep the baseline rebuilt policy and continue research.",
+        : "No safe return-first swing policy emerged from the current analysis. Keep the baseline rebuilt policy and continue research.",
     },
   };
 }
