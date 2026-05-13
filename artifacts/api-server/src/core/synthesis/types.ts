@@ -309,6 +309,144 @@ export type EliteSynthesisResult = {
   [key: string]: unknown;
 };
 
+export type LifecycleState =
+  | "initial_risk"
+  | "protected"
+  | "tp1_reached"
+  | "runner_active"
+  | "momentum_watch"
+  | "tighten_protection"
+  | "exit_pending"
+  | "exited";
+
+export type LifecycleDecision =
+  | "hold"
+  | "protect_to_breakeven"
+  | "protect_to_profit"
+  | "partial_take_profit"
+  | "continue_runner"
+  | "tighten_dynamic_stop"
+  | "cascade_allowed"
+  | "exit_momentum_failure"
+  | "exit_reversal_signal"
+  | "exit_tp2"
+  | "exit_time_failure"
+  | "exit_hard_sl";
+
+export type TradeLifecycleSnapshot = {
+  currentPnlPct: number;
+  currentMfePct: number;
+  currentMaePct: number;
+  progressToExpectedMovePct: number;
+  progressToTp1Pct: number;
+  progressToTp2Pct: number;
+  timeInTradeBars: number;
+  timeInTradeMinutes: number;
+  expectedMaturityBars: number;
+  expectedMaturityMinutes: number;
+  barsSinceEntry: number;
+  oneBarReturnPct: number;
+  threeBarReturnPct: number;
+  fiveBarReturnPct: number;
+  pullbackFromLocalExtremePct: number;
+  atrNormalisedPullback: number;
+  candleBodyDirection: "up" | "down" | "flat";
+  upperWickRejection: number;
+  lowerWickRejection: number;
+  microBreakDirection: "up" | "down" | "flat";
+  microBreakStrengthPct: number;
+  reclaimConfirmed: boolean;
+  rangeExpansionScore: number;
+  rangeCompressionScore: number;
+  compressionToExpansionScore: number;
+  atrRank: number;
+  bbWidthRank: number;
+  momentumDecayScore: number;
+  reversalPressureScore: number;
+  continuationScore: number;
+  normalPullbackScore: number;
+};
+
+export type LifecycleExitPlan = {
+  initialHardSlPct: number;
+  tp1Pct: number;
+  tp2Pct: number;
+  runnerTargetPct: number;
+  protectionActivationPct: number;
+  minimumNoTrailBars: number;
+  minimumNoTrailMinutes: number;
+  expectedMaturityBars: number;
+  expectedMaturityMinutes: number;
+  maxHoldBars: number;
+  maxHoldMinutes: number;
+  partialTakeProfitPct: number;
+  runnerRemainderPct: number;
+  trailingDistancePct: number;
+};
+
+export type LifecycleReplayTraceEntry = {
+  candleTs: number;
+  state: LifecycleState;
+  decision: LifecycleDecision;
+  snapshot: TradeLifecycleSnapshot;
+  notes: string[];
+  protectedStopPct: number | null;
+};
+
+export type TradeLifecycleReplayTradeResult = {
+  tradeId: string;
+  serviceId: string;
+  sourceJobId: number | null;
+  sourcePolicyId: string | null;
+  entryTs: number;
+  oldExitTs: number | null;
+  lifecycleExitTs: number | null;
+  oldPnlPct: number;
+  lifecyclePnlPct: number;
+  oldExitReason: string | null;
+  lifecycleExitReason: string | null;
+  maxMfeSeenBeforeExit: number;
+  maxMaeSeenBeforeExit: number;
+  oldMfeCaptureRatio: number;
+  lifecycleMfeCaptureRatio: number;
+  timeInTradeOld: number;
+  timeInTradeLifecycle: number;
+  tp1Reached: boolean;
+  tp2Reached: boolean;
+  protectedAt: number | null;
+  partialTakenAt: number | null;
+  runnerActivatedAt: number | null;
+  exitDecisionTrace: LifecycleReplayTraceEntry[];
+  oldExitWasTooEarly: boolean;
+  lifecycleCapturedMoreMove: boolean;
+};
+
+export type TradeLifecycleReplayReport = {
+  serviceId: string;
+  sourceJobId: number | null;
+  sourcePolicyId: string | null;
+  tradeCount: number;
+  oldMedianPnlPct: number;
+  lifecycleMedianPnlPct: number;
+  oldAveragePnlPct: number;
+  lifecycleAveragePnlPct: number;
+  oldMfeCaptureRatio: number;
+  lifecycleMfeCaptureRatio: number;
+  oldTotalAccountReturnPct: number;
+  lifecycleTotalAccountReturnPct: number;
+  oldAverageMonthlyReturnPct: number;
+  lifecycleAverageMonthlyReturnPct: number;
+  improvedTradeCount: number;
+  exitReasonDistribution: Record<string, number>;
+  examples: {
+    fixedTrailingTooEarly: TradeLifecycleReplayTradeResult[];
+    lifecycleHoldImprovedResult: TradeLifecycleReplayTradeResult[];
+    lifecycleProtectedProfit: TradeLifecycleReplayTradeResult[];
+    lifecycleExitedCorrectly: TradeLifecycleReplayTradeResult[];
+  };
+  trades: TradeLifecycleReplayTradeResult[];
+};
+
 export type EliteSynthesisProgressSnapshot = {
   jobId: number;
   serviceId: string;

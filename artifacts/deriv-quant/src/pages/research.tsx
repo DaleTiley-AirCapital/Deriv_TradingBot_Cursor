@@ -5672,6 +5672,7 @@ const REPORT_OPTIONS: ReportOption[] = [
   { value: "elite-synthesis-result", label: "Elite Synthesis Result", task: "integrated-elite-synthesis", runType: "synthesis" },
   { value: "elite-synthesis-selected-trades", label: "Elite Synthesis Selected Trades", task: "integrated-elite-synthesis", runType: "synthesis" },
   { value: "elite-return-amplification", label: "Return Amplification Analysis", task: "integrated-elite-synthesis", runType: "synthesis" },
+  { value: "trade-lifecycle-replay", label: "Trade Lifecycle Replay Report", task: "integrated-elite-synthesis", runType: "synthesis" },
 ];
 
 function AddServiceModal({
@@ -6005,6 +6006,10 @@ function ReportsTab({
         case "elite-return-amplification":
           if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
           endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/return-amplification`;
+          break;
+        case "trade-lifecycle-replay":
+          if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
+          endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/trade-lifecycle-replay`;
           break;
       }
       const d = await apiFetch(endpoint);

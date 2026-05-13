@@ -1,7 +1,11 @@
 import { Router, type IRouter } from "express";
-import { db, platformStateTable } from "@workspace/db";
+import { backgroundDb, candlesTable, db, platformStateTable } from "@workspace/db";
+import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { buildUnifiedCrash300Dataset } from "../core/synthesis/crash300Adapter.js";
-import { getSynthesisAdapter } from "../core/synthesis/engine.js";
+import {
+  buildTradeLifecycleReplayReportFromStoredTrades,
+  getSynthesisAdapter,
+} from "../core/synthesis/engine.js";
 import {
   createEliteSynthesisJob,
   ensureEliteSynthesisJobsTable,
@@ -13,7 +17,8 @@ import {
   updateEliteSynthesisJob,
   type EliteSynthesisJobRow,
 } from "../core/synthesis/jobs.js";
-import type { EliteSynthesisParams } from "../core/synthesis/types.js";
+import type { CandleRow } from "../core/backtest/featureSlice.js";
+import type { EliteSynthesisParams, EliteSynthesisResult } from "../core/synthesis/types.js";
 import { profileDefaults } from "../core/synthesis/types.js";
 import {
   promoteCandidateArtifactToServiceRuntime,
@@ -140,6 +145,78 @@ function buildExportMetadata(job: EliteSynthesisJobRow, reportType: string) {
     artifactStatus: health.artifactStatus,
     artifactDiagnostics: health.artifactDiagnostics,
   };
+}
+
+function readStoredSelectedTrades(job: EliteSynthesisJobRow): Array<Record<string, unknown>> {
+  const selected = job.resultArtifact?.bestPolicySelectedTrades;
+  return Array.isArray(selected) ? selected.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")) : [];
+}
+
+async function loadLifecycleReplayCandles(job: EliteSynthesisJobRow, selectedTrades: Array<Record<string, unknown>>): Promise<CandleRow[]> {
+  if (selectedTrades.length === 0) return [];
+  const minEntryTs = Math.min(...selectedTrades.map((trade) => Number(trade.entryTs ?? 0)).filter((value) => Number.isFinite(value) && value > 0));
+  const maxExitTs = Math.max(...selectedTrades.map((trade) => Number(
+    trade.sourceMoveEndTs ?? trade.moveEndTs ?? trade.exitTs ?? trade.entryTs ?? 0,
+  )).filter((value) => Number.isFinite(value) && value > 0));
+  if (!Number.isFinite(minEntryTs) || !Number.isFinite(maxExitTs) || minEntryTs <= 0 || maxExitTs <= 0) return [];
+  const symbol = String(job.symbol ?? job.serviceId ?? "").toUpperCase();
+  const rows = await backgroundDb
+    .select({
+      openTs: candlesTable.openTs,
+      closeTs: candlesTable.closeTs,
+      open: candlesTable.open,
+      high: candlesTable.high,
+      low: candlesTable.low,
+      close: candlesTable.close,
+    })
+    .from(candlesTable)
+    .where(and(
+      eq(candlesTable.symbol, symbol),
+      eq(candlesTable.timeframe, "1m"),
+      eq(candlesTable.isInterpolated, false),
+      gte(candlesTable.openTs, Math.max(0, minEntryTs - 3600)),
+      lte(candlesTable.openTs, maxExitTs + 3600),
+    ))
+    .orderBy(asc(candlesTable.openTs));
+  return rows.map((row) => ({
+    openTs: Number(row.openTs),
+    closeTs: Number(row.closeTs ?? (Number(row.openTs) + 60)),
+    open: Number(row.open),
+    high: Number(row.high),
+    low: Number(row.low),
+    close: Number(row.close),
+  }));
+}
+
+async function synthesizeTradeLifecycleReplayReport(job: EliteSynthesisJobRow) {
+  const existing = (job.resultArtifact?.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.tradeLifecycleReplayReport;
+  if (existing && typeof existing === "object") return existing;
+  const selectedTrades = readStoredSelectedTrades(job);
+  if (selectedTrades.length === 0) return null;
+  const candles = await loadLifecycleReplayCandles(job, selectedTrades);
+  if (candles.length === 0) return null;
+  return buildTradeLifecycleReplayReportFromStoredTrades({
+    serviceId: job.serviceId,
+    sourceJobId: job.id,
+    sourcePolicyId: String((job.resultArtifact?.bestPolicySummary as Record<string, unknown> | undefined)?.policyId ?? "") || null,
+    selectedTrades,
+    candles,
+  });
+}
+
+async function buildHydratedResultArtifact(job: EliteSynthesisJobRow): Promise<EliteSynthesisResult | null> {
+  if (!job.resultArtifact) return null;
+  const lifecycleReplayReport = await synthesizeTradeLifecycleReplayReport(job);
+  const returnAmplificationAnalysis = job.resultArtifact.returnAmplificationAnalysis && typeof job.resultArtifact.returnAmplificationAnalysis === "object"
+    ? {
+        ...(job.resultArtifact.returnAmplificationAnalysis as Record<string, unknown>),
+        ...(lifecycleReplayReport ? { tradeLifecycleReplayReport: lifecycleReplayReport } : {}),
+      }
+    : (lifecycleReplayReport ? { tradeLifecycleReplayReport: lifecycleReplayReport } : null);
+  return {
+    ...job.resultArtifact,
+    returnAmplificationAnalysis,
+  } as EliteSynthesisResult;
 }
 
 async function resolveCurrentStagedCandidate(serviceId: string) {
@@ -316,7 +393,11 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
       });
       return;
     }
-    const compact = job.resultArtifact;
+    const compact = await buildHydratedResultArtifact(job);
+    if (!compact) {
+      res.status(409).json({ error: `Elite synthesis job ${jobId} has no completed result artifact yet.` });
+      return;
+    }
     res.json({
       jobId,
       serviceId,
@@ -737,10 +818,35 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/return-amplific
       ...buildExportMetadata(job, "return_lifecycle_amplification"),
       status: job.status,
       targetProfile: (job.resultArtifact.windowSummary as Record<string, unknown> | undefined)?.targetProfile ?? "default",
-      returnAmplificationAnalysis: job.resultArtifact.returnAmplificationAnalysis ?? null,
+      returnAmplificationAnalysis: (await buildHydratedResultArtifact(job))?.returnAmplificationAnalysis ?? null,
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite return amplification export failed" });
+  }
+});
+
+router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/trade-lifecycle-replay", async (req, res): Promise<void> => {
+  try {
+    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+    getSynthesisAdapter(serviceId);
+    const jobId = Number(req.params.id);
+    const job = await getEliteSynthesisJob(jobId);
+    if (!job || job.serviceId !== serviceId) {
+      res.status(404).json({ error: `Elite synthesis job ${jobId} not found for ${serviceId}.` });
+      return;
+    }
+    if (!job.resultArtifact) {
+      res.status(400).json({ error: `Elite synthesis job ${jobId} has no result artifact to export.` });
+      return;
+    }
+    res.json({
+      ...buildExportMetadata(job, "trade_lifecycle_replay"),
+      status: job.status,
+      targetProfile: (job.resultArtifact.windowSummary as Record<string, unknown> | undefined)?.targetProfile ?? "default",
+      tradeLifecycleReplayReport: ((await buildHydratedResultArtifact(job))?.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.tradeLifecycleReplayReport ?? null,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Trade lifecycle replay export failed" });
   }
 });
 
@@ -761,7 +867,7 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/full", async (r
     res.json({
       ...buildExportMetadata(job, "elite_synthesis_full"),
       status: job.status,
-      result: job.resultArtifact,
+      result: await buildHydratedResultArtifact(job),
       candidateRuntimeArtifacts: job.candidateRuntimeArtifacts,
       baselineRecords: job.baselineRecords,
     });

@@ -5,6 +5,7 @@ import {
   updateEliteSynthesisJob,
 } from "./jobs.js";
 import { isWorkerJobCancellationRequested, WorkerJobCancelledError } from "../worker/jobs.js";
+import type { CandleRow } from "../backtest/featureSlice.js";
 import type {
   EliteSynthesisBottleneck,
   EliteSynthesisDataAvailability,
@@ -17,11 +18,45 @@ import type {
   EliteSynthesisResultState,
   EliteSynthesisResult,
   EliteSynthesisSearchProfile,
+  LifecycleDecision,
+  LifecycleExitPlan,
+  LifecycleReplayTraceEntry,
+  LifecycleState,
+  TradeLifecycleReplayReport,
+  TradeLifecycleReplayTradeResult,
+  TradeLifecycleSnapshot,
   EliteSynthesisTargetProfile,
   EliteSynthesisUnitValidation,
   EliteSynthesisValidationError,
 } from "./types.js";
 import { profileDefaults } from "./types.js";
+
+export type LifecycleReplayCandidateInput = {
+  candidateId: string;
+  direction: "buy" | "sell" | "unknown";
+  entryTs: number;
+  exitTs: number | null;
+  pnlPct?: number | null;
+  pnlPctPoints?: number | null;
+  mfePct?: number | null;
+  mfePctPoints?: number | null;
+  maePct?: number | null;
+  maePctPoints?: number | null;
+  minHoldBars?: number | null;
+  slPct?: number | null;
+  slRiskPct?: number | null;
+  slPctPoints?: number | null;
+  trailingDistancePctPoints?: number | null;
+  trailingDistancePct?: number | null;
+  trailingActivationPctPoints?: number | null;
+  trailingActivationPct?: number | null;
+  tpTargetPct?: number | null;
+  projectedMovePct?: number | null;
+  projectedMovePctPoints?: number | null;
+  exitReason?: string | null;
+  sourceMoveEndTs?: number | null;
+  moveEndTs?: number | null;
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -1018,6 +1053,553 @@ function mean(values: number[]) {
   return values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
+function pctDeltaPoints(direction: "buy" | "sell", entryPrice: number, price: number) {
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(price)) return 0;
+  const change = ((price - entryPrice) / entryPrice) * 100;
+  return direction === "buy" ? change : -change;
+}
+
+function safeNumber(value: unknown, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function averageTrueRange(candles: CandleRow[], index: number, length = 14) {
+  const start = Math.max(1, index - length + 1);
+  const values: number[] = [];
+  for (let i = start; i <= index; i += 1) {
+    const candle = candles[i];
+    const prev = candles[i - 1];
+    if (!candle || !prev) continue;
+    const tr = Math.max(
+      Math.abs(candle.high - candle.low),
+      Math.abs(candle.high - prev.close),
+      Math.abs(candle.low - prev.close),
+    );
+    if (Number.isFinite(tr)) values.push(tr);
+  }
+  return mean(values);
+}
+
+function buildLifecycleSnapshot(params: {
+  candles: CandleRow[];
+  entryIndex: number;
+  index: number;
+  direction: "buy" | "sell";
+  entryPrice: number;
+  expectedMovePct: number;
+  exitPlan: LifecycleExitPlan;
+  bestFavourable: number;
+  worstAdverse: number;
+}) : TradeLifecycleSnapshot {
+  const candle = params.candles[params.index];
+  const prev1 = params.candles[Math.max(params.entryIndex, params.index - 1)] ?? candle;
+  const prev3 = params.candles[Math.max(params.entryIndex, params.index - 3)] ?? prev1;
+  const prev5 = params.candles[Math.max(params.entryIndex, params.index - 5)] ?? prev3;
+  const direction = params.direction;
+  const currentPnlPct = pctDeltaPoints(direction, params.entryPrice, candle.close);
+  const pullbackFromLocalExtremePct = Math.max(0, params.bestFavourable - currentPnlPct);
+  const atr = averageTrueRange(params.candles, params.index, 14);
+  const atrPct = params.entryPrice > 0 ? (atr / params.entryPrice) * 100 : 0;
+  const oneBarReturnPct = pctDeltaPoints(direction, prev1.close, candle.close);
+  const threeBarReturnPct = pctDeltaPoints(direction, prev3.close, candle.close);
+  const fiveBarReturnPct = pctDeltaPoints(direction, prev5.close, candle.close);
+  const bodyPct = params.entryPrice > 0 ? Math.abs(((candle.close - candle.open) / params.entryPrice) * 100) : 0;
+  const rangePct = params.entryPrice > 0 ? Math.abs(((candle.high - candle.low) / params.entryPrice) * 100) : 0;
+  const upperWick = Math.max(0, candle.high - Math.max(candle.open, candle.close));
+  const lowerWick = Math.max(0, Math.min(candle.open, candle.close) - candle.low);
+  const upperWickRejection = rangePct > 0 ? upperWick / Math.max(candle.high - candle.low, 1e-6) : 0;
+  const lowerWickRejection = rangePct > 0 ? lowerWick / Math.max(candle.high - candle.low, 1e-6) : 0;
+  const candleBodyDirection = candle.close > candle.open ? "up" : candle.close < candle.open ? "down" : "flat";
+  const microBreakDirection = oneBarReturnPct > 0.02 ? "up" : oneBarReturnPct < -0.02 ? "down" : "flat";
+  const progressToExpectedMovePct = params.expectedMovePct > 0 ? clamp01(params.bestFavourable / params.expectedMovePct) : 0;
+  const progressToTp1Pct = params.exitPlan.tp1Pct > 0 ? clamp01(params.bestFavourable / params.exitPlan.tp1Pct) : 0;
+  const progressToTp2Pct = params.exitPlan.tp2Pct > 0 ? clamp01(params.bestFavourable / params.exitPlan.tp2Pct) : 0;
+  const momentumDecayScore = clamp01((pullbackFromLocalExtremePct / Math.max(params.exitPlan.trailingDistancePct, 0.25)) * 0.6 + Math.max(0, -threeBarReturnPct) * 0.2 + Math.max(0, -fiveBarReturnPct) * 0.2);
+  const reversalPressureScore = clamp01(
+    (direction === "sell" ? upperWickRejection : lowerWickRejection) * 0.35
+    + Math.max(0, -oneBarReturnPct) * 0.15
+    + Math.max(0, -threeBarReturnPct) * 0.2
+    + Math.max(0, pullbackFromLocalExtremePct / Math.max(params.bestFavourable || 1, 1)) * 0.3,
+  );
+  const continuationScore = clamp01(
+    progressToExpectedMovePct * 0.35
+    + Math.max(0, oneBarReturnPct) * 0.1
+    + Math.max(0, threeBarReturnPct) * 0.2
+    + Math.max(0, fiveBarReturnPct) * 0.2
+    + Math.max(0, 1 - momentumDecayScore) * 0.15,
+  );
+  const normalPullbackScore = clamp01(1 - (pullbackFromLocalExtremePct / Math.max(params.exitPlan.trailingDistancePct * 1.5, 0.25)));
+  const timeInTradeBars = Math.max(1, params.index - params.entryIndex);
+  const timeInTradeMinutes = timeInTradeBars;
+  const reclaimConfirmed = direction === "sell"
+    ? candle.close >= candle.open && threeBarReturnPct < 0
+    : candle.close <= candle.open && threeBarReturnPct < 0;
+  return {
+    currentPnlPct: Number(currentPnlPct.toFixed(4)),
+    currentMfePct: Number(params.bestFavourable.toFixed(4)),
+    currentMaePct: Number((-Math.abs(params.worstAdverse)).toFixed(4)),
+    progressToExpectedMovePct: Number(progressToExpectedMovePct.toFixed(4)),
+    progressToTp1Pct: Number(progressToTp1Pct.toFixed(4)),
+    progressToTp2Pct: Number(progressToTp2Pct.toFixed(4)),
+    timeInTradeBars,
+    timeInTradeMinutes,
+    expectedMaturityBars: params.exitPlan.expectedMaturityBars,
+    expectedMaturityMinutes: params.exitPlan.expectedMaturityMinutes,
+    barsSinceEntry: timeInTradeBars,
+    oneBarReturnPct: Number(oneBarReturnPct.toFixed(4)),
+    threeBarReturnPct: Number(threeBarReturnPct.toFixed(4)),
+    fiveBarReturnPct: Number(fiveBarReturnPct.toFixed(4)),
+    pullbackFromLocalExtremePct: Number(pullbackFromLocalExtremePct.toFixed(4)),
+    atrNormalisedPullback: Number((atrPct > 0 ? pullbackFromLocalExtremePct / atrPct : 0).toFixed(4)),
+    candleBodyDirection,
+    upperWickRejection: Number(upperWickRejection.toFixed(4)),
+    lowerWickRejection: Number(lowerWickRejection.toFixed(4)),
+    microBreakDirection,
+    microBreakStrengthPct: Number(Math.abs(oneBarReturnPct).toFixed(4)),
+    reclaimConfirmed,
+    rangeExpansionScore: Number(Math.min(1, rangePct / Math.max(atrPct, 0.05)).toFixed(4)),
+    rangeCompressionScore: Number(Math.min(1, Math.max(0, 1 - rangePct / Math.max(atrPct, 0.05))).toFixed(4)),
+    compressionToExpansionScore: Number(Math.min(1, Math.abs(bodyPct) / Math.max(rangePct, 0.01)).toFixed(4)),
+    atrRank: Number(Math.min(1, atrPct / 3).toFixed(4)),
+    bbWidthRank: Number(Math.min(1, rangePct / 4).toFixed(4)),
+    momentumDecayScore: Number(momentumDecayScore.toFixed(4)),
+    reversalPressureScore: Number(reversalPressureScore.toFixed(4)),
+    continuationScore: Number(continuationScore.toFixed(4)),
+    normalPullbackScore: Number(normalPullbackScore.toFixed(4)),
+  };
+}
+
+export function buildLifecycleExitPlan(params: {
+  candidate: LifecycleReplayCandidateInput;
+  dynamicExitPlan: Record<string, unknown> | null | undefined;
+  expectedMovePct: number;
+}): LifecycleExitPlan {
+  const candidateTp = Math.abs(safeNumber(params.candidate.projectedMovePctPoints ?? params.candidate.projectedMovePct, 0));
+  const hardSlPct = Math.max(0.1, Math.abs(safeNumber(params.dynamicExitPlan?.slRiskPct ?? params.candidate.slPctPoints ?? params.candidate.slPct, 0.5)));
+  const trailingDistancePct = Math.max(0.1, Math.abs(safeNumber(params.dynamicExitPlan?.trailingDistancePct ?? params.candidate.trailingDistancePctPoints ?? params.candidate.trailingDistancePct, 0.35)));
+  const tp2Pct = Math.max(
+    0.2,
+    safeNumber(
+      params.dynamicExitPlan?.runnerTargetPct
+      ?? params.dynamicExitPlan?.tpTargetPct
+      ?? params.expectedMovePct
+      ?? candidateTp,
+      0,
+    ),
+  );
+  const derivedTp1 = safeNumber(
+    Array.isArray(params.dynamicExitPlan?.partialTakeProfitPlan)
+      ? (params.dynamicExitPlan?.partialTakeProfitPlan as Array<Record<string, unknown>>)[0]?.targetPct
+      : null,
+    Math.min(tp2Pct * 0.55, Math.max(0.35, tp2Pct * 0.55)),
+  );
+  const tp1Pct = Math.max(0.15, Math.min(tp2Pct, derivedTp1));
+  const protectionActivationPct = Math.max(
+    0.1,
+    Math.min(tp1Pct, safeNumber(params.dynamicExitPlan?.trailingActivationPct, tp1Pct * 0.8)),
+  );
+  const minHoldBars = Math.max(1, Math.round(safeNumber(params.dynamicExitPlan?.minHoldBars ?? params.candidate.minHoldBars, 2)));
+  const maxHoldBars = Math.max(
+    minHoldBars + 1,
+    Math.round(safeNumber(params.dynamicExitPlan?.maxHoldBars, Math.max(minHoldBars + 4, minHoldBars * 3))),
+  );
+  const expectedMaturityBars = Math.max(minHoldBars + 1, Math.round((minHoldBars + maxHoldBars) / 2));
+  return {
+    initialHardSlPct: Number(hardSlPct.toFixed(4)),
+    tp1Pct: Number(tp1Pct.toFixed(4)),
+    tp2Pct: Number(tp2Pct.toFixed(4)),
+    runnerTargetPct: Number(Math.max(tp2Pct, safeNumber(params.expectedMovePct, tp2Pct)).toFixed(4)),
+    protectionActivationPct: Number(protectionActivationPct.toFixed(4)),
+    minimumNoTrailBars: minHoldBars,
+    minimumNoTrailMinutes: minHoldBars,
+    expectedMaturityBars,
+    expectedMaturityMinutes: expectedMaturityBars,
+    maxHoldBars,
+    maxHoldMinutes: maxHoldBars,
+    partialTakeProfitPct: 0.5,
+    runnerRemainderPct: 0.5,
+    trailingDistancePct: Number(trailingDistancePct.toFixed(4)),
+  };
+}
+
+function recordLifecycleTrace(params: {
+  trace: LifecycleReplayTraceEntry[];
+  candleTs: number;
+  state: LifecycleState;
+  decision: LifecycleDecision;
+  snapshot: TradeLifecycleSnapshot;
+  notes: string[];
+  protectedStopPct: number | null;
+}) {
+  params.trace.push({
+    candleTs: params.candleTs,
+    state: params.state,
+    decision: params.decision,
+    snapshot: params.snapshot,
+    notes: params.notes,
+    protectedStopPct: params.protectedStopPct != null ? Number(params.protectedStopPct.toFixed(4)) : null,
+  });
+}
+
+export function replayLifecycleTrade(params: {
+  candidate: LifecycleReplayCandidateInput;
+  candles: CandleRow[];
+  expectedMovePct: number;
+  exitPlan: LifecycleExitPlan;
+  serviceId: string;
+  sourceJobId: number | null;
+  sourcePolicyId: string | null;
+  maxReplayTs: number | null;
+}): TradeLifecycleReplayTradeResult | null {
+  if (params.candidate.direction !== "buy" && params.candidate.direction !== "sell") {
+    return null;
+  }
+  const tradeDirection: "buy" | "sell" = params.candidate.direction;
+  const entryIndex = params.candles.findIndex((candle) => candle.closeTs >= params.candidate.entryTs);
+  if (entryIndex < 0 || entryIndex >= params.candles.length - 1) return null;
+  const entryCandle = params.candles[entryIndex];
+  const entryPrice = safeNumber(entryCandle?.close, 0);
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0) return null;
+  let state: LifecycleState = "initial_risk";
+  let bestFavourable = 0;
+  let worstAdverse = 0;
+  let protectedStopPct: number | null = null;
+  let lifecycleExitTs: number | null = null;
+  let lifecycleExitReason: string | null = null;
+  let lifecyclePnlPct = 0;
+  let tp1Reached = false;
+  let tp2Reached = false;
+  let protectedAt: number | null = null;
+  let partialTakenAt: number | null = null;
+  let runnerActivatedAt: number | null = null;
+  const trace: LifecycleReplayTraceEntry[] = [];
+  for (let index = entryIndex + 1; index < params.candles.length; index += 1) {
+    const candle = params.candles[index];
+    if (!candle) continue;
+    if (params.maxReplayTs != null && candle.closeTs > params.maxReplayTs) {
+      lifecycleExitTs = candle.closeTs;
+      lifecycleExitReason = "window_end";
+      lifecyclePnlPct = pctDeltaPoints(tradeDirection, entryPrice, candle.close);
+      break;
+    }
+    const favourable = pctDeltaPoints(
+      tradeDirection,
+      entryPrice,
+      tradeDirection === "buy" ? candle.high : candle.low,
+    );
+    const adverse = pctDeltaPoints(
+      tradeDirection,
+      entryPrice,
+      tradeDirection === "buy" ? candle.low : candle.high,
+    );
+    bestFavourable = Math.max(bestFavourable, favourable);
+    worstAdverse = Math.max(worstAdverse, Math.abs(Math.min(adverse, 0)));
+    const snapshot = buildLifecycleSnapshot({
+      candles: params.candles,
+      entryIndex,
+      index,
+      direction: tradeDirection,
+      entryPrice,
+      expectedMovePct: params.expectedMovePct,
+      exitPlan: params.exitPlan,
+      bestFavourable,
+      worstAdverse,
+    });
+    const barsSinceEntry = index - entryIndex;
+    if (adverse <= -params.exitPlan.initialHardSlPct) {
+      lifecycleExitTs = candle.closeTs;
+      lifecycleExitReason = "hard_sl";
+      lifecyclePnlPct = -params.exitPlan.initialHardSlPct;
+      state = "exited";
+      recordLifecycleTrace({ trace, candleTs: candle.closeTs, state, decision: "exit_hard_sl", snapshot, notes: ["hard_sl_hit"], protectedStopPct });
+      break;
+    }
+    if (!tp1Reached && bestFavourable >= params.exitPlan.tp1Pct) {
+      tp1Reached = true;
+      protectedAt = candle.closeTs;
+      partialTakenAt = candle.closeTs;
+      state = "tp1_reached";
+      protectedStopPct = Math.max(0, params.exitPlan.tp1Pct * 0.2);
+      recordLifecycleTrace({ trace, candleTs: candle.closeTs, state, decision: "partial_take_profit", snapshot, notes: ["tp1_reached", "partial_profit_taken"], protectedStopPct });
+    } else if (!protectedAt && bestFavourable >= params.exitPlan.protectionActivationPct) {
+      protectedAt = candle.closeTs;
+      state = "protected";
+      protectedStopPct = Math.max(0, params.exitPlan.protectionActivationPct * 0.15);
+      recordLifecycleTrace({ trace, candleTs: candle.closeTs, state, decision: "protect_to_breakeven", snapshot, notes: ["protection_threshold_reached"], protectedStopPct });
+    }
+    if (!runnerActivatedAt && tp1Reached && bestFavourable >= params.exitPlan.tp1Pct * 1.1) {
+      runnerActivatedAt = candle.closeTs;
+      state = "runner_active";
+      recordLifecycleTrace({ trace, candleTs: candle.closeTs, state, decision: "continue_runner", snapshot, notes: ["runner_active"], protectedStopPct });
+    }
+    if (bestFavourable >= params.exitPlan.tp2Pct) {
+      tp2Reached = true;
+      lifecycleExitTs = candle.closeTs;
+      lifecycleExitReason = "tp2_hit";
+      lifecyclePnlPct = params.exitPlan.tp2Pct;
+      state = "exited";
+      recordLifecycleTrace({ trace, candleTs: candle.closeTs, state, decision: "exit_tp2", snapshot, notes: ["tp2_reached"], protectedStopPct });
+      break;
+    }
+    const canTighten = barsSinceEntry >= params.exitPlan.minimumNoTrailBars;
+    const momentumFailure = canTighten
+      && snapshot.momentumDecayScore >= 0.78
+      && snapshot.continuationScore <= 0.45
+      && snapshot.pullbackFromLocalExtremePct >= params.exitPlan.trailingDistancePct;
+    const reversalFailure = canTighten
+      && snapshot.reversalPressureScore >= 0.78
+      && snapshot.reclaimConfirmed;
+    const timeFailure = barsSinceEntry >= params.exitPlan.maxHoldBars
+      || (barsSinceEntry >= params.exitPlan.expectedMaturityBars && snapshot.progressToExpectedMovePct < 0.4);
+    if (canTighten && protectedStopPct != null) {
+      const tightened = Math.max(protectedStopPct, bestFavourable - params.exitPlan.trailingDistancePct);
+      if (tightened > protectedStopPct + 0.01) {
+        protectedStopPct = tightened;
+        state = "tighten_protection";
+        recordLifecycleTrace({ trace, candleTs: candle.closeTs, state, decision: "tighten_dynamic_stop", snapshot, notes: ["dynamic_protection_tightened"], protectedStopPct });
+      }
+      if (snapshot.currentPnlPct <= protectedStopPct) {
+        lifecycleExitTs = candle.closeTs;
+        lifecycleExitReason = momentumFailure ? "momentum_failure_exit" : reversalFailure ? "reversal_exit" : "protected_exit";
+        lifecyclePnlPct = protectedStopPct;
+        state = "exited";
+        recordLifecycleTrace({
+          trace,
+          candleTs: candle.closeTs,
+          state,
+          decision: momentumFailure ? "exit_momentum_failure" : reversalFailure ? "exit_reversal_signal" : "protect_to_profit",
+          snapshot,
+          notes: [momentumFailure ? "momentum_failure" : reversalFailure ? "reversal_pressure" : "protected_floor_hit"],
+          protectedStopPct,
+        });
+        break;
+      }
+    }
+    if (momentumFailure) {
+      lifecycleExitTs = candle.closeTs;
+      lifecycleExitReason = "momentum_failure_exit";
+      lifecyclePnlPct = snapshot.currentPnlPct;
+      state = "exited";
+      recordLifecycleTrace({ trace, candleTs: candle.closeTs, state, decision: "exit_momentum_failure", snapshot, notes: ["momentum_failure_confirmed"], protectedStopPct });
+      break;
+    }
+    if (reversalFailure) {
+      lifecycleExitTs = candle.closeTs;
+      lifecycleExitReason = "reversal_exit";
+      lifecyclePnlPct = snapshot.currentPnlPct;
+      state = "exited";
+      recordLifecycleTrace({ trace, candleTs: candle.closeTs, state, decision: "exit_reversal_signal", snapshot, notes: ["reversal_pressure_confirmed"], protectedStopPct });
+      break;
+    }
+    if (timeFailure) {
+      lifecycleExitTs = candle.closeTs;
+      lifecycleExitReason = "time_failure_exit";
+      lifecyclePnlPct = snapshot.currentPnlPct;
+      state = "exited";
+      recordLifecycleTrace({ trace, candleTs: candle.closeTs, state, decision: "exit_time_failure", snapshot, notes: ["time_or_progress_failure"], protectedStopPct });
+      break;
+    }
+    if (trace.length === 0 || trace[trace.length - 1]?.candleTs !== candle.closeTs) {
+      const holdState: LifecycleState = runnerActivatedAt ? "runner_active" : protectedAt ? "protected" : "initial_risk";
+      recordLifecycleTrace({ trace, candleTs: candle.closeTs, state: holdState, decision: "hold", snapshot, notes: ["holding"], protectedStopPct });
+    }
+  }
+  if (lifecycleExitTs == null) {
+    const finalCandle = params.candles[Math.min(params.candles.length - 1, Math.max(entryIndex + 1, entryIndex + params.exitPlan.maxHoldBars))] ?? params.candles[params.candles.length - 1];
+    lifecycleExitTs = finalCandle?.closeTs ?? params.candidate.exitTs ?? null;
+    lifecycleExitReason = lifecycleExitReason ?? "window_end";
+    lifecyclePnlPct = finalCandle ? pctDeltaPoints(tradeDirection, entryPrice, finalCandle.close) : 0;
+  }
+  const oldPnlPct = safeNumber(params.candidate.pnlPctPoints ?? params.candidate.pnlPct, 0);
+  const oldExitTs = safeNumber(params.candidate.exitTs, 0) || null;
+  const oldMfeCaptureRatio = bestFavourable > 0 ? oldPnlPct / bestFavourable : 0;
+  const lifecycleMfeCaptureRatio = bestFavourable > 0 ? lifecyclePnlPct / bestFavourable : 0;
+  return {
+    tradeId: params.candidate.candidateId,
+    serviceId: params.serviceId,
+    sourceJobId: params.sourceJobId,
+    sourcePolicyId: params.sourcePolicyId,
+    entryTs: params.candidate.entryTs,
+    oldExitTs,
+    lifecycleExitTs,
+    oldPnlPct: Number(oldPnlPct.toFixed(4)),
+    lifecyclePnlPct: Number(lifecyclePnlPct.toFixed(4)),
+    oldExitReason: params.candidate.exitReason ?? null,
+    lifecycleExitReason,
+    maxMfeSeenBeforeExit: Number(bestFavourable.toFixed(4)),
+    maxMaeSeenBeforeExit: Number((-Math.abs(worstAdverse)).toFixed(4)),
+    oldMfeCaptureRatio: Number(oldMfeCaptureRatio.toFixed(4)),
+    lifecycleMfeCaptureRatio: Number(lifecycleMfeCaptureRatio.toFixed(4)),
+    timeInTradeOld: oldExitTs != null ? Math.max(0, oldExitTs - params.candidate.entryTs) : 0,
+    timeInTradeLifecycle: lifecycleExitTs != null ? Math.max(0, lifecycleExitTs - params.candidate.entryTs) : 0,
+    tp1Reached,
+    tp2Reached,
+    protectedAt,
+    partialTakenAt,
+    runnerActivatedAt,
+    exitDecisionTrace: trace,
+    oldExitWasTooEarly: bestFavourable > 0 && oldPnlPct < bestFavourable * 0.75,
+    lifecycleCapturedMoreMove: lifecyclePnlPct > oldPnlPct,
+  };
+}
+
+export function buildTradeLifecycleReplayReport(params: {
+  serviceId: string;
+  sourceJobId: number | null;
+  sourcePolicyId: string | null;
+  selected: TradeLifecycleReplayTradeResult[];
+}) : TradeLifecycleReplayReport {
+  const oldPnl = params.selected.map((item) => item.oldPnlPct);
+  const lifecyclePnl = params.selected.map((item) => item.lifecyclePnlPct);
+  const oldMonthly = new Map<string, number[]>();
+  const lifecycleMonthly = new Map<string, number[]>();
+  for (const item of params.selected) {
+    const month = new Date(item.entryTs * 1000).toISOString().slice(0, 7);
+    oldMonthly.set(month, [...(oldMonthly.get(month) ?? []), item.oldPnlPct]);
+    lifecycleMonthly.set(month, [...(lifecycleMonthly.get(month) ?? []), item.lifecyclePnlPct]);
+  }
+  const byMonthAverage = (map: Map<string, number[]>) =>
+    map.size > 0
+      ? Number(mean(Array.from(map.values()).map((values) => computeScenarioEquityMetrics(values).accountReturnPct)).toFixed(2))
+      : 0;
+  const exitReasonDistribution = params.selected.reduce<Record<string, number>>((acc, item) => {
+    const key = item.lifecycleExitReason ?? "unknown";
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  return {
+    serviceId: params.serviceId,
+    sourceJobId: params.sourceJobId,
+    sourcePolicyId: params.sourcePolicyId,
+    tradeCount: params.selected.length,
+    oldMedianPnlPct: Number(percentile(oldPnl, 0.5).toFixed(4)),
+    lifecycleMedianPnlPct: Number(percentile(lifecyclePnl, 0.5).toFixed(4)),
+    oldAveragePnlPct: Number(mean(oldPnl).toFixed(4)),
+    lifecycleAveragePnlPct: Number(mean(lifecyclePnl).toFixed(4)),
+    oldMfeCaptureRatio: Number(mean(params.selected.map((item) => item.oldMfeCaptureRatio)).toFixed(4)),
+    lifecycleMfeCaptureRatio: Number(mean(params.selected.map((item) => item.lifecycleMfeCaptureRatio)).toFixed(4)),
+    oldTotalAccountReturnPct: computeScenarioEquityMetrics(oldPnl).accountReturnPct,
+    lifecycleTotalAccountReturnPct: computeScenarioEquityMetrics(lifecyclePnl).accountReturnPct,
+    oldAverageMonthlyReturnPct: byMonthAverage(oldMonthly),
+    lifecycleAverageMonthlyReturnPct: byMonthAverage(lifecycleMonthly),
+    improvedTradeCount: params.selected.filter((item) => item.lifecycleCapturedMoreMove).length,
+    exitReasonDistribution,
+    examples: {
+      fixedTrailingTooEarly: params.selected.filter((item) => item.oldExitWasTooEarly).slice(0, 5),
+      lifecycleHoldImprovedResult: params.selected.filter((item) => item.lifecycleCapturedMoreMove).slice(0, 5),
+      lifecycleProtectedProfit: params.selected.filter((item) => item.protectedAt != null).slice(0, 5),
+      lifecycleExitedCorrectly: params.selected.filter((item) => item.lifecycleExitReason === "tp2_hit" || item.lifecycleExitReason === "momentum_failure_exit" || item.lifecycleExitReason === "reversal_exit").slice(0, 5),
+    },
+    trades: params.selected,
+  };
+}
+
+function normalizeLifecycleReplayCandidateInput(record: Record<string, unknown>): LifecycleReplayCandidateInput | null {
+  const candidateId = String(record.candidateId ?? record.tradeId ?? "").trim();
+  const directionRaw = String(record.direction ?? "unknown").toLowerCase();
+  const direction: LifecycleReplayCandidateInput["direction"] =
+    directionRaw === "buy" || directionRaw === "sell" ? directionRaw : "unknown";
+  const entryTs = safeNumber(record.entryTs, 0);
+  if (!candidateId || !entryTs) return null;
+  return {
+    candidateId,
+    direction,
+    entryTs,
+    exitTs: safeNumber(record.exitTs, 0) || null,
+    pnlPct: safeNumber(record.pnlPct, 0),
+    pnlPctPoints: safeNumber(record.pnlPctPoints ?? record.pnlPct, 0),
+    mfePct: safeNumber(record.mfePct, 0),
+    mfePctPoints: safeNumber(record.mfePctPoints ?? record.mfePct, 0),
+    maePct: safeNumber(record.maePct, 0),
+    maePctPoints: safeNumber(record.maePctPoints ?? record.maePct, 0),
+    minHoldBars: safeNumber(record.minHoldBars, 0) || null,
+    slPct: safeNumber(record.slPct ?? record.slPctPoints, 0) || null,
+    slRiskPct: safeNumber(record.slRiskPct ?? record.slPctPoints ?? record.slPct, 0) || null,
+    slPctPoints: safeNumber(record.slPctPoints ?? record.slPct, 0) || null,
+    trailingDistancePctPoints: safeNumber(record.trailingDistancePctPoints ?? record.trailingDistancePct, 0) || null,
+    trailingDistancePct: safeNumber(record.trailingDistancePctPoints ?? record.trailingDistancePct, 0) || null,
+    trailingActivationPctPoints: safeNumber(record.trailingActivationPctPoints ?? record.trailingActivationPct, 0) || null,
+    trailingActivationPct: safeNumber(record.trailingActivationPctPoints ?? record.trailingActivationPct, 0) || null,
+    tpTargetPct: safeNumber(record.tpTargetPct ?? record.projectedMovePctPoints ?? record.projectedMovePct, 0) || null,
+    projectedMovePct: safeNumber(record.projectedMovePctPoints ?? record.projectedMovePct ?? record.tpTargetPct, 0) || null,
+    projectedMovePctPoints: safeNumber(record.projectedMovePctPoints ?? record.projectedMovePct ?? record.tpTargetPct, 0) || null,
+    exitReason: record.exitReason == null ? null : String(record.exitReason),
+    sourceMoveEndTs: safeNumber(record.sourceMoveEndTs, 0) || null,
+    moveEndTs: safeNumber(record.moveEndTs ?? record.sourceMoveEndTs, 0) || null,
+  };
+}
+
+export function buildTradeLifecycleReplayReportFromStoredTrades(params: {
+  serviceId: string;
+  sourceJobId: number | null;
+  sourcePolicyId: string | null;
+  selectedTrades: Array<Record<string, unknown>>;
+  candles: CandleRow[];
+}): TradeLifecycleReplayReport {
+  if (params.selectedTrades.length === 0 || params.candles.length === 0) {
+    return buildTradeLifecycleReplayReport({
+      serviceId: params.serviceId,
+      sourceJobId: params.sourceJobId,
+      sourcePolicyId: params.sourcePolicyId,
+      selected: [],
+    });
+  }
+  const replayed = params.selectedTrades
+    .map((trade) => {
+      const candidate = normalizeLifecycleReplayCandidateInput(trade);
+      if (!candidate) return null;
+      const expectedMovePct = Math.max(
+        0.2,
+        Math.abs(
+          safeNumber(
+            trade.runnerTargetPct
+              ?? trade.tpTargetPct
+              ?? trade.projectedMovePctPoints
+              ?? trade.projectedMovePct
+              ?? trade.mfePct
+              ?? trade.pnlPct,
+            candidate.projectedMovePctPoints ?? candidate.projectedMovePct ?? candidate.tpTargetPct ?? 0.5,
+          ),
+        ),
+      );
+      const exitPlan = buildLifecycleExitPlan({
+        candidate,
+        dynamicExitPlan: {
+          tpTargetPct: safeNumber(trade.tpTargetPct ?? trade.projectedMovePctPoints ?? trade.projectedMovePct, 0) || undefined,
+          runnerTargetPct: safeNumber(trade.runnerTargetPct ?? trade.tpTargetPct ?? trade.projectedMovePctPoints ?? trade.projectedMovePct, 0) || undefined,
+          trailingActivationPct: safeNumber(trade.trailingActivationPctPoints ?? trade.trailingActivationPct, 0) || undefined,
+          trailingDistancePct: safeNumber(trade.trailingDistancePctPoints ?? trade.trailingDistancePct, 0) || undefined,
+          minHoldBars: safeNumber(trade.minHoldBars, 0) || undefined,
+          maxHoldBars: safeNumber(trade.maxHoldBars, 0) || undefined,
+          slRiskPct: safeNumber(trade.slRiskPct ?? trade.slPctPoints ?? trade.slPct, 0) || undefined,
+        },
+        expectedMovePct,
+      });
+      return replayLifecycleTrade({
+        candidate,
+        candles: params.candles,
+        expectedMovePct,
+        exitPlan,
+        serviceId: params.serviceId,
+        sourceJobId: params.sourceJobId,
+        sourcePolicyId: params.sourcePolicyId,
+        maxReplayTs: candidate.sourceMoveEndTs ?? candidate.moveEndTs ?? candidate.exitTs ?? null,
+      });
+    })
+    .filter((value): value is TradeLifecycleReplayTradeResult => Boolean(value));
+  return buildTradeLifecycleReplayReport({
+    serviceId: params.serviceId,
+    sourceJobId: params.sourceJobId,
+    sourcePolicyId: params.sourcePolicyId,
+    selected: replayed,
+  });
+}
+
 function countValues(values: Array<string | null | undefined>) {
   return values.reduce<Record<string, number>>((acc, value) => {
     const key = typeof value === "string" && value.trim().length > 0 ? value : "unknown";
@@ -1551,6 +2133,9 @@ function buildReturnAmplificationAnalysis(params: {
   const simulatedCandidates = params.dataset.rebuiltTriggerCandidates
     .filter((candidate) => candidate.eligible && candidate.simulatedTrade && !candidate.noTradeReason);
   const moveById = new Map(params.dataset.moves.map((move) => [move.moveId, move]));
+  const lifecycleCandles = Array.isArray((params.dataset.internalContext as Record<string, unknown> | undefined)?.candles)
+    ? (((params.dataset.internalContext as Record<string, unknown>).candles as CandleRow[]) ?? [])
+    : [];
   const baselineSelectedIds = new Set(
     Array.isArray(params.bestPolicyEvaluation?.diagnostics?.selectedTradeIds)
       ? (params.bestPolicyEvaluation?.diagnostics?.selectedTradeIds as string[])
@@ -2078,6 +2663,49 @@ function buildReturnAmplificationAnalysis(params: {
       .reduce((sum, item) => sum + Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0), 0));
     const metrics = computeScenarioEquityMetrics(pnlValues);
     const monthlyBreakdown = scenarioMonthlyBreakdown(selected);
+    const lifecycleReplayTrades = lifecycleCandles.length > 0
+      ? selected.map((item) => replayLifecycleTrade({
+          candidate: item.candidate,
+          candles: lifecycleCandles,
+          expectedMovePct: Math.max(
+            safeNumber(item.dynamicExitPlan?.runnerTargetPct, 0),
+            safeNumber(item.dynamicExitPlan?.tpTargetPct, 0),
+            safeNumber(item.prediction.expectedMovePct, 0),
+            safeNumber(item.candidate.projectedMovePctPoints ?? item.candidate.projectedMovePct, 0),
+          ),
+          exitPlan: buildLifecycleExitPlan({
+            candidate: item.candidate,
+            dynamicExitPlan: item.dynamicExitPlan,
+            expectedMovePct: Math.max(
+              safeNumber(item.dynamicExitPlan?.runnerTargetPct, 0),
+              safeNumber(item.dynamicExitPlan?.tpTargetPct, 0),
+              safeNumber(item.prediction.expectedMovePct, 0),
+              safeNumber(item.candidate.projectedMovePctPoints ?? item.candidate.projectedMovePct, 0),
+            ),
+          }),
+          serviceId: params.dataset.serviceId,
+          sourceJobId: null,
+          sourcePolicyId: params.bestPolicySummary?.policyId ?? null,
+          maxReplayTs: safeNumber(item.candidate.sourceMoveEndTs ?? item.candidate.exitTs, 0) || null,
+        })).filter((value): value is TradeLifecycleReplayTradeResult => Boolean(value))
+      : [];
+    const lifecycleReplayReport = buildTradeLifecycleReplayReport({
+      serviceId: params.dataset.serviceId,
+      sourceJobId: null,
+      sourcePolicyId: params.bestPolicySummary?.policyId ?? null,
+      selected: lifecycleReplayTrades,
+    });
+    const lifecyclePnlValues = lifecycleReplayTrades.map((item) => Number(item.lifecyclePnlPct ?? 0));
+    const lifecycleMetrics = lifecyclePnlValues.length > 0 ? computeScenarioEquityMetrics(lifecyclePnlValues) : metrics;
+    const effectiveAccountReturnPct = isReturnFirstObjective(params.targetProfile) && lifecyclePnlValues.length > 0
+      ? lifecycleReplayReport.lifecycleTotalAccountReturnPct
+      : metrics.accountReturnPct;
+    const effectiveMonthlyAccountReturnPct = isReturnFirstObjective(params.targetProfile) && lifecyclePnlValues.length > 0
+      ? lifecycleReplayReport.lifecycleAverageMonthlyReturnPct
+      : (monthlyBreakdown.length > 0 ? Number(mean(monthlyBreakdown.map((month) => Number(month.accountReturnPct ?? 0))).toFixed(2)) : 0);
+    const effectiveDrawdown = isReturnFirstObjective(params.targetProfile) && lifecyclePnlValues.length > 0
+      ? lifecycleMetrics.maxDrawdownPct
+      : metrics.maxDrawdownPct;
     const capitalAllocationScenarios = simulateCapitalModels(selected);
     const cascadeScenarios = simulateCascadeScenarios(selected);
     const predictedBucketDistribution = probabilityDistribution(selected.map((item) => item.prediction.predictedMoveSizeBucket));
@@ -2101,12 +2729,12 @@ function buildReturnAmplificationAnalysis(params: {
       profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : 0,
       requiredProfitFactor: 2.5,
       profitFactorPassed: grossLoss > 0 ? grossProfit / grossLoss >= 2.5 : grossProfit > 0,
-      monthlyAccountReturnPct: monthlyBreakdown.length > 0 ? Number(mean(monthlyBreakdown.map((month) => Number(month.accountReturnPct ?? 0))).toFixed(2)) : 0,
+      monthlyAccountReturnPct: effectiveMonthlyAccountReturnPct,
       requiredMonthlyAccountReturnPct: 50,
-      monthlyReturnPassed: monthlyBreakdown.length > 0 ? mean(monthlyBreakdown.map((month) => Number(month.accountReturnPct ?? 0))) >= 50 : false,
-      maxDrawdownPct: metrics.maxDrawdownPct,
+      monthlyReturnPassed: effectiveMonthlyAccountReturnPct >= 50,
+      maxDrawdownPct: effectiveDrawdown,
       requiredMaxDrawdownPct: 10,
-      drawdownPassed: metrics.maxDrawdownPct <= 10,
+      drawdownPassed: effectiveDrawdown <= 10,
       trades: selected.length,
       requiredTradeCountMin: 20,
       requiredTradeCountMax: 45,
@@ -2129,8 +2757,15 @@ function buildReturnAmplificationAnalysis(params: {
       slHitRate: selected.length > 0 ? Number((slHits / selected.length).toFixed(4)) : 0,
       profitFactor: grossLoss > 0 ? Number((grossProfit / grossLoss).toFixed(2)) : grossProfit > 0 ? 99 : 0,
       summedTradePnl: Number(pnlValues.reduce((sum, value) => sum + value, 0).toFixed(2)),
-      accountReturnPct: metrics.accountReturnPct,
-      averageMonthlyAccountReturnPct: monthlyBreakdown.length > 0 ? Number(mean(monthlyBreakdown.map((month) => Number(month.accountReturnPct ?? 0))).toFixed(2)) : 0,
+      accountReturnPct: effectiveAccountReturnPct,
+      averageMonthlyAccountReturnPct: effectiveMonthlyAccountReturnPct,
+      baseAccountReturnPct: metrics.accountReturnPct,
+      baseAverageMonthlyAccountReturnPct: monthlyBreakdown.length > 0 ? Number(mean(monthlyBreakdown.map((month) => Number(month.accountReturnPct ?? 0))).toFixed(2)) : 0,
+      lifecycleAccountReturnPct: lifecycleReplayReport.lifecycleTotalAccountReturnPct,
+      lifecycleAverageMonthlyAccountReturnPct: lifecycleReplayReport.lifecycleAverageMonthlyReturnPct,
+      lifecycleMedianPnlPct: lifecycleReplayReport.lifecycleMedianPnlPct,
+      lifecycleAveragePnlPct: lifecycleReplayReport.lifecycleAveragePnlPct,
+      lifecycleMfeCaptureRatio: lifecycleReplayReport.lifecycleMfeCaptureRatio,
       averageTpAchieved: selected.length > 0
         ? Number(mean(selected.map((item) => {
             const target = Number(item.dynamicExitPlan.tpTargetPct ?? 0);
@@ -2140,7 +2775,7 @@ function buildReturnAmplificationAnalysis(params: {
         : 0,
       averageAdverseExcursion: selected.length > 0 ? Number(mean(selected.map((item) => Math.abs(Number(item.candidate.maePctPoints ?? item.candidate.maePct ?? 0)))).toFixed(2)) : 0,
       averageHoldBars: selected.length > 0 ? Number(mean(selected.map((item) => Math.max(1, ((item.candidate.exitTs ?? item.candidate.entryTs) - item.candidate.entryTs) / 60))).toFixed(2)) : 0,
-      drawdown: metrics.maxDrawdownPct,
+      drawdown: effectiveDrawdown,
       monthlyBreakdown,
       selectedBucketDistribution: countRecord(selected.map((item) => item.candidate.selectedBucket)),
       predictedBucketDistribution: predictedBucketDistribution.counts,
@@ -2150,6 +2785,7 @@ function buildReturnAmplificationAnalysis(params: {
       reasonsSelected: config.filterNotes,
       reasonsRejected: [`filtered_candidates=${Math.max(0, enrichedCandidates.length - selected.length)}`],
       dynamicExitPlanSummary,
+      tradeLifecycleReplayReport: lifecycleReplayReport,
       capitalAllocationScenarios,
       cascadeScenarios,
       targetAchievedBreakdown: {
@@ -2356,8 +2992,15 @@ function buildReturnAmplificationAnalysis(params: {
       || Number(a.slHitRate ?? Number.POSITIVE_INFINITY) - Number(b.slHitRate ?? Number.POSITIVE_INFINITY)
       || Number(b.profitFactor ?? 0) - Number(a.profitFactor ?? 0)
       || Number(b.winRate ?? 0) - Number(a.winRate ?? 0)
+      || Number(b.lifecycleMfeCaptureRatio ?? 0) - Number(a.lifecycleMfeCaptureRatio ?? 0)
       || Number(b.trades ?? 0) - Number(a.trades ?? 0)
     )[0] ?? null;
+  const baselineLifecycleReplayReport = baselineScenario?.tradeLifecycleReplayReport ?? buildTradeLifecycleReplayReport({
+    serviceId: params.dataset.serviceId,
+    sourceJobId: null,
+    sourcePolicyId: params.bestPolicySummary?.policyId ?? null,
+    selected: [],
+  });
 
   return {
     preservedBaselineInvariants: {
@@ -2395,6 +3038,7 @@ function buildReturnAmplificationAnalysis(params: {
     })),
     relationshipFailureProxyAnalysis,
     recommendedCandidateConfiguration,
+    tradeLifecycleReplayReport: baselineLifecycleReplayReport,
     summary: {
       anyScenarioReaches50MonthlyReturn: scenarios.some((scenario) => Number(scenario.averageMonthlyAccountReturnPct ?? 0) >= 50),
       closestScenarioTo50MonthlyReturn: scenarioApproaching50Monthly
@@ -2405,6 +3049,11 @@ function buildReturnAmplificationAnalysis(params: {
         : null,
       anyScenarioMaintains90WinAndLowSl: scenarioMeeting90Win.length > 0,
       scenariosMeeting90WinAndLowSl: scenarioMeeting90Win.map((scenario) => scenario.scenarioId),
+      lifecycleReplayImprovedTrades: baselineLifecycleReplayReport.improvedTradeCount,
+      lifecycleOldMedianPnlPct: baselineLifecycleReplayReport.oldMedianPnlPct,
+      lifecycleNewMedianPnlPct: baselineLifecycleReplayReport.lifecycleMedianPnlPct,
+      lifecycleOldAveragePnlPct: baselineLifecycleReplayReport.oldAveragePnlPct,
+      lifecycleNewAveragePnlPct: baselineLifecycleReplayReport.lifecycleAveragePnlPct,
       recommendedNextStep: recommendedCandidateConfiguration && Number((recommendedCandidateConfiguration as Record<string, unknown>).averageMonthlyAccountReturnPct ?? 0) > 0
         ? "Review the lifecycle and return-first analysis in Reports, then rerun the deep search with targetProfile=return_first if the recommended scenario looks safe."
         : "No safe return amplification scenario emerged from the current analysis. Keep the baseline rebuilt policy and continue research.",
