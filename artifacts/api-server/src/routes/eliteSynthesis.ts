@@ -91,7 +91,7 @@ function jobDisplayState(job: EliteSynthesisJobRow): string {
       ?? "",
   );
   if (job.status === "completed") {
-    if (!job.resultArtifact) return "completed_missing_artifact";
+    if (!job.hasResultArtifact && !job.resultArtifact) return "completed_missing_artifact";
     if (resultState === "completed_target_achieved") return "completed_target_achieved";
     if (resultState === "completed_exhausted_no_target") {
       if (recommendedPolicyStatus === "baseline_only") return "completed_baseline_only";
@@ -108,6 +108,7 @@ function jobDisplayState(job: EliteSynthesisJobRow): string {
 
 function artifactHealth(job: EliteSynthesisJobRow) {
   const resultArtifact = job.resultArtifact;
+  const hasResultArtifact = job.resultArtifactLoaded ? Boolean(resultArtifact) : job.hasResultArtifact;
   const resultSummary = job.resultSummary && typeof job.resultSummary === "object"
     ? job.resultSummary as Record<string, unknown>
     : {};
@@ -118,7 +119,7 @@ function artifactHealth(job: EliteSynthesisJobRow) {
     : [];
   const returnAmplification = resultArtifact?.returnAmplificationAnalysis ?? null;
   const diagnostics: string[] = [];
-  if (job.status === "completed" && !resultArtifact) {
+  if (job.status === "completed" && job.resultArtifactLoaded && !resultArtifact) {
     diagnostics.push("Job status is completed but the result artifact is missing.");
   }
   if (resultArtifact && !resultArtifact.bestPolicySummary && !noTargetDiagnosticRun) {
@@ -133,7 +134,7 @@ function artifactHealth(job: EliteSynthesisJobRow) {
   return {
     displayState: jobDisplayState(job),
     artifactStatus: {
-      resultArtifact: Boolean(resultArtifact),
+      resultArtifact: hasResultArtifact,
       selectedTradesArtifact: bestSelectedTrades.length > 0,
       returnAmplificationArtifact: Boolean(returnAmplification),
       candidateRuntimeArtifacts: job.candidateRuntimeArtifacts.length,
@@ -235,7 +236,17 @@ async function synthesizeTradeLifecycleReplayReport(job: EliteSynthesisJobRow) {
 
 async function buildHydratedResultArtifact(job: EliteSynthesisJobRow): Promise<EliteSynthesisResult | null> {
   if (!job.resultArtifact) return null;
-  const lifecycleReplayReport = await synthesizeTradeLifecycleReplayReport(job);
+  const storedReturnAmplification = job.resultArtifact.returnAmplificationAnalysis && typeof job.resultArtifact.returnAmplificationAnalysis === "object"
+    ? job.resultArtifact.returnAmplificationAnalysis as Record<string, unknown>
+    : null;
+  const storedLifecycleReplay = storedReturnAmplification?.tradeLifecycleReplayReport;
+  const lifecycleReplayNeedsHydration = !storedLifecycleReplay
+    || typeof storedLifecycleReplay !== "object"
+    || !Array.isArray((storedLifecycleReplay as Record<string, unknown>).trades)
+    || ((storedLifecycleReplay as Record<string, unknown>).trades as unknown[]).length === 0;
+  const lifecycleReplayReport = lifecycleReplayNeedsHydration
+    ? await synthesizeTradeLifecycleReplayReport(job)
+    : storedLifecycleReplay;
   const returnAmplificationAnalysis = job.resultArtifact.returnAmplificationAnalysis && typeof job.resultArtifact.returnAmplificationAnalysis === "object"
     ? {
         ...(job.resultArtifact.returnAmplificationAnalysis as Record<string, unknown>),

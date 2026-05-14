@@ -26,6 +26,54 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function workerJobSelect(includeResultArtifact: boolean) {
+  return includeResultArtifact
+    ? sql`
+        id,
+        task_type,
+        service_id,
+        symbol,
+        status,
+        stage,
+        params,
+        task_state,
+        progress_pct,
+        message,
+        heartbeat_at,
+        started_at,
+        completed_at,
+        error_summary,
+        result_summary,
+        CASE WHEN result_artifact IS NULL THEN false ELSE true END AS has_result_artifact,
+        true AS result_artifact_loaded,
+        result_artifact,
+        created_at,
+        updated_at
+      `
+    : sql`
+        id,
+        task_type,
+        service_id,
+        symbol,
+        status,
+        stage,
+        params,
+        task_state,
+        progress_pct,
+        message,
+        heartbeat_at,
+        started_at,
+        completed_at,
+        error_summary,
+        result_summary,
+        CASE WHEN result_artifact IS NULL THEN false ELSE true END AS has_result_artifact,
+        false AS result_artifact_loaded,
+        NULL::jsonb AS result_artifact,
+        created_at,
+        updated_at
+      `;
+}
+
 function hydrateWorkerJobRow(row: Record<string, unknown> | undefined): WorkerJobRow | null {
   if (!row) return null;
   return {
@@ -44,6 +92,8 @@ function hydrateWorkerJobRow(row: Record<string, unknown> | undefined): WorkerJo
     completedAt: iso(row.completed_at),
     errorSummary: asRecord(row.error_summary),
     resultSummary: asRecord(row.result_summary),
+    hasResultArtifact: Boolean(row.has_result_artifact),
+    resultArtifactLoaded: Boolean(row.result_artifact_loaded),
     resultArtifact: row.result_artifact ?? null,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
@@ -185,9 +235,18 @@ export async function updateWorkerJob(
   `);
 }
 
-export async function getWorkerJob(jobId: number): Promise<WorkerJobRow | null> {
+export async function getWorkerJob(
+  jobId: number,
+  options?: { includeResultArtifact?: boolean },
+): Promise<WorkerJobRow | null> {
   await ensureWorkerJobsTable();
-  const result = await db.execute(sql`SELECT * FROM worker_jobs WHERE id = ${jobId} LIMIT 1`);
+  const includeResultArtifact = options?.includeResultArtifact !== false;
+  const result = await db.execute(sql`
+    SELECT ${workerJobSelect(includeResultArtifact)}
+    FROM worker_jobs
+    WHERE id = ${jobId}
+    LIMIT 1
+  `);
   return hydrateWorkerJobRow(result.rows?.[0] as Record<string, unknown> | undefined);
 }
 
@@ -196,9 +255,11 @@ export async function listWorkerJobs(params: {
   taskType?: WorkerTaskType;
   statuses?: WorkerJobStatus[];
   limit?: number;
+  includeResultArtifact?: boolean;
 }): Promise<WorkerJobRow[]> {
   await ensureWorkerJobsTable();
   const limit = Math.max(1, Math.min(50, params.limit ?? 10));
+  const includeResultArtifact = params.includeResultArtifact === true;
   const statusArray = params.statuses && params.statuses.length > 0 ? params.statuses : null;
   const whereParts = [sql`1 = 1`];
   if (params.serviceId) {
@@ -211,7 +272,7 @@ export async function listWorkerJobs(params: {
     whereParts.push(sql`status IN (${sql.join(statusArray.map((status) => sql`${status}`), sql`, `)})`);
   }
   const result = await db.execute(sql`
-    SELECT *
+    SELECT ${workerJobSelect(includeResultArtifact)}
     FROM worker_jobs
     WHERE ${sql.join(whereParts, sql` AND `)}
     ORDER BY created_at DESC

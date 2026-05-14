@@ -31,6 +31,8 @@ export type WorkerJobRow = {
   completedAt: string | null;
   errorSummary: Record<string, unknown> | null;
   resultSummary: Record<string, unknown> | null;
+  hasResultArtifact: boolean;
+  resultArtifactLoaded: boolean;
   resultArtifact: unknown;
   createdAt: string | null;
   updatedAt: string | null;

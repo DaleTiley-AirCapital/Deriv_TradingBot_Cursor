@@ -33,6 +33,8 @@ export type EliteSynthesisJobRow = {
   errorSummary: Record<string, unknown> | null;
   bestSummary: Record<string, unknown> | null;
   resultSummary: Record<string, unknown> | null;
+  hasResultArtifact: boolean;
+  resultArtifactLoaded: boolean;
   resultArtifact: EliteSynthesisResult | null;
   candidateRuntimeArtifacts: Array<Record<string, unknown>>;
   baselineRecords: Array<Record<string, unknown>>;
@@ -59,6 +61,8 @@ function hydrateEliteSynthesisJob(row: WorkerJobRow | null): EliteSynthesisJobRo
     errorSummary: row.errorSummary,
     bestSummary: (taskState.bestSummary as Record<string, unknown> | null) ?? null,
     resultSummary: row.resultSummary,
+    hasResultArtifact: row.hasResultArtifact,
+    resultArtifactLoaded: row.resultArtifactLoaded,
     resultArtifact: (row.resultArtifact as EliteSynthesisResult | null) ?? null,
     candidateRuntimeArtifacts: Array.isArray(taskState.candidateRuntimeArtifacts)
       ? (taskState.candidateRuntimeArtifacts as Array<Record<string, unknown>>)
@@ -148,7 +152,7 @@ export async function getEliteSynthesisJob(jobId: number): Promise<EliteSynthesi
 }
 
 export async function getEliteSynthesisProgress(jobId: number): Promise<EliteSynthesisProgressSnapshot | null> {
-  const row = await getEliteSynthesisJob(jobId);
+  const row = hydrateEliteSynthesisJob(await getWorkerJob(jobId, { includeResultArtifact: false }));
   if (!row) return null;
   const bestSummary = row.bestSummary ?? {};
   return {
@@ -181,6 +185,7 @@ export async function listEliteSynthesisJobs(serviceId: string, limit = 10): Pro
     serviceId,
     taskType: "elite_synthesis",
     limit,
+    includeResultArtifact: false,
   });
   return rows.map((row) => hydrateEliteSynthesisJob(row)).filter(Boolean) as EliteSynthesisJobRow[];
 }

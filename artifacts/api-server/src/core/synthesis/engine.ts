@@ -3356,6 +3356,119 @@ function deriveNoTargetReason(params: {
   return "no_policy_survived_return_first_search";
 }
 
+function compactLifecycleReplayTradeForStorage(trade: Record<string, unknown>) {
+  return {
+    tradeId: trade.tradeId ?? null,
+    serviceId: trade.serviceId ?? null,
+    sourceJobId: trade.sourceJobId ?? null,
+    sourcePolicyId: trade.sourcePolicyId ?? null,
+    entryTs: trade.entryTs ?? null,
+    oldExitTs: trade.oldExitTs ?? null,
+    lifecycleExitTs: trade.lifecycleExitTs ?? null,
+    oldPnlPct: trade.oldPnlPct ?? 0,
+    lifecyclePnlPct: trade.lifecyclePnlPct ?? 0,
+    oldExitReason: trade.oldExitReason ?? null,
+    lifecycleExitReason: trade.lifecycleExitReason ?? null,
+    maxMfeSeenBeforeExit: trade.maxMfeSeenBeforeExit ?? 0,
+    maxMaeSeenBeforeExit: trade.maxMaeSeenBeforeExit ?? 0,
+    oldMfeCaptureRatio: trade.oldMfeCaptureRatio ?? 0,
+    lifecycleMfeCaptureRatio: trade.lifecycleMfeCaptureRatio ?? 0,
+    timeInTradeOld: trade.timeInTradeOld ?? 0,
+    timeInTradeLifecycle: trade.timeInTradeLifecycle ?? 0,
+    tp1Reached: Boolean(trade.tp1Reached),
+    tp2Reached: Boolean(trade.tp2Reached),
+    protectedAt: trade.protectedAt ?? null,
+    partialTakenAt: trade.partialTakenAt ?? null,
+    runnerActivatedAt: trade.runnerActivatedAt ?? null,
+    oldExitWasTooEarly: Boolean(trade.oldExitWasTooEarly),
+    lifecycleCapturedMoreMove: Boolean(trade.lifecycleCapturedMoreMove),
+  };
+}
+
+function compactTradeLifecycleReplayReportForStorage(report: unknown) {
+  if (!report || typeof report !== "object") return report;
+  const replay = report as Record<string, unknown>;
+  const examples = replay.examples && typeof replay.examples === "object"
+    ? replay.examples as Record<string, unknown>
+    : {};
+  const compactExamples = Object.fromEntries(
+    ["fixedTrailingTooEarly", "lifecycleHoldImprovedResult", "lifecycleProtectedProfit", "lifecycleExitedCorrectly"]
+      .map((key) => [
+        key,
+        Array.isArray(examples[key])
+          ? (examples[key] as Record<string, unknown>[]).slice(0, 3).map((trade) => compactLifecycleReplayTradeForStorage(trade))
+          : [],
+      ]),
+  );
+  return {
+    ...replay,
+    compactedForStorage: true,
+    examples: compactExamples,
+    trades: [],
+  };
+}
+
+function compactReturnAmplificationScenarioForStorage(scenario: unknown) {
+  if (!scenario || typeof scenario !== "object") return scenario;
+  const entry = scenario as Record<string, unknown>;
+  return {
+    ...entry,
+    monthlyBreakdown: Array.isArray(entry.monthlyBreakdown) ? entry.monthlyBreakdown.slice(-12) : [],
+    tradeLifecycleReplayReport: compactTradeLifecycleReplayReportForStorage(entry.tradeLifecycleReplayReport),
+    exampleSelectedTrades: Array.isArray(entry.exampleSelectedTrades) ? entry.exampleSelectedTrades.slice(0, 5) : [],
+  };
+}
+
+function compactReturnAmplificationAnalysisForStorage(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const analysis = value as Record<string, unknown>;
+  const predictorSummary = analysis.predictorSummary && typeof analysis.predictorSummary === "object"
+    ? analysis.predictorSummary as Record<string, unknown>
+    : null;
+  return {
+    ...analysis,
+    predictorSummary: predictorSummary
+      ? {
+          ...predictorSummary,
+          candidatePredictions: Array.isArray(predictorSummary.candidatePredictions)
+            ? predictorSummary.candidatePredictions.slice(0, 60)
+            : [],
+          candidatePredictionsTruncated: Array.isArray(predictorSummary.candidatePredictions)
+            ? (predictorSummary.candidatePredictions as unknown[]).length > 60
+            : false,
+        }
+      : null,
+    dynamicExitDerivationTable: Array.isArray(analysis.dynamicExitDerivationTable)
+      ? analysis.dynamicExitDerivationTable.slice(0, 40)
+      : [],
+    scenarioPolicies: Array.isArray(analysis.scenarioPolicies)
+      ? analysis.scenarioPolicies.map((scenario) => compactReturnAmplificationScenarioForStorage(scenario))
+      : [],
+    safestHighWinPolicy: compactReturnAmplificationScenarioForStorage(analysis.safestHighWinPolicy),
+    bestReturnFirstPolicy: compactReturnAmplificationScenarioForStorage(analysis.bestReturnFirstPolicy),
+    bestRejectedProfitPolicy: compactReturnAmplificationScenarioForStorage(analysis.bestRejectedProfitPolicy),
+    recommendedPolicy: analysis.recommendedPolicy && typeof analysis.recommendedPolicy === "object"
+      ? {
+          ...(analysis.recommendedPolicy as Record<string, unknown>),
+          policy: compactReturnAmplificationScenarioForStorage((analysis.recommendedPolicy as Record<string, unknown>).policy),
+        }
+      : analysis.recommendedPolicy,
+    recommendedCandidateConfiguration: compactReturnAmplificationScenarioForStorage(analysis.recommendedCandidateConfiguration),
+    bestAbove5: compactReturnAmplificationScenarioForStorage(analysis.bestAbove5),
+    bestAbove7: compactReturnAmplificationScenarioForStorage(analysis.bestAbove7),
+    bestAbove9: compactReturnAmplificationScenarioForStorage(analysis.bestAbove9),
+    tradeLifecycleReplayReport: compactTradeLifecycleReplayReportForStorage(analysis.tradeLifecycleReplayReport),
+  };
+}
+
+function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): EliteSynthesisResult {
+  return {
+    ...result,
+    fullPassLog: result.fullPassLog.slice(-24),
+    returnAmplificationAnalysis: compactReturnAmplificationAnalysisForStorage(result.returnAmplificationAnalysis),
+  };
+}
+
 export function getSynthesisAdapter(serviceId: string): SymbolSynthesisAdapter {
   if (serviceId === "CRASH300") return new Crash300SynthesisAdapter();
   throw new Error(`Elite synthesis adapter missing for service ${serviceId}.`);
@@ -4215,6 +4328,7 @@ export async function runEliteSynthesisJob(params: {
     validationHardeningGuard,
     returnAmplificationAnalysis,
   };
+  const storedResult = compactEliteSynthesisResultForStorage(result);
 
   await updateEliteSynthesisJob(params.jobId, {
     status: "completed",
@@ -4250,7 +4364,7 @@ export async function runEliteSynthesisJob(params: {
       bottleneck: result.bottleneckSummary.classification,
       validationErrors: result.validationErrors,
     },
-    resultArtifact: result,
+    resultArtifact: storedResult,
   });
 
   return result;
