@@ -1108,6 +1108,20 @@ function normalizeLifecycleExitReason(reason: unknown): string {
   return value;
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 function averageTrueRange(candles: CandleRow[], index: number, length = 14) {
   const start = Math.max(1, index - length + 1);
   const values: number[] = [];
@@ -3544,34 +3558,38 @@ async function buildReturnAmplificationAnalysis(params: {
   };
   const aiStrategyReview = await (async () => {
     try {
-      const completion = await chatComplete({
-        messages: [
-          {
-            role: "system",
-            content: "You are an offline research reviewer for a Deriv synthetic-index runtime builder. You cannot trade, stage, promote, or access live execution. Return compact JSON only.",
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              task: "Review deterministic CRASH300 Build Runtime Model summaries. Recommend deterministic live-safe refinements only.",
-              requiredOutput: {
-                recommendedSeedFamiliesToPrioritise: "string[]",
-                winnerLoserSeparatingFeatures: "string[]",
-                deterministicRuleRefinements: "string[]",
-                tpProtectionMaturitySettings: "string[]",
-                rejectionFilters: "string[]",
-                riskConcerns: "string[]",
-                confidence: "low|medium|high",
-                worthRuntimeMimicValidation: "boolean",
-              },
-              input: aiReviewInput,
-            }),
-          },
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.1,
-        max_completion_tokens: 1400,
-      });
+      const completion = await withTimeout(
+        chatComplete({
+          messages: [
+            {
+              role: "system",
+              content: "You are an offline research reviewer for a Deriv synthetic-index runtime builder. You cannot trade, stage, promote, or access live execution. Return compact JSON only.",
+            },
+            {
+              role: "user",
+              content: JSON.stringify({
+                task: "Review deterministic CRASH300 Build Runtime Model summaries. Recommend deterministic live-safe refinements only.",
+                requiredOutput: {
+                  recommendedSeedFamiliesToPrioritise: "string[]",
+                  winnerLoserSeparatingFeatures: "string[]",
+                  deterministicRuleRefinements: "string[]",
+                  tpProtectionMaturitySettings: "string[]",
+                  rejectionFilters: "string[]",
+                  riskConcerns: "string[]",
+                  confidence: "low|medium|high",
+                  worthRuntimeMimicValidation: "boolean",
+                },
+                input: aiReviewInput,
+              }),
+            },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.1,
+          max_completion_tokens: 1400,
+        }),
+        45_000,
+        "AI Strategy Review timed out after 45s; deterministic final-pass build continued.",
+      );
       const text = completion.choices[0]?.message?.content ?? "{}";
       return {
         status: "run",
@@ -4569,6 +4587,12 @@ export async function runEliteSynthesisJob(params: {
     bestPolicySummary,
     bestPolicySelectedTradesSummary: bestPolicyValidationArtifacts.bestPolicySelectedTradesSummary,
   });
+  await updateEliteSynthesisJob(params.jobId, {
+    stage: "selecting_best",
+    progressPct: 96,
+    message: "Running final-pass high-volume seed escalation and lifecycle analysis",
+    heartbeatAt: nowIso(),
+  });
   const returnAmplificationAnalysis = await buildReturnAmplificationAnalysis({
     dataset,
     targetProfile: params.request.targetProfile ?? "default",
@@ -4578,6 +4602,12 @@ export async function runEliteSynthesisJob(params: {
     bestPolicySelectedTrades: bestPolicyValidationArtifacts.bestPolicySelectedTrades,
     policyArtifactReadiness,
     leakageAudit: bestPolicyArtifact?.leakageAudit ?? null,
+  });
+  await updateEliteSynthesisJob(params.jobId, {
+    stage: "selecting_best",
+    progressPct: 98,
+    message: "Final-pass runtime build result assembled",
+    heartbeatAt: nowIso(),
   });
   const finalPassRuntimeArtifactEligibility = (returnAmplificationAnalysis as Record<string, unknown>).runtimeArtifactEligibility as Record<string, unknown> | undefined;
   const reviewCandidateRuntimeArtifact = finalPassRuntimeArtifactEligibility?.canCreateReviewArtifact
