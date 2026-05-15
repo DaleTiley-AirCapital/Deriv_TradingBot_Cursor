@@ -334,10 +334,10 @@ interface V3Trade {
   qualityTier?: string | null;
   confidence?: number | null;
   setupMatch?: number | null;
-  trailingActivationPct?: number | null;
-  trailingDistancePct?: number | null;
-  trailingMinHoldBars?: number | null;
-  trailingActivated?: boolean;
+  protectionActivationPct?: number | null;
+  dynamicProtectionDistancePct?: number | null;
+  protectionMinHoldBars?: number | null;
+  protectionActivated?: boolean;
   regimeAtEntry: string;
   holdBars: number;
   pnlPct: number;
@@ -753,6 +753,8 @@ function ExitReasonBadge({ reason }: { reason: string }) {
     hard_sl: "bg-red-500/15 text-red-400 border-red-500/25",
     mfe_reversal: "bg-yellow-500/15 text-yellow-400 border-yellow-500/25",
     trailing_stop: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
+    trailing_exit: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
+    protected_exit: "bg-emerald-500/15 text-emerald-400 border-emerald-500/25",
     tp_hit: "bg-green-500/15 text-green-400 border-green-500/25",
     sl_hit: "bg-red-500/15 text-red-400 border-red-500/25",
     max_duration: "bg-blue-500/15 text-blue-400 border-blue-500/25",
@@ -760,7 +762,9 @@ function ExitReasonBadge({ reason }: { reason: string }) {
   const labels: Record<string, string> = {
     tp_hit: "TP Hit",
     sl_hit: "SL Hit",
-    trailing_stop: "Trailing Stop",
+    trailing_stop: "Protected Exit",
+    trailing_exit: "Protected Exit",
+    protected_exit: "Protected Exit",
     max_duration: "Max Duration",
     leg1_tp: "Leg 1 TP",
     hard_sl: "Hard SL",
@@ -774,7 +778,7 @@ function ExitReasonBadge({ reason }: { reason: string }) {
 }
 
 function exitReasonSortValue(reason: string): number {
-  const order = ["tp_hit", "trailing_stop", "sl_hit", "max_duration"];
+  const order = ["tp_hit", "protected_exit", "trailing_exit", "trailing_stop", "sl_hit", "max_duration"];
   const idx = order.indexOf(reason);
   return idx >= 0 ? idx : order.length;
 }
@@ -1962,6 +1966,7 @@ interface SymbolResearchProfileUi {
   recommendedEntryModel?: string;
   recommendedTpModel?: Record<string, unknown>;
   recommendedSlModel?: Record<string, unknown>;
+  recommendedLifecycleProtectionModel?: Record<string, unknown>;
   recommendedTrailingModel?: Record<string, unknown>;
   estimatedFitAdjustedMonthlyReturnPct?: number;
   engineTypeRecommendation?: string;
@@ -2329,7 +2334,7 @@ function formatPct(v: unknown, digits = 2): string {
 
 function formatModelDetails(
   model: Record<string, unknown> | undefined,
-  kind: "tp" | "sl" | "trailing",
+  kind: "tp" | "sl" | "lifecycle",
 ): string {
   if (!model || Object.keys(model).length === 0) return "";
 
@@ -2345,13 +2350,13 @@ function formatModelDetails(
     return [structural, risk ? `max risk ${risk}` : ""].filter(Boolean).join(" - ");
   }
 
-  const activation = formatPct(model.activationProfitPct, 2);
-  const distance = formatPct(model.trailingDistancePct, 2);
-  const hold = asNum(model.minHoldMinutesBeforeTrail);
+  const activation = formatPct(model.protectionActivationPct ?? model.activationProfitPct, 2);
+  const distance = formatPct(model.dynamicProtectionDistancePct ?? model.trailingDistancePct, 2);
+  const hold = asNum(model.minimumProtectionMinutes ?? model.minHoldMinutesBeforeTrail);
   const policy = typeof model.policy === "string" ? model.policy : "";
   return [
-    activation ? `arm ${activation}` : "",
-    distance ? `distance ${distance}` : "",
+    activation ? `protect ${activation}` : "",
+    distance ? `floor distance ${distance}` : "",
     hold != null ? `min hold ${Math.round(hold)}m` : "",
     policy,
   ].filter(Boolean).join(" - ");
@@ -4348,8 +4353,8 @@ function MoveCalibrationTab({
                 value={formatModelDetails(researchProfile.recommendedSlModel, "sl") || "n/a"}
               />
               <StatRow
-                label="Trailing model"
-                value={formatModelDetails(researchProfile.recommendedTrailingModel, "trailing") || "n/a"}
+                label="Lifecycle protection model"
+                value={formatModelDetails(researchProfile.recommendedLifecycleProtectionModel ?? researchProfile.recommendedTrailingModel, "lifecycle") || "n/a"}
               />
               <StatRow label="Profitability summary" value={researchProfile.estimatedFitAdjustedMonthlyReturnPct != null ? `${researchProfile.estimatedFitAdjustedMonthlyReturnPct.toFixed(2)}%/mo` : ""} />
               <StatRow label="Engine recommendation" value={researchProfile.engineTypeRecommendation ?? ""} />
@@ -6213,6 +6218,11 @@ function ReportsTab({
   const bestReturnFirstPolicy = (returnAmplificationAnalysis.bestReturnFirstPolicy as Record<string, unknown> | undefined) ?? null;
   const bestRejectedProfitPolicy = (returnAmplificationAnalysis.bestRejectedProfitPolicy as Record<string, unknown> | undefined) ?? null;
   const recommendedPolicyMeta = (returnAmplificationAnalysis.recommendedPolicy as Record<string, unknown> | undefined) ?? null;
+  const primaryDeepFamilyAnalysis = (returnAmplificationAnalysis.primaryDeepFamilyAnalysis as Record<string, unknown> | undefined) ?? null;
+  const runtimeArtifactEligibility = (returnAmplificationAnalysis.runtimeArtifactEligibility as Record<string, unknown> | undefined) ?? null;
+  const aiStrategyReview = (returnAmplificationAnalysis.aiStrategyReview as Record<string, unknown> | undefined) ?? null;
+  const preLimitFamilyStats = (returnAmplificationAnalysis.preLimitFamilyStats as Record<string, unknown> | undefined) ?? null;
+  const postDailyLimitFamilyStats = (returnAmplificationAnalysis.postDailyLimitFamilyStats as Record<string, unknown> | undefined) ?? null;
   const bestLifecycleReturnPct = Number(recommendedScenario?.totalAccountReturnPct ?? recommendedScenario?.accountReturnPct ?? 0);
   const bestLifecycleMonthlyPct = Number(recommendedScenario?.averageMonthlyAccountReturnPct ?? 0);
   const stageButtonAllowed = service === "CRASH300"
@@ -6412,6 +6422,34 @@ function ReportsTab({
             <div>
               <p className="text-muted-foreground uppercase tracking-wide">Best return-first policy</p>
               <p className="mt-1 text-foreground">{String(bestReturnFirstPolicy?.policyId ?? bestReturnFirstPolicy?.scenarioId ?? "none passed")}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Priority seed family</p>
+              <p className="mt-1 text-foreground">{String(primaryDeepFamilyAnalysis?.familyKey ?? "not analysed")}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Pre-limit seed stats</p>
+              <p className="mt-1 text-foreground">
+                {preLimitFamilyStats
+                  ? `${Number(preLimitFamilyStats.totalSimulatedTrades ?? 0)} trades / ${(Number(preLimitFamilyStats.winRate ?? 0) * 100).toFixed(1)}% win`
+                  : "n/a"}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Post-limit seed stats</p>
+              <p className="mt-1 text-foreground">
+                {postDailyLimitFamilyStats
+                  ? `${Number(postDailyLimitFamilyStats.trades ?? 0)} trades / ${(Number(postDailyLimitFamilyStats.winRate ?? 0) * 100).toFixed(1)}% win`
+                  : "n/a"}
+              </p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">AI Strategy Review</p>
+              <p className="mt-1 text-foreground">{String(aiStrategyReview?.status ?? "not run")}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground uppercase tracking-wide">Runtime artifact eligibility</p>
+              <p className="mt-1 text-foreground">{String(runtimeArtifactEligibility?.status ?? "not evaluated")}</p>
             </div>
             <div>
               <p className="text-muted-foreground uppercase tracking-wide">Best rejected profit policy</p>

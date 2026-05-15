@@ -2642,7 +2642,7 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           noTradeReasonCounts: { impossible_exit_rejected: 1 },
         },
         selectedFeaturesSummary: policy.selectedCoreFeatures.map((feature) => feature.key),
-        tpSlTrailingSummary: ["policy_rejected: impossible exit scale"],
+          tpSlLifecycleSummary: ["policy_rejected: impossible exit scale"],
         targetAchieved: false,
       };
     }
@@ -2740,6 +2740,15 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
       maxDrawdownPct,
       phantomCount,
     });
+    const lifecycleRules = policy.lifecycleManagerRules ?? {};
+    const protectionActivationPct = asNumber(
+      asRecord(lifecycleRules).protectionActivationPct ?? policy.trailingRules.activationProfitPct,
+      0,
+    );
+    const dynamicProtectionDistancePct = asNumber(
+      asRecord(lifecycleRules).dynamicProtectionDistancePct ?? policy.trailingRules.trailingDistancePct,
+      0,
+    );
     if (sourcePool === "rebuilt_trigger_candidates" && eligible.length === 0) {
       const reasons = [
         "no_simulated_rebuilt_trades",
@@ -2769,8 +2778,10 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         exitRules: {
           tpTargetPct: asNumber(policy.tpRules.targetPct, 0),
           slRiskPct: asNumber(policy.slRules.maxInitialRiskPct, 0),
-          trailingActivationPct: asNumber(policy.trailingRules.activationProfitPct, 0),
-          trailingDistancePct: asNumber(policy.trailingRules.trailingDistancePct, 0),
+          protectionActivationPct,
+          dynamicProtectionDistancePct,
+          trailingActivationPct: protectionActivationPct,
+          trailingDistancePct: dynamicProtectionDistancePct,
           minHoldBars: asNumber(policy.minHoldRules.minHoldBars, 0),
           unit: "percentage_points",
           exitUnitValidation: {
@@ -2778,8 +2789,10 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
             selectedSubsetMaeAbsRange: { min: null, max: null },
             derivedTpPctPoints: asNumber(policy.tpRules.targetPct, 0),
             derivedSlPctPoints: asNumber(policy.slRules.maxInitialRiskPct, 0),
-            derivedTrailingActivationPctPoints: asNumber(policy.trailingRules.activationProfitPct, 0),
-            derivedTrailingDistancePctPoints: asNumber(policy.trailingRules.trailingDistancePct, 0),
+            derivedProtectionActivationPctPoints: protectionActivationPct,
+            derivedDynamicProtectionDistancePctPoints: dynamicProtectionDistancePct,
+            derivedTrailingActivationPctPoints: protectionActivationPct,
+            derivedTrailingDistancePctPoints: dynamicProtectionDistancePct,
             impossibleExitRejected: false,
             warnings: ["No simulated rebuilt trades survived grouping and daily selection."],
           },
@@ -2797,7 +2810,7 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           monthlyBreakdown,
         },
         selectedFeaturesSummary: policy.selectedCoreFeatures.map((feature) => feature.key),
-        tpSlTrailingSummary: ["policy_rejected: no simulated rebuilt trades"],
+        tpSlLifecycleSummary: ["policy_rejected: no simulated rebuilt trades"],
         targetAchieved: false,
       };
     }
@@ -2826,8 +2839,10 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
       exitRules: {
         tpTargetPct: asNumber(policy.tpRules.targetPct, 0),
         slRiskPct: asNumber(policy.slRules.maxInitialRiskPct, 0),
-        trailingActivationPct: asNumber(policy.trailingRules.activationProfitPct, 0),
-        trailingDistancePct: asNumber(policy.trailingRules.trailingDistancePct, 0),
+        protectionActivationPct,
+        dynamicProtectionDistancePct,
+        trailingActivationPct: protectionActivationPct,
+        trailingDistancePct: dynamicProtectionDistancePct,
         minHoldBars: asNumber(policy.minHoldRules.minHoldBars, 0),
         unit: "percentage_points",
         exitUnitValidation: {
@@ -2841,8 +2856,24 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
           },
           derivedTpPctPoints: asNumber(asRecord(policy.tpRules.exitUnitValidation).derivedTpPctPoints, 0),
           derivedSlPctPoints: asNumber(asRecord(policy.tpRules.exitUnitValidation).derivedSlPctPoints, 0),
-          derivedTrailingActivationPctPoints: asNumber(asRecord(policy.tpRules.exitUnitValidation).derivedTrailingActivationPctPoints, 0),
-          derivedTrailingDistancePctPoints: asNumber(asRecord(policy.tpRules.exitUnitValidation).derivedTrailingDistancePctPoints, 0),
+          derivedProtectionActivationPctPoints: asNumber(
+            asRecord(policy.tpRules.exitUnitValidation).derivedProtectionActivationPctPoints
+            ?? asRecord(policy.tpRules.exitUnitValidation).derivedTrailingActivationPctPoints,
+            protectionActivationPct,
+          ),
+          derivedDynamicProtectionDistancePctPoints: asNumber(
+            asRecord(policy.tpRules.exitUnitValidation).derivedDynamicProtectionDistancePctPoints
+            ?? asRecord(policy.tpRules.exitUnitValidation).derivedTrailingDistancePctPoints,
+            dynamicProtectionDistancePct,
+          ),
+          derivedTrailingActivationPctPoints: asNumber(
+            asRecord(policy.tpRules.exitUnitValidation).derivedTrailingActivationPctPoints,
+            protectionActivationPct,
+          ),
+          derivedTrailingDistancePctPoints: asNumber(
+            asRecord(policy.tpRules.exitUnitValidation).derivedTrailingDistancePctPoints,
+            dynamicProtectionDistancePct,
+          ),
           impossibleExitRejected: Boolean(asRecord(policy.tpRules.exitUnitValidation).impossibleExitRejected),
           warnings: Array.isArray(asRecord(policy.tpRules.exitUnitValidation).warnings)
             ? ((asRecord(policy.tpRules.exitUnitValidation).warnings as unknown[]) as string[])
@@ -2867,10 +2898,10 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         }, {}),
       },
       selectedFeaturesSummary: policy.selectedCoreFeatures.map((feature) => feature.key),
-      tpSlTrailingSummary: [
+      tpSlLifecycleSummary: [
         `tp=${asNumber(policy.tpRules.targetPct, 0).toFixed(2)}%`,
         `sl=${asNumber(policy.slRules.maxInitialRiskPct, 0).toFixed(2)}%`,
-        `trail=${asNumber(policy.trailingRules.activationProfitPct, 0).toFixed(2)}%/${asNumber(policy.trailingRules.trailingDistancePct, 0).toFixed(2)}%`,
+        `protect=${protectionActivationPct.toFixed(2)}%/${dynamicProtectionDistancePct.toFixed(2)}%`,
       ],
       targetAchieved: winRate >= 0.9 && slHitRate <= 0.1 && profitFactor >= 2.5 && eligible.length >= 45 && eligible.length <= 75,
     };
@@ -2888,8 +2919,8 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     if (winners.length === 0) warnings.push("Rejected exit derivation because no winning subset trades were available.");
     if (derivedTpPctPoints <= 0) warnings.push("Rejected TP because derived TP was not positive.");
     if (derivedSlPctPoints <= 0) warnings.push("Rejected SL because derived SL was not positive.");
-    if (derivedTrailingActivationPctPoints <= 0) warnings.push("Rejected trailing activation because derived value was not positive.");
-    if (derivedTrailingDistancePctPoints <= 0) warnings.push("Rejected trailing distance because derived value was not positive.");
+    if (derivedTrailingActivationPctPoints <= 0) warnings.push("Rejected protection activation because derived value was not positive.");
+    if (derivedTrailingDistancePctPoints <= 0) warnings.push("Rejected dynamic protection distance because derived value was not positive.");
     if (winnerMfePct.length > 0 && derivedTpPctPoints < Math.max(0.1, percentile(winnerMfePct, 0.1) * 0.25)) {
       warnings.push("Derived TP is materially below the selected subset MFE distribution.");
     }
@@ -2906,6 +2937,8 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
     return {
       tpTargetPct: derivedTpPctPoints,
       slRiskPct: derivedSlPctPoints,
+      protectionActivationPct: derivedTrailingActivationPctPoints,
+      dynamicProtectionDistancePct: derivedTrailingDistancePctPoints,
       trailingActivationPct: derivedTrailingActivationPctPoints,
       trailingDistancePct: derivedTrailingDistancePctPoints,
       minHoldBars: Math.max(1, Math.round(average(winners.map((trade) => Math.max(1, ((trade.exitTs ?? trade.entryTs) - trade.entryTs) / 60))))),
@@ -2917,6 +2950,8 @@ export class Crash300SynthesisAdapter implements SymbolSynthesisAdapter {
         selectedSubsetMaeAbsRangePctPoints: rangeOf(winnerMaePct),
         derivedTpPctPoints,
         derivedSlPctPoints,
+        derivedProtectionActivationPctPoints: derivedTrailingActivationPctPoints,
+        derivedDynamicProtectionDistancePctPoints: derivedTrailingDistancePctPoints,
         derivedTrailingActivationPctPoints,
         derivedTrailingDistancePctPoints,
         sourceValueExamples: {

@@ -34,6 +34,10 @@ Internal stages:
 
 The consolidated output contract is `runtime_build_result_<SERVICE>_<RUN>.json`. It is an artifact over existing calibration, synthesis, backtest, and platform-state data. It must not create tables, promote runtime, enable execution modes, or auto-stage a candidate.
 
+Final-pass CRASH300 steering is data-led. Build Runtime Model escalates high-volume promising seed families before tiny perfect subsets, with `failed_recovery_short | failed_recovery_break_down | 5_to_6_pct | sell | late` as the current primary family when it satisfies volume, win-rate, and SL gates. The build result reports pre-limit family stats, post-daily-limit stats, winner-vs-loser separation, Trade Lifecycle Manager replay, dynamic TP/protection settings, AI Strategy Review status, candidate-family comparison, and runtime artifact eligibility.
+
+Reports describe exits as the Trade Lifecycle Manager: protection activation, protected floor, TP1, TP2/runner target, lifecycle state, continuation score, reversal pressure, momentum failure exit, time/progress failure exit, and protected exit. Historical low-level fields may be read for compatibility, but new user-facing reports must not present a fixed trailing-stop strategy.
+
 ## Validate Runtime
 
 Validate Runtime is the single user-visible validation action for the currently staged runtime candidate.

@@ -161,6 +161,8 @@ export type EliteSynthesisEntryTimingRule = {
 export type EliteSynthesisExitRules = {
   tpTargetPct: number;
   slRiskPct: number;
+  protectionActivationPct: number;
+  dynamicProtectionDistancePct: number;
   trailingActivationPct: number;
   trailingDistancePct: number;
   minHoldBars: number;
@@ -172,6 +174,8 @@ export type EliteSynthesisExitRules = {
     selectedSubsetMaeAbsRangePctPoints?: { min: number | null; max: number | null };
     derivedTpPctPoints: number;
     derivedSlPctPoints: number;
+    derivedProtectionActivationPctPoints: number;
+    derivedDynamicProtectionDistancePctPoints: number;
     derivedTrailingActivationPctPoints: number;
     derivedTrailingDistancePctPoints: number;
     sourceValueExamples?: Record<string, number[]>;
@@ -196,7 +200,8 @@ export type EliteSynthesisPolicySummary = {
   phantomCount: number;
   objectiveScore: number;
   selectedFeaturesSummary: string[];
-  tpSlTrailingSummary: string[];
+  tpSlLifecycleSummary?: string[];
+  tpSlTrailingSummary?: string[];
   targetAchieved: boolean;
   [key: string]: unknown;
 };
@@ -218,6 +223,7 @@ export type EliteSynthesisPolicyArtifact = {
   noTradeRules: string[];
   tpRules: Record<string, unknown>;
   slRules: Record<string, unknown>;
+  lifecycleManagerRules: Record<string, unknown>;
   trailingRules: Record<string, unknown>;
   minHoldRules: Record<string, unknown>;
   dailyTradeLimit: number;
@@ -375,13 +381,20 @@ export type LifecycleExitPlan = {
   protectionActivationPct: number;
   minimumNoTrailBars: number;
   minimumNoTrailMinutes: number;
+  minimumProtectionBars: number;
+  minimumProtectionMinutes: number;
   expectedMaturityBars: number;
   expectedMaturityMinutes: number;
   maxHoldBars: number;
   maxHoldMinutes: number;
   partialTakeProfitPct: number;
   runnerRemainderPct: number;
-  trailingDistancePct: number;
+  dynamicProtectionDistancePct: number;
+  trailingDistancePct?: number;
+  lifecycleManagerModel: string;
+  protectionRules: Record<string, unknown>;
+  exitDecisionRules: Record<string, unknown>;
+  maturityRules: Record<string, unknown>;
 };
 
 export type LifecycleReplayTraceEntry = {
@@ -439,7 +452,7 @@ export type TradeLifecycleReplayReport = {
   improvedTradeCount: number;
   exitReasonDistribution: Record<string, number>;
   examples: {
-    fixedTrailingTooEarly: TradeLifecycleReplayTradeResult[];
+    protectedExitExamples: TradeLifecycleReplayTradeResult[];
     lifecycleHoldImprovedResult: TradeLifecycleReplayTradeResult[];
     lifecycleProtectedProfit: TradeLifecycleReplayTradeResult[];
     lifecycleExitedCorrectly: TradeLifecycleReplayTradeResult[];

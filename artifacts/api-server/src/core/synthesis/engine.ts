@@ -1,4 +1,5 @@
 import { Crash300SynthesisAdapter, buildUnifiedCrash300Dataset } from "./crash300Adapter.js";
+import { chatComplete } from "../../infrastructure/openai.js";
 import type { PolicyEvaluationResult, SymbolSynthesisAdapter, SynthesisRebuiltTriggerCandidateRecord, UnifiedSynthesisDataset } from "./adapter.js";
 import {
   getEliteSynthesisJob,
@@ -746,6 +747,8 @@ function buildPolicyArtifact(params: {
         return {
           tpTargetPct: exitSummary.tp.p50,
           slRiskPct: exitSummary.sl.p50,
+          protectionActivationPct: exitSummary.trailingActivation.p50,
+          dynamicProtectionDistancePct: exitSummary.trailingDistance.p50,
           trailingActivationPct: exitSummary.trailingActivation.p50,
           trailingDistancePct: exitSummary.trailingDistance.p50,
           minHoldBars: Math.max(1, Math.round(median(rebuiltSubset.map((candidate) => Math.max(1, candidate.minHoldBars ?? 1))))),
@@ -757,6 +760,8 @@ function buildPolicyArtifact(params: {
             selectedSubsetMaeAbsRangePctPoints: summarizeRange(rebuiltSubset.map((candidate) => Math.abs(candidate.maePctPoints ?? 0))),
             derivedTpPctPoints: exitSummary.tp.p50,
             derivedSlPctPoints: exitSummary.sl.p50,
+            derivedProtectionActivationPctPoints: exitSummary.trailingActivation.p50,
+            derivedDynamicProtectionDistancePctPoints: exitSummary.trailingDistance.p50,
             derivedTrailingActivationPctPoints: exitSummary.trailingActivation.p50,
             derivedTrailingDistancePctPoints: exitSummary.trailingDistance.p50,
             sourceValueExamples: {
@@ -773,6 +778,20 @@ function buildPolicyArtifact(params: {
         };
       })()
     : params.adapter.deriveExitPolicyFromSubset(params.dataset, exitSubset as never);
+  exitRules.protectionActivationPct = Number(exitRules.protectionActivationPct ?? exitRules.trailingActivationPct ?? 0);
+  exitRules.dynamicProtectionDistancePct = Number(exitRules.dynamicProtectionDistancePct ?? exitRules.trailingDistancePct ?? 0);
+  exitRules.exitUnitValidation.derivedProtectionActivationPctPoints = Number(
+    exitRules.exitUnitValidation.derivedProtectionActivationPctPoints
+    ?? exitRules.exitUnitValidation.derivedTrailingActivationPctPoints
+    ?? exitRules.protectionActivationPct
+    ?? 0,
+  );
+  exitRules.exitUnitValidation.derivedDynamicProtectionDistancePctPoints = Number(
+    exitRules.exitUnitValidation.derivedDynamicProtectionDistancePctPoints
+    ?? exitRules.exitUnitValidation.derivedTrailingDistancePctPoints
+    ?? exitRules.dynamicProtectionDistancePct
+    ?? 0,
+  );
   const selectedMoveSizeBuckets = params.selectedMoveSizeBuckets.length > 0
     ? uniqueStrings(params.selectedMoveSizeBuckets)
     : resolveSelectedMoveSizeBuckets({
@@ -833,11 +852,26 @@ function buildPolicyArtifact(params: {
       source: "synthesis_percentile_subset",
       exitUnitValidation: exitRules.exitUnitValidation,
     },
-    trailingRules: {
-      activationProfitPct: exitRules.trailingActivationPct,
-      trailingDistancePct: exitRules.trailingDistancePct,
+    lifecycleManagerRules: {
+      lifecycleManagerModel: "trade_lifecycle_manager_v1",
+      protectionActivationPct: exitRules.protectionActivationPct ?? exitRules.trailingActivationPct ?? 0,
+      dynamicProtectionDistancePct: exitRules.dynamicProtectionDistancePct ?? exitRules.trailingDistancePct ?? 0,
+      protectedFloorPct: 0,
+      tp1Pct: Number(Math.max(0.1, (exitRules.tpTargetPct ?? 0) * 0.45).toFixed(4)),
+      tp2Pct: exitRules.tpTargetPct,
+      runnerTargetPct: exitRules.tpTargetPct,
       unit: exitRules.unit,
       source: "synthesis_percentile_subset",
+      exitUnitValidation: exitRules.exitUnitValidation,
+      protectionRules: ["activate_protection_after_tp1_progress", "tighten_floor_on_momentum_failure"],
+      exitDecisionRules: ["tp2_or_runner_target", "protected_exit", "momentum_failure_exit", "reversal_pressure_exit", "time_progress_failure_exit", "hard_sl"],
+      maturityRules: { minHoldBars: exitRules.minHoldBars },
+    },
+    trailingRules: {
+      activationProfitPct: exitRules.protectionActivationPct ?? exitRules.trailingActivationPct,
+      trailingDistancePct: exitRules.dynamicProtectionDistancePct ?? exitRules.trailingDistancePct,
+      unit: exitRules.unit,
+      source: "internal_compatibility_alias",
       exitUnitValidation: exitRules.exitUnitValidation,
     },
     minHoldRules: { minHoldBars: exitRules.minHoldBars },
@@ -1068,6 +1102,12 @@ function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
 }
 
+function normalizeLifecycleExitReason(reason: unknown): string {
+  const value = String(reason ?? "unknown");
+  if (value === "trailing_exit" || value === "trailing_stop") return "protected_exit";
+  return value;
+}
+
 function averageTrueRange(candles: CandleRow[], index: number, length = 14) {
   const start = Math.max(1, index - length + 1);
   const values: number[] = [];
@@ -1119,7 +1159,8 @@ function buildLifecycleSnapshot(params: {
   const progressToExpectedMovePct = params.expectedMovePct > 0 ? clamp01(params.bestFavourable / params.expectedMovePct) : 0;
   const progressToTp1Pct = params.exitPlan.tp1Pct > 0 ? clamp01(params.bestFavourable / params.exitPlan.tp1Pct) : 0;
   const progressToTp2Pct = params.exitPlan.tp2Pct > 0 ? clamp01(params.bestFavourable / params.exitPlan.tp2Pct) : 0;
-  const momentumDecayScore = clamp01((pullbackFromLocalExtremePct / Math.max(params.exitPlan.trailingDistancePct, 0.25)) * 0.6 + Math.max(0, -threeBarReturnPct) * 0.2 + Math.max(0, -fiveBarReturnPct) * 0.2);
+  const protectionDistancePct = params.exitPlan.dynamicProtectionDistancePct ?? params.exitPlan.trailingDistancePct ?? 0.25;
+  const momentumDecayScore = clamp01((pullbackFromLocalExtremePct / Math.max(protectionDistancePct, 0.25)) * 0.6 + Math.max(0, -threeBarReturnPct) * 0.2 + Math.max(0, -fiveBarReturnPct) * 0.2);
   const reversalPressureScore = clamp01(
     (direction === "sell" ? upperWickRejection : lowerWickRejection) * 0.35
     + Math.max(0, -oneBarReturnPct) * 0.15
@@ -1133,7 +1174,7 @@ function buildLifecycleSnapshot(params: {
     + Math.max(0, fiveBarReturnPct) * 0.2
     + Math.max(0, 1 - momentumDecayScore) * 0.15,
   );
-  const normalPullbackScore = clamp01(1 - (pullbackFromLocalExtremePct / Math.max(params.exitPlan.trailingDistancePct * 1.5, 0.25)));
+  const normalPullbackScore = clamp01(1 - (pullbackFromLocalExtremePct / Math.max(protectionDistancePct * 1.5, 0.25)));
   const timeInTradeBars = Math.max(1, params.index - params.entryIndex);
   const timeInTradeMinutes = timeInTradeBars;
   const reclaimConfirmed = direction === "sell"
@@ -1181,7 +1222,13 @@ export function buildLifecycleExitPlan(params: {
 }): LifecycleExitPlan {
   const candidateTp = Math.abs(safeNumber(params.candidate.projectedMovePctPoints ?? params.candidate.projectedMovePct, 0));
   const hardSlPct = Math.max(0.1, Math.abs(safeNumber(params.dynamicExitPlan?.slRiskPct ?? params.candidate.slPctPoints ?? params.candidate.slPct, 0.5)));
-  const trailingDistancePct = Math.max(0.1, Math.abs(safeNumber(params.dynamicExitPlan?.trailingDistancePct ?? params.candidate.trailingDistancePctPoints ?? params.candidate.trailingDistancePct, 0.35)));
+  const dynamicProtectionDistancePct = Math.max(0.1, Math.abs(safeNumber(
+    params.dynamicExitPlan?.dynamicProtectionDistancePct
+    ?? params.dynamicExitPlan?.trailingDistancePct
+    ?? params.candidate.trailingDistancePctPoints
+    ?? params.candidate.trailingDistancePct,
+    0.35,
+  )));
   const tp2Pct = Math.max(
     0.2,
     safeNumber(
@@ -1201,7 +1248,7 @@ export function buildLifecycleExitPlan(params: {
   const tp1Pct = Math.max(0.15, Math.min(tp2Pct, derivedTp1));
   const protectionActivationPct = Math.max(
     0.1,
-    Math.min(tp1Pct, safeNumber(params.dynamicExitPlan?.trailingActivationPct, tp1Pct * 0.8)),
+    Math.min(tp1Pct, safeNumber(params.dynamicExitPlan?.protectionActivationPct ?? params.dynamicExitPlan?.trailingActivationPct, tp1Pct * 0.8)),
   );
   const minHoldBars = Math.max(1, Math.round(safeNumber(params.dynamicExitPlan?.minHoldBars ?? params.candidate.minHoldBars, 2)));
   const maxHoldBars = Math.max(
@@ -1217,13 +1264,32 @@ export function buildLifecycleExitPlan(params: {
     protectionActivationPct: Number(protectionActivationPct.toFixed(4)),
     minimumNoTrailBars: minHoldBars,
     minimumNoTrailMinutes: minHoldBars,
+    minimumProtectionBars: minHoldBars,
+    minimumProtectionMinutes: minHoldBars,
     expectedMaturityBars,
     expectedMaturityMinutes: expectedMaturityBars,
     maxHoldBars,
     maxHoldMinutes: maxHoldBars,
     partialTakeProfitPct: 0.5,
     runnerRemainderPct: 0.5,
-    trailingDistancePct: Number(trailingDistancePct.toFixed(4)),
+    dynamicProtectionDistancePct: Number(dynamicProtectionDistancePct.toFixed(4)),
+    lifecycleManagerModel: "trade_lifecycle_manager_v1",
+    protectionRules: {
+      protectionActivationPct: Number(protectionActivationPct.toFixed(4)),
+      dynamicProtectionDistancePct: Number(dynamicProtectionDistancePct.toFixed(4)),
+      protectedFloorPct: 0,
+    },
+    exitDecisionRules: {
+      tp1Pct: Number(tp1Pct.toFixed(4)),
+      tp2Pct: Number(tp2Pct.toFixed(4)),
+      runnerTargetPct: Number(Math.max(tp2Pct, safeNumber(params.expectedMovePct, tp2Pct)).toFixed(4)),
+      exits: ["tp2_hit", "protected_exit", "momentum_failure_exit", "reversal_exit", "time_failure_exit", "hard_sl"],
+    },
+    maturityRules: {
+      minHoldBars,
+      expectedMaturityBars,
+      maxHoldBars,
+    },
   };
 }
 
@@ -1350,14 +1416,14 @@ export function replayLifecycleTrade(params: {
     const momentumFailure = canTighten
       && snapshot.momentumDecayScore >= 0.78
       && snapshot.continuationScore <= 0.45
-      && snapshot.pullbackFromLocalExtremePct >= params.exitPlan.trailingDistancePct;
+      && snapshot.pullbackFromLocalExtremePct >= (params.exitPlan.dynamicProtectionDistancePct ?? params.exitPlan.trailingDistancePct ?? 0);
     const reversalFailure = canTighten
       && snapshot.reversalPressureScore >= 0.78
       && snapshot.reclaimConfirmed;
     const timeFailure = barsSinceEntry >= params.exitPlan.maxHoldBars
       || (barsSinceEntry >= params.exitPlan.expectedMaturityBars && snapshot.progressToExpectedMovePct < 0.4);
     if (canTighten && protectedStopPct != null) {
-      const tightened = Math.max(protectedStopPct, bestFavourable - params.exitPlan.trailingDistancePct);
+      const tightened = Math.max(protectedStopPct, bestFavourable - (params.exitPlan.dynamicProtectionDistancePct ?? params.exitPlan.trailingDistancePct ?? 0));
       if (tightened > protectedStopPct + 0.01) {
         protectedStopPct = tightened;
         state = "tighten_protection";
@@ -1490,7 +1556,7 @@ export function buildTradeLifecycleReplayReport(params: {
     improvedTradeCount: params.selected.filter((item) => item.lifecycleCapturedMoreMove).length,
     exitReasonDistribution,
     examples: {
-      fixedTrailingTooEarly: params.selected.filter((item) => item.oldExitWasTooEarly).slice(0, 5),
+      protectedExitExamples: params.selected.filter((item) => item.oldExitWasTooEarly || item.lifecycleExitReason === "protected_exit").slice(0, 5),
       lifecycleHoldImprovedResult: params.selected.filter((item) => item.lifecycleCapturedMoreMove).slice(0, 5),
       lifecycleProtectedProfit: params.selected.filter((item) => item.protectedAt != null).slice(0, 5),
       lifecycleExitedCorrectly: params.selected.filter((item) => item.lifecycleExitReason === "tp2_hit" || item.lifecycleExitReason === "momentum_failure_exit" || item.lifecycleExitReason === "reversal_exit").slice(0, 5),
@@ -1857,21 +1923,21 @@ function buildBestRebuiltPolicyArtifacts(
         min: selectedTrades.length > 0 ? Math.min(...selectedTrades.map((trade) => Number(trade.slPctPoints ?? trade.slPct ?? 0))) : null,
         max: selectedTrades.length > 0 ? Math.max(...selectedTrades.map((trade) => Number(trade.slPctPoints ?? trade.slPct ?? 0))) : null,
       },
-      trailingActivationRangePctPoints: {
+      protectionActivationRangePctPoints: {
         min: selectedTrades.length > 0 ? Math.min(...selectedTrades.map((trade) => Number(trade.trailingActivationPctPoints ?? trade.trailingActivationPct ?? 0))) : null,
         max: selectedTrades.length > 0 ? Math.max(...selectedTrades.map((trade) => Number(trade.trailingActivationPctPoints ?? trade.trailingActivationPct ?? 0))) : null,
       },
-      trailingDistanceRangePctPoints: {
+      dynamicProtectionDistanceRangePctPoints: {
         min: selectedTrades.length > 0 ? Math.min(...selectedTrades.map((trade) => Number(trade.trailingDistancePctPoints ?? trade.trailingDistancePct ?? 0))) : null,
         max: selectedTrades.length > 0 ? Math.max(...selectedTrades.map((trade) => Number(trade.trailingDistancePctPoints ?? trade.trailingDistancePct ?? 0))) : null,
       },
     },
     derivedTpPct: bestEvaluation.exitRules.tpTargetPct,
     derivedSlPct: bestEvaluation.exitRules.slRiskPct,
-    derivedTrailingActivationPct: bestEvaluation.exitRules.trailingActivationPct,
-    derivedTrailingDistancePct: bestEvaluation.exitRules.trailingDistancePct,
+    derivedProtectionActivationPct: bestEvaluation.exitRules.protectionActivationPct ?? bestEvaluation.exitRules.trailingActivationPct,
+    derivedDynamicProtectionDistancePct: bestEvaluation.exitRules.dynamicProtectionDistancePct ?? bestEvaluation.exitRules.trailingDistancePct,
     explanation: mostCommonExitSource === "family_default"
-      ? "The selected rebuilt trades use the family_default exit subset. TP/SL/trailing should be judged against the source value ranges aggregated from the simulated selected trades, not only against a narrower intermediate display range."
+      ? "The selected rebuilt trades use the family_default exit subset. TP, SL, and lifecycle protection should be judged against the source value ranges aggregated from the simulated selected trades, not only against a narrower intermediate display range."
       : `The selected rebuilt trades use ${mostCommonExitSource} exit derivation and the displayed ranges are aggregated from that selected subset.`,
     warnings: sourceSubset.length !== selectedTrades.length
       ? ["Exit rules were derived from a broader source subset than the final selected trades."]
@@ -2120,7 +2186,7 @@ function buildStrategyGradeReadiness(params: {
   };
 }
 
-function buildReturnAmplificationAnalysis(params: {
+async function buildReturnAmplificationAnalysis(params: {
   dataset: UnifiedSynthesisDataset;
   targetProfile: EliteSynthesisTargetProfile;
   bestPolicyEvaluation: PolicyEvaluationResult | null;
@@ -2440,9 +2506,15 @@ function buildReturnAmplificationAnalysis(params: {
     const slQuantile = conf >= 0.8 ? 0.75 : 0.85;
     const tpTargetPct = Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerProjected.length > 0 ? peerProjected : peerMfe, tpQuantile)).toFixed(2));
     const slRiskPct = Number(percentile(peerMae, slQuantile).toFixed(2));
-    const trailingActivationPct = Number(percentile(peerMfe, 0.25).toFixed(2));
-    const trailingDistancePct = Number(percentile(peerMae, 0.65).toFixed(2));
+    const protectionActivationPct = Number(percentile(peerMfe, 0.25).toFixed(2));
+    const dynamicProtectionDistancePct = Number(percentile(peerMae, 0.65).toFixed(2));
     const runnerAllowed = returnBucketAtLeast(predictedBucket, "9_to_10_pct") && conf >= 0.6;
+    const runnerTargetPct = runnerAllowed ? Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerMfe, 0.75)).toFixed(2)) : null;
+    const partialTakeProfitPlan = runnerAllowed
+      ? [{ takePctOfPosition: 0.5, targetPct: Number(Math.min(bucketMidpoint(predictedBucket), percentile(peerMfe, 0.5)).toFixed(2)) }]
+      : [];
+    const minHoldBars = peerHoldBars.length > 0 ? Math.max(1, Math.round(percentile(peerHoldBars, 0.25))) : 1;
+    const maxHoldBars = peerHoldBars.length > 0 ? Math.max(2, Math.round(percentile(peerHoldBars, 0.75))) : 6;
     return {
       available: peerMfe.length > 0 && peerMae.length > 0,
       predictedMoveSizeBucket: predictedBucket,
@@ -2450,18 +2522,32 @@ function buildReturnAmplificationAnalysis(params: {
       tpTargetSource: `${chosenScope.source}:p${Math.round(tpQuantile * 100)}_projected_or_mfe`,
       slRiskPct,
       slRiskSource: `${chosenScope.source}:p${Math.round(slQuantile * 100)}_mae`,
-      trailingActivationPct,
-      trailingActivationSource: `${chosenScope.source}:p25_mfe`,
-      trailingDistancePct,
-      trailingDistanceSource: `${chosenScope.source}:p65_mae`,
-      minHoldBars: peerHoldBars.length > 0 ? Math.max(1, Math.round(percentile(peerHoldBars, 0.25))) : 1,
-      maxHoldBars: peerHoldBars.length > 0 ? Math.max(2, Math.round(percentile(peerHoldBars, 0.75))) : 6,
+      protectionActivationPct,
+      protectionActivationSource: `${chosenScope.source}:p25_mfe`,
+      dynamicProtectionDistancePct,
+      dynamicProtectionDistanceSource: `${chosenScope.source}:p65_mae`,
+      minHoldBars,
+      maxHoldBars,
       runnerAllowed,
-      runnerTargetPct: runnerAllowed ? Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerMfe, 0.75)).toFixed(2)) : null,
-      partialTakeProfitPlan: runnerAllowed
-        ? [{ takePctOfPosition: 0.5, targetPct: Number(Math.min(bucketMidpoint(predictedBucket), percentile(peerMfe, 0.5)).toFixed(2)) }]
-        : [],
+      runnerTargetPct,
+      partialTakeProfitPlan,
       exitPlanConfidence: Number(Math.min(0.99, conf * 0.6 + Math.min(1, chosenScope.peers.length / 12) * 0.4).toFixed(4)),
+      lifecycleManagerModel: "trade_lifecycle_manager_v1",
+      protectionRules: {
+        protectionActivationPct,
+        dynamicProtectionDistancePct,
+        protectiveFloorPct: 0,
+      },
+      exitDecisionRules: {
+        tp1Pct: partialTakeProfitPlan?.[0]?.targetPct ?? Number(Math.min(bucketMidpoint(predictedBucket), tpTargetPct).toFixed(2)),
+        tp2Pct: tpTargetPct,
+        runnerTargetPct: runnerTargetPct ?? tpTargetPct,
+        exits: ["tp2_hit", "protected_exit", "momentum_failure_exit", "reversal_exit", "time_failure_exit", "hard_sl"],
+      },
+      maturityRules: {
+        minHoldBars,
+        maxHoldBars,
+      },
       derivationNotes: [
         `predicted_bucket=${predictedBucket}`,
         `exit_source=${chosenScope.source}`,
@@ -2815,10 +2901,25 @@ function buildReturnAmplificationAnalysis(params: {
       - ((selected.length > 0 ? slHits / selected.length : 0) * 40)
     ).toFixed(4));
     const dynamicExitPlanSummary = {
-      tpTargetPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.tpTargetPct ?? 0)).filter((value) => value > 0)),
-      slRiskPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.slRiskPct ?? 0)).filter((value) => value > 0)),
-      trailingActivationPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.trailingActivationPct ?? 0)).filter((value) => value > 0)),
-      trailingDistancePct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.trailingDistancePct ?? 0)).filter((value) => value > 0)),
+      lifecycleManagerModel: "trade_lifecycle_manager_v1",
+      tp1Pct: summarizeDistribution(selected.map((item) => Number(((item.dynamicExitPlan.exitDecisionRules as Record<string, unknown> | undefined)?.tp1Pct ?? item.dynamicExitPlan.tpTargetPct ?? 0))).filter((value) => value > 0)),
+      tp2Pct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.tpTargetPct ?? 0)).filter((value) => value > 0)),
+      runnerTargetPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.runnerTargetPct ?? item.dynamicExitPlan.tpTargetPct ?? 0)).filter((value) => value > 0)),
+      hardSlPct: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.slRiskPct ?? 0)).filter((value) => value > 0)),
+      protectionActivationPct: summarizeDistribution(selected.map((item) => {
+        const plan = item.dynamicExitPlan as Record<string, unknown>;
+        return Number(plan.protectionActivationPct ?? plan.trailingActivationPct ?? 0);
+      }).filter((value) => value > 0)),
+      dynamicProtectionDistancePct: summarizeDistribution(selected.map((item) => {
+        const plan = item.dynamicExitPlan as Record<string, unknown>;
+        return Number(plan.dynamicProtectionDistancePct ?? plan.trailingDistancePct ?? 0);
+      }).filter((value) => value > 0)),
+      protectionRules: ["activate_protection_after_tp1_progress", "ratchet_protected_floor_after_maturity", "exit_on_protected_floor_hit"],
+      exitDecisionRules: ["tp2_hit", "protected_exit", "momentum_failure_exit", "reversal_exit", "time_failure_exit", "hard_sl"],
+      maturityRules: {
+        minHoldBars: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.minHoldBars ?? 0)).filter((value) => value > 0)),
+        maxHoldBars: summarizeDistribution(selected.map((item) => Number(item.dynamicExitPlan.maxHoldBars ?? 0)).filter((value) => value > 0)),
+      },
       sourceDistribution: countRecord(selected.map((item) => String(item.dynamicExitPlan.tpTargetSource ?? item.dynamicExitPlan.noPredictionReason ?? "unknown"))),
       widenedDistribution: countRecord(selected.map((item) => `${String(item.dynamicExitPlan.widenedFrom ?? "none")}=>${String(item.dynamicExitPlan.widenedTo ?? "none")}`)),
     };
@@ -3020,6 +3121,25 @@ function buildReturnAmplificationAnalysis(params: {
       ],
     },
     {
+      scenarioId: "failed_recovery_short_5_to_6_sell_late_full_family",
+      label: "Failed recovery short 5-6% sell late full family",
+      description: "Mandatory high-volume seed family analysis before daily-limit pruning.",
+      predicate: (item: typeof enrichedCandidates[number]) =>
+        item.candidate.runtimeFamily === "failed_recovery_short"
+        && item.candidate.triggerTransition === "failed_recovery_break_down"
+        && item.candidate.selectedMoveSizeBucket === "5_to_6_pct"
+        && item.candidate.direction === "sell"
+        && offsetClusterFromLabel(item.candidate.offsetLabel) === "late",
+      filterNotes: [
+        "runtimeFamily=failed_recovery_short",
+        "triggerTransition=failed_recovery_break_down",
+        "selectedMoveSizeBucket=5_to_6_pct",
+        "direction=sell",
+        "offsetCluster=late",
+        "mandatory_high_volume_seed_escalation",
+      ],
+    },
+    {
       scenarioId: "lifecycle_capture_gte_5",
       label: "Lifecycle capture >= 5%",
       description: "Evaluation-only filter keeping candidates whose lifecycle replay captured at least 5% PnL historically.",
@@ -3044,6 +3164,158 @@ function buildReturnAmplificationAnalysis(params: {
       filterNotes: ["evaluation_only:lifecycle_capture>=9pct"],
     },
   ].map((scenario) => buildScenario(scenario));
+
+  const targetSeedPredicate = (item: typeof enrichedCandidates[number]) =>
+    item.candidate.runtimeFamily === "failed_recovery_short"
+    && item.candidate.triggerTransition === "failed_recovery_break_down"
+    && item.candidate.selectedMoveSizeBucket === "5_to_6_pct"
+    && item.candidate.direction === "sell"
+    && offsetClusterFromLabel(item.candidate.offsetLabel) === "late";
+  const targetSeedFull = enrichedCandidates.filter(targetSeedPredicate);
+  const targetSeedDailyLimited = scenarios.find((scenario) => scenario.scenarioId === "failed_recovery_short_5_to_6_sell_late_full_family") ?? null;
+  const summariseCandidateSet = (selected: typeof enrichedCandidates) => {
+    const pnl = selected.map((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0));
+    const lifecycleTrades = selected
+      .map((item) => lifecycleReplayByCandidateId.get(item.candidate.candidateId) ?? null)
+      .filter((item): item is TradeLifecycleReplayTradeResult => Boolean(item));
+    const lifecyclePnl = lifecycleTrades.map((item) => Number(item.lifecyclePnlPct ?? 0));
+    const wins = selected.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0).length;
+    const losses = selected.length - wins;
+    const slHits = selected.filter((item) => item.candidate.exitReason === "sl_hit").length;
+    return {
+      totalSimulatedTrades: selected.length,
+      wins,
+      losses,
+      slHits,
+      winRate: selected.length > 0 ? Number((wins / selected.length).toFixed(4)) : 0,
+      slHitRate: selected.length > 0 ? Number((slHits / selected.length).toFixed(4)) : 0,
+      baseMedianPnlPct: Number(percentile(pnl, 0.5).toFixed(4)),
+      baseAveragePnlPct: Number(mean(pnl).toFixed(4)),
+      lifecycleMedianPnlPct: lifecyclePnl.length > 0 ? Number(percentile(lifecyclePnl, 0.5).toFixed(4)) : null,
+      lifecycleAveragePnlPct: lifecyclePnl.length > 0 ? Number(mean(lifecyclePnl).toFixed(4)) : null,
+      accountReturnScenarios: simulateCapitalModels(selected),
+      monthlyDistribution: scenarioMonthlyBreakdown(selected),
+      offsetDistribution: countRecord(selected.map((item) => item.candidate.offsetLabel)),
+      exitDistribution: countRecord(selected.map((item) => normalizeLifecycleExitReason(item.candidate.exitReason))),
+      lifecycleExitDistribution: countRecord(lifecycleTrades.map((item) => item.lifecycleExitReason)),
+      mfeDistribution: summarizeDistribution(selected.map((item) => Math.abs(Number(item.candidate.mfePctPoints ?? item.candidate.mfePct ?? 0))).filter((value) => value > 0)),
+      maeDistribution: summarizeDistribution(selected.map((item) => Math.abs(Number(item.candidate.maePctPoints ?? item.candidate.maePct ?? 0))).filter((value) => value > 0)),
+      tpPotentialDistribution: summarizeDistribution(selected.map((item) => Math.abs(Number(item.candidate.projectedMovePctPoints ?? item.candidate.projectedMovePct ?? 0))).filter((value) => value > 0)),
+      lifecycleReplayReport: buildTradeLifecycleReplayReport({
+        serviceId: params.dataset.serviceId,
+        sourceJobId: null,
+        sourcePolicyId: "failed_recovery_short_5_to_6_sell_late",
+        selected: lifecycleTrades,
+      }),
+      worstLosingTradeExamples: selected
+        .filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) <= 0)
+        .sort((a, b) => Number(a.candidate.pnlPctPoints ?? a.candidate.pnlPct ?? 0) - Number(b.candidate.pnlPctPoints ?? b.candidate.pnlPct ?? 0))
+        .slice(0, 8)
+        .map((item) => ({
+          candidateId: item.candidate.candidateId,
+          pnlPct: item.candidate.pnlPctPoints ?? item.candidate.pnlPct,
+          exitReason: normalizeLifecycleExitReason(item.candidate.exitReason),
+          offsetLabel: item.candidate.offsetLabel,
+          barsSinceLastCrash: item.candidate.liveSafeFeatures.barsSinceLastCrash ?? null,
+          triggerStrengthScore: item.candidate.triggerStrengthScore,
+          liveSafeEliteScore: item.liveSafeEliteScore,
+        })),
+      bestWinningTradeExamples: selected
+        .filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0)
+        .sort((a, b) => Number(b.candidate.pnlPctPoints ?? b.candidate.pnlPct ?? 0) - Number(a.candidate.pnlPctPoints ?? a.candidate.pnlPct ?? 0))
+        .slice(0, 8)
+        .map((item) => ({
+          candidateId: item.candidate.candidateId,
+          pnlPct: item.candidate.pnlPctPoints ?? item.candidate.pnlPct,
+          offsetLabel: item.candidate.offsetLabel,
+          barsSinceLastCrash: item.candidate.liveSafeFeatures.barsSinceLastCrash ?? null,
+          triggerStrengthScore: item.candidate.triggerStrengthScore,
+          liveSafeEliteScore: item.liveSafeEliteScore,
+        })),
+    };
+  };
+  const liveSafeSeparationKeys = [
+    "triggerStrengthScore",
+    "liveSafeEliteScore",
+    "oneBarReturnPct",
+    "threeBarReturnPct",
+    "fiveBarReturnPct",
+    "tenBarReturnPct",
+    "microBreakStrengthPct",
+    "rangeExpansionScore60",
+    "rangeCompressionScore60",
+    "compressionToExpansionScore",
+    "atrRank240",
+    "bbWidthRank60",
+    "barsSinceLastCrash",
+    "crashRecencyScore",
+    "reversalPressureScore",
+    "offsetBars",
+  ];
+  const valueForSeparation = (item: typeof enrichedCandidates[number], key: string): number | null => {
+    if (key === "triggerStrengthScore") return asFiniteNumber(item.candidate.triggerStrengthScore);
+    if (key === "liveSafeEliteScore") return asFiniteNumber(item.liveSafeEliteScore);
+    if (key === "offsetBars") return asFiniteNumber(item.candidate.offsetBars);
+    return candidateFeatureNumber(item.candidate, key);
+  };
+  const winnerLoserSeparation = liveSafeSeparationKeys.map((key) => {
+    const winners = targetSeedFull.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0);
+    const losers = targetSeedFull.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) <= 0);
+    const winnerValues = winners.map((item) => valueForSeparation(item, key)).filter((value): value is number => value != null);
+    const loserValues = losers.map((item) => valueForSeparation(item, key)).filter((value): value is number => value != null);
+    const higherIsBetter = winnerValues.length === 0 || loserValues.length === 0 || percentile(winnerValues, 0.5) >= percentile(loserValues, 0.5);
+    const threshold = higherIsBetter ? percentile(winnerValues, 0.25) : percentile(winnerValues, 0.75);
+    const kept = targetSeedFull.filter((item) => {
+      const value = valueForSeparation(item, key);
+      if (value == null) return false;
+      return higherIsBetter ? value >= threshold : value <= threshold;
+    });
+    const winnersLost = winners.length - kept.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0).length;
+    const losersRemoved = losers.length - kept.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) <= 0).length;
+    return {
+      feature: key,
+      winnerP25: winnerValues.length > 0 ? Number(percentile(winnerValues, 0.25).toFixed(4)) : null,
+      winnerMedian: winnerValues.length > 0 ? Number(percentile(winnerValues, 0.5).toFixed(4)) : null,
+      winnerP75: winnerValues.length > 0 ? Number(percentile(winnerValues, 0.75).toFixed(4)) : null,
+      loserP25: loserValues.length > 0 ? Number(percentile(loserValues, 0.25).toFixed(4)) : null,
+      loserMedian: loserValues.length > 0 ? Number(percentile(loserValues, 0.5).toFixed(4)) : null,
+      loserP75: loserValues.length > 0 ? Number(percentile(loserValues, 0.75).toFixed(4)) : null,
+      separationScore: winnerValues.length > 0 && loserValues.length > 0
+        ? Number(Math.abs(percentile(winnerValues, 0.5) - percentile(loserValues, 0.5)).toFixed(4))
+        : 0,
+      thresholdCandidate: `${key} ${higherIsBetter ? ">=" : "<="} ${Number(threshold.toFixed(4))}`,
+      falsePositiveImpact: {
+        resultingTrades: kept.length,
+        winnersLost,
+        losersRemoved,
+        resultingWinRate: kept.length > 0 ? Number((kept.filter((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0) > 0).length / kept.length).toFixed(4)) : 0,
+        resultingSlRate: kept.length > 0 ? Number((kept.filter((item) => item.candidate.exitReason === "sl_hit").length / kept.length).toFixed(4)) : 0,
+      },
+    };
+  }).sort((a, b) => b.separationScore - a.separationScore);
+  const preLimitFamilyStats = summariseCandidateSet(targetSeedFull);
+  const postDailyLimitFamilyStats = targetSeedDailyLimited;
+  const dynamicTpProtectionSummary = targetSeedDailyLimited?.dynamicExitPlanSummary ?? null;
+  const tradeLifecycleManagerReplay = preLimitFamilyStats.lifecycleReplayReport;
+  const primaryDeepFamilyAnalysis = {
+    familyKey: "failed_recovery_short|failed_recovery_break_down|5_to_6_pct|sell|late",
+    verdict: "priority_runtime_candidate_family",
+    preLimitFamilyStats,
+    postDailyLimitFamilyStats,
+    winnerLoserSeparation,
+    tradeLifecycleManagerReplay,
+    dynamicTpProtectionSummary,
+    answers: {
+      betterThanTinyBestAbove5: Number(preLimitFamilyStats.totalSimulatedTrades ?? 0) >= 50
+        && Number(preLimitFamilyStats.winRate ?? 0) >= 0.88,
+      retains90WinRateAfterDailyLimit: Number(targetSeedDailyLimited?.winRate ?? 0) >= 0.9,
+      capturesFiveToSixPct: Number(targetSeedDailyLimited?.lifecycleMedianPnlPct ?? 0) >= 5,
+      lossesAvoidableWithoutDestroyingWinners: winnerLoserSeparation.some((item) =>
+        Number((item.falsePositiveImpact as Record<string, unknown>).losersRemoved ?? 0) >= 3
+        && Number((item.falsePositiveImpact as Record<string, unknown>).winnersLost ?? 999) <= 14
+      ),
+    },
+  };
 
   const baselineScenario = scenarios.find((scenario) => scenario.scenarioId === "baseline_current_best") ?? null;
   const relationshipFailedTrades = baselineSelected.filter((item) => {
@@ -3140,7 +3412,9 @@ function buildReturnAmplificationAnalysis(params: {
     ((params.dataset.summary.rebuiltPolicySeedDiagnostics as Record<string, unknown> | undefined)?.rebuiltPolicySeedCount ?? 0),
   );
   const rankedScenarios = [...scenarios].sort((a, b) =>
-    Number(b.guardrailsPassed ? 1 : 0) - Number(a.guardrailsPassed ? 1 : 0)
+    Number((b.scenarioId === "failed_recovery_short_5_to_6_sell_late_full_family") ? 1 : 0) - Number((a.scenarioId === "failed_recovery_short_5_to_6_sell_late_full_family") ? 1 : 0)
+    || Number(b.guardrailsPassed ? 1 : 0) - Number(a.guardrailsPassed ? 1 : 0)
+    || Number((b.trades ?? 0) >= 50 ? 1 : 0) - Number((a.trades ?? 0) >= 50 ? 1 : 0)
     || Number(b.lifecycleAverageMonthlyAccountReturnPct ?? b.averageMonthlyAccountReturnPct ?? 0) - Number(a.lifecycleAverageMonthlyAccountReturnPct ?? a.averageMonthlyAccountReturnPct ?? 0)
     || Number(b.lifecycleAccountReturnPct ?? b.accountReturnPct ?? 0) - Number(a.lifecycleAccountReturnPct ?? a.accountReturnPct ?? 0)
     || Number(b.lifecycleMedianPnlPct ?? 0) - Number(a.lifecycleMedianPnlPct ?? 0)
@@ -3157,7 +3431,12 @@ function buildReturnAmplificationAnalysis(params: {
     || Number(b.profitFactor ?? 0) - Number(a.profitFactor ?? 0)
     || Number(b.lifecycleMedianPnlPct ?? 0) - Number(a.lifecycleMedianPnlPct ?? 0)
   )[0] ?? null;
-  const bestReturnFirstPolicy = rankedScenarios.find((scenario) => Boolean(scenario.guardrailsPassed)) ?? null;
+  const highVolumeRuntimeCandidate = targetSeedDailyLimited && Number(targetSeedDailyLimited.trades ?? 0) >= 50
+    && Number(targetSeedDailyLimited.winRate ?? 0) >= 0.9
+    && Number(targetSeedDailyLimited.slHitRate ?? 1) <= 0.1
+    ? targetSeedDailyLimited
+    : null;
+  const bestReturnFirstPolicy = highVolumeRuntimeCandidate ?? rankedScenarios.find((scenario) => Boolean(scenario.guardrailsPassed) && Number(scenario.trades ?? 0) >= 50) ?? rankedScenarios.find((scenario) => Boolean(scenario.guardrailsPassed)) ?? null;
   const bestRejectedProfitPolicy = [...scenarios]
     .filter((scenario) => !Boolean(scenario.guardrailsPassed))
     .sort((a, b) =>
@@ -3189,9 +3468,11 @@ function buildReturnAmplificationAnalysis(params: {
   });
   const recommendedPolicy = bestReturnFirstPolicy
     ? {
-        status: "guardrails_passed",
+        status: highVolumeRuntimeCandidate ? "runtime_artifact_eligible" : "guardrails_passed",
         policy: bestReturnFirstPolicy,
-        explanation: `Selected for return_first because it passed swing capture guardrails and delivered ${Number(bestReturnFirstPolicy.lifecycleAverageMonthlyAccountReturnPct ?? 0).toFixed(2)}% average monthly return.`,
+        explanation: highVolumeRuntimeCandidate
+          ? "Selected for final-pass review because failed_recovery_short 5_to_6 sell late is the strongest high-volume runtime family and retains 90%+ win rate after daily limiting."
+          : `Selected for return_first because it passed swing capture guardrails and delivered ${Number(bestReturnFirstPolicy.lifecycleAverageMonthlyAccountReturnPct ?? 0).toFixed(2)}% average monthly return.`,
       }
     : safestHighWinPolicy
       ? {
@@ -3204,6 +3485,110 @@ function buildReturnAmplificationAnalysis(params: {
           policy: null,
           explanation: "No CRASH300 return-first swing policy found. Current best is high-win low-capture baseline.",
         };
+  const runtimeArtifactEligibility = {
+    status: highVolumeRuntimeCandidate ? "runtime_artifact_eligible" : "blocked_with_named_reason",
+    candidateFamily: "failed_recovery_short|failed_recovery_break_down|5_to_6_pct|sell|late",
+    canCreateReviewArtifact: Boolean(highVolumeRuntimeCandidate),
+    canAutoStage: false,
+    canAutoPromote: false,
+    canPromoteRuntimeAfterValidation: Boolean(highVolumeRuntimeCandidate),
+    blockers: [
+      ...(highVolumeRuntimeCandidate ? [] : ["high_volume_family_failed_win_or_sl_gate"]),
+      ...(Number(targetSeedDailyLimited?.lifecycleMedianPnlPct ?? 0) >= 5 ? [] : ["lifecycle_capture_below_5pct"]),
+      ...(primaryDeepFamilyAnalysis.answers.lossesAvoidableWithoutDestroyingWinners ? [] : ["losses_not_cleanly_separable_yet"]),
+      "runtime_mimic_validation_required_before_promotion",
+      "manual_validate_runtime_required",
+    ],
+    warnings: [
+      "Review artifact only. No staging, promotion, Demo, Real, or live execution changes are performed by Build Runtime Model.",
+    ],
+  };
+  const aiReviewInput = {
+    objective: "Can failed_recovery_short 5_to_6 sell late become a live-safe deterministic runtime, and what filters/lifecycle settings should be validated?",
+    primaryFamily: {
+      familyKey: primaryDeepFamilyAnalysis.familyKey,
+      preLimitFamilyStats,
+      postDailyLimitFamilyStats,
+      answers: primaryDeepFamilyAnalysis.answers,
+      topWinnerLoserSeparation: winnerLoserSeparation.slice(0, 10),
+      dynamicTpProtectionSummary,
+      lifecycleReplaySummary: tradeLifecycleManagerReplay
+        ? {
+            tradeCount: tradeLifecycleManagerReplay.tradeCount,
+            lifecycleMedianPnlPct: tradeLifecycleManagerReplay.lifecycleMedianPnlPct,
+            lifecycleAveragePnlPct: tradeLifecycleManagerReplay.lifecycleAveragePnlPct,
+            lifecycleTotalAccountReturnPct: tradeLifecycleManagerReplay.lifecycleTotalAccountReturnPct,
+            lifecycleAverageMonthlyReturnPct: tradeLifecycleManagerReplay.lifecycleAverageMonthlyReturnPct,
+            oldMedianPnlPct: tradeLifecycleManagerReplay.oldMedianPnlPct,
+            oldAveragePnlPct: tradeLifecycleManagerReplay.oldAveragePnlPct,
+            improvedTradeCount: tradeLifecycleManagerReplay.improvedTradeCount,
+            exitReasonDistribution: tradeLifecycleManagerReplay.exitReasonDistribution,
+          }
+        : null,
+    },
+    candidateFamilyComparison: scenarios.map((scenario) => ({
+      scenarioId: scenario.scenarioId,
+      label: scenario.label,
+      trades: scenario.trades,
+      wins: scenario.wins,
+      losses: scenario.losses,
+      winRate: scenario.winRate,
+      slHitRate: scenario.slHitRate,
+      lifecycleMedianPnlPct: scenario.lifecycleMedianPnlPct,
+      lifecycleAveragePnlPct: scenario.lifecycleAveragePnlPct,
+      lifecycleAverageMonthlyAccountReturnPct: scenario.lifecycleAverageMonthlyAccountReturnPct,
+      rejectionReasons: scenario.rejectionReasons,
+    })).slice(0, 12),
+    deterministicRulesOnly: true,
+    noLiveTradingAccess: true,
+  };
+  const aiStrategyReview = await (async () => {
+    try {
+      const completion = await chatComplete({
+        messages: [
+          {
+            role: "system",
+            content: "You are an offline research reviewer for a Deriv synthetic-index runtime builder. You cannot trade, stage, promote, or access live execution. Return compact JSON only.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              task: "Review deterministic CRASH300 Build Runtime Model summaries. Recommend deterministic live-safe refinements only.",
+              requiredOutput: {
+                recommendedSeedFamiliesToPrioritise: "string[]",
+                winnerLoserSeparatingFeatures: "string[]",
+                deterministicRuleRefinements: "string[]",
+                tpProtectionMaturitySettings: "string[]",
+                rejectionFilters: "string[]",
+                riskConcerns: "string[]",
+                confidence: "low|medium|high",
+                worthRuntimeMimicValidation: "boolean",
+              },
+              input: aiReviewInput,
+            }),
+          },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+        max_completion_tokens: 1400,
+      });
+      const text = completion.choices[0]?.message?.content ?? "{}";
+      return {
+        status: "run",
+        model: completion.model,
+        recommendations: JSON.parse(text) as Record<string, unknown>,
+        deterministicValidationRequired: true,
+        liveTradingAccess: false,
+      };
+    } catch (err) {
+      return {
+        status: "unavailable",
+        reason: err instanceof Error ? err.message : String(err),
+        deterministicModeContinued: true,
+        curatedReviewInput: aiReviewInput,
+      };
+    }
+  })();
   const policyComparisonTable = rankedScenarios.map((scenario) => ({
     policyId: String(scenario.scenarioId ?? "unknown"),
     runtimeFamily: String(scenario.runtimeFamily ?? "unknown"),
@@ -3283,6 +3668,39 @@ function buildReturnAmplificationAnalysis(params: {
     bestRejectedProfitPolicy,
     recommendedPolicy,
     recommendedCandidateConfiguration,
+    escalatedSeedFamilies: [
+      {
+        familyKey: "failed_recovery_short|failed_recovery_break_down|5_to_6_pct|sell|late",
+        escalationReason: "simulatedTrades>=50 winRate>=0.88 slHitRate<=0.15 bucket>=5_to_6_pct",
+        priority: "primary",
+        preLimit: {
+          trades: preLimitFamilyStats.totalSimulatedTrades,
+          wins: preLimitFamilyStats.wins,
+          losses: preLimitFamilyStats.losses,
+          slHits: preLimitFamilyStats.slHits,
+          winRate: preLimitFamilyStats.winRate,
+          slHitRate: preLimitFamilyStats.slHitRate,
+        },
+        postDailyLimit: targetSeedDailyLimited
+          ? {
+              trades: targetSeedDailyLimited.trades,
+              wins: targetSeedDailyLimited.wins,
+              losses: targetSeedDailyLimited.losses,
+              slHits: targetSeedDailyLimited.slHits,
+              winRate: targetSeedDailyLimited.winRate,
+              slHitRate: targetSeedDailyLimited.slHitRate,
+            }
+          : null,
+      },
+    ],
+    primaryDeepFamilyAnalysis,
+    preLimitFamilyStats,
+    postDailyLimitFamilyStats,
+    winnerLoserSeparation,
+    tradeLifecycleManagerReplay,
+    dynamicTpProtectionSummary,
+    aiStrategyReview,
+    runtimeArtifactEligibility,
     policyComparisonTable,
     tradeLifecycleReplayReport: baselineLifecycleReplayReport,
     summary: {
@@ -3307,8 +3725,9 @@ function buildReturnAmplificationAnalysis(params: {
       lifecycleNewMedianPnlPct: baselineLifecycleReplayReport.lifecycleMedianPnlPct,
       lifecycleOldAveragePnlPct: baselineLifecycleReplayReport.oldAveragePnlPct,
       lifecycleNewAveragePnlPct: baselineLifecycleReplayReport.lifecycleAveragePnlPct,
+      failedRecoveryShortFinalPassAnswers: primaryDeepFamilyAnalysis.answers,
       recommendedNextStep: recommendedCandidateConfiguration && Number((recommendedCandidateConfiguration as Record<string, unknown>).averageMonthlyAccountReturnPct ?? 0) > 0
-        ? "Review the lifecycle and return-first analysis in Reports, then rerun the deep search with targetProfile=return_first if the recommended scenario looks safe."
+        ? "Review the failed_recovery_short runtime artifact candidate, then run Validate Runtime manually before any Promote Runtime action."
         : "No safe return-first swing policy emerged from the current analysis. Keep the baseline rebuilt policy and continue research.",
     },
   };
@@ -3392,7 +3811,7 @@ function compactTradeLifecycleReplayReportForStorage(report: unknown) {
     ? replay.examples as Record<string, unknown>
     : {};
   const compactExamples = Object.fromEntries(
-    ["fixedTrailingTooEarly", "lifecycleHoldImprovedResult", "lifecycleProtectedProfit", "lifecycleExitedCorrectly"]
+    ["protectedExitExamples", "lifecycleHoldImprovedResult", "lifecycleProtectedProfit", "lifecycleExitedCorrectly"]
       .map((key) => [
         key,
         Array.isArray(examples[key])
@@ -3458,6 +3877,13 @@ function compactReturnAmplificationAnalysisForStorage(value: unknown) {
     bestAbove7: compactReturnAmplificationScenarioForStorage(analysis.bestAbove7),
     bestAbove9: compactReturnAmplificationScenarioForStorage(analysis.bestAbove9),
     tradeLifecycleReplayReport: compactTradeLifecycleReplayReportForStorage(analysis.tradeLifecycleReplayReport),
+    tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage(analysis.tradeLifecycleManagerReplay),
+    primaryDeepFamilyAnalysis: analysis.primaryDeepFamilyAnalysis && typeof analysis.primaryDeepFamilyAnalysis === "object"
+      ? {
+          ...(analysis.primaryDeepFamilyAnalysis as Record<string, unknown>),
+          tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage((analysis.primaryDeepFamilyAnalysis as Record<string, unknown>).tradeLifecycleManagerReplay),
+        }
+      : analysis.primaryDeepFamilyAnalysis,
   };
 }
 
@@ -3466,6 +3892,13 @@ function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): El
     ...result,
     fullPassLog: result.fullPassLog.slice(-24),
     returnAmplificationAnalysis: compactReturnAmplificationAnalysisForStorage(result.returnAmplificationAnalysis),
+    tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage(result.tradeLifecycleManagerReplay),
+    primaryDeepFamilyAnalysis: result.primaryDeepFamilyAnalysis && typeof result.primaryDeepFamilyAnalysis === "object"
+      ? {
+          ...(result.primaryDeepFamilyAnalysis as Record<string, unknown>),
+          tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage((result.primaryDeepFamilyAnalysis as Record<string, unknown>).tradeLifecycleManagerReplay),
+        }
+      : result.primaryDeepFamilyAnalysis,
   };
 }
 
@@ -4136,7 +4569,7 @@ export async function runEliteSynthesisJob(params: {
     bestPolicySummary,
     bestPolicySelectedTradesSummary: bestPolicyValidationArtifacts.bestPolicySelectedTradesSummary,
   });
-  const returnAmplificationAnalysis = buildReturnAmplificationAnalysis({
+  const returnAmplificationAnalysis = await buildReturnAmplificationAnalysis({
     dataset,
     targetProfile: params.request.targetProfile ?? "default",
     bestPolicyEvaluation,
@@ -4146,6 +4579,35 @@ export async function runEliteSynthesisJob(params: {
     policyArtifactReadiness,
     leakageAudit: bestPolicyArtifact?.leakageAudit ?? null,
   });
+  const finalPassRuntimeArtifactEligibility = (returnAmplificationAnalysis as Record<string, unknown>).runtimeArtifactEligibility as Record<string, unknown> | undefined;
+  const reviewCandidateRuntimeArtifact = finalPassRuntimeArtifactEligibility?.canCreateReviewArtifact
+    ? {
+        artifactId: `crash300-final-pass-review-${params.jobId}`,
+        artifactType: "crash300_final_pass_runtime_review_candidate",
+        mode: "review_only",
+        serviceId: params.serviceId,
+        generatedAt: nowIso(),
+        sourceSynthesisJobId: params.jobId,
+        sourcePolicyId: "failed_recovery_short_5_to_6_sell_late_final_pass",
+        runtimeFamily: "failed_recovery_short",
+        triggerTransition: "failed_recovery_break_down",
+        selectedMoveSizeBucket: "5_to_6_pct",
+        direction: "sell",
+        offsetCluster: "late",
+        lifecycleManagerRules: ((returnAmplificationAnalysis as Record<string, unknown>).dynamicTpProtectionSummary ?? null),
+        deepFamilyAnalysis: (returnAmplificationAnalysis as Record<string, unknown>).primaryDeepFamilyAnalysis ?? null,
+        aiStrategyReview: (returnAmplificationAnalysis as Record<string, unknown>).aiStrategyReview ?? null,
+        runtimeArtifactEligibility: finalPassRuntimeArtifactEligibility,
+        readiness: {
+          runtimeMimicValidationStatus: "not_run",
+          runtimeMimicReady: false,
+          canPromoteRuntime: false,
+          requiresManualValidateRuntime: true,
+          autoStage: false,
+          autoPromote: false,
+        },
+      }
+    : null;
   const normalizedTargetProfile = normalizedEliteTargetProfile(targetProfile);
   const recommendedPolicy = (returnAmplificationAnalysis as Record<string, unknown>).recommendedPolicy as Record<string, unknown> | null;
   const bestReturnFirstPolicy = (returnAmplificationAnalysis as Record<string, unknown>).bestReturnFirstPolicy as Record<string, unknown> | null;
@@ -4251,7 +4713,7 @@ export async function runEliteSynthesisJob(params: {
     passLogSummary: passLog.slice(-10),
     fullPassLog: passLog,
     featureDistributions: features,
-    exitOptimisationTable: bestPolicyArtifact ? [bestPolicyArtifact.tpRules, bestPolicyArtifact.slRules, bestPolicyArtifact.trailingRules] : [],
+    exitOptimisationTable: bestPolicyArtifact ? [bestPolicyArtifact.tpRules, bestPolicyArtifact.slRules, bestPolicyArtifact.lifecycleManagerRules] : [],
     triggerRebuildSummary: {
       candidateCount: dataset.rebuiltTriggerCandidates.length,
       eligibleCount: dataset.rebuiltTriggerCandidates.filter((candidate) => candidate.eligible).length,
@@ -4327,6 +4789,17 @@ export async function runEliteSynthesisJob(params: {
     policyArtifactReadiness,
     validationHardeningGuard,
     returnAmplificationAnalysis,
+    escalatedSeedFamilies: (returnAmplificationAnalysis as Record<string, unknown>).escalatedSeedFamilies ?? [],
+    primaryDeepFamilyAnalysis: (returnAmplificationAnalysis as Record<string, unknown>).primaryDeepFamilyAnalysis ?? null,
+    preLimitFamilyStats: (returnAmplificationAnalysis as Record<string, unknown>).preLimitFamilyStats ?? null,
+    postDailyLimitFamilyStats: (returnAmplificationAnalysis as Record<string, unknown>).postDailyLimitFamilyStats ?? null,
+    winnerLoserSeparation: (returnAmplificationAnalysis as Record<string, unknown>).winnerLoserSeparation ?? [],
+    tradeLifecycleManagerReplay: (returnAmplificationAnalysis as Record<string, unknown>).tradeLifecycleManagerReplay ?? null,
+    dynamicTpProtectionSummary: (returnAmplificationAnalysis as Record<string, unknown>).dynamicTpProtectionSummary ?? null,
+    aiStrategyReview: (returnAmplificationAnalysis as Record<string, unknown>).aiStrategyReview ?? null,
+    candidateFamilyComparison: (returnAmplificationAnalysis as Record<string, unknown>).policyComparisonTable ?? [],
+    runtimeArtifactEligibility: finalPassRuntimeArtifactEligibility ?? null,
+    reviewCandidateRuntimeArtifact,
   };
   const storedResult = compactEliteSynthesisResultForStorage(result);
 
