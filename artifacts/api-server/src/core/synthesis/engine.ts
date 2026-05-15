@@ -3906,6 +3906,33 @@ function compactReviewCandidateRuntimeArtifactForStorage(value: unknown) {
   };
 }
 
+function compactDiagnosticsForStorage(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const diagnostics = value as Record<string, unknown>;
+  return {
+    summary: diagnostics.summary ?? null,
+    rawCandidatesGenerated: diagnostics.rawCandidatesGenerated ?? null,
+    eligibleCandidates: diagnostics.eligibleCandidates ?? null,
+    simulatedTradeCount: diagnostics.simulatedTradeCount ?? null,
+    rebuiltPolicySeedCount: diagnostics.rebuiltPolicySeedCount ?? null,
+    rebuiltPoliciesWithTrades: diagnostics.rebuiltPoliciesWithTrades ?? null,
+    rebuiltRejectedPolicyCount: diagnostics.rebuiltRejectedPolicyCount ?? null,
+    rebuiltPolicyEvaluationTradeCounts: Array.isArray(diagnostics.rebuiltPolicyEvaluationTradeCounts)
+      ? diagnostics.rebuiltPolicyEvaluationTradeCounts.slice(0, 40)
+      : [],
+    topRejectReasons: Array.isArray(diagnostics.topRejectReasons) ? diagnostics.topRejectReasons.slice(0, 20) : [],
+  };
+}
+
+function compactDatasetSummaryForStorage(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const summary = value as Record<string, unknown>;
+  return {
+    ...summary,
+    rebuiltPolicySeedDiagnostics: compactDiagnosticsForStorage(summary.rebuiltPolicySeedDiagnostics),
+  };
+}
+
 function compactReturnAmplificationAnalysisForStorage(value: unknown) {
   if (!value || typeof value !== "object") return value;
   const analysis = value as Record<string, unknown>;
@@ -3957,7 +3984,14 @@ function compactReturnAmplificationAnalysisForStorage(value: unknown) {
 function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): EliteSynthesisResult {
   return {
     ...result,
+    topPolicySummaries: result.topPolicySummaries.slice(0, 20),
+    rejectedPolicySummaries: Array.isArray(result.rejectedPolicySummaries) ? result.rejectedPolicySummaries.slice(0, 80) : [],
     fullPassLog: result.fullPassLog.slice(-24),
+    featureDistributions: result.featureDistributions.slice(0, 60),
+    exitOptimisationTable: result.exitOptimisationTable.slice(0, 40),
+    triggerRebuildSummary: compactDiagnosticsForStorage(result.triggerRebuildSummary) as Record<string, unknown>,
+    rebuiltTriggerDiagnostics: compactDiagnosticsForStorage(result.rebuiltTriggerDiagnostics) as Record<string, unknown>,
+    datasetSummary: compactDatasetSummaryForStorage(result.datasetSummary) as Record<string, unknown>,
     returnAmplificationAnalysis: compactReturnAmplificationAnalysisForStorage(result.returnAmplificationAnalysis),
     tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage(result.tradeLifecycleManagerReplay),
     preLimitFamilyStats: compactFamilyStatsForStorage(result.preLimitFamilyStats),
