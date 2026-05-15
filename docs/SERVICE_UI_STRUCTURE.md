@@ -31,8 +31,8 @@ Research
     Calibration & Research
     Reports
     Runtime Model
-    Backtests
-    Advanced Diagnostics
+    Validation Reports
+    Validation Reports
 ```
 
 ## Workflow Intent
@@ -41,10 +41,10 @@ Normal workflow:
 
 1. Full Calibration
 2. Generate or Stage Research Model
-3. Run Integrated Elite Synthesis
+3. Build Runtime Model
 4. Review Candidate Runtime Policy
 5. Promote Candidate Runtime
-6. Validate Current Runtime Backtest
+6. Validate Runtime
 7. Review Reports
 
 Advanced diagnostics:
@@ -58,7 +58,7 @@ Advanced diagnostics:
 - calibration reconciliation
 - policy comparison
 
-Manual tier and admission-policy experimentation must not be presented as the intended workflow for future services. Integrated Elite Synthesis owns the normal search path.
+Manual tier and admission-policy experimentation must not be presented as the intended workflow for future services. Build Runtime Model owns the normal search path.
 
 ## Language Rules
 
@@ -83,9 +83,9 @@ Preferred wording:
 
 Reports and heavy exports belong under the Reports tab. Other tabs may link to Reports, but should not duplicate export hubs.
 
-## Backtests Placement
+## Validation Reports Placement
 
-The normal Backtests tab should show:
+The normal Validation Reports tab should show:
 
 - selected service
 - window or range

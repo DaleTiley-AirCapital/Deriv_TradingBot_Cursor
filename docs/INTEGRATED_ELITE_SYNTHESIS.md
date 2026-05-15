@@ -1,8 +1,8 @@
-# Integrated Elite Synthesis
+# Build Runtime Model
 
 ## Purpose
 
-Integrated Elite Synthesis is the normal async research search engine for a symbol service.
+Build Runtime Model is the normal async research search engine for a symbol service.
 
 It is not a one-pass report and it is not a manual tier sweep replacement with a prettier name. It builds a unified service dataset, evaluates complete runtime-policy candidates, iterates through multiple passes, and returns a candidate runtime-policy artifact for operator review.
 
@@ -20,10 +20,10 @@ The normal service workflow is:
 
 1. Full Calibration
 2. Generate or Stage Research Model
-3. Run Integrated Elite Synthesis
+3. Build Runtime Model
 4. Review Candidate Runtime Policy
 5. Promote Candidate Runtime
-6. Validate Current Runtime Backtest
+6. Validate Runtime
 7. Paper validation
 
 Manual tier testing, admission-policy toggles, and parity debugging remain advanced diagnostics only.
@@ -213,11 +213,11 @@ Integrated synthesis runs async, persists progress, and must keep Railway respon
 
 ## Candidate Runtime Staging
 
-Integrated Elite Synthesis can now stage a best candidate as a separate paper-only artifact:
+Build Runtime Model can now stage a best candidate as a separate mode-gated artifact:
 
 1. run synthesis
 2. verify selected-trades export consistency against the best-policy summary
-3. stage the best synthesis candidate as a paper-only artifact
+3. stage the best synthesis candidate as a mode-gated artifact
 4. validate the candidate runtime mimic against the synthesis result
 5. run the candidate in paper
 6. only after paper validation, consider explicit promote-to-runtime
@@ -226,6 +226,6 @@ Integrated Elite Synthesis can now stage a best candidate as a separate paper-on
 Important rules:
 
 - the synthesis best policy is not automatically live-ready
-- the staged candidate artifact is paper-only
+- the staged candidate artifact is mode-gated
 - runtime mimic must use live-safe rules, not calibrated move offsets, selected trade ids, or calibrated move outcome labels
 - the existing promoted runtime remains unchanged until an explicit later promotion step

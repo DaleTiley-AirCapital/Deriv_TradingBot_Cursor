@@ -76,6 +76,138 @@ async function findCandidateRuntimeArtifact(serviceId: string, artifactId: strin
   return null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, result: EliteSynthesisResult) {
+  const resultRecord = result as unknown as Record<string, unknown>;
+  const bestPolicySummary = asRecord(result.bestPolicySummary);
+  const readiness = asRecord(result.policyArtifactReadiness);
+  const returnAmplification = asRecord(result.returnAmplificationAnalysis);
+  const returnSummary = asRecord(returnAmplification.summary);
+  const recommendedCandidate = asRecord(returnAmplification.recommendedCandidateConfiguration);
+  const bestPolicyArtifact = asRecord(result.bestPolicyArtifact);
+  const candidateArtifacts = Array.isArray(job.candidateRuntimeArtifacts) ? job.candidateRuntimeArtifacts : [];
+  const blockers: string[] = [];
+  if (readiness.reportConsistencyPassed === false) blockers.push("report_consistency_failed");
+  if (readiness.selectedTradesExportPassed === false) blockers.push("selected_trades_export_failed");
+  if (readiness.leakagePassed === false) blockers.push("leakage_check_failed");
+  if (!bestPolicySummary.policyId) blockers.push("recommended_policy_missing");
+  return {
+    artifactName: `runtime_build_result_${serviceId}_${job.id}.json`,
+    serviceId,
+    sourceCalibrationRunId: Number(bestPolicySummary.sourceRunId ?? job.params?.sourceRunId ?? 0) || null,
+    sourceDataWindow: {
+      windowDays: job.params?.windowDays ?? null,
+      startTs: job.params?.startTs ?? null,
+      endTs: job.params?.endTs ?? null,
+    },
+    buildRunId: job.id,
+    buildProfile: {
+      searchProfile: job.params?.searchProfile ?? null,
+      targetProfile: job.params?.targetProfile ?? null,
+      maxPasses: job.maxPasses,
+    },
+    targetObjective: job.params?.targetProfile ?? "default",
+    targetMoveUniverse: resultRecord.datasetSummary ?? resultRecord.moveUniverseSummary ?? null,
+    targetMoveCoverage: result.targetAchievedBreakdown ?? null,
+    missedMoveAnalysis: resultRecord.missedMoveAnalysis ?? resultRecord.calibrationReconciliationSummary ?? null,
+    candidateEntryMatrixSummary: resultRecord.candidateEntryMatrixSummary ?? bestPolicyArtifact.entryThresholds ?? null,
+    controlSampleSummary: resultRecord.controlSampleSummary ?? null,
+    lifecycleSimulationSummary: resultRecord.tradeLifecycleReplaySummary ?? recommendedCandidate.dynamicExitPlanSummary ?? null,
+    profitRankingSummary: returnSummary,
+    candidateLeaderboard: resultRecord.policyLeaderboard ?? resultRecord.bestPolicyCandidates ?? [],
+    recommendedCandidate: bestPolicySummary,
+    safestBaselineCandidate: returnAmplification.safestHighWinPolicy ?? null,
+    bestRejectedProfitCandidate: returnAmplification.bestRejectedProfitPolicy ?? null,
+    runtimeRuleDraft: result.bestPolicyArtifact ?? null,
+    liveSafeRuleStatus: {
+      status: readiness.liveSafeRuleStatus ?? (blockers.length === 0 ? "ready_for_validation" : "blocked"),
+      reportConsistencyPassed: Boolean(readiness.reportConsistencyPassed),
+      selectedTradesExportPassed: Boolean(readiness.selectedTradesExportPassed),
+    },
+    leakageStatus: {
+      passed: Boolean(readiness.leakagePassed ?? result.leakageAuditSummary),
+      summary: result.leakageAuditSummary ?? null,
+    },
+    runtimeMimicReadiness: {
+      status: candidateArtifacts.some((artifact) => Boolean(artifact.runtimeMimicReady)) ? "ready" : "not_run",
+      stagedCandidateArtifactId: candidateArtifacts.find((artifact) => Boolean(artifact.staged))?.artifactId ?? null,
+    },
+    stageability: {
+      canStage: blockers.length === 0,
+      requiresManualStage: true,
+      autoStage: false,
+    },
+    reportsGenerated: {
+      selectedTrades: Boolean(result.bestPolicySelectedTradesSummary),
+      returnProfitAnalysis: Boolean(result.returnAmplificationAnalysis),
+      lifecycleReplay: Boolean(resultRecord.tradeLifecycleReplaySummary),
+      policyComparison: Boolean(resultRecord.policyComparisonSummary),
+    },
+    blockers,
+    warnings: [
+      "Build Runtime Model does not promote runtime or enable any execution mode.",
+      "Validate Runtime must pass before Promote Runtime.",
+    ],
+  };
+}
+
+function buildRuntimeValidationResult(serviceId: string, artifact: Record<string, unknown>) {
+  const artifactId = String(artifact.artifactId ?? "");
+  const readiness = asRecord(artifact.readiness);
+  const blockers = [
+    "runtime_mimic_validation_not_executed",
+    "historical_backtest_not_executed_in_consolidated_validator",
+    "parity_check_not_executed_in_consolidated_validator",
+    "trigger_validation_not_executed_in_consolidated_validator",
+  ];
+  return {
+    artifactName: `runtime_validation_result_${serviceId}_${Date.now()}.json`,
+    stagedCandidateId: artifactId,
+    runtimeArtifactId: artifactId,
+    validationStatus: "blocked",
+    mimicResult: {
+      status: artifact.runtimeMimicValidationStatus ?? "not_run",
+      ready: Boolean(artifact.runtimeMimicReady ?? false),
+    },
+    backtestResult: {
+      status: "not_run",
+      source: "Validate Runtime consolidated contract",
+    },
+    parityResult: {
+      status: "not_run",
+      source: "internal parity stage",
+    },
+    triggerValidationResult: {
+      status: "not_run",
+      source: "internal runtime trigger validation stage",
+    },
+    phantomNoiseResult: {
+      status: "not_run",
+    },
+    allocatorPathResult: {
+      status: "not_run",
+      provenanceRequired: true,
+    },
+    lifecycleMonitorResult: {
+      status: "not_run",
+    },
+    modeGateResult: {
+      paper: Boolean(readiness.canUseForPaper ?? readiness.canUseForServiceRuntime ?? false),
+      demo: false,
+      real: false,
+    },
+    blockers,
+    warnings: [
+      "This validation action is consolidated over existing diagnostic stages and does not change live execution.",
+      "Promotion remains a separate explicit service-level action.",
+    ],
+    canPromoteRuntime: false,
+  };
+}
+
 function parseParams(input: unknown): EliteSynthesisParams {
   const record = input && typeof input === "object" && !Array.isArray(input)
     ? (input as Record<string, unknown>)
@@ -707,7 +839,7 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
     }
     const selectedTrades = Array.isArray(result.bestPolicySelectedTrades) ? result.bestPolicySelectedTrades : [];
     const selectedTradeIds = selectedTrades.map((trade) => String((trade as Record<string, unknown>).candidateId ?? (trade as Record<string, unknown>).tradeId ?? "")).filter(Boolean);
-    const artifactId = `crash300-v3-1-paper-candidate-${jobId}-${Date.now()}`;
+    const artifactId = `crash300-v3-1-runtime-candidate-${jobId}-${Date.now()}`;
     const reportConsistencyChecks = ((result.bestPolicySelectedTradesSummary as Record<string, unknown> | undefined)?.reportConsistencyChecks ?? {}) as Record<string, unknown>;
     const dynamicExitPlanSummary = ((result.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.recommendedCandidateConfiguration as Record<string, unknown> | undefined)?.dynamicExitPlanSummary ?? null;
     const returnAmplificationSummary = ((result.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.summary ?? null) as Record<string, unknown> | null;
@@ -718,13 +850,13 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
       canPromoteLive: false,
       runtimeMimicValidationStatus: "not_run",
       runtimeMimicReady: false,
-      blocker: "Candidate staged for paper review; runtime mimic validation still required before demo/real.",
-      reason: "V3.1 CRASH300 baseline candidate for paper observation only",
+      blocker: "Candidate staged for service runtime review; runtime mimic validation still required before wider mode gates.",
+      reason: "V3.1 CRASH300 baseline candidate for service runtime validation",
     };
     const artifact = {
       artifactId,
-      artifactType: "crash300_v3_1_paper_candidate_runtime",
-      mode: "paper_only",
+      artifactType: "crash300_v3_1_service_runtime_candidate",
+      mode: "service_runtime_candidate",
       version: "v3.1",
       runtimeMimicReady: false,
       runtimeMimicValidationStatus: "not_run",
@@ -788,7 +920,7 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
     const baselineRecord = {
       version: "v3.1",
       serviceId,
-      baselineType: "paper_candidate",
+      baselineType: "service_runtime_candidate",
       sourceJobId: jobId,
       sourcePolicyId: result.bestPolicySummary.policyId,
       createdAt: new Date().toISOString(),
@@ -797,7 +929,7 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
       runtimeMimicReady: false,
       notes: [
         "CRASH300 is preserved as current best baseline while pipeline moves to R_75.",
-        "Further CRASH300 squeezing deferred until all active services have candidate runtimes.",
+        "Further CRASH300 squeezing deferred until all active services have runtime candidates.",
       ],
       metricsSnapshot: {
         trades: result.bestPolicySummary.trades,
@@ -849,7 +981,7 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/stage-candidate-runti
       ok: true,
       artifact,
       baselineRecord,
-      note: "Paper-only candidate. Not live-approved.",
+      note: "Runtime candidate staged. Not promoted.",
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Candidate runtime staging failed" });
@@ -878,6 +1010,7 @@ router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/
     res.status(202).json({
       artifactId,
       serviceId,
+      runtimeValidationResult: buildRuntimeValidationResult(serviceId, artifact),
       candidateRuntimeValidation: {
         artifactId,
         sourceSynthesisJobId: artifact.sourceSynthesisJobId ?? null,
@@ -917,6 +1050,37 @@ router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/
   }
 });
 
+router.post("/research/:serviceId/runtime-validation/run", async (req, res): Promise<void> => {
+  try {
+    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+    getSynthesisAdapter(serviceId);
+    const stagedState = await readStagedSynthesisCandidateState(serviceId);
+    if (!stagedState) {
+      res.status(409).json({
+        error: "Validate Runtime requires a staged runtime candidate for the service.",
+        runtimeValidationResult: null,
+      });
+      return;
+    }
+    const located = await findCandidateRuntimeArtifact(serviceId, stagedState.artifactId);
+    if (!located) {
+      res.status(404).json({
+        error: `Staged runtime candidate ${stagedState.artifactId} could not be resolved for ${serviceId}.`,
+      });
+      return;
+    }
+    const runtimeValidationResult = buildRuntimeValidationResult(serviceId, located.artifact);
+    res.status(202).json({
+      ok: true,
+      serviceId,
+      runtimeValidationResult,
+      note: "Validate Runtime returned a consolidated validation artifact over existing diagnostic stages. It did not promote runtime or change execution mode.",
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Validate Runtime failed" });
+  }
+});
+
 router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/promote-runtime", async (req, res): Promise<void> => {
   try {
     const serviceId = String(req.params.serviceId ?? "").toUpperCase();
@@ -943,7 +1107,7 @@ router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/
     }
     if (serviceId === "CRASH300" && readiness.canUseForPaper === false) {
       res.status(409).json({
-        error: "CRASH300 candidate runtime is not approved for Paper staging.",
+        error: "CRASH300 candidate runtime is not approved for service runtime staging.",
         readiness,
       });
       return;
@@ -960,7 +1124,7 @@ router.post("/research/:serviceId/elite-synthesis/candidate-runtime/:artifactId/
       ok: true,
       serviceId,
       promotedRuntime,
-      note: "Promoted runtime is universal to the service. Paper is enabled first; Demo and Real remain blocked.",
+      note: "Promoted runtime is universal to the service. Mode gates decide where it can execute; Demo and Real remain blocked.",
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Candidate runtime promotion failed" });
@@ -1038,6 +1202,31 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/trade-lifecycle
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Trade lifecycle replay export failed" });
+  }
+});
+
+router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/runtime-build-result", async (req, res): Promise<void> => {
+  const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+  const jobId = Number(req.params.id);
+  try {
+    getSynthesisAdapter(serviceId);
+    const job = await getEliteSynthesisJob(jobId);
+    if (!job || job.serviceId !== serviceId || !job.resultArtifact) {
+      res.status(404).json({ error: `Runtime build result for job ${jobId} not found for ${serviceId}.` });
+      return;
+    }
+    sendJsonOrTooLarge(res, "elite_synthesis_runtime_build_result_export", buildRuntimeBuildResult(serviceId, job, job.resultArtifact), {
+      serviceId,
+      jobId,
+    });
+  } catch (err) {
+    logEliteSynthesisRouteError("elite_synthesis_runtime_build_result_export", err, {
+      serviceId,
+      jobId,
+      selectsTaskState: true,
+      selectsResultArtifact: true,
+    });
+    res.status(400).json({ error: err instanceof Error ? err.message : "Runtime build result export failed" });
   }
 });
 

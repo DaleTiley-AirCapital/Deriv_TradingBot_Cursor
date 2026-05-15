@@ -191,7 +191,7 @@ function CalibrationRunProvider({ children }: { children: ReactNode }) {
 const ACTIVE_SYMBOLS: string[] = [...ACTIVE_SERVICE_SYMBOLS];
 const BACKTEST_ACTIVE_SYMBOLS = ["all", ...ACTIVE_SYMBOLS];
 type DomainId = "active";
-type ResearchTabId = "data" | "calibration" | "synthesis" | "runtime" | "backtests" | "diagnostics" | "reports";
+type ResearchTabId = "data" | "calibration" | "synthesis" | "runtime" | "reports";
 const RESEARCH_WINDOWS = [
   { days: 30, label: "1 month" },
   { days: 90, label: "3 months" },
@@ -1534,10 +1534,10 @@ function BacktestTab({
       {/* Controls */}
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-4">
         <div>
-          <h3 className="text-sm font-semibold">Validate Current Runtime Backtest</h3>
+          <h3 className="text-sm font-semibold">Validate Runtime</h3>
           <p className="text-xs text-muted-foreground leading-relaxed">
             Backtest replays selected service runtime logic against historical candles.
-            Advanced diagnostics can test tiers and policies manually, but normal workflow uses Integrated Elite Synthesis to search combinations automatically.
+            Backtest, parity, trigger, and optimiser checks are internal validation stages in the simplified workflow.
           </p>
         </div>
 
@@ -1586,7 +1586,7 @@ function BacktestTab({
               {running
                 ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 : <BarChart2 className="w-3.5 h-3.5" />}
-              {running ? `Running ${formatDurationCompact(elapsed)}` : "Run Backtest / Validate Current Runtime"}
+              {running ? `Running ${formatDurationCompact(elapsed)}` : "Validate Runtime"}
             </button>
           </div>
           <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
@@ -1595,7 +1595,7 @@ function BacktestTab({
         </div>
 
         <div className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground">
-          Manual tier sweeps and admission-policy diagnostics now live under <span className="text-foreground font-medium">Advanced Diagnostics</span>.
+          Manual tier sweeps and admission-policy diagnostics are internal validation details and export through <span className="text-foreground font-medium">Reports</span>.
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
@@ -2027,6 +2027,14 @@ interface ServiceLifecycleStatusUi {
   executionAllowedForActiveMode: boolean;
   allocatorConnected: boolean;
   nextRequiredAction: string;
+  workflowStages?: Array<{
+    label: string;
+    status: "complete" | "incomplete" | "blocked" | "warning";
+    sourceRunId: string | number | null;
+    timestamp: string | null;
+    nextAction: string | null;
+    blockers: string[];
+  }>;
   blockers: string[];
   warnings: string[];
 }
@@ -4413,7 +4421,7 @@ function MoveCalibrationTab({
         <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
-              <p className="text-xs font-semibold text-cyan-200">Backtest Calibration Optimiser</p>
+              <p className="text-xs font-semibold text-cyan-200">Internal Optimisation Stage</p>
               <p className="text-[11px] text-muted-foreground">
                 Runs V3 backtest candidates against calibrated moves. Winners are staged only, never auto-promoted.
               </p>
@@ -4431,7 +4439,7 @@ function MoveCalibrationTab({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
             >
               {optimiserBusy === "run" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart2 className="w-3.5 h-3.5" />}
-              Run Optimiser
+              Run Internal Optimisation
             </button>
             {optimiserHasExistingRun && (
               <>
@@ -4442,7 +4450,7 @@ function MoveCalibrationTab({
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-500/30 text-xs text-red-300 bg-red-500/10 hover:bg-red-500/15 disabled:opacity-50"
                 >
                   {optimiserBusy === "cancel" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />}
-                  Cancel Optimiser
+                  Cancel Internal Optimisation
                 </button>
                 <button
                   type="button"
@@ -4451,7 +4459,7 @@ function MoveCalibrationTab({
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/40 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
                 >
                   {optimiserBusy === "refresh" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                  Refresh Optimiser
+                  Refresh Internal Optimisation
                 </button>
                 <button
                   type="button"
@@ -4466,11 +4474,11 @@ function MoveCalibrationTab({
             )}
           </div>
           {optimiserLockedByParity && (
-            <ErrorBox msg="Optimiser disabled: CRASH300 runtime does not recognise calibrated moves yet." />
+            <ErrorBox msg="Internal optimisation disabled: CRASH300 runtime does not recognise calibrated moves yet." />
           )}
           {!optimiserHasExistingRun && (
             <p className="text-[11px] text-muted-foreground">
-              Optimiser run controls (refresh/cancel/stage) will appear after a valid optimiser run exists.
+              Internal optimisation controls (refresh/cancel/stage) will appear after a valid run exists.
             </p>
           )}
 
@@ -5006,7 +5014,7 @@ function ServicePipelinePanel({
     void load();
   }, [load]);
 
-  const stages = lifecycle ? [
+  const fallbackStages = lifecycle ? [
     {
       label: "Data Coverage",
       tab: "data" as ResearchTabId,
@@ -5014,26 +5022,26 @@ function ServicePipelinePanel({
       detail: lifecycle.latestCandleTs ? formatRuntimeDate(lifecycle.latestCandleTs) : "No candles yet",
     },
     {
-      label: "Calibration",
+      label: "Full Calibration",
       tab: "calibration" as ResearchTabId,
       status: lifecycle.calibrationStatus === "complete" ? "complete" : "not_run",
       detail: lifecycle.latestCalibrationRunId ? `run ${lifecycle.latestCalibrationRunId}` : "Not run",
     },
     {
-      label: "Elite Synthesis",
+      label: "Build Runtime Model",
       tab: "synthesis" as ResearchTabId,
       status: lifecycle.latestSynthesisJobId && lifecycle.synthesisStatus === "completed" ? "complete" : lifecycle.latestSynthesisJobId ? "warning" : "not_run",
       detail: lifecycle.latestSynthesisJobId ? `job #${lifecycle.latestSynthesisJobId}` : "Not run",
     },
     {
-      label: "Candidate Staged",
+      label: "Runtime Staged",
       tab: "synthesis" as ResearchTabId,
       status: lifecycle.stagedCandidateArtifactId ? "complete" : "not_run",
       detail: lifecycle.stagedCandidateArtifactId ?? "Not staged",
     },
     {
       label: "Runtime Validated",
-      tab: "diagnostics" as ResearchTabId,
+      tab: "runtime" as ResearchTabId,
       status: lifecycle.runtimeValidationStatus === "passed" ? "complete" : lifecycle.runtimeValidationStatus === "failed" ? "blocked" : lifecycle.runtimeValidationStatus === "running" ? "warning" : "not_run",
       detail: runtimeValidationSummary(lifecycle.runtimeValidationStatus),
     },
@@ -5056,12 +5064,45 @@ function ServicePipelinePanel({
       detail: lifecycle.executionAllowedForActiveMode ? "Ready for Paper allocator" : "Waiting on mode or risk gates",
     },
     {
-      label: "Paper Monitoring",
-      tab: "backtests" as ResearchTabId,
+      label: "Monitoring",
+      tab: "runtime" as ResearchTabId,
       status: lifecycle.executionAllowedForActiveMode ? "complete" : "warning",
       detail: lifecycle.executionAllowedForActiveMode ? "Execution allowed for active mode" : lifecycle.nextRequiredAction,
     },
   ] : [];
+
+  const stageTab = (label: string): ResearchTabId => {
+    switch (label) {
+      case "Data Coverage":
+      case "Stream Active":
+        return "data";
+      case "Full Calibration":
+        return "calibration";
+      case "Build Runtime Model":
+      case "Runtime Staged":
+        return "synthesis";
+      case "Runtime Validated":
+      case "Runtime Promoted":
+      case "Allocator Connected":
+      case "Monitoring":
+        return "runtime";
+      default:
+        return "reports";
+    }
+  };
+
+  const stages = lifecycle?.workflowStages?.length
+    ? lifecycle.workflowStages.map((stage) => ({
+        label: stage.label,
+        tab: stageTab(stage.label),
+        status: stage.status === "incomplete" ? "not_run" : stage.status,
+        detail: [
+          stage.sourceRunId ? `source ${stage.sourceRunId}` : null,
+          stage.timestamp ? formatRuntimeDate(stage.timestamp) : null,
+          stage.nextAction ? `next ${stage.nextAction}` : null,
+        ].filter(Boolean).join(" | ") || stage.blockers[0] || "No details yet",
+      }))
+    : fallbackStages;
 
   const nextStepGuide = lifecycle ? (() => {
     if (lifecycle.dataCoverageStatus !== "ready") {
@@ -5081,29 +5122,29 @@ function ServicePipelinePanel({
     if (lifecycle.synthesisStatus !== "completed") {
       return {
         tab: "synthesis" as ResearchTabId,
-        action: "Open Elite Synthesis",
-        detail: "Run Integrated Elite Synthesis from the synthesis tab and use the worker-backed history card below it to monitor progress.",
+        action: "Build Runtime Model",
+        detail: "Run Build Runtime Model from the build tab and use the worker-backed history card below it to monitor progress.",
       };
     }
     if (!lifecycle.stagedCandidateArtifactId) {
       return {
         tab: "synthesis" as ResearchTabId,
-        action: "Stage Best Candidate",
-        detail: "Open Elite Synthesis, review the latest result summary, then use the stage button once report consistency and export checks pass.",
+        action: "Review Runtime Build Result",
+        detail: "Open Build Runtime Model and review the consolidated build result before staging or promotion.",
       };
     }
     if (!lifecycle.promotedRuntimeArtifactId) {
       return {
         tab: "runtime" as ResearchTabId,
-        action: "Promote Candidate To Runtime",
-        detail: "Open Runtime Model and promote the staged candidate into the universal service runtime. Paper can use it when the stream and allocator are healthy.",
+        action: "Validate Runtime",
+        detail: "Open Runtime Model and run the consolidated validation action over the staged runtime candidate.",
       };
     }
     if (lifecycle.runtimeValidationStatus !== "passed") {
       return {
-        tab: "diagnostics" as ResearchTabId,
-        action: "Run Parity & Runtime Trigger Validation",
-        detail: "Use Advanced Diagnostics to validate the promoted runtime before loosening any mode permissions beyond Paper.",
+        tab: "runtime" as ResearchTabId,
+        action: "Validate Runtime",
+        detail: "Run the single Validate Runtime action before promoting the staged candidate.",
       };
     }
     if (lifecycle.streamState !== "active") {
@@ -5122,8 +5163,8 @@ function ServicePipelinePanel({
     }
     return {
       tab: "backtests" as ResearchTabId,
-      action: "Monitor Backtests & Paper Behaviour",
-      detail: "The service has completed the core pipeline. Use Backtests, Reports, and live Paper monitoring to compare expected and realised behaviour.",
+        action: "Stream / Monitor",
+        detail: "The service has completed the core pipeline. Use Stream / Monitor and read-only reports to compare expected and realised behaviour.",
     };
   })() : null;
 
@@ -5143,7 +5184,7 @@ function ServicePipelinePanel({
         <div>
           <h3 className="text-sm font-semibold">Service Pipeline</h3>
           <p className="text-xs text-muted-foreground mt-1">
-            Data Coverage → Calibration → Elite Synthesis → Candidate Staged → Runtime Validated → Runtime Promoted → Stream Active → Allocator Connected → Paper Monitoring
+            Data Coverage {">"} Full Calibration {">"} Build Runtime Model {">"} Runtime Staged {">"} Runtime Validated {">"} Runtime Promoted {">"} Stream Active {">"} Allocator Connected {">"} Monitoring
           </p>
         </div>
         {lifecycle ? (
@@ -5180,7 +5221,7 @@ function ServicePipelinePanel({
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-primary/30 bg-primary/10 text-xs text-primary hover:bg-primary/15"
                 >
                   <ChevronRight className="w-3.5 h-3.5" />
-                  Open {activeStage.tab === "data" ? "Data & Coverage" : activeStage.tab === "calibration" ? "Calibration" : activeStage.tab === "synthesis" ? "Elite Synthesis" : activeStage.tab === "runtime" ? "Runtime Model" : activeStage.tab === "diagnostics" ? "Advanced Diagnostics" : "Backtests"}
+                  Open {activeStage.tab === "data" ? "Data & Coverage" : activeStage.tab === "calibration" ? "Calibration" : activeStage.tab === "synthesis" ? "Build Runtime Model" : activeStage.tab === "runtime" ? "Runtime Model" : "Reports"}
                 </button>
               </div>
             </div>
@@ -5198,7 +5239,7 @@ function ServicePipelinePanel({
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-primary/30 bg-primary/10 text-xs text-primary hover:bg-primary/15"
                 >
                   <ChevronRight className="w-3.5 h-3.5" />
-                  Go to {nextStepGuide.tab === "data" ? "Data & Coverage" : nextStepGuide.tab === "calibration" ? "Calibration" : nextStepGuide.tab === "synthesis" ? "Elite Synthesis" : nextStepGuide.tab === "runtime" ? "Runtime Model" : nextStepGuide.tab === "diagnostics" ? "Advanced Diagnostics" : "Backtests"}
+                  Go to {nextStepGuide.tab === "data" ? "Data & Coverage" : nextStepGuide.tab === "calibration" ? "Calibration" : nextStepGuide.tab === "synthesis" ? "Build Runtime Model" : nextStepGuide.tab === "runtime" ? "Runtime Model" : "Reports"}
                 </button>
               </div>
               <p className="text-muted-foreground">{nextStepGuide.detail}</p>
@@ -5319,7 +5360,7 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
           <p className="font-mono text-foreground">
             {service === "CRASH300"
               ? latestBaselineJob
-                ? `paper-only staged candidate`
+                ? `staged runtime candidate`
                 : "ready to stage"
               : service === "R_75"
                 ? "next optimisation target"
@@ -5396,6 +5437,7 @@ function RuntimeModelTab({ service }: { service: string }) {
   const [lifecycle, setLifecycle] = useState<ServiceLifecycleStatusUi | null>(null);
   const [promotedRuntime, setPromotedRuntime] = useState<ServicePromotedRuntimeUi | null>(null);
   const [promoteBusy, setPromoteBusy] = useState(false);
+  const [validateBusy, setValidateBusy] = useState(false);
   const [promoteNotice, setPromoteNotice] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -5457,11 +5499,33 @@ function RuntimeModelTab({ service }: { service: string }) {
         serviceLifecycleStatus?: ServiceLifecycleStatusUi | null;
       };
       setLifecycle(lifecycleResp.serviceLifecycleStatus ?? null);
-      setPromoteNotice("Promoted service runtime updated. Paper can consume it when Paper mode is active and the stream is active.");
+      setPromoteNotice("Promoted service runtime updated. Mode gates decide where it can execute.");
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Failed to promote candidate to runtime");
     } finally {
       setPromoteBusy(false);
+    }
+  };
+
+  const validateRuntime = async () => {
+    setValidateBusy(true);
+    setPromoteNotice(null);
+    setErr(null);
+    try {
+      const data = await apiFetch(`research/${service}/runtime-validation/run`, { method: "POST" }) as {
+        runtimeValidationResult?: { artifactName?: string; validationStatus?: string; blockers?: string[] };
+      };
+      const result = data.runtimeValidationResult;
+      const blockerCount = Array.isArray(result?.blockers) ? result.blockers.length : 0;
+      setPromoteNotice(`Validate Runtime produced ${result?.artifactName ?? "runtime_validation_result"} with status ${result?.validationStatus ?? "unknown"} and ${blockerCount} blocker(s).`);
+      const lifecycleResp = await apiFetch(`research/${service}/service-lifecycle`).catch(() => ({ serviceLifecycleStatus: null })) as {
+        serviceLifecycleStatus?: ServiceLifecycleStatusUi | null;
+      };
+      setLifecycle(lifecycleResp.serviceLifecycleStatus ?? null);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Failed to validate runtime");
+    } finally {
+      setValidateBusy(false);
     }
   };
 
@@ -5477,16 +5541,28 @@ function RuntimeModelTab({ service }: { service: string }) {
               Promoted runtime is universal to the service. Paper, Demo, and Real use the same runtime artifact, with mode permissions controlling execution.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => void promoteCandidateToRuntime()}
-            disabled={promoteBusy || !lifecycle?.stagedCandidateArtifactId}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
-            title="Promote the staged synthesis candidate into the universal service runtime path"
-          >
-            {promoteBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            Promote Candidate To Runtime
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void validateRuntime()}
+              disabled={validateBusy || !lifecycle?.stagedCandidateArtifactId}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
+              title="Validate the staged runtime candidate through the consolidated validation contract"
+            >
+              {validateBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+              Validate Runtime
+            </button>
+            <button
+              type="button"
+              onClick={() => void promoteCandidateToRuntime()}
+              disabled={promoteBusy || !lifecycle?.stagedCandidateArtifactId}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-xs text-emerald-200 bg-emerald-500/10 hover:bg-emerald-500/15 disabled:opacity-50"
+              title="Promote the staged runtime candidate into the universal service runtime path"
+            >
+              {promoteBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+              Promote Runtime
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 text-[11px]">
           <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
@@ -5530,7 +5606,7 @@ function RuntimeModelTab({ service }: { service: string }) {
           <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">Mode gates</p>
             <StatRow label="Active mode" value={lifecycle?.activeMode ?? "idle"} />
-            <StatRow label="Service runtime allowed" value={promotedRuntime?.allowedModes?.paper ? "paper yes" : "paper no"} />
+            <StatRow label="Service runtime allowed" value={promotedRuntime?.allowedModes?.paper ? "baseline mode yes" : "baseline mode no"} />
             <StatRow label="Allocator allowed" value={lifecycle?.allocatorConnected ? "connected" : "blocked"} />
             <StatRow label="Execution allowed" value={lifecycle?.executionAllowedForActiveMode ? "yes" : "no"} />
           </div>
@@ -5555,7 +5631,7 @@ function RuntimeModelTab({ service }: { service: string }) {
           <StatRow label="Runtime entry archetypes" value={runtimeArchetypes.join(", ") || "n/a"} />
           <StatRow label="Promoted model source run" value={runtime?.promotedModel?.sourceRunId ?? "none"} />
           {service === "CRASH300" ? (
-            <StatRow label="V3.1 baseline" value="Paper-only staged candidate workflow" />
+          <StatRow label="V3.1 baseline" value="Staged runtime candidate workflow" />
           ) : null}
           {service === "R_75" ? (
             <StatRow label="Next optimisation" value="Volatility-series symbol-service workflow ready" />
@@ -5575,7 +5651,7 @@ function RuntimeModelTab({ service }: { service: string }) {
           </p>
           {service === "CRASH300" ? (
             <p className="text-xs text-amber-300">
-              CRASH300 V3.1 baseline remains paper-only. Runtime mimic validation must pass before any demo or live promotion path is considered.
+              CRASH300 V3.1 baseline remains mode-gated. Runtime mimic validation must pass before any wider mode path is considered.
             </p>
           ) : null}
           {service === "R_75" ? (
@@ -5665,7 +5741,7 @@ function RuntimeModelTab({ service }: { service: string }) {
 type ReportOption = {
   value: string;
   label: string;
-  task: "full-calibration" | "runtime-backtest" | "parity-diagnostics" | "policy-comparison" | "integrated-elite-synthesis";
+  task: "calibration" | "runtime-build" | "validation" | "execution";
   runType: "none" | "backtest" | "comparison" | "synthesis";
 };
 
@@ -5681,33 +5757,33 @@ const ELITE_SYNTHESIS_PROFILE_DESCRIPTIONS: Record<EliteSynthesisSearchProfileUi
 };
 
 const REPORT_TASK_OPTIONS: ReportTaskOption[] = [
-  { value: "full-calibration", label: "Run Full Calibration" },
-  { value: "runtime-backtest", label: "Validate Current Runtime Backtest" },
-  { value: "parity-diagnostics", label: "Run Parity / Diagnostics" },
-  { value: "policy-comparison", label: "Policy Comparison" },
-  { value: "integrated-elite-synthesis", label: "Run Integrated Elite Synthesis" },
+  { value: "calibration", label: "Calibration Reports" },
+  { value: "runtime-build", label: "Runtime Build Reports" },
+  { value: "validation", label: "Validation Reports" },
+  { value: "execution", label: "Execution Reports" },
 ];
 
 const REPORT_OPTIONS: ReportOption[] = [
-  { value: "detected-moves", label: "Detected Moves", task: "full-calibration", runType: "none" },
-  { value: "calibration-profile", label: "Calibration Profile", task: "full-calibration", runType: "none" },
-  { value: "pass-results", label: "Pass Results", task: "full-calibration", runType: "none" },
-  { value: "comparison-summary", label: "Comparison Summary", task: "full-calibration", runType: "none" },
-  { value: "backtest-summary", label: "Backtest Summary", task: "runtime-backtest", runType: "backtest" },
-  { value: "backtest-trades", label: "Backtest Trades", task: "runtime-backtest", runType: "backtest" },
-  { value: "backtest-attribution", label: "Backtest Attribution", task: "runtime-backtest", runType: "backtest" },
-  { value: "calibration-reconciliation", label: "Calibration Reconciliation", task: "runtime-backtest", runType: "backtest" },
-  { value: "backtest-signals", label: "Signal Log Export", task: "runtime-backtest", runType: "none" },
-  { value: "parity-report", label: "Parity Report", task: "parity-diagnostics", runType: "none" },
-  { value: "phase-summary", label: "Phase Identifier Summary", task: "parity-diagnostics", runType: "none" },
-  { value: "phase-sample", label: "Phase Identifier Sample", task: "parity-diagnostics", runType: "none" },
-  { value: "phase-full", label: "Full Phase Identifier Report", task: "parity-diagnostics", runType: "none" },
-  { value: "policy-comparison", label: "Policy Comparison", task: "policy-comparison", runType: "comparison" },
-  { value: "elite-synthesis-result", label: "Elite Synthesis Result", task: "integrated-elite-synthesis", runType: "synthesis" },
-  { value: "elite-synthesis-selected-trades", label: "Elite Synthesis Selected Trades", task: "integrated-elite-synthesis", runType: "synthesis" },
-  { value: "elite-return-amplification", label: "Return Amplification Analysis", task: "integrated-elite-synthesis", runType: "synthesis" },
-  { value: "elite-policy-comparison", label: "Policy Comparison", task: "integrated-elite-synthesis", runType: "synthesis" },
-  { value: "trade-lifecycle-replay", label: "Trade Lifecycle Replay Report", task: "integrated-elite-synthesis", runType: "synthesis" },
+  { value: "detected-moves", label: "Detected Moves", task: "calibration", runType: "none" },
+  { value: "calibration-profile", label: "Calibration Profile", task: "calibration", runType: "none" },
+  { value: "pass-results", label: "Pass Results", task: "calibration", runType: "none" },
+  { value: "comparison-summary", label: "Comparison Summary", task: "calibration", runType: "none" },
+  { value: "runtime-build-result", label: "Runtime Build Summary", task: "runtime-build", runType: "synthesis" },
+  { value: "elite-synthesis-result", label: "Selected Candidate", task: "runtime-build", runType: "synthesis" },
+  { value: "elite-return-amplification", label: "Return / Profit Analysis", task: "runtime-build", runType: "synthesis" },
+  { value: "trade-lifecycle-replay", label: "Lifecycle Replay", task: "runtime-build", runType: "synthesis" },
+  { value: "calibration-reconciliation", label: "Missed Move / Coverage Analysis", task: "runtime-build", runType: "backtest" },
+  { value: "elite-policy-comparison", label: "Policy Comparison / Candidate Leaderboard", task: "runtime-build", runType: "synthesis" },
+  { value: "backtest-summary", label: "Backtest Result", task: "validation", runType: "backtest" },
+  { value: "parity-report", label: "Parity Result", task: "validation", runType: "none" },
+  { value: "runtime-trigger-validation", label: "Trigger Validation", task: "validation", runType: "none" },
+  { value: "backtest-attribution", label: "Phantom / Noise Analysis", task: "validation", runType: "backtest" },
+  { value: "phase-summary", label: "Runtime Mimic Validation Summary", task: "validation", runType: "none" },
+  { value: "phase-sample", label: "Runtime Mimic Validation Sample", task: "validation", runType: "none" },
+  { value: "backtest-signals", label: "Service Candidates", task: "execution", runType: "none" },
+  { value: "policy-comparison", label: "Allocator Decisions", task: "execution", runType: "comparison" },
+  { value: "backtest-trades", label: "Trades", task: "execution", runType: "backtest" },
+  { value: "phase-full", label: "Lifecycle Monitor Logs", task: "execution", runType: "none" },
 ];
 
 function AddServiceModal({
@@ -5887,7 +5963,7 @@ function ReportsTab({
   title?: string;
   description?: string;
 }) {
-  const [reportTask, setReportTask] = useState<ReportOption["task"]>(forcedTask ?? "full-calibration");
+  const [reportTask, setReportTask] = useState<ReportOption["task"]>(forcedTask ?? "calibration");
   const [reportType, setReportType] = useState<string>("detected-moves");
   const [calibrationRuns, setCalibrationRuns] = useState<PassRun[]>([]);
   const [backtestRuns, setBacktestRuns] = useState<PersistedV3BacktestHistoryRun[]>([]);
@@ -5922,7 +5998,7 @@ function ReportsTab({
         if (cancelled) return;
         const synthesisLoadError = (synthesisResp as { error?: string }).error;
         if (synthesisLoadError) {
-          setErr(`Elite synthesis job history failed to load: ${synthesisLoadError}`);
+          setErr(`Build Runtime Model history failed to load: ${synthesisLoadError}`);
         } else {
           setErr(null);
         }
@@ -5999,6 +6075,9 @@ function ReportsTab({
         case "parity-report":
           endpoint = `calibration/runtime-model/${service}/parity-report?windowDays=${windowDays}`;
           break;
+        case "runtime-trigger-validation":
+          endpoint = `calibration/runtime-model/${service}/runtime-trigger-validation?windowDays=${windowDays}`;
+          break;
         case "phase-summary":
           endpoint = `calibration/runtime-model/${service}/phase-identifiers/summary?windowDays=${windowDays}`;
           break;
@@ -6043,6 +6122,11 @@ function ReportsTab({
           if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
           endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/full`;
           break;
+        case "runtime-build-result":
+          if (!selectedSynthesisJobId) throw new Error("Select a Build Runtime Model job first.");
+          endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/runtime-build-result`;
+          filename = `runtime_build_result_${service}_${selectedSynthesisJobId}_${stamp}.json`;
+          break;
         case "elite-synthesis-selected-trades":
           if (!selectedSynthesisJobId) throw new Error("Select an elite synthesis job first.");
           endpoint = `research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/selected-trades`;
@@ -6083,7 +6167,7 @@ function ReportsTab({
           manualStageReason: "Portfolio baseline handover; CRASH300 candidate is high-quality but not final/live-approved.",
         }),
       }) as { artifact?: { artifactId?: string } };
-      setNotice(`Paper-only candidate staged${data.artifact?.artifactId ? ` (${data.artifact.artifactId})` : ""}.`);
+      setNotice(`Runtime candidate staged${data.artifact?.artifactId ? ` (${data.artifact.artifactId})` : ""}.`);
       const refreshed = await apiFetch(`research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/result`) as {
         result?: Record<string, unknown> | null;
       };
@@ -6140,7 +6224,7 @@ function ReportsTab({
       <div>
         <h3 className="text-sm font-semibold">{title}</h3>
         <p className="text-xs text-muted-foreground mt-1">{description}</p>
-        {forcedTask === "integrated-elite-synthesis" ? (
+        {forcedTask === "runtime-build" ? (
           <p className="text-xs text-amber-200 mt-2">
             Deep 12-month run may take long. It runs on worker and will not block the UI.
           </p>
@@ -6199,9 +6283,9 @@ function ReportsTab({
         )}
         {selectedOption.runType === "synthesis" && (
           <div className="space-y-1">
-            <label className="text-[11px] text-muted-foreground">Elite synthesis job</label>
+            <label className="text-[11px] text-muted-foreground">Runtime build job</label>
             <select value={selectedSynthesisJobId ? String(selectedSynthesisJobId) : ""} onChange={(e) => setSelectedSynthesisJobId(Number(e.target.value) || null)} className="w-full text-xs bg-background border border-border/50 rounded px-2 py-1.5 text-foreground">
-              <option value="">Select a synthesis job</option>
+              <option value="">Select a runtime build job</option>
               {synthesisJobs.map((job) => (
                 <option key={job.id} value={String(job.id)}>
                   #{job.id}  {searchProfileLabel(job.searchProfile)}  {targetProfileLabel(job.targetProfile)}  {synthesisResultStateLabel(job)}
@@ -6356,17 +6440,7 @@ function ReportsTab({
             </div>
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
-            {stageButtonAllowed && (
-              <button
-                type="button"
-                onClick={() => void stageBestSynthesisCandidate()}
-                disabled={busy}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
-              >
-                {service === "CRASH300" ? "Stage This CRASH300 Candidate" : "Stage This Candidate"}
-              </button>
-            )}
-            <span className="text-[11px] text-amber-300">Paper-only candidate. Not live-approved.</span>
+            <span className="text-[11px] text-amber-300">Runtime candidate is read-only here. Use the workflow actions to validate or promote.</span>
             <span className="text-[11px] text-muted-foreground">
               Current staged candidate: {currentStagedCandidate ? `job #${String(currentStagedCandidate.jobId ?? "n/a")}` : "none"}
             </span>
@@ -6378,26 +6452,18 @@ function ReportsTab({
                 <span className="text-[11px] text-muted-foreground">
                   Runtime mimic validation: {String(currentStagedCandidate.runtimeMimicValidationStatus ?? "not_run")}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => void validateCandidateRuntime(String(currentStagedCandidate.artifactId ?? ""))}
-                  disabled={busy}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border/50 text-xs text-muted-foreground hover:text-foreground hover:border-border disabled:opacity-50"
-                >
-                  Validate Candidate Runtime Backtest
-                </button>
               </>
             )}
             {Array.isArray((synthesisReportResult.baselineRecords as unknown[] | undefined))
               && (synthesisReportResult.baselineRecords as Array<Record<string, unknown>>).length > 0 && (
               <span className="text-[11px] text-cyan-200">
-                V3.1 baseline staged. Next optimisation deferred.
+                V3.1 baseline staged. Next build refinement deferred.
               </span>
             )}
           </div>
           {service === "CRASH300" ? (
             <p className="text-[11px] text-muted-foreground">
-              CRASH300 synthesis, selected-trades, and return-amplification exports are V3.1 baseline research artifacts only. They remain paper-only and are not live-approved.
+              CRASH300 build, selected-trades, and return/profit exports are V3.1 baseline research artifacts only. Promotion remains a separate explicit action.
             </p>
           ) : null}
         </div>
@@ -6461,12 +6527,12 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
       }) as { jobId?: number; symbol?: string };
       const jobId = Number(data.jobId ?? 0);
       if (!Number.isInteger(jobId) || jobId <= 0) {
-        throw new Error("Integrated elite synthesis did not return a valid job id.");
+        throw new Error("Build Runtime Model did not return a valid job id.");
       }
-      setNotice(`Integrated elite synthesis started for ${getSymbolLabel(service)} (job #${jobId}).`);
+      setNotice(`Build Runtime Model started for ${getSymbolLabel(service)} (job #${jobId}).`);
       await loadHistory(true);
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Failed to start integrated elite synthesis");
+      setErr(e instanceof Error ? e.message : "Failed to start Build Runtime Model");
     } finally {
       setBusy(false);
     }
@@ -6476,10 +6542,10 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
     <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-4 space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h3 className="text-sm font-semibold text-cyan-100">Run Integrated Elite Synthesis</h3>
+          <h3 className="text-sm font-semibold text-cyan-100">Build Runtime Model</h3>
           <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-            Automatically searches tiers, admission policies, trigger timings, bucket combinations, entry archetypes, TP, SL, trailing, and daily trade limits.
-            It outputs a candidate runtime policy artifact only. No live trading changes happen until an explicit later promotion step.
+            Builds the best live-safe runtime model from the latest calibration data. Internally evaluates target moves, candidate entries, controls, lifecycle exits, profit ranking, AI-assisted reasoning if enabled, and runtime mimic readiness.
+            No trading changes happen until you stage and promote.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -6507,7 +6573,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
           >
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" />}
-            Run Integrated Elite Synthesis
+            Build Runtime Model
           </button>
         </div>
       </div>
@@ -6522,7 +6588,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]">
         <div className="rounded-lg border border-border/30 bg-background/40 p-3">
           <p className="text-muted-foreground uppercase tracking-wide">Normal workflow role</p>
-          <p className="mt-1 text-foreground">Owns the normal search over tiers, policies, triggers, exits, and daily selection rules.</p>
+          <p className="mt-1 text-foreground">Owns the internal search over target moves, controls, candidate entries, lifecycle exits, profit ranking, and runtime rule drafts.</p>
         </div>
         <div className="rounded-lg border border-border/30 bg-background/40 p-3">
           <p className="text-muted-foreground uppercase tracking-wide">Runtime safety</p>
@@ -6906,7 +6972,7 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
           </div>
           <button type="button" onClick={() => void loadParity()} disabled={busy !== null} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-500/30 text-xs text-indigo-200 bg-indigo-500/10 hover:bg-indigo-500/15 disabled:opacity-50">
             {busy === "parity" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-            Run Parity
+            Validate Runtime
           </button>
           <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1 text-[11px]">
             <p className="text-muted-foreground uppercase tracking-wide">Latest parity output</p>
@@ -6926,14 +6992,14 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
         </div>
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
           <div>
-            <h3 className="text-sm font-semibold">Runtime Trigger Validation</h3>
+            <h3 className="text-sm font-semibold">Validate Runtime</h3>
             <p className="text-xs text-muted-foreground mt-1">
               Use this card to validate runtime trigger health for the active service and inspect the latest aggregate output.
             </p>
           </div>
           <button type="button" onClick={() => void loadValidation()} disabled={busy !== null || service !== "CRASH300"} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50">
             {busy === "validation" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
-            Runtime Trigger Validation
+            Validate Runtime
           </button>
           <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1 text-[11px]">
             <p className="text-muted-foreground uppercase tracking-wide">Latest trigger validation output</p>
@@ -6958,7 +7024,7 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
       </div>
       <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
         <div>
-          <h3 className="text-sm font-semibold">Optimiser</h3>
+          <h3 className="text-sm font-semibold">Internal Optimisation Stage</h3>
           <p className="text-xs text-muted-foreground mt-1">
             This card stays visible throughout the workflow. It remains disabled until parity and runtime-trigger validation are available for the active service.
           </p>
@@ -6971,7 +7037,7 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-500/30 text-xs text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/15 disabled:opacity-50"
           >
             {optimiserBusy === "run" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart2 className="w-3.5 h-3.5" />}
-            Run Optimiser
+            Run Internal Optimisation
           </button>
           <button
             type="button"
@@ -7002,7 +7068,7 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
           </button>
         </div>
         <div className="rounded-lg border border-border/30 bg-background/40 p-3 text-[11px] space-y-1">
-          <p className="text-muted-foreground uppercase tracking-wide">Optimiser readiness</p>
+          <p className="text-muted-foreground uppercase tracking-wide">Internal optimisation readiness</p>
           <p className={cn("font-medium", optimiserReady ? "text-emerald-200" : "text-amber-200")}>{optimiserEnableReason}</p>
           {!runtimeModel?.lifecycle?.hasPromotedModel && (
             <p className="text-muted-foreground">Promote a runtime model before running the optimiser.</p>
@@ -7049,7 +7115,7 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
 
       {validationAggregates && (
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3 text-xs">
-          <h3 className="text-sm font-semibold">Runtime Trigger Validation</h3>
+          <h3 className="text-sm font-semibold">Trigger Validation Result</h3>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
             {Object.entries(validationAggregates).slice(0, 10).map(([key, value]) => (
               <div key={key} className="rounded border border-border/30 bg-muted/10 p-2">
@@ -7120,10 +7186,8 @@ export default function Research() {
   const tabs: { id: ResearchTabId; label: string; icon: React.ReactNode }[] = [
     { id: "data", label: "Data & Coverage", icon: <Activity className="w-3.5 h-3.5" /> },
     { id: "calibration", label: "Calibration", icon: <Target className="w-3.5 h-3.5" /> },
-    { id: "synthesis", label: "Integrated Elite Synthesis", icon: <TrendingUp className="w-3.5 h-3.5" /> },
+    { id: "synthesis", label: "Build Runtime Model", icon: <TrendingUp className="w-3.5 h-3.5" /> },
     { id: "runtime", label: "Runtime Model", icon: <Zap className="w-3.5 h-3.5" /> },
-    { id: "backtests", label: "Backtests", icon: <BarChart2 className="w-3.5 h-3.5" /> },
-    { id: "diagnostics", label: "Advanced Diagnostics", icon: <Search className="w-3.5 h-3.5" /> },
     { id: "reports", label: "Reports", icon: <FileText className="w-3.5 h-3.5" /> },
   ];
 
@@ -7136,7 +7200,7 @@ export default function Research() {
           Research
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Selected symbol-service research, runtime lifecycle, backtests, and consolidated reports
+          Selected symbol-service research, runtime lifecycle, validation, and consolidated reports
         </p>
       </div>
 
@@ -7224,27 +7288,10 @@ export default function Research() {
       {activeTab === "synthesis" && (
         <div className="space-y-4">
           <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} />
-          <ReportsTab
-            service={selectedService}
-            windowDays={sharedWindowDays}
-            forcedTask="integrated-elite-synthesis"
-            title="Elite Synthesis Result"
-            description="Inspect the current elite synthesis result, selected-trades export, return amplification report, and stage candidate artifacts without leaving the synthesis workspace."
-          />
         </div>
       )}
       {activeTab === "runtime" && (
         <RuntimeModelTab service={selectedService} />
-      )}
-      {activeTab === "backtests" && (
-        <BacktestTab
-          domain="active"
-          windowDays={sharedWindowDays}
-          lockedSymbol={selectedService}
-        />
-      )}
-      {activeTab === "diagnostics" && (
-        <AdvancedDiagnosticsTab service={selectedService} windowDays={sharedWindowDays} />
       )}
       {activeTab === "reports" && (
         <ReportsTab service={selectedService} windowDays={sharedWindowDays} />

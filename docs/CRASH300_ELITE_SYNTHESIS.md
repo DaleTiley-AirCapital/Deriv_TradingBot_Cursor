@@ -1,8 +1,8 @@
-# CRASH300 Integrated Elite Synthesis
+# CRASH300 Build Runtime Model
 
 ## Scope
 
-CRASH300 is the first full service used to stand up Integrated Elite Synthesis.
+CRASH300 is the first full service used to stand up Build Runtime Model.
 
 This pass does not change live runtime behavior. It adds the async synthesis foundation, the CRASH300 adapter, unified dataset construction, pass logging, and result exports needed to search for a future candidate runtime policy artifact.
 
@@ -123,7 +123,7 @@ Recommended CRASH300 workflow:
 
 1. Full Calibration
 2. Stage or Generate Research Model
-3. Run Integrated Elite Synthesis
+3. Build Runtime Model
 4. Review best candidate policy, top 20, pass log, and leakage audit
 5. Promote a runtime candidate only in a later explicit task
 6. Run validation backtests

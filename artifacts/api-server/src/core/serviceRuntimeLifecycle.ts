@@ -76,6 +76,14 @@ export interface ServiceLifecycleStatus {
   executionAllowedForActiveMode: boolean;
   allocatorConnected: boolean;
   nextRequiredAction: string;
+  workflowStages: Array<{
+    label: string;
+    status: "complete" | "incomplete" | "blocked" | "warning";
+    sourceRunId: string | number | null;
+    timestamp: string | null;
+    nextAction: string | null;
+    blockers: string[];
+  }>;
   blockers: string[];
   warnings: string[];
 }
@@ -305,8 +313,8 @@ export async function promoteCandidateArtifactToServiceRuntime(serviceId: string
       selectedFeatures: selectedPolicy.selectedFeatures ?? null,
       noTradeRules: selectedPolicy.noTradeRules ?? null,
       warnings: [
-        "Runtime uses promoted service runtime adapter in Paper mode.",
-        "Explicit runtime mimic parity still pending before Demo or Real can be enabled.",
+        "Runtime uses the promoted service runtime adapter.",
+        "Explicit runtime mimic parity remains required before wider mode permissions can be enabled.",
       ],
     },
     selectedFeatures: selectedPolicy.selectedFeatures ?? null,
@@ -321,7 +329,7 @@ export async function promoteCandidateArtifactToServiceRuntime(serviceId: string
       requestedAllocationPct: 15,
       maxAllocationPct: 25,
       leverageAllowed: false,
-      source: "paper_runtime_baseline",
+      source: "service_runtime_baseline",
     },
     confidenceScoring: {
       reportConsistencyPassed: bool(readiness.reportConsistencyPassed),
@@ -344,7 +352,7 @@ export async function promoteCandidateArtifactToServiceRuntime(serviceId: string
       runtimeMimicReady: false,
     },
     warnings: [
-      "Promoted runtime is approved for Paper observation only.",
+      "Promoted runtime remains controlled by mode gates.",
       "Demo and Real remain blocked until runtime validation, parity, and trigger validation are explicitly passed.",
     ],
     allowedModes: {
@@ -414,7 +422,7 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
   const warnings: string[] = [];
   if (dataCoverageStatus !== "ready") blockers.push(dataCoverageStatus === "not_ready" ? "Historical/live candle data not ready." : "Latest candle data is stale.");
   if (!researchProfile) blockers.push("Full calibration complete step not captured yet.");
-  if (!synthesisJob?.resultArtifact) blockers.push("Elite synthesis complete step not captured yet.");
+  if (!synthesisJob?.resultArtifact) blockers.push("Build Runtime Model complete step not captured yet.");
   if (!stagedCandidateArtifact) blockers.push("No staged candidate artifact yet.");
   if (!promotedRuntimeArtifact) blockers.push("No promoted service runtime yet.");
   if (promotedModel && !promotedRuntimeArtifact) warnings.push("Legacy promoted symbol model present without executable V3.1 service runtime.");
@@ -422,25 +430,108 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
   if (stagedCandidateState && !stagedCandidateArtifact) {
     warnings.push("Staged synthesis candidate reference exists, but its historical artifact could not be resolved.");
   }
-  if (activeMode !== "paper") warnings.push(`Active mode is ${activeMode}. Paper runtime is ready first; Demo/Real remain blocked.`);
-  if (promotedRuntimeArtifact && !promotedRuntimeArtifact.allowedModes.paper) blockers.push("Promoted runtime is not allowed for Paper mode.");
+  if (activeMode !== "paper") warnings.push(`Active mode is ${activeMode}. Runtime mode gates still block Demo/Real.`);
+  if (promotedRuntimeArtifact && !promotedRuntimeArtifact.allowedModes.paper) blockers.push("Promoted runtime is not allowed for the current mode gate baseline.");
   if (promotedRuntimeArtifact?.allowedModes.demo === false) warnings.push("Demo mode remains blocked pending runtime validation.");
   if (promotedRuntimeArtifact?.allowedModes.real === false) warnings.push("Real mode remains blocked pending stricter validation and manual unlock.");
 
-  const nextRequiredAction = !researchProfile
+  const workflowStages: ServiceLifecycleStatus["workflowStages"] = [
+    {
+      label: "Data Coverage",
+      status: dataCoverageStatus === "ready" ? "complete" : dataCoverageStatus === "stale" ? "warning" : "blocked",
+      sourceRunId: null,
+      timestamp: latestCandleTs,
+      nextAction: dataCoverageStatus === "ready" ? null : "Refresh Data Coverage",
+      blockers: dataCoverageStatus === "ready" ? [] : blockers.filter((item) => item.includes("candle")),
+    },
+    {
+      label: "Full Calibration",
+      status: researchProfile ? "complete" : "incomplete",
+      sourceRunId: researchProfile?.lastRunId ?? null,
+      timestamp: researchProfile?.generatedAt ? new Date(researchProfile.generatedAt).toISOString() : null,
+      nextAction: researchProfile ? null : "Run Full Calibration",
+      blockers: researchProfile ? [] : ["Full calibration complete step not captured yet."],
+    },
+    {
+      label: "Build Runtime Model",
+      status: synthesisJob?.status === "completed" && synthesisJob.resultArtifact ? "complete" : synthesisJob ? "warning" : "incomplete",
+      sourceRunId: synthesisJob?.id ?? null,
+      timestamp: synthesisJob?.completedAt ?? synthesisJob?.startedAt ?? null,
+      nextAction: synthesisJob?.resultArtifact ? null : "Build Runtime Model",
+      blockers: synthesisJob?.resultArtifact ? [] : ["Build Runtime Model complete step not captured yet."],
+    },
+    {
+      label: "Runtime Staged",
+      status: stagedCandidateArtifact ? "complete" : "incomplete",
+      sourceRunId: stagedCandidateState?.jobId ?? null,
+      timestamp: stagedCandidateState?.stagedAt ?? null,
+      nextAction: stagedCandidateArtifact ? null : "Review Runtime Build Result",
+      blockers: stagedCandidateArtifact ? [] : ["No staged runtime candidate artifact yet."],
+    },
+    {
+      label: "Runtime Validated",
+      status: promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus === "passed"
+        ? "complete"
+        : promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus === "failed"
+          ? "blocked"
+          : promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus === "running"
+            ? "warning"
+            : "incomplete",
+      sourceRunId: promotedRuntimeArtifact?.sourceSynthesisJobId ?? stagedCandidateState?.jobId ?? null,
+      timestamp: promotedRuntimeArtifact?.promotedAt ?? stagedCandidateState?.stagedAt ?? null,
+      nextAction: promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus === "passed" ? null : "Validate Runtime",
+      blockers: promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus === "passed" ? [] : ["Runtime validation has not passed."],
+    },
+    {
+      label: "Runtime Promoted",
+      status: promotedRuntimeArtifact ? "complete" : "incomplete",
+      sourceRunId: promotedRuntimeArtifact?.sourceSynthesisJobId ?? null,
+      timestamp: promotedRuntimeArtifact?.promotedAt ?? null,
+      nextAction: promotedRuntimeArtifact ? null : "Promote Runtime",
+      blockers: promotedRuntimeArtifact ? [] : ["No promoted service runtime yet."],
+    },
+    {
+      label: "Stream Active",
+      status: streamState === "active" ? "complete" : "blocked",
+      sourceRunId: null,
+      timestamp: latestCandleTs,
+      nextAction: streamState === "active" ? null : "Start Symbol Stream",
+      blockers: streamState === "active" ? [] : ["Symbol stream inactive."],
+    },
+    {
+      label: "Allocator Connected",
+      status: true ? "complete" : "blocked",
+      sourceRunId: promotedRuntimeArtifact?.artifactId ?? null,
+      timestamp: promotedRuntimeArtifact?.promotedAt ?? null,
+      nextAction: executionAllowedForActiveMode ? null : "Check allocator and mode gates",
+      blockers: executionAllowedForActiveMode ? [] : ["Allocator is waiting on runtime, stream, or mode gates."],
+    },
+    {
+      label: "Monitoring",
+      status: executionAllowedForActiveMode ? "complete" : streamState === "active" ? "warning" : "incomplete",
+      sourceRunId: promotedRuntimeArtifact?.artifactId ?? null,
+      timestamp: latestCandleTs,
+      nextAction: executionAllowedForActiveMode ? "Stream / Monitor" : "Stream / Monitor",
+      blockers: executionAllowedForActiveMode ? [] : ["Monitoring is not fully ready until runtime, stream, allocator, and mode gates are aligned."],
+    },
+  ];
+
+  const normalisedNextRequiredAction = !researchProfile
     ? "Run Full Calibration"
     : !synthesisJob?.resultArtifact
-      ? "Run Integrated Elite Synthesis"
+      ? "Build Runtime Model"
       : !stagedCandidateArtifact
-        ? "Stage Current Best Candidate"
-        : !promotedRuntimeArtifact
-          ? "Promote Candidate To Runtime"
+        ? "Review Runtime Build Result"
+        : promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus !== "passed"
+          ? "Validate Runtime"
+          : !promotedRuntimeArtifact
+            ? "Promote Runtime"
           : streamState !== "active"
             ? "Start Symbol Stream"
             : activeMode !== "paper"
-              ? "Activate Paper Mode"
+              ? "Review Mode Gates"
               : executionAllowedForActiveMode
-                ? "Paper Monitoring"
+                ? "Stream / Monitor"
                 : "Check allocator and mode gates";
 
   return {
@@ -463,7 +554,8 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
     activeMode,
     executionAllowedForActiveMode,
     allocatorConnected: true,
-    nextRequiredAction,
+    nextRequiredAction: normalisedNextRequiredAction,
+    workflowStages,
     blockers,
     warnings,
   };

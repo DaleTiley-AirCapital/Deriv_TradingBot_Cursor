@@ -90,14 +90,14 @@ Each symbol service also owns its research-to-runtime preparation flow:
 5. promoted runtime model
 6. service-specific backtest, parity, and reconciliation reports
 
-Integrated Elite Synthesis is the normal search engine for future services. It consumes service-owned research data, evaluates complete runtime-policy candidates, and returns a candidate runtime artifact. It does not auto-promote and it does not alter live runtime behavior by itself.
+Build Runtime Model is the normal search engine for future services. It consumes service-owned research data, evaluates complete runtime-policy candidates, and returns a candidate runtime artifact. It does not auto-promote and it does not alter live runtime behavior by itself.
 
-Candidate runtime staging is a separate paper-only step:
+Candidate runtime staging is a separate mode-gated step:
 
 1. synthesis returns a best candidate policy
 2. selected-trades export consistency must pass
 3. the best candidate may be staged as `crash300_synthesis_candidate_runtime`
-4. the staged artifact stays paper-only until runtime-mimic validation passes
+4. the staged artifact stays mode-gated until runtime-mimic validation passes
 5. the existing promoted runtime remains unchanged until explicit manual promotion
 
 Runtime mimic rules:

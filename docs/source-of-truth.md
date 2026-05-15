@@ -12,8 +12,9 @@ Use this map to avoid doc and implementation drift.
   - `docs/symbol-service-architecture.md`
   - `docs/SYMBOL_SERVICE_ARCHITECTURE.md`
 - Service UI structure and selected-service research workflow:
-  - `docs/SERVICE_UI_STRUCTURE.md`
   - `docs/RESEARCH_TO_RUNTIME_WORKFLOW.md`
+  - `docs/V3_1_RESEARCH_WORKFLOW_AUDIT.md`
+  - `docs/SERVICE_UI_STRUCTURE.md`
 - CRASH300 service-specific implementation notes:
   - `docs/CRASH300_SERVICE_README.md`
 - Runtime feeddown contract and validation:
@@ -60,11 +61,11 @@ Use this map to avoid doc and implementation drift.
 - Suggested research outputs:
   - `symbol_research_profiles`
 - Staged runtime owner:
-  - `platform_state` staged symbol model entries
+  - `platform_state` staged symbol model entries and `staged_synthesis_candidate_<SERVICE>` references
 - Promoted runtime owner for trading behavior:
-  - `platform_state` promoted symbol model entries
+  - `platform_state` `promoted_service_runtime_<SERVICE>` entries
 - Rule:
-  - latest research output is not allowed to change runtime behavior until explicitly staged and promoted
+  - latest research output is not allowed to change runtime behavior until explicitly validated and promoted through the service-level workflow
 
 ## Change Ownership Rule
 

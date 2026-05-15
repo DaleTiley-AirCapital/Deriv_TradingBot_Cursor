@@ -1,127 +1,73 @@
-# Research To Runtime Workflow
+# V3.1 Research To Runtime Workflow
 
-## Normal Service Workflow
+## Visible Workflow
 
-Every symbol service should follow the same normal workflow:
+Every symbol service follows one visible workflow:
 
-1. Full Calibration
-2. Review calibration runs
-3. Generate or Stage Research Model
-4. Run Integrated Elite Synthesis
-5. Review Candidate Runtime Policy
-6. Promote Candidate Runtime
-7. Validate Current Runtime Backtest
-8. Review Reports
-9. Paper validation
-10. Demo or Real escalation only after validation
+1. Data Coverage
+2. Full Calibration
+3. Build Runtime Model
+4. Validate Runtime
+5. Promote Runtime
+6. Stream / Monitor
 
-CRASH300 is the current reference implementation for this workflow.
+Do not add a new top-level Research button for an internal diagnostic. If a capability belongs in the workflow, absorb it into Build Runtime Model, Validate Runtime, or a read-only report export.
 
-Manual tier testing, admission-policy toggles, optimiser passes, and parity debugging are not the intended workflow for future symbol services. Integrated Elite Synthesis owns the normal search over tiers, policies, triggers, buckets, entry timing, exits, and daily trade selection.
+## Build Runtime Model
 
-## Research Page Structure
+Build Runtime Model replaces the old integrated synthesis action as the user-facing runtime-building task. It may keep existing internal function and endpoint names temporarily, but UI and docs must call it Build Runtime Model.
 
-The Research page is service-specific. Selecting a service opens that service's workspace:
+Internal stages:
 
-- Calibration & Research
-- Reports
-- Runtime Model
-- Backtests
-- Advanced Diagnostics
+- load latest calibration source data
+- build or reuse move universe
+- build or reuse candidate entry matrix
+- build or reuse non-move controls
+- run deterministic candidate search
+- run lifecycle simulation
+- run return-first profit ranking
+- run coverage and missed-move analysis
+- run offline AI-assisted reasoning when enabled
+- convert the proposal into live-safe deterministic runtime rules
+- generate candidate runtime artifact
+- generate reports
 
-## Calibration & Research
+The consolidated output contract is `runtime_build_result_<SERVICE>_<RUN>.json`. It is an artifact over existing calibration, synthesis, backtest, and platform-state data. It must not create tables, promote runtime, enable execution modes, or auto-stage a candidate.
 
-The normal workflow cards should appear in this order:
+## Validate Runtime
 
-1. Full Calibration
-2. Review calibration runs
-3. Generate or Stage Research Model
-4. Run Integrated Elite Synthesis
-5. Promote Runtime or Candidate Runtime
-6. Validate Current Runtime Backtest
+Validate Runtime is the single user-visible validation action for the currently staged runtime candidate.
 
-This tab should not present parity, optimiser controls, or export-heavy diagnostics as if they are normal lifecycle steps.
+Internal stages:
+
+- runtime mimic validation
+- historical backtest
+- parity check against calibrated move universe
+- runtime trigger validation
+- phantom/noise trade check
+- allocator visibility/provenance check
+- lifecycle monitor validation
+- mode-gate safety check
+
+The consolidated output contract is `runtime_validation_result_<SERVICE>_<RUN>.json`. It must not promote runtime, enable Paper/Demo/Real, or alter live or allocator execution behavior.
+
+## Promote Runtime
+
+Promotion is service-level:
+
+- action label: Promote Runtime
+- promoted state key: `promoted_service_runtime_<SERVICE_ID>`
+- execution destination is decided later by mode gates
+
+Avoid paper-specific promotion language. Paper, Demo, and Real are execution modes, not separate promotion targets.
 
 ## Reports
 
-Reports are consolidated under the Reports tab. Heavy exports should not be scattered across runtime lifecycle cards or backtest action rows.
+Reports are read-only exports grouped by purpose:
 
-Current report families include:
+- Calibration Reports: detected moves, calibration profile, pass results, comparison summary
+- Runtime Build Reports: runtime build summary, selected candidate, return/profit analysis, lifecycle replay, missed move/coverage analysis, policy comparison/candidate leaderboard
+- Validation Reports: runtime mimic validation, backtest result, parity result, trigger validation, phantom/noise analysis
+- Execution Reports: service candidates, allocator decisions, trades, lifecycle monitor logs
 
-- detected moves
-- calibration profile
-- pass results
-- comparison summary
-- parity report
-- phase identifier summary, sample, and full
-- backtest summary
-- backtest trades
-- backtest attribution
-- calibration reconciliation
-- policy comparison
-- elite synthesis result exports
-- elite synthesis selected-trades exports
-
-## Candidate Runtime Lifecycle
-
-The candidate runtime lifecycle is now:
-
-1. run synthesis
-2. fix or verify best-policy export consistency
-3. stage best synthesis candidate as a paper-only artifact
-4. validate the candidate runtime mimic against the synthesis result
-5. if parity passes, run the candidate in paper
-6. only after paper validation, consider explicit promote-to-runtime
-7. live promotion remains separate and manual
-
-Important:
-
-- a synthesis best policy is not automatically live-ready
-- paper-only candidate staging must not change the current promoted runtime
-- runtime mimic must use live-safe rules, not calibrated move offsets or selected trade ids
-
-## Runtime Model
-
-The runtime model view should clearly distinguish:
-
-- calibrated move family
-- calibrated move-size buckets
-- runtime entry archetypes
-- staged runtime
-- promoted runtime
-- model validation errors
-
-For CRASH300:
-
-- calibrated family: `crash_expansion`
-- runtime archetypes: service-specific archetypes such as `crash_event_down`, `post_crash_recovery_up`, and `bear_trap_reversal_up`
-
-Runtime feeddown or lifecycle state belongs here, not duplicated in the calibration workflow tab.
-
-## Backtests
-
-The normal Backtests tab should focus on:
-
-- selected service
-- research window or date range
-- Run Backtest or Validate Current Runtime
-- backtest history
-- compact summary
-
-Tier mode, tier sweep, and manual admission-policy presets are diagnostics only and should remain under collapsed advanced options instead of the primary validation flow.
-
-## Advanced Diagnostics
-
-Advanced diagnostics contain:
-
-- parity
-- runtime-trigger validation
-- tier sweeps
-- manual admission-policy diagnostics
-- optimiser controls, disabled by default unless specifically needed
-- phase identifier exports
-- calibration reconciliation exports
-- policy comparison exports
-- internal or legacy diagnostic snapshots where still useful
-
-Diagnostics must never be presented as the active trade-admission source.
+Backend diagnostic endpoints may remain for debugging. They should not appear as peer-level Research workflow actions.
