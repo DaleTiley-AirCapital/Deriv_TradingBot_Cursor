@@ -3856,6 +3856,56 @@ function compactReturnAmplificationScenarioForStorage(scenario: unknown) {
   };
 }
 
+function compactFamilyStatsForStorage(stats: unknown) {
+  if (!stats || typeof stats !== "object") return stats;
+  const entry = stats as Record<string, unknown>;
+  return {
+    ...entry,
+    monthlyDistribution: Array.isArray(entry.monthlyDistribution) ? entry.monthlyDistribution.slice(-12) : [],
+    lifecycleReplayReport: compactTradeLifecycleReplayReportForStorage(entry.lifecycleReplayReport),
+    worstLosingTradeExamples: Array.isArray(entry.worstLosingTradeExamples) ? entry.worstLosingTradeExamples.slice(0, 5) : [],
+    bestWinningTradeExamples: Array.isArray(entry.bestWinningTradeExamples) ? entry.bestWinningTradeExamples.slice(0, 5) : [],
+  };
+}
+
+function compactPrimaryDeepFamilyAnalysisForStorage(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const analysis = value as Record<string, unknown>;
+  return {
+    ...analysis,
+    preLimitFamilyStats: compactFamilyStatsForStorage(analysis.preLimitFamilyStats),
+    postDailyLimitFamilyStats: compactReturnAmplificationScenarioForStorage(analysis.postDailyLimitFamilyStats),
+    winnerLoserSeparation: Array.isArray(analysis.winnerLoserSeparation) ? analysis.winnerLoserSeparation.slice(0, 16) : [],
+    tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage(analysis.tradeLifecycleManagerReplay),
+  };
+}
+
+function compactAiStrategyReviewForStorage(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const review = value as Record<string, unknown>;
+  return {
+    ...review,
+    curatedReviewInput: undefined,
+    curatedReviewInputSummary: review.curatedReviewInput && typeof review.curatedReviewInput === "object"
+      ? {
+          objective: (review.curatedReviewInput as Record<string, unknown>).objective,
+          deterministicRulesOnly: (review.curatedReviewInput as Record<string, unknown>).deterministicRulesOnly,
+          noLiveTradingAccess: (review.curatedReviewInput as Record<string, unknown>).noLiveTradingAccess,
+        }
+      : undefined,
+  };
+}
+
+function compactReviewCandidateRuntimeArtifactForStorage(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const artifact = value as Record<string, unknown>;
+  return {
+    ...artifact,
+    deepFamilyAnalysis: compactPrimaryDeepFamilyAnalysisForStorage(artifact.deepFamilyAnalysis),
+    aiStrategyReview: compactAiStrategyReviewForStorage(artifact.aiStrategyReview),
+  };
+}
+
 function compactReturnAmplificationAnalysisForStorage(value: unknown) {
   if (!value || typeof value !== "object") return value;
   const analysis = value as Record<string, unknown>;
@@ -3896,12 +3946,11 @@ function compactReturnAmplificationAnalysisForStorage(value: unknown) {
     bestAbove9: compactReturnAmplificationScenarioForStorage(analysis.bestAbove9),
     tradeLifecycleReplayReport: compactTradeLifecycleReplayReportForStorage(analysis.tradeLifecycleReplayReport),
     tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage(analysis.tradeLifecycleManagerReplay),
-    primaryDeepFamilyAnalysis: analysis.primaryDeepFamilyAnalysis && typeof analysis.primaryDeepFamilyAnalysis === "object"
-      ? {
-          ...(analysis.primaryDeepFamilyAnalysis as Record<string, unknown>),
-          tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage((analysis.primaryDeepFamilyAnalysis as Record<string, unknown>).tradeLifecycleManagerReplay),
-        }
-      : analysis.primaryDeepFamilyAnalysis,
+    preLimitFamilyStats: compactFamilyStatsForStorage(analysis.preLimitFamilyStats),
+    postDailyLimitFamilyStats: compactReturnAmplificationScenarioForStorage(analysis.postDailyLimitFamilyStats),
+    winnerLoserSeparation: Array.isArray(analysis.winnerLoserSeparation) ? analysis.winnerLoserSeparation.slice(0, 16) : [],
+    aiStrategyReview: compactAiStrategyReviewForStorage(analysis.aiStrategyReview),
+    primaryDeepFamilyAnalysis: compactPrimaryDeepFamilyAnalysisForStorage(analysis.primaryDeepFamilyAnalysis),
   };
 }
 
@@ -3911,12 +3960,12 @@ function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): El
     fullPassLog: result.fullPassLog.slice(-24),
     returnAmplificationAnalysis: compactReturnAmplificationAnalysisForStorage(result.returnAmplificationAnalysis),
     tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage(result.tradeLifecycleManagerReplay),
-    primaryDeepFamilyAnalysis: result.primaryDeepFamilyAnalysis && typeof result.primaryDeepFamilyAnalysis === "object"
-      ? {
-          ...(result.primaryDeepFamilyAnalysis as Record<string, unknown>),
-          tradeLifecycleManagerReplay: compactTradeLifecycleReplayReportForStorage((result.primaryDeepFamilyAnalysis as Record<string, unknown>).tradeLifecycleManagerReplay),
-        }
-      : result.primaryDeepFamilyAnalysis,
+    preLimitFamilyStats: compactFamilyStatsForStorage(result.preLimitFamilyStats),
+    postDailyLimitFamilyStats: compactReturnAmplificationScenarioForStorage(result.postDailyLimitFamilyStats),
+    winnerLoserSeparation: Array.isArray(result.winnerLoserSeparation) ? result.winnerLoserSeparation.slice(0, 16) : [],
+    aiStrategyReview: compactAiStrategyReviewForStorage(result.aiStrategyReview),
+    primaryDeepFamilyAnalysis: compactPrimaryDeepFamilyAnalysisForStorage(result.primaryDeepFamilyAnalysis),
+    reviewCandidateRuntimeArtifact: compactReviewCandidateRuntimeArtifactForStorage(result.reviewCandidateRuntimeArtifact),
   };
 }
 
