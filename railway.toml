@@ -1,6 +1,7 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "./Dockerfile"
+# Deploy marker: 2026-05-15 force Railway rebuild for API artifact compaction fix.
 
 [deploy]
 restartPolicyType = "ON_FAILURE"
