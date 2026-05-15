@@ -21,6 +21,25 @@ try {
 try {
   $railwayVersion = (& railway --version | Select-Object -First 1)
   Write-Host "Railway CLI: $railwayVersion" -ForegroundColor Green
+
+  $railwayStatusOutput = ""
+  $railwayStatusSucceeded = $false
+  try {
+    $railwayStatusOutput = (& railway status 2>&1 | Out-String)
+    $railwayStatusSucceeded = ($LASTEXITCODE -eq 0)
+  } catch {
+    $railwayStatusOutput = ($_ | Out-String)
+  }
+
+  if ($railwayStatusSucceeded) {
+    Write-Host "Railway auth: ready" -ForegroundColor Green
+  } elseif ($railwayStatusOutput -match "Unauthorized|railway login|invalid_grant|Token refresh failed") {
+    Write-Host "Railway auth needs refresh. Starting railway login..." -ForegroundColor Yellow
+    & railway login
+  } else {
+    Write-Host "Railway status check did not complete cleanly:" -ForegroundColor Yellow
+    Write-Host $railwayStatusOutput.Trim() -ForegroundColor DarkYellow
+  }
 } catch {
   Write-Host "Railway CLI not available on PATH" -ForegroundColor Yellow
 }
