@@ -38,6 +38,8 @@ export type EliteSynthesisJobRow = {
   resultArtifact: EliteSynthesisResult | null;
   candidateRuntimeArtifacts: Array<Record<string, unknown>>;
   baselineRecords: Array<Record<string, unknown>>;
+  candidateRuntimeArtifactsCount: number;
+  baselineRecordsCount: number;
   createdAt: string | null;
 };
 
@@ -70,6 +72,8 @@ function hydrateEliteSynthesisJob(row: WorkerJobRow | null): EliteSynthesisJobRo
     baselineRecords: Array.isArray(taskState.baselineRecords)
       ? (taskState.baselineRecords as Array<Record<string, unknown>>)
       : [],
+    candidateRuntimeArtifactsCount: row.candidateRuntimeArtifactsCount,
+    baselineRecordsCount: row.baselineRecordsCount,
     createdAt: row.createdAt,
   };
 }

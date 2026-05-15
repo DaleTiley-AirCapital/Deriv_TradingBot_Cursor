@@ -34,6 +34,8 @@ export type WorkerJobRow = {
   hasResultArtifact: boolean;
   resultArtifactLoaded: boolean;
   resultArtifact: unknown;
+  candidateRuntimeArtifactsCount: number;
+  baselineRecordsCount: number;
   createdAt: string | null;
   updatedAt: string | null;
 };

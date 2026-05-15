@@ -47,6 +47,16 @@ function workerJobSelect(includeResultArtifact: boolean) {
         CASE WHEN result_artifact IS NULL THEN false ELSE true END AS has_result_artifact,
         true AS result_artifact_loaded,
         result_artifact,
+        CASE
+          WHEN jsonb_typeof(task_state -> 'candidateRuntimeArtifacts') = 'array'
+            THEN jsonb_array_length(task_state -> 'candidateRuntimeArtifacts')
+          ELSE 0
+        END AS candidate_runtime_artifacts_count,
+        CASE
+          WHEN jsonb_typeof(task_state -> 'baselineRecords') = 'array'
+            THEN jsonb_array_length(task_state -> 'baselineRecords')
+          ELSE 0
+        END AS baseline_records_count,
         created_at,
         updated_at
       `
@@ -58,17 +68,59 @@ function workerJobSelect(includeResultArtifact: boolean) {
         status,
         stage,
         params,
-        task_state,
+        jsonb_build_object(
+          'currentPass', task_state -> 'currentPass',
+          'maxPass', task_state -> 'maxPass',
+          'bestSummary', task_state -> 'bestSummary'
+        ) AS task_state,
         progress_pct,
         message,
         heartbeat_at,
         started_at,
         completed_at,
-        error_summary,
-        result_summary,
+        CASE
+          WHEN error_summary IS NULL THEN NULL::jsonb
+          ELSE jsonb_build_object(
+            'failureType', error_summary -> 'failureType',
+            'exceptionMessage', error_summary -> 'exceptionMessage',
+            'noTargetReason', error_summary -> 'noTargetReason',
+            'passesCompleted', error_summary -> 'passesCompleted',
+            'maxPasses', error_summary -> 'maxPasses',
+            'targetProfile', error_summary -> 'targetProfile',
+            'targetProfileNormalized', error_summary -> 'targetProfileNormalized'
+          )
+        END AS error_summary,
+        CASE
+          WHEN result_summary IS NULL THEN NULL::jsonb
+          ELSE jsonb_build_object(
+            'resultState', result_summary -> 'resultState',
+            'targetAchieved', result_summary -> 'targetAchieved',
+            'failureType', result_summary -> 'failureType',
+            'exceptionMessage', result_summary -> 'exceptionMessage',
+            'noTargetReason', result_summary -> 'noTargetReason',
+            'passesCompleted', result_summary -> 'passesCompleted',
+            'maxPasses', result_summary -> 'maxPasses',
+            'targetProfile', result_summary -> 'targetProfile',
+            'targetProfileNormalized', result_summary -> 'targetProfileNormalized',
+            'recommendedPolicyStatus', result_summary -> 'recommendedPolicyStatus',
+            'guardrailsPassedCount', result_summary -> 'guardrailsPassedCount',
+            'topPolicyCount', result_summary -> 'topPolicyCount',
+            'bottleneck', result_summary -> 'bottleneck'
+          )
+        END AS result_summary,
         CASE WHEN result_artifact IS NULL THEN false ELSE true END AS has_result_artifact,
         false AS result_artifact_loaded,
         NULL::jsonb AS result_artifact,
+        CASE
+          WHEN jsonb_typeof(task_state -> 'candidateRuntimeArtifacts') = 'array'
+            THEN jsonb_array_length(task_state -> 'candidateRuntimeArtifacts')
+          ELSE 0
+        END AS candidate_runtime_artifacts_count,
+        CASE
+          WHEN jsonb_typeof(task_state -> 'baselineRecords') = 'array'
+            THEN jsonb_array_length(task_state -> 'baselineRecords')
+          ELSE 0
+        END AS baseline_records_count,
         created_at,
         updated_at
       `;
@@ -95,6 +147,8 @@ function hydrateWorkerJobRow(row: Record<string, unknown> | undefined): WorkerJo
     hasResultArtifact: Boolean(row.has_result_artifact),
     resultArtifactLoaded: Boolean(row.result_artifact_loaded),
     resultArtifact: row.result_artifact ?? null,
+    candidateRuntimeArtifactsCount: Number(row.candidate_runtime_artifacts_count ?? 0),
+    baselineRecordsCount: Number(row.baseline_records_count ?? 0),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
