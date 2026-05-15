@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Response } from "express";
 import { backgroundDb, candlesTable, db, platformStateTable } from "@workspace/db";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { buildUnifiedCrash300Dataset } from "../core/synthesis/crash300Adapter.js";
@@ -10,6 +10,8 @@ import {
   createEliteSynthesisJob,
   ensureEliteSynthesisJobsTable,
   getEliteSynthesisJob,
+  getEliteSynthesisJobSizeDiagnostics,
+  getEliteSynthesisJobSummary,
   getEliteSynthesisProgress,
   getEliteSynthesisSchemaStatus,
   listEliteSynthesisJobs,
@@ -28,6 +30,33 @@ import {
 } from "../core/serviceRuntimeLifecycle.js";
 
 const router: IRouter = Router();
+
+function logEliteSynthesisRouteError(routeName: string, err: unknown, context: Record<string, unknown> = {}) {
+  const error = err instanceof Error ? err : new Error(String(err));
+  console.error("[elite-synthesis-route-error]", {
+    routeName,
+    errorName: error.name,
+    errorMessage: error.message,
+    stack: error.stack,
+    ...context,
+  });
+}
+
+function sendJsonOrTooLarge(res: Response, routeName: string, payload: unknown, context: Record<string, unknown> = {}) {
+  try {
+    const body = JSON.stringify(payload);
+    res.type("application/json").send(body);
+  } catch (err) {
+    logEliteSynthesisRouteError(routeName, err, {
+      ...context,
+      jsonStringify: true,
+    });
+    res.status(413).json({
+      error: "Elite synthesis artifact is too large to export in one response.",
+      routeName,
+    });
+  }
+}
 
 function stableChecksum(value: unknown): string {
   const json = JSON.stringify(value, Object.keys(value && typeof value === "object" ? value as Record<string, unknown> : {}).sort());
@@ -312,8 +341,8 @@ router.get("/research/:serviceId/elite-synthesis/dataset-summary", async (req, r
 });
 
 router.get("/research/:serviceId/elite-synthesis/jobs", async (req, res): Promise<void> => {
+  const serviceId = String(req.params.serviceId ?? "").toUpperCase();
   try {
-    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
     getSynthesisAdapter(serviceId);
     const limit = Math.max(1, Number(req.query.limit ?? 10));
     const jobs = await listEliteSynthesisJobs(serviceId, limit);
@@ -339,14 +368,54 @@ router.get("/research/:serviceId/elite-synthesis/jobs", async (req, res): Promis
       })),
     });
   } catch (err) {
+    logEliteSynthesisRouteError("elite_synthesis_jobs_list", err, {
+      serviceId,
+      selectsTaskState: false,
+      selectsResultArtifact: false,
+      selectedFields: "scalar summary projection",
+    });
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis job list failed" });
   }
 });
 
+router.get("/research/:serviceId/elite-synthesis/job-size-diagnostics", async (req, res): Promise<void> => {
+  const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+  try {
+    getSynthesisAdapter(serviceId);
+    const limit = Math.max(1, Number(req.query.limit ?? 50));
+    const rows = await getEliteSynthesisJobSizeDiagnostics(serviceId, limit);
+    res.json({
+      serviceId,
+      taskType: "elite_synthesis",
+      selectedFields: [
+        "id",
+        "status",
+        "stage",
+        "params windowDays/searchProfile/targetProfile",
+        "pg_column_size(task_state)",
+        "pg_column_size(result_artifact)",
+        "pg_column_size(result_summary)",
+        "pg_column_size(error_summary)",
+        "created_at",
+        "completed_at",
+      ],
+      rows,
+    });
+  } catch (err) {
+    logEliteSynthesisRouteError("elite_synthesis_job_size_diagnostics", err, {
+      serviceId,
+      selectsTaskState: false,
+      selectsResultArtifact: false,
+      selectedFields: "pg_column_size diagnostics",
+    });
+    res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis size diagnostics failed" });
+  }
+});
+
 router.post("/research/:serviceId/elite-synthesis/jobs", async (req, res): Promise<void> => {
+  const serviceId = String(req.params.serviceId ?? "").toUpperCase();
   try {
     await ensureEliteSynthesisJobsTable();
-    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
     const adapter = getSynthesisAdapter(serviceId);
     const params = parseParams(req.body);
     const defaults = profileDefaults(params.searchProfile ?? "balanced");
@@ -365,15 +434,21 @@ router.post("/research/:serviceId/elite-synthesis/jobs", async (req, res): Promi
       defaults,
     });
   } catch (err) {
+    logEliteSynthesisRouteError("elite_synthesis_jobs_create", err, {
+      serviceId,
+      selectsTaskState: false,
+      selectsResultArtifact: false,
+      selectedFields: "insert only",
+    });
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis job start failed" });
   }
 });
 
 router.get("/research/:serviceId/elite-synthesis/jobs/:id", async (req, res): Promise<void> => {
+  const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+  const jobId = Number(req.params.id);
   try {
-    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
     getSynthesisAdapter(serviceId);
-    const jobId = Number(req.params.id);
     const job = await getEliteSynthesisProgress(jobId);
     if (!job || job.serviceId !== serviceId) {
       res.status(404).json({ error: `Elite synthesis job ${jobId} not found for ${serviceId}.` });
@@ -381,6 +456,13 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id", async (req, res): Pr
     }
     res.json({ job });
   } catch (err) {
+    logEliteSynthesisRouteError("elite_synthesis_job_progress", err, {
+      serviceId,
+      jobId,
+      selectsTaskState: false,
+      selectsResultArtifact: false,
+      selectedFields: "scalar summary projection",
+    });
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis job status failed" });
   }
 });
@@ -403,45 +485,29 @@ router.post("/research/:serviceId/elite-synthesis/jobs/:id/cancel", async (req, 
 });
 
 router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, res): Promise<void> => {
+  const serviceId = String(req.params.serviceId ?? "").toUpperCase();
+  const jobId = Number(req.params.id);
   try {
-    const serviceId = String(req.params.serviceId ?? "").toUpperCase();
     getSynthesisAdapter(serviceId);
-    const jobId = Number(req.params.id);
-    const job = await getEliteSynthesisJob(jobId);
+    const job = await getEliteSynthesisJobSummary(jobId);
     if (!job || job.serviceId !== serviceId) {
       res.status(404).json({ error: `Elite synthesis job ${jobId} not found for ${serviceId}.` });
       return;
     }
     const stagedCandidate = await resolveCurrentStagedCandidate(serviceId);
     const health = artifactHealth(job);
-    if (!job.resultArtifact) {
-      res.json({
-        jobId,
-        serviceId,
-        status: job.status,
-        stage: job.stage,
-        message: job.message,
-        selectedJob: {
-          jobId: job.id,
-          ...synthesisJobMetadata(job),
-          displayState: health.displayState,
-        },
-        artifactStatus: health.artifactStatus,
-        artifactDiagnostics: health.artifactDiagnostics,
-        currentStagedCandidate: stagedCandidate,
-        result: null,
-      });
-      return;
-    }
-    const compact = await buildHydratedResultArtifact(job);
-    if (!compact) {
-      res.status(409).json({ error: `Elite synthesis job ${jobId} has no completed result artifact yet.` });
-      return;
-    }
+    const resultSummary = job.resultSummary && typeof job.resultSummary === "object"
+      ? job.resultSummary as Record<string, unknown>
+      : {};
+    const bestSummary = job.bestSummary && typeof job.bestSummary === "object"
+      ? job.bestSummary as Record<string, unknown>
+      : {};
     res.json({
       jobId,
       serviceId,
       status: job.status,
+      stage: job.stage,
+      message: job.message,
       selectedJob: {
         jobId: job.id,
         ...synthesisJobMetadata(job),
@@ -451,34 +517,50 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
       artifactDiagnostics: health.artifactDiagnostics,
       currentStagedCandidate: stagedCandidate,
       result: {
-        jobId: compact.jobId,
-        serviceId: compact.serviceId,
-        status: compact.status,
-        resultState: compact.resultState,
-        targetAchieved: compact.targetAchieved,
-        bestPolicySummary: compact.bestPolicySummary,
-        topPolicySummaries: compact.topPolicySummaries,
-        bottleneckSummary: compact.bottleneckSummary,
-        leakageAuditSummary: compact.leakageAuditSummary,
-        validationErrors: compact.validationErrors,
-        dataAvailability: compact.dataAvailability,
-        unitValidation: compact.unitValidation,
-        missingFeatureImplementations: compact.missingFeatureImplementations,
-        windowSummary: compact.windowSummary,
-        sourceRunIds: compact.sourceRunIds,
-        datasetSummary: compact.datasetSummary,
-        passLogSummary: compact.passLogSummary,
-        fullPassLog: compact.fullPassLog,
-        featureDistributions: compact.featureDistributions,
-        triggerRebuildSummary: compact.triggerRebuildSummary,
-        rebuiltTriggerDiagnostics: compact.rebuiltTriggerDiagnostics ?? compact.triggerRebuildSummary ?? null,
-        exitOptimisationTable: compact.exitOptimisationTable,
-        bestPolicySelectedTradesSummary: compact.bestPolicySelectedTradesSummary ?? null,
-        targetAchievedBreakdown: compact.targetAchievedBreakdown ?? null,
-        strategyGradeReadiness: compact.strategyGradeReadiness ?? null,
-        policyArtifactReadiness: compact.policyArtifactReadiness ?? null,
-        validationHardeningGuard: compact.validationHardeningGuard ?? null,
-        returnAmplificationAnalysis: compact.returnAmplificationAnalysis ?? null,
+        jobId: job.id,
+        serviceId: job.serviceId,
+        status: job.status,
+        resultState: resultSummary.resultState ?? null,
+        targetAchieved: resultSummary.targetAchieved ?? null,
+        bestPolicySummary: {
+          policyId: bestSummary.bestPolicyId ?? null,
+          trades: bestSummary.bestTradeCount ?? null,
+          winRate: bestSummary.bestWinRate ?? null,
+          slHitRate: bestSummary.bestSlRate ?? null,
+          profitFactor: bestSummary.bestProfitFactor ?? null,
+          objectiveScore: bestSummary.bestObjectiveScore ?? null,
+        },
+        topPolicySummaries: [],
+        bottleneckSummary: resultSummary.bottleneck ? { classification: resultSummary.bottleneck } : null,
+        leakageAuditSummary: null,
+        validationErrors: [],
+        dataAvailability: null,
+        unitValidation: null,
+        missingFeatureImplementations: [],
+        windowSummary: synthesisJobMetadata(job),
+        sourceRunIds: null,
+        datasetSummary: null,
+        passLogSummary: null,
+        fullPassLog: null,
+        featureDistributions: null,
+        triggerRebuildSummary: null,
+        rebuiltTriggerDiagnostics: null,
+        exitOptimisationTable: null,
+        bestPolicySelectedTradesSummary: null,
+        targetAchievedBreakdown: {
+          finalTargetAchieved: Boolean(resultSummary.targetAchieved),
+        },
+        strategyGradeReadiness: null,
+        policyArtifactReadiness: null,
+        validationHardeningGuard: null,
+        returnAmplificationAnalysis: {
+          targetProfileNormalized: resultSummary.targetProfileNormalized ?? null,
+          recommendedPolicy: resultSummary.recommendedPolicyStatus ? { status: resultSummary.recommendedPolicyStatus } : null,
+          summary: {
+            guardrailsPassedCount: resultSummary.guardrailsPassedCount ?? null,
+            topPolicyCount: resultSummary.topPolicyCount ?? null,
+          },
+        },
         candidateRuntimeArtifacts: job.candidateRuntimeArtifacts,
         baselineRecords: job.baselineRecords,
         selectedJob: {
@@ -492,6 +574,13 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/result", async (req, r
       },
     });
   } catch (err) {
+    logEliteSynthesisRouteError("elite_synthesis_job_result_summary", err, {
+      serviceId,
+      jobId,
+      selectsTaskState: false,
+      selectsResultArtifact: false,
+      selectedFields: "scalar summary projection",
+    });
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis result fetch failed" });
   }
 });
@@ -510,7 +599,7 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/selected-trades
       res.status(409).json({ error: `Elite synthesis job ${jobId} has no completed result artifact yet.` });
       return;
     }
-    res.json({
+    sendJsonOrTooLarge(res, "elite_synthesis_export_selected_trades", {
       ...buildExportMetadata(job, "selected_trades"),
       status: job.status,
       policyId: (job.resultArtifact.bestPolicySummary as Record<string, unknown> | undefined)?.policyId ?? null,
@@ -518,6 +607,11 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/selected-trades
       policyArtifactReadiness: job.resultArtifact.policyArtifactReadiness ?? null,
       bestPolicySelectedTradesSummary: job.resultArtifact.bestPolicySelectedTradesSummary ?? null,
       bestPolicySelectedTrades: job.resultArtifact.bestPolicySelectedTrades ?? [],
+    }, {
+      serviceId,
+      jobId,
+      selectsTaskState: true,
+      selectsResultArtifact: true,
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis selected-trades export failed" });
@@ -542,7 +636,7 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/policy-comparis
     const returnAmplificationAnalysis = hydrated?.returnAmplificationAnalysis && typeof hydrated.returnAmplificationAnalysis === "object"
       ? hydrated.returnAmplificationAnalysis as Record<string, unknown>
       : {};
-    res.json({
+    sendJsonOrTooLarge(res, "elite_synthesis_export_policy_comparison", {
       ...buildExportMetadata(job, "return_first_policy_comparison"),
       status: job.status,
       resultState: hydrated?.resultState ?? null,
@@ -560,6 +654,11 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/policy-comparis
         : [],
       tradeLifecycleReplayReport: returnAmplificationAnalysis.tradeLifecycleReplayReport ?? null,
       summary: returnAmplificationAnalysis.summary ?? null,
+    }, {
+      serviceId,
+      jobId,
+      selectsTaskState: true,
+      selectsResultArtifact: true,
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis policy comparison export failed" });
@@ -896,11 +995,16 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/return-amplific
       res.status(409).json({ error: `Elite synthesis job ${jobId} has no completed result artifact yet.` });
       return;
     }
-    res.json({
+    sendJsonOrTooLarge(res, "elite_synthesis_export_return_amplification", {
       ...buildExportMetadata(job, "return_lifecycle_amplification"),
       status: job.status,
       targetProfile: (job.resultArtifact.windowSummary as Record<string, unknown> | undefined)?.targetProfile ?? "default",
       returnAmplificationAnalysis: (await buildHydratedResultArtifact(job))?.returnAmplificationAnalysis ?? null,
+    }, {
+      serviceId,
+      jobId,
+      selectsTaskState: true,
+      selectsResultArtifact: true,
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite return amplification export failed" });
@@ -921,11 +1025,16 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/trade-lifecycle
       res.status(400).json({ error: `Elite synthesis job ${jobId} has no result artifact to export.` });
       return;
     }
-    res.json({
+    sendJsonOrTooLarge(res, "elite_synthesis_export_trade_lifecycle_replay", {
       ...buildExportMetadata(job, "trade_lifecycle_replay"),
       status: job.status,
       targetProfile: (job.resultArtifact.windowSummary as Record<string, unknown> | undefined)?.targetProfile ?? "default",
       tradeLifecycleReplayReport: ((await buildHydratedResultArtifact(job))?.returnAmplificationAnalysis as Record<string, unknown> | undefined)?.tradeLifecycleReplayReport ?? null,
+    }, {
+      serviceId,
+      jobId,
+      selectsTaskState: true,
+      selectsResultArtifact: true,
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Trade lifecycle replay export failed" });
@@ -946,12 +1055,17 @@ router.get("/research/:serviceId/elite-synthesis/jobs/:id/export/full", async (r
       res.status(409).json({ error: `Elite synthesis job ${jobId} has no completed result artifact yet.` });
       return;
     }
-    res.json({
+    sendJsonOrTooLarge(res, "elite_synthesis_export_full", {
       ...buildExportMetadata(job, "elite_synthesis_full"),
       status: job.status,
       result: await buildHydratedResultArtifact(job),
       candidateRuntimeArtifacts: job.candidateRuntimeArtifacts,
       baselineRecords: job.baselineRecords,
+    }, {
+      serviceId,
+      jobId,
+      selectsTaskState: true,
+      selectsResultArtifact: true,
     });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Elite synthesis full export failed" });

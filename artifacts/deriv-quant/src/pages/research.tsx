@@ -5914,9 +5914,18 @@ function ReportsTab({
         const [runsResp, backtestsResp, synthesisResp] = await Promise.all([
           apiFetch(`calibration/runs/${service}`).catch(() => ({ runs: [] })),
           apiFetch(`backtest/v3/history?symbol=${encodeURIComponent(service)}&limit=30`).catch(() => ({ runs: [] })),
-          apiFetch(`research/${service}/elite-synthesis/jobs?limit=20`).catch(() => ({ jobs: [] })),
+          apiFetch(`research/${service}/elite-synthesis/jobs?limit=20`).catch((e: unknown) => ({
+            jobs: [],
+            error: e instanceof Error ? e.message : "Failed to load elite synthesis jobs",
+          })),
         ]);
         if (cancelled) return;
+        const synthesisLoadError = (synthesisResp as { error?: string }).error;
+        if (synthesisLoadError) {
+          setErr(`Elite synthesis job history failed to load: ${synthesisLoadError}`);
+        } else {
+          setErr(null);
+        }
         const nextCalibrationRuns = Array.isArray((runsResp as { runs?: PassRun[] }).runs) ? (runsResp as { runs?: PassRun[] }).runs ?? [] : [];
         const nextBacktestRuns = Array.isArray((backtestsResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs) ? (backtestsResp as { runs?: PersistedV3BacktestHistoryRun[] }).runs ?? [] : [];
         const nextSynthesisJobs = Array.isArray((synthesisResp as { jobs?: EliteSynthesisJobStatusUi[] }).jobs)
@@ -6406,6 +6415,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyJobs, setHistoryJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
+  const [historyErr, setHistoryErr] = useState<string | null>(null);
 
   const loadHistory = useCallback(async (silent = false) => {
     if (!silent) setErr(null);
@@ -6414,9 +6424,12 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
       const data = await apiFetch(`research/${service}/elite-synthesis/jobs?limit=20`) as {
         jobs?: EliteSynthesisJobStatusUi[];
       };
+      setHistoryErr(null);
       setHistoryJobs(Array.isArray(data.jobs) ? data.jobs : []);
     } catch (e: unknown) {
-      if (!silent) setErr(e instanceof Error ? e.message : "Failed to load elite synthesis run history");
+      const message = e instanceof Error ? e.message : "Failed to load elite synthesis run history";
+      setHistoryErr(message);
+      if (!silent) setErr(message);
     } finally {
       if (!silent) setHistoryLoading(false);
     }
@@ -6425,6 +6438,7 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
   useEffect(() => {
     setHistoryExpanded(false);
     setHistoryJobs([]);
+    setHistoryErr(null);
     setHistoryLoading(false);
   }, [service]);
 
@@ -6551,7 +6565,10 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
                 <Loader2 className="w-4 h-4 animate-spin" />Loading run history
               </div>
             )}
-            {!historyLoading && historyJobs.length === 0 && (
+            {!historyLoading && historyErr && (
+              <p className="text-xs text-red-300">Run history failed to load: {historyErr}</p>
+            )}
+            {!historyLoading && !historyErr && historyJobs.length === 0 && (
               <p className="text-xs text-muted-foreground">No elite synthesis runs recorded yet for {service}.</p>
             )}
             {!historyLoading && historyJobs.length > 0 && (

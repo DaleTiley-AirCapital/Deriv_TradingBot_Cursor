@@ -1,5 +1,5 @@
 import { db } from "@workspace/db";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import {
   cancelWorkerJob,
   createWorkerJob,
@@ -65,6 +65,10 @@ function asNullableString(raw: unknown): string | null {
   return raw == null || raw === "" ? null : String(raw);
 }
 
+function safeText(expr: SQL, maxLength = 2000) {
+  return sql`left(COALESCE(${expr}, ''), ${maxLength})`;
+}
+
 function compactSummarySelect() {
   return sql`
     id,
@@ -74,45 +78,45 @@ function compactSummarySelect() {
     status,
     stage,
     progress_pct,
-    message,
+    ${safeText(sql`message`, 1000)} AS message,
     heartbeat_at,
     started_at,
     completed_at,
     created_at,
     updated_at,
-    params ->> 'windowDays' AS window_days,
-    params ->> 'searchProfile' AS search_profile,
-    params ->> 'targetProfile' AS target_profile,
-    COALESCE(task_state ->> 'currentPass', '0') AS current_pass,
-    COALESCE(task_state ->> 'maxPasses', task_state ->> 'maxPass', '0') AS max_passes,
-    COALESCE(task_state -> 'bestSummary' ->> 'currentPolicyCount', '0') AS current_policy_count,
-    COALESCE(task_state -> 'bestSummary' ->> 'evaluatedPolicyCount', '0') AS evaluated_policy_count,
-    task_state -> 'bestSummary' ->> 'bestWinRate' AS best_win_rate,
-    task_state -> 'bestSummary' ->> 'bestSlRate' AS best_sl_rate,
-    task_state -> 'bestSummary' ->> 'bestProfitFactor' AS best_profit_factor,
-    task_state -> 'bestSummary' ->> 'bestTradeCount' AS best_trade_count,
-    task_state -> 'bestSummary' ->> 'bestObjectiveScore' AS best_objective_score,
-    task_state -> 'bestSummary' ->> 'bestPolicyId' AS best_policy_id,
-    error_summary ->> 'failureType' AS error_failure_type,
-    error_summary ->> 'exceptionMessage' AS error_exception_message,
-    error_summary ->> 'noTargetReason' AS error_no_target_reason,
-    error_summary ->> 'passesCompleted' AS error_passes_completed,
-    error_summary ->> 'maxPasses' AS error_max_passes,
-    error_summary ->> 'targetProfile' AS error_target_profile,
-    error_summary ->> 'targetProfileNormalized' AS error_target_profile_normalized,
-    result_summary ->> 'resultState' AS result_state,
-    result_summary ->> 'targetAchieved' AS result_target_achieved,
-    result_summary ->> 'failureType' AS result_failure_type,
-    result_summary ->> 'exceptionMessage' AS result_exception_message,
-    result_summary ->> 'noTargetReason' AS result_no_target_reason,
-    result_summary ->> 'passesCompleted' AS result_passes_completed,
-    result_summary ->> 'maxPasses' AS result_max_passes,
-    result_summary ->> 'targetProfile' AS result_target_profile,
-    result_summary ->> 'targetProfileNormalized' AS result_target_profile_normalized,
-    result_summary ->> 'recommendedPolicyStatus' AS recommended_policy_status,
-    result_summary ->> 'guardrailsPassedCount' AS guardrails_passed_count,
-    result_summary ->> 'topPolicyCount' AS top_policy_count,
-    result_summary ->> 'bottleneck' AS result_bottleneck,
+    ${safeText(sql`params ->> 'windowDays'`, 80)} AS window_days,
+    ${safeText(sql`params ->> 'searchProfile'`, 80)} AS search_profile,
+    ${safeText(sql`params ->> 'targetProfile'`, 80)} AS target_profile,
+    ${safeText(sql`task_state ->> 'currentPass'`, 80)} AS current_pass,
+    ${safeText(sql`COALESCE(task_state ->> 'maxPasses', task_state ->> 'maxPass')`, 80)} AS max_passes,
+    ${safeText(sql`task_state -> 'bestSummary' ->> 'currentPolicyCount'`, 80)} AS current_policy_count,
+    ${safeText(sql`task_state -> 'bestSummary' ->> 'evaluatedPolicyCount'`, 80)} AS evaluated_policy_count,
+    ${safeText(sql`task_state -> 'bestSummary' ->> 'bestWinRate'`, 80)} AS best_win_rate,
+    ${safeText(sql`task_state -> 'bestSummary' ->> 'bestSlRate'`, 80)} AS best_sl_rate,
+    ${safeText(sql`task_state -> 'bestSummary' ->> 'bestProfitFactor'`, 80)} AS best_profit_factor,
+    ${safeText(sql`task_state -> 'bestSummary' ->> 'bestTradeCount'`, 80)} AS best_trade_count,
+    ${safeText(sql`task_state -> 'bestSummary' ->> 'bestObjectiveScore'`, 80)} AS best_objective_score,
+    ${safeText(sql`task_state -> 'bestSummary' ->> 'bestPolicyId'`, 300)} AS best_policy_id,
+    ${safeText(sql`error_summary ->> 'failureType'`, 120)} AS error_failure_type,
+    ${safeText(sql`error_summary ->> 'exceptionMessage'`, 2000)} AS error_exception_message,
+    ${safeText(sql`error_summary ->> 'noTargetReason'`, 2000)} AS error_no_target_reason,
+    ${safeText(sql`error_summary ->> 'passesCompleted'`, 80)} AS error_passes_completed,
+    ${safeText(sql`error_summary ->> 'maxPasses'`, 80)} AS error_max_passes,
+    ${safeText(sql`error_summary ->> 'targetProfile'`, 80)} AS error_target_profile,
+    ${safeText(sql`error_summary ->> 'targetProfileNormalized'`, 80)} AS error_target_profile_normalized,
+    ${safeText(sql`result_summary ->> 'resultState'`, 120)} AS result_state,
+    ${safeText(sql`result_summary ->> 'targetAchieved'`, 80)} AS result_target_achieved,
+    ${safeText(sql`result_summary ->> 'failureType'`, 120)} AS result_failure_type,
+    ${safeText(sql`result_summary ->> 'exceptionMessage'`, 2000)} AS result_exception_message,
+    ${safeText(sql`result_summary ->> 'noTargetReason'`, 2000)} AS result_no_target_reason,
+    ${safeText(sql`result_summary ->> 'passesCompleted'`, 80)} AS result_passes_completed,
+    ${safeText(sql`result_summary ->> 'maxPasses'`, 80)} AS result_max_passes,
+    ${safeText(sql`result_summary ->> 'targetProfile'`, 80)} AS result_target_profile,
+    ${safeText(sql`result_summary ->> 'targetProfileNormalized'`, 80)} AS result_target_profile_normalized,
+    ${safeText(sql`result_summary ->> 'recommendedPolicyStatus'`, 120)} AS recommended_policy_status,
+    ${safeText(sql`result_summary ->> 'guardrailsPassedCount'`, 80)} AS guardrails_passed_count,
+    ${safeText(sql`result_summary ->> 'topPolicyCount'`, 80)} AS top_policy_count,
+    ${safeText(sql`result_summary ->> 'bottleneck'`, 500)} AS result_bottleneck,
     CASE WHEN result_artifact IS NULL THEN false ELSE true END AS has_result_artifact,
     false AS result_artifact_loaded,
     NULL::jsonb AS result_artifact,
@@ -306,6 +310,18 @@ export async function getEliteSynthesisJob(jobId: number): Promise<EliteSynthesi
   return hydrateEliteSynthesisJob(await getWorkerJob(jobId));
 }
 
+export async function getEliteSynthesisJobSummary(jobId: number): Promise<EliteSynthesisJobRow | null> {
+  await ensureWorkerJobsTable();
+  const result = await db.execute(sql`
+    SELECT ${compactSummarySelect()}
+    FROM worker_jobs
+    WHERE id = ${jobId}
+      AND task_type = 'elite_synthesis'
+    LIMIT 1
+  `);
+  return hydrateEliteSynthesisSummaryRow(result.rows?.[0] as Record<string, unknown> | undefined);
+}
+
 export async function getEliteSynthesisProgress(jobId: number): Promise<EliteSynthesisProgressSnapshot | null> {
   await ensureWorkerJobsTable();
   const result = await db.execute(sql`
@@ -365,4 +381,43 @@ export async function getEliteSynthesisSchemaStatus(): Promise<Record<string, un
     ...status,
     taskType: "elite_synthesis",
   };
+}
+
+export async function getEliteSynthesisJobSizeDiagnostics(serviceId: string, limit = 50): Promise<Array<Record<string, unknown>>> {
+  await ensureWorkerJobsTable();
+  const boundedLimit = Math.max(1, Math.min(200, limit));
+  const result = await db.execute(sql`
+    SELECT
+      id,
+      status,
+      stage,
+      params ->> 'windowDays' AS window_days,
+      params ->> 'searchProfile' AS search_profile,
+      params ->> 'targetProfile' AS target_profile,
+      pg_column_size(task_state) AS task_state_bytes,
+      pg_column_size(result_artifact) AS result_artifact_bytes,
+      pg_column_size(result_summary) AS result_summary_bytes,
+      pg_column_size(error_summary) AS error_summary_bytes,
+      created_at,
+      completed_at
+    FROM worker_jobs
+    WHERE service_id = ${serviceId}
+      AND task_type = 'elite_synthesis'
+    ORDER BY created_at DESC
+    LIMIT ${boundedLimit}
+  `);
+  return ((result.rows ?? []) as Record<string, unknown>[]).map((row) => ({
+    id: asNumber(row.id),
+    status: asNullableString(row.status),
+    stage: asNullableString(row.stage),
+    windowDays: asNullableString(row.window_days),
+    searchProfile: asNullableString(row.search_profile),
+    targetProfile: asNullableString(row.target_profile),
+    taskStateBytes: asNumber(row.task_state_bytes),
+    resultArtifactBytes: asNumber(row.result_artifact_bytes),
+    resultSummaryBytes: asNumber(row.result_summary_bytes),
+    errorSummaryBytes: asNumber(row.error_summary_bytes),
+    createdAt: iso(row.created_at),
+    completedAt: iso(row.completed_at),
+  }));
 }
