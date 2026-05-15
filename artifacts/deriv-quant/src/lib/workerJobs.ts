@@ -27,17 +27,17 @@ export type WorkerJobUi = {
 export function formatWorkerTaskLabel(taskType: WorkerTaskTypeUi | string): string {
   switch (taskType) {
     case "elite_synthesis":
-      return "Integrated Elite Synthesis";
+      return "Build Runtime Model";
     case "full_calibration":
       return "Full Calibration";
     case "calibration_passes":
       return "Calibration Passes";
     case "runtime_backtest":
-      return "Runtime Backtest";
+      return "Validate Runtime";
     case "parity_run":
-      return "Parity";
+      return "Validate Runtime";
     case "runtime_trigger_validation":
-      return "Runtime Trigger Validation";
+      return "Validate Runtime";
     default:
       return taskType.replace(/_/g, " ");
   }

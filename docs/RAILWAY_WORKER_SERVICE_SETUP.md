@@ -72,7 +72,7 @@ The worker service does not need a public URL.
 5. Start one worker-owned heavy task, for example:
    - `30-day fast` elite synthesis
    - `Run Full Calibration`
-   - `Validate Current Runtime Backtest`
+   - `Validate Runtime`
 6. Confirm:
    - the API returns `202 queued`
    - `worker_jobs` row changes from `queued` to `running`
