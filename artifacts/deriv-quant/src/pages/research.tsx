@@ -7133,7 +7133,7 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
 //  Main Page 
 
 export default function Research() {
-  const [selectedService, setSelectedService] = useState<string>("CRASH300");
+  const [selectedService, setSelectedService] = useState<string>("R_75");
   const [activeTab, setActiveTab] = useState<ResearchTabId>("data");
   const [sharedWindowDays, setSharedWindowDays] = useState<number>(365);
   const [showAddService, setShowAddService] = useState(false);
@@ -7165,7 +7165,7 @@ export default function Research() {
 
   useEffect(() => {
     if (serviceSelectorOptions.some((option) => option.symbol === selectedService)) return;
-    setSelectedService(serviceSelectorOptions[0]?.symbol ?? "CRASH300");
+    setSelectedService(serviceSelectorOptions[0]?.symbol ?? "R_75");
   }, [selectedService, serviceSelectorOptions]);
 
   const handleSelectService = useCallback((service: string) => {
