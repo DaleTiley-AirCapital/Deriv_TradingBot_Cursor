@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, createContext, useContext, type ReactNode } from "react";
+import { Fragment, useState, useRef, useEffect, useCallback, useMemo, createContext, useContext, type ReactNode } from "react";
 import {
   FlaskConical, RefreshCw,
   Loader2, CheckCircle, XCircle,
@@ -5959,16 +5959,12 @@ function ReportsTab({
   service,
   windowDays,
   forcedTask,
-  initialReportType,
-  initialSynthesisJobId,
   title = "Reports",
   description = "Consolidated read-only exports for the selected symbol service. Backtest-heavy artifacts stay here instead of being scattered through calibration and runtime cards.",
 }: {
   service: string;
   windowDays: number;
   forcedTask?: ReportOption["task"];
-  initialReportType?: string | null;
-  initialSynthesisJobId?: number | null;
   title?: string;
   description?: string;
 }) {
@@ -5991,22 +5987,6 @@ function ReportsTab({
       setReportTask(forcedTask);
     }
   }, [forcedTask]);
-
-  useEffect(() => {
-    if (initialReportType) {
-      const option = REPORT_OPTIONS.find((entry) => entry.value === initialReportType);
-      if (option) {
-        setReportTask(option.task);
-        setReportType(option.value);
-      }
-    }
-  }, [initialReportType]);
-
-  useEffect(() => {
-    if (initialSynthesisJobId) {
-      setSelectedSynthesisJobId(initialSynthesisJobId);
-    }
-  }, [initialSynthesisJobId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -6361,203 +6341,66 @@ function ReportsTab({
         {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
         Export / Download JSON
       </button>
-      {selectedOption.runType === "synthesis" && synthesisReportResult && (
-        <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-3 text-[11px]">
-          {String(selectedSynthesisJobMeta?.targetProfile ?? "") === "return_amplification" && (
-            <div className="rounded-md border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-amber-200">
-              Historical target profile `return_amplification` is normalized to `return_first` in V3.1.
-            </div>
-          )}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-3">
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Selected job</p>
-              <p className="mt-1 text-foreground">
-                #{String(selectedSynthesisJobMeta?.jobId ?? selectedSynthesisJobId ?? "n/a")}  {windowLabel(Number(selectedSynthesisJobMeta?.windowDays ?? windowDays))}
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Profile / target</p>
-              <p className="mt-1 text-foreground">
-                {searchProfileLabel(String(selectedSynthesisJobMeta?.searchProfile ?? runtimeBuildProfile.searchProfile ?? ""))} / {targetProfileLabel(String(selectedSynthesisJobMeta?.targetProfile ?? runtimeBuildProfile.targetProfile ?? ""))}
-              </p>
-              <p className="mt-1 text-[10px] text-muted-foreground">
-                raw: {String(selectedSynthesisJobMeta?.targetProfile ?? runtimeBuildProfile.targetProfile ?? "default")} - normalized: {normalizeTargetProfile(String(selectedSynthesisJobMeta?.targetProfile ?? runtimeBuildProfile.targetProfile ?? "default"))}
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Artifact health</p>
-              <p className="mt-1 text-foreground">{String(artifactStatusMeta?.artifactStatus ?? "unknown").replaceAll("_", " ")}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Best candidate</p>
-              <p className="mt-1 text-foreground">{String(bestPolicySummary?.policyId ?? bestPolicySummary?.scenarioId ?? "n/a")}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Trades / win / SL</p>
-              <p className="mt-1 text-foreground">
-                {Number(bestPolicySummary?.trades ?? 0)} / {(Number(bestPolicySummary?.winRate ?? 0) * 100).toFixed(2)}% / {(Number(bestPolicySummary?.slHitRate ?? 0) * 100).toFixed(2)}%
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Lifecycle return</p>
-              <p className="mt-1 text-foreground">{Number(bestPolicySummary?.totalAccountReturnPct ?? bestPolicySummary?.accountReturnPct ?? 0).toFixed(2)}% total</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Large move coverage</p>
-              <p className="mt-1 text-foreground">
-                {Object.keys(runtimeBuildCoverage).length > 0
-                  ? `${Number(runtimeBuildCoverage.capturedTargetMoveCount ?? 0)} / ${Number(runtimeBuildCoverage.targetUniverseCount ?? runtimeBuildUniverse.totalTargetMoves ?? 0)} (${Number(runtimeBuildCoverage.coveragePct ?? 0).toFixed(2)}%)`
-                  : Boolean((synthesisReportResult.targetAchievedBreakdown as Record<string, unknown> | undefined)?.finalTargetAchieved) ? "Target achieved" : "Target not achieved"}
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Report consistency</p>
-              <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.policyArtifactReadiness as Record<string, unknown> | undefined)?.reportConsistencyPassed) ? "Passed" : "Mismatch detected"}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Balanced readiness</p>
-              <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.strategyGradeReadiness as Record<string, unknown> | undefined)?.safeToRunBalanced) ? "Safe to run balanced" : "More review needed"}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Late offset safety</p>
-              <p className="mt-1 text-foreground">{Boolean(((synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.lateOffsetSafetyAudit as Record<string, unknown> | undefined)?.passed) ? "Passed" : "Review warnings"}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Exit derivation</p>
-              <p className="mt-1 text-foreground">{Boolean(((synthesisReportResult.bestPolicySummary as Record<string, unknown> | undefined)?.exitDerivationAudit as Record<string, unknown> | undefined)?.passed) ? "Passed" : "Review audit"}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Selected trades</p>
-              <p className="mt-1 text-foreground">{Number((synthesisReportResult.bestPolicySelectedTradesSummary as Record<string, unknown> | undefined)?.tradeCount ?? 0)} trade(s) in export</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Return-first search</p>
-              <p className="mt-1 text-foreground">
-                {Boolean(returnSummary.anyScenarioReaches50MonthlyReturn)
-                  ? "50%+ monthly scenario found"
-                  : "No 50% monthly scenario yet"}
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Best lifecycle return</p>
-              <p className="mt-1 text-foreground">
-                {bestLifecycleReturnPct > 0
-                  ? `${bestLifecycleReturnPct.toFixed(2)}% total / ${bestLifecycleMonthlyPct.toFixed(2)}% avg monthly`
-                  : "No lifecycle return estimate yet"}
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Scenario config</p>
-              <p className="mt-1 text-foreground">
-                {recommendedScenario
-                  ? `${String(recommendedScenario.allocationModel ?? "base")} / ${String(recommendedScenario.leverageModel ?? "1.0x")} / ${String(recommendedScenario.cascadeModel ?? "no_cascade")}`
-                  : "No recommended scenario yet"}
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Safest high-win policy</p>
-              <p className="mt-1 text-foreground">{String(safestHighWinPolicy?.policyId ?? safestHighWinPolicy?.scenarioId ?? "n/a")}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Best return-first policy</p>
-              <p className="mt-1 text-foreground">{String(bestReturnFirstPolicy?.policyId ?? bestReturnFirstPolicy?.scenarioId ?? "none passed")}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Priority seed family</p>
-              <p className="mt-1 text-foreground">{String(primaryDeepFamilyAnalysis?.familyKey ?? "not analysed")}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Pre-limit seed stats</p>
-              <p className="mt-1 text-foreground">
-                {preLimitFamilyStats
-                  ? `${Number(preLimitFamilyStats.totalSimulatedTrades ?? 0)} trades / ${(Number(preLimitFamilyStats.winRate ?? 0) * 100).toFixed(1)}% win`
-                  : "n/a"}
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Post-limit seed stats</p>
-              <p className="mt-1 text-foreground">
-                {postDailyLimitFamilyStats
-                  ? `${Number(postDailyLimitFamilyStats.trades ?? 0)} trades / ${(Number(postDailyLimitFamilyStats.winRate ?? 0) * 100).toFixed(1)}% win`
-                  : "n/a"}
-              </p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">AI Strategy Review</p>
-              <p className="mt-1 text-foreground">{String(aiStrategyReview?.status ?? "not run")}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Runtime artifact eligibility</p>
-              <p className="mt-1 text-foreground">{String(runtimeArtifactEligibility?.status ?? "not evaluated")}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Best rejected profit policy</p>
-              <p className="mt-1 text-foreground">{String(bestRejectedProfitPolicy?.policyId ?? bestRejectedProfitPolicy?.scenarioId ?? "n/a")}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Capture thresholds</p>
-              <p className="mt-1 text-foreground">
-                {Array.isArray(returnSummary.policiesWithMedianLifecyclePnlAbove5) ? `${(returnSummary.policiesWithMedianLifecyclePnlAbove5 as unknown[]).length}` : 0}
-                {" / "}
-                {Array.isArray(returnSummary.policiesWithMedianLifecyclePnlAbove7) ? `${(returnSummary.policiesWithMedianLifecyclePnlAbove7 as unknown[]).length}` : 0}
-                {" / "}
-                {Array.isArray(returnSummary.policiesWithMedianLifecyclePnlAbove9) ? `${(returnSummary.policiesWithMedianLifecyclePnlAbove9 as unknown[]).length}` : 0}
-                <span className="text-muted-foreground"> above 5% / 7% / 9%</span>
-              </p>
-            </div>
-          </div>
-          {recommendedPolicyMeta?.explanation ? (
-            <div className="rounded-lg border border-border/30 bg-background/30 px-3 py-2 text-[11px] text-muted-foreground">
-              {String(recommendedPolicyMeta.explanation)}
-            </div>
-          ) : null}
-          {artifactDiagnostics.length > 0 ? (
-            <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] text-red-200 space-y-1">
-              {artifactDiagnostics.map((diagnostic) => <p key={diagnostic}>{diagnostic}</p>)}
-            </div>
-          ) : null}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-amber-300">Runtime candidate is read-only here. Use the workflow actions to validate or promote.</span>
-            <span className="text-[11px] text-muted-foreground">
-              Current staged candidate: {currentStagedCandidate ? `job #${String(currentStagedCandidate.jobId ?? "n/a")}` : "none"}
-            </span>
-            {currentStagedCandidate && (
-              <>
-                <span className="text-[11px] text-muted-foreground">
-                  Candidate artifact: {String(currentStagedCandidate.artifactId ?? "n/a")}
-                </span>
-                <span className="text-[11px] text-muted-foreground">
-                  Runtime mimic validation: {String(currentStagedCandidate.runtimeMimicValidationStatus ?? "not_run")}
-                </span>
-              </>
-            )}
-            {Array.isArray((synthesisReportResult.baselineRecords as unknown[] | undefined))
-              && (synthesisReportResult.baselineRecords as Array<Record<string, unknown>>).length > 0 && (
-              <span className="text-[11px] text-cyan-200">
-                V3.1 baseline staged. Next build refinement deferred.
-              </span>
-            )}
-          </div>
-          {service === "CRASH300" ? (
-            <p className="text-[11px] text-muted-foreground">
-              CRASH300 build, selected-trades, and return/profit exports are V3.1 baseline research artifacts only. Promotion remains a separate explicit action.
-            </p>
-          ) : null}
+    </div>
+  );
+}
+
+function RuntimeBuildRunDetails({ result }: { result: Record<string, unknown> }) {
+  const profile = asUiRecord(result.buildProfile);
+  const universe = asUiRecord(result.targetMoveUniverse);
+  const coverage = asUiRecord(result.largeMoveCoverage ?? result.targetMoveCoverage);
+  const candidate = asUiRecord(result.bestCapitalExtractionCandidate ?? result.recommendedCandidate);
+  const eligibility = asUiRecord(result.runtimeArtifactEligibility);
+  const lifecycle = asUiRecord(result.lifecycleHoldAndExhaustionAnalysis);
+  const exitTiming = asUiRecord(lifecycle.selectedCandidateExitTiming ?? candidate.lifecycleExitTiming);
+  const dynamicPlan = asUiRecord(candidate.dynamicExitPlanSummary ?? result.dynamicTpProtectionSummary);
+  const aiReview = asUiRecord(result.aiStrategyReview);
+  const blockers = Array.isArray(eligibility.blockers) ? eligibility.blockers.map(String) : [];
+  const warnings = Array.isArray(result.warnings) ? result.warnings.map(String) : [];
+  const trades = Number(candidate.trades ?? candidate.selectedTradeCount ?? 0);
+  const wins = Number(candidate.wins ?? 0);
+  const losses = Number(candidate.losses ?? 0);
+  const lifecycleTotal = Number(candidate.totalAccountReturnPct ?? candidate.accountReturnPct ?? 0);
+  const lifecycleMonthly = Number(candidate.averageMonthlyAccountReturnPct ?? candidate.monthlyAccountReturnPct ?? 0);
+  const lifecycleMedian = Number(candidate.lifecycleMedianPnlPct ?? 0);
+  const lifecycleAverage = Number(candidate.lifecycleAveragePnlPct ?? 0);
+
+  return (
+    <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 space-y-3 text-[11px]">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <StatRow label="Build run" value={`#${String(result.buildRunId ?? "n/a")}`} />
+        <StatRow label="Profile / target" value={`${searchProfileLabel(String(profile.searchProfile ?? ""))} / ${targetProfileLabel(String(profile.targetProfile ?? ""))}`} />
+        <StatRow label="Target universe" value={`${Number(universe.totalTargetMoves ?? 0)} ${String(universe.family ?? "target")} >= ${Number(universe.minimumMovePct ?? 0)}%`} />
+        <StatRow label="Large move coverage" value={`${Number(coverage.capturedTargetMoveCount ?? 0)} / ${Number(coverage.targetUniverseCount ?? universe.totalTargetMoves ?? 0)} (${Number(coverage.coveragePct ?? 0).toFixed(2)}%)`} />
+        <StatRow label="Best candidate" value={String(candidate.scenarioId ?? candidate.policyId ?? "n/a")} />
+        <StatRow label="Trades / wins / losses" value={`${trades} / ${wins} / ${losses}`} />
+        <StatRow label="Win / SL" value={`${(Number(candidate.winRate ?? 0) * 100).toFixed(2)}% / ${(Number(candidate.slHitRate ?? 0) * 100).toFixed(2)}%`} />
+        <StatRow label="Lifecycle return" value={`${lifecycleTotal.toFixed(2)}% total / ${lifecycleMonthly.toFixed(2)}% monthly`} />
+        <StatRow label="Lifecycle PnL" value={`${lifecycleMedian.toFixed(2)}% median / ${lifecycleAverage.toFixed(2)}% avg`} />
+        <StatRow label="Exit timing" value={`early ${Number(exitTiming.early ?? 0)} / correct ${Number(exitTiming.correct_near_detected_exhaustion ?? exitTiming.correct ?? 0)} / late ${Number(exitTiming.late ?? 0)}`} />
+        <StatRow label="TP2 / runner" value={`${Number(asUiRecord(dynamicPlan.tp2Pct).p50 ?? 0).toFixed(2)}% / ${Number(asUiRecord(dynamicPlan.runnerTargetPct).p50 ?? 0).toFixed(2)}%`} />
+        <StatRow label="Protection" value={`${Number(asUiRecord(dynamicPlan.protectionActivationPct).p50 ?? 0).toFixed(2)}% activation / ${Number(asUiRecord(dynamicPlan.dynamicProtectionDistancePct).p50 ?? 0).toFixed(2)}% room`} />
+        <StatRow label="Eligibility" value={String(eligibility.status ?? "not evaluated")} />
+        <StatRow label="Review artifact" value={asUiRecord(result.reviewCandidateRuntimeArtifact).artifactId ? "created" : "not created"} />
+        <StatRow label="AI review" value={String(aiReview.status ?? "not run")} />
+        <StatRow label="Promote mode" value={Boolean(eligibility.canAutoPromote) ? "auto" : "manual only"} />
+      </div>
+      {blockers.length > 0 && (
+        <div className="rounded-md border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-amber-100">
+          <p className="font-medium">Blockers</p>
+          <p className="mt-1 text-muted-foreground">{blockers.join(", ")}</p>
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div className="rounded-md border border-border/30 bg-background/30 px-3 py-2 text-muted-foreground">
+          {warnings.join(" ")}
         </div>
       )}
     </div>
   );
 }
 
-function IntegratedEliteSynthesisCard({
-  service,
-  windowDays,
-  onOpenRunResult,
-}: {
-  service: string;
-  windowDays: number;
-  onOpenRunResult?: (jobId: number) => void;
-}) {
+function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string; windowDays: number }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -6567,6 +6410,10 @@ function IntegratedEliteSynthesisCard({
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyJobs, setHistoryJobs] = useState<EliteSynthesisJobStatusUi[]>([]);
   const [historyErr, setHistoryErr] = useState<string | null>(null);
+  const [expandedJobId, setExpandedJobId] = useState<number | null>(null);
+  const [expandedJobResult, setExpandedJobResult] = useState<Record<string, unknown> | null>(null);
+  const [expandedJobLoading, setExpandedJobLoading] = useState(false);
+  const [expandedJobErr, setExpandedJobErr] = useState<string | null>(null);
 
   const loadHistory = useCallback(async (silent = false) => {
     if (!silent) setErr(null);
@@ -6591,7 +6438,31 @@ function IntegratedEliteSynthesisCard({
     setHistoryJobs([]);
     setHistoryErr(null);
     setHistoryLoading(false);
+    setExpandedJobId(null);
+    setExpandedJobResult(null);
+    setExpandedJobErr(null);
   }, [service]);
+
+  const toggleJobDetails = async (jobId: number) => {
+    if (expandedJobId === jobId) {
+      setExpandedJobId(null);
+      setExpandedJobResult(null);
+      setExpandedJobErr(null);
+      return;
+    }
+    setExpandedJobId(jobId);
+    setExpandedJobResult(null);
+    setExpandedJobErr(null);
+    setExpandedJobLoading(true);
+    try {
+      const data = await apiFetch(`research/${service}/elite-synthesis/jobs/${jobId}/export/runtime-build-result`) as Record<string, unknown>;
+      setExpandedJobResult(data);
+    } catch (e: unknown) {
+      setExpandedJobErr(e instanceof Error ? e.message : "Runtime build result failed to load");
+    } finally {
+      setExpandedJobLoading(false);
+    }
+  };
 
   const startJob = async () => {
     setBusy(true);
@@ -6741,33 +6612,47 @@ function IntegratedEliteSynthesisCard({
                     {historyJobs.map((job) => {
                       const resultLabel = synthesisResultStateLabel(job);
                       return (
-                        <tr
-                          key={job.id}
-                          className="border-b border-border/10 last:border-b-0 cursor-pointer hover:bg-primary/5"
-                          onClick={() => onOpenRunResult?.(job.id)}
-                          title="Open this Build Runtime Model result in Reports"
-                        >
-                          <td className="py-2 pr-3 text-foreground font-medium">#{job.id}</td>
-                          <td className="px-3 py-2 text-muted-foreground">
-                            {searchProfileLabel(job.searchProfile) !== "n/a"
-                              ? searchProfileLabel(job.searchProfile)
-                              : Number(job.maxPasses ?? 0) >= 24 ? "deep" : Number(job.maxPasses ?? 0) >= 12 ? "balanced" : "fast"}
-                          </td>
-                          <td className="px-3 py-2">
-                            <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium", synthesisStatusTone(job))}>
-                              {synthesisResultStateLabel(job)}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 text-muted-foreground">{targetProfileLabel(job.targetProfile)}</td>
-                          <td className="px-3 py-2 text-muted-foreground">{resultLabel}</td>
-                          <td className="px-3 py-2 text-muted-foreground">
-                            {Number(job.currentPass ?? 0) > 0 || Number(job.maxPasses ?? 0) > 0
-                              ? `${Number(job.currentPass ?? 0)}/${Number(job.maxPasses ?? 0)}`
-                              : "n/a"}
-                          </td>
-                          <td className="px-3 py-2 text-muted-foreground">{job.startedAt ? formatRuntimeDate(job.startedAt) : "n/a"}</td>
-                          <td className="px-3 py-2 text-muted-foreground">{job.completedAt ? formatRuntimeDate(job.completedAt) : "n/a"}</td>
-                        </tr>
+                        <Fragment key={job.id}>
+                          <tr
+                            className="border-b border-border/10 last:border-b-0 cursor-pointer hover:bg-primary/5"
+                            onClick={() => void toggleJobDetails(job.id)}
+                            title="Show Build Runtime Model run details"
+                          >
+                            <td className="py-2 pr-3 text-foreground font-medium">#{job.id}</td>
+                            <td className="px-3 py-2 text-muted-foreground">
+                              {searchProfileLabel(job.searchProfile) !== "n/a"
+                                ? searchProfileLabel(job.searchProfile)
+                                : Number(job.maxPasses ?? 0) >= 24 ? "deep" : Number(job.maxPasses ?? 0) >= 12 ? "balanced" : "fast"}
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium", synthesisStatusTone(job))}>
+                                {synthesisResultStateLabel(job)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground">{targetProfileLabel(job.targetProfile)}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{resultLabel}</td>
+                            <td className="px-3 py-2 text-muted-foreground">
+                              {Number(job.currentPass ?? 0) > 0 || Number(job.maxPasses ?? 0) > 0
+                                ? `${Number(job.currentPass ?? 0)}/${Number(job.maxPasses ?? 0)}`
+                                : "n/a"}
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground">{job.startedAt ? formatRuntimeDate(job.startedAt) : "n/a"}</td>
+                            <td className="px-3 py-2 text-muted-foreground">{job.completedAt ? formatRuntimeDate(job.completedAt) : "n/a"}</td>
+                          </tr>
+                          {expandedJobId === job.id && (
+                            <tr className="border-b border-border/10">
+                              <td colSpan={8} className="py-3">
+                                {expandedJobLoading && (
+                                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                    <Loader2 className="w-4 h-4 animate-spin" />Loading runtime build result
+                                  </div>
+                                )}
+                                {!expandedJobLoading && expandedJobErr && <p className="text-xs text-red-300">{expandedJobErr}</p>}
+                                {!expandedJobLoading && expandedJobResult && <RuntimeBuildRunDetails result={expandedJobResult} />}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -7228,8 +7113,6 @@ export default function Research() {
   const [sharedWindowDays, setSharedWindowDays] = useState<number>(365);
   const [showAddService, setShowAddService] = useState(false);
   const [customServices, setCustomServices] = useState<string[]>([]);
-  const [reportSynthesisJobId, setReportSynthesisJobId] = useState<number | null>(null);
-  const [reportTypeHint, setReportTypeHint] = useState<string | null>(null);
 
   useEffect(() => {
     setCustomServices(readCustomResearchServices());
@@ -7263,15 +7146,7 @@ export default function Research() {
   const handleSelectService = useCallback((service: string) => {
     setSelectedService(service);
     setActiveTab("data");
-    setReportSynthesisJobId(null);
-    setReportTypeHint(null);
     setShowAddService(false);
-  }, []);
-
-  const openRuntimeBuildReport = useCallback((jobId: number) => {
-    setReportSynthesisJobId(jobId);
-    setReportTypeHint("runtime-build-result");
-    setActiveTab("reports");
   }, []);
 
   const handleAddService = useCallback((service: string) => {
@@ -7387,19 +7262,14 @@ export default function Research() {
       )}
       {activeTab === "synthesis" && (
         <div className="space-y-4">
-          <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} onOpenRunResult={openRuntimeBuildReport} />
+          <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} />
         </div>
       )}
       {activeTab === "runtime" && (
         <RuntimeModelTab service={selectedService} />
       )}
       {activeTab === "reports" && (
-        <ReportsTab
-          service={selectedService}
-          windowDays={sharedWindowDays}
-          initialReportType={reportTypeHint}
-          initialSynthesisJobId={reportSynthesisJobId}
-        />
+        <ReportsTab service={selectedService} windowDays={sharedWindowDays} />
       )}
     </div>
     </CalibrationRunProvider>
