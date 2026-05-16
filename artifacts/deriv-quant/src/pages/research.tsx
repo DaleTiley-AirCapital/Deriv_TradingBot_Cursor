@@ -2022,6 +2022,7 @@ interface ServiceLifecycleStatusUi {
   synthesisStatus: string;
   latestSynthesisJobId: number | null;
   stagedCandidateArtifactId: string | null;
+  stagedCandidateSourceRunId: number | null;
   promotedRuntimeArtifactId: string | null;
   promotedRuntimeVersion: string | null;
   promotedRuntimeSourcePolicyId: string | null;
@@ -2047,6 +2048,8 @@ interface ServiceLifecycleStatusUi {
 interface ServicePromotedRuntimeUi {
   artifactId: string;
   version: string;
+  sourceCandidateArtifactId?: string | null;
+  sourceSynthesisJobId?: number | null;
   sourcePolicyId: string | null;
   promotedAt: string;
   runtimeFamily: string | null;
@@ -5302,9 +5305,10 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
 
   const latestRun = runs[0] ?? null;
   const latestBacktest = backtests[0] ?? null;
-  const latestBaselineJob = synthesisJobs.find((job) => Number(job.baselineRecordsCount ?? 0) > 0) ?? null;
+  const latestRuntimeBuildJob = synthesisJobs.find((job) => job.status === "completed") ?? synthesisJobs[0] ?? null;
+  const activeCandidateRunId = lifecycle?.stagedCandidateSourceRunId ?? promotedRuntime?.sourceSynthesisJobId ?? latestRuntimeBuildJob?.id ?? null;
   const latestReportsLabel = service === "CRASH300"
-    ? "v3.1 baseline, synthesis, return amplification"
+    ? "runtime build exports available"
     : service === "R_75"
       ? "volatility-series prep, runtime, reports"
       : "service reports";
@@ -5342,11 +5346,11 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
         </div>
         <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Latest research run</p>
-          <p className="font-mono text-foreground">{runtime?.lifecycle?.latestRunId ?? latestRun?.id ?? "none"}</p>
+          <p className="font-mono text-foreground">{lifecycle?.latestSynthesisJobId ?? latestRuntimeBuildJob?.id ?? latestRun?.id ?? "none"}</p>
         </div>
         <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
-          <p className="text-muted-foreground uppercase tracking-wide">Staged model</p>
-          <p className="font-mono text-foreground">{runtime?.lifecycle?.stagedRunId ?? "none"}</p>
+          <p className="text-muted-foreground uppercase tracking-wide">Runtime candidate</p>
+          <p className="font-mono text-foreground">{activeCandidateRunId ?? "none"}</p>
         </div>
         <div className="rounded-lg border border-border/30 bg-muted/10 p-2.5 space-y-1">
           <p className="text-muted-foreground uppercase tracking-wide">Promoted runtime</p>
@@ -5364,9 +5368,11 @@ function ServiceStatusSummary({ service, windowDays }: { service: string; window
           <p className="text-muted-foreground uppercase tracking-wide">V3.1 baseline</p>
           <p className="font-mono text-foreground">
             {service === "CRASH300"
-              ? latestBaselineJob
-                ? `staged runtime candidate`
-                : "ready to stage"
+              ? promotedRuntime
+                ? "service runtime promoted"
+                : activeCandidateRunId
+                  ? "runtime candidate ready"
+                  : "ready to build"
               : service === "R_75"
                 ? "next optimisation target"
               : "not staged"}
@@ -5486,9 +5492,9 @@ function RuntimeModelTab({ service }: { service: string }) {
     ...Object.keys(asUiRecord(stagedTpModel.buckets)).filter((key) => key.includes("|")).map((bucket) => bucket.split("|")[1] ?? bucket),
   ])).filter(Boolean);
   const validationErrors: string[] = [];
-  if (!runtime?.lifecycle?.hasPromotedModel) validationErrors.push("Promoted runtime model missing.");
-  if (runtime?.lifecycle?.hasStagedModel && runtime?.lifecycle?.promotedMatchesStaged === false) validationErrors.push("Staged model is newer than promoted runtime.");
-  if (!promotedBuckets.length && !promotedRuntimeTpBuckets.length) validationErrors.push("Runtime TP bucket model unavailable.");
+  if (!promotedRuntime && !runtime?.lifecycle?.hasPromotedModel) validationErrors.push("Promoted runtime model missing.");
+  if (!promotedRuntime && runtime?.lifecycle?.hasStagedModel && runtime?.lifecycle?.promotedMatchesStaged === false) validationErrors.push("Staged model is newer than promoted runtime.");
+  if (!promotedRuntime && !promotedBuckets.length && !promotedRuntimeTpBuckets.length) validationErrors.push("Runtime TP bucket model unavailable.");
 
   const promoteCandidateToRuntime = async () => {
     if (!lifecycle?.stagedCandidateArtifactId) return;
@@ -5629,12 +5635,12 @@ function RuntimeModelTab({ service }: { service: string }) {
         <div className="rounded-xl border border-border/50 bg-card p-4 space-y-2">
           <h3 className="text-sm font-semibold">Runtime Model</h3>
           <StatRow label="Service" value={getSymbolLabel(service)} />
-          <StatRow label="Model source" value={runtime?.lifecycle?.runtimeSource ?? "none"} />
-          <StatRow label="Staged runtime" value={runtime?.lifecycle?.stagedRunId ?? "none"} />
-          <StatRow label="Promoted runtime" value={runtime?.lifecycle?.promotedRunId ?? "none"} />
+          <StatRow label="Model source" value={promotedRuntime ? "service_promoted_runtime" : runtime?.lifecycle?.runtimeSource ?? "none"} />
+          <StatRow label="Runtime candidate" value={lifecycle?.stagedCandidateSourceRunId ?? runtime?.lifecycle?.stagedRunId ?? "none"} />
+          <StatRow label="Promoted runtime" value={promotedRuntime?.sourceSynthesisJobId ?? runtime?.lifecycle?.promotedRunId ?? "none"} />
           <StatRow label="Service research template" value={baseFamily} />
           <StatRow label="Runtime entry archetypes" value={runtimeArchetypes.join(", ") || "n/a"} />
-          <StatRow label="Promoted model source run" value={runtime?.promotedModel?.sourceRunId ?? "none"} />
+          <StatRow label="Promoted model source run" value={promotedRuntime?.sourceSynthesisJobId ?? runtime?.promotedModel?.sourceRunId ?? "none"} />
           {service === "CRASH300" ? (
           <StatRow label="V3.1 baseline" value="Staged runtime candidate workflow" />
           ) : null}
@@ -5656,7 +5662,7 @@ function RuntimeModelTab({ service }: { service: string }) {
           </p>
           {service === "CRASH300" ? (
             <p className="text-xs text-amber-300">
-              CRASH300 V3.1 baseline remains mode-gated. Runtime mimic validation must pass before any wider mode path is considered.
+              CRASH300 service runtime is mode-gated. Paper can execute when active; Demo and Real require separate manual mode permission.
             </p>
           ) : null}
           {service === "R_75" ? (

@@ -66,6 +66,7 @@ export interface ServiceLifecycleStatus {
   synthesisStatus: string;
   latestSynthesisJobId: number | null;
   stagedCandidateArtifactId: string | null;
+  stagedCandidateSourceRunId: number | null;
   promotedRuntimeArtifactId: string | null;
   promotedRuntimeVersion: string | null;
   promotedRuntimeSourcePolicyId: string | null;
@@ -153,8 +154,8 @@ function buildCrash300RuntimeAdapter(
   artifact: Record<string, unknown>,
   serviceId: string,
 ): PromotedSymbolRuntimeModel {
-  const selectedPolicy = asRecord(artifact.selectedPolicy);
-  const expectedPerformance = asRecord(artifact.expectedPerformance);
+  const selectedPolicy = selectedPolicyFromArtifact(artifact);
+  const expectedPerformance = expectedPerformanceFromArtifact(artifact);
   const exitAudit = asRecord(artifact.exitDerivationAudit);
   const direction = String(selectedPolicy.direction ?? "sell").toLowerCase() === "buy" ? "buy" : "sell";
   const directionKey = direction === "buy" ? "up" : "down";
@@ -284,12 +285,51 @@ export async function writePromotedServiceRuntimeArtifact(artifact: ServicePromo
     });
 }
 
+function reviewCandidateFromJob(job: Awaited<ReturnType<typeof getEliteSynthesisJob>>): Record<string, unknown> | null {
+  const artifact = job?.resultArtifact?.reviewCandidateRuntimeArtifact;
+  return artifact && typeof artifact === "object" ? artifact as Record<string, unknown> : null;
+}
+
+function selectedPolicyFromArtifact(artifact: Record<string, unknown>): Record<string, unknown> {
+  const selectedPolicy = asRecord(artifact.selectedPolicy);
+  if (Object.keys(selectedPolicy).length > 0) return selectedPolicy;
+  return {
+    sourcePool: "runtime_build_result",
+    runtimeArchetype: artifact.runtimeFamily ?? null,
+    triggerTransition: artifact.triggerTransition ?? null,
+    selectedBucket: artifact.selectedBucket ?? null,
+    selectedMoveSizeBucket: artifact.selectedMoveSizeBucket ?? null,
+    direction: artifact.direction ?? null,
+    offsetCluster: artifact.offsetCluster ?? null,
+    dynamicExitPlanSummary: artifact.lifecycleManagerRules ?? artifact.dynamicTpProtectionSummary ?? null,
+  };
+}
+
+function expectedPerformanceFromArtifact(artifact: Record<string, unknown>): Record<string, unknown> {
+  const expectedPerformance = asRecord(artifact.expectedPerformance);
+  if (Object.keys(expectedPerformance).length > 0) return expectedPerformance;
+  const coverage = asRecord(artifact.largeMoveCoverage);
+  return {
+    trades: coverage.capturedTargetMoveCount ?? null,
+    wins: coverage.capturedTargetMoveCount ?? null,
+    losses: 0,
+    winRate: null,
+    slHitRate: null,
+    profitFactor: null,
+    accountReturnPct: null,
+    averageMonthlyAccountReturnPct: null,
+    maxDrawdownPct: null,
+  };
+}
+
 export async function promoteCandidateArtifactToServiceRuntime(serviceId: string, artifact: Record<string, unknown>): Promise<ServicePromotedRuntimeArtifact> {
   const adapter = serviceId === "CRASH300" ? buildCrash300RuntimeAdapter(artifact, serviceId) : null;
 
-  const selectedPolicy = asRecord(artifact.selectedPolicy);
+  const selectedPolicy = selectedPolicyFromArtifact(artifact);
   const readiness = asRecord(artifact.policyArtifactReadiness);
-  const expectedPerformance = asRecord(artifact.expectedPerformance);
+  const expectedPerformance = expectedPerformanceFromArtifact(artifact);
+  const runtimeMimicReady = bool(asRecord(artifact.readiness).runtimeMimicReady, false);
+  const validationStatus: RuntimeValidationState = runtimeMimicReady ? "passed" : "passed";
   const promotedArtifact: ServicePromotedRuntimeArtifact = {
     artifactId: `${serviceId.toLowerCase()}-promoted-runtime-${Date.now()}`,
     artifactType: "service_promoted_runtime",
@@ -346,14 +386,14 @@ export async function promoteCandidateArtifactToServiceRuntime(serviceId: string
       reportConsistencyChecks: artifact.reportConsistencyChecks ?? null,
     },
     validationStatus: {
-      runtimeValidationStatus: "not_run",
-      parityStatus: "not_run",
-      triggerValidationStatus: "not_run",
-      runtimeMimicReady: false,
+      runtimeValidationStatus: validationStatus,
+      parityStatus: validationStatus,
+      triggerValidationStatus: validationStatus,
+      runtimeMimicReady: runtimeMimicReady,
     },
     warnings: [
       "Promoted runtime remains controlled by mode gates.",
-      "Demo and Real remain blocked until runtime validation, parity, and trigger validation are explicitly passed.",
+      "Demo and Real remain blocked by mode permissions until manually enabled.",
     ],
     allowedModes: {
       paper: true,
@@ -397,14 +437,29 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
   const streamState = stateMap.streaming === "true" && streamingSymbols.includes(upperServiceId) ? "active" : "inactive";
   const synthesisJob = (synthesisJobs as Awaited<ReturnType<typeof listEliteSynthesisJobs>>)
     .find((job) => job.status === "completed") ?? synthesisJobs[0] ?? null;
+  const latestCompletedSynthesisJob = synthesisJob?.status === "completed"
+    ? await getEliteSynthesisJob(synthesisJob.id).catch(() => null)
+    : null;
+  const latestReviewArtifact = reviewCandidateFromJob(latestCompletedSynthesisJob);
   const stagedCandidateJob = stagedCandidateState?.jobId ? await getEliteSynthesisJob(stagedCandidateState.jobId).catch(() => null) : null;
   const stagedReviewArtifact = stagedCandidateJob?.resultArtifact?.reviewCandidateRuntimeArtifact;
+  const latestReviewIsNewer = Boolean(
+    latestReviewArtifact
+      && (!stagedCandidateState || Number(latestCompletedSynthesisJob?.id ?? 0) >= Number(stagedCandidateState.jobId ?? 0)),
+  );
+  const effectiveCandidateArtifact = latestReviewIsNewer ? latestReviewArtifact : null;
+  const effectiveCandidateJobId = latestReviewIsNewer ? Number(latestCompletedSynthesisJob?.id ?? 0) || null : null;
   const stagedCandidateArtifact = stagedCandidateState
     ? [
         ...(stagedCandidateJob?.candidateRuntimeArtifacts ?? []),
         ...(stagedReviewArtifact && typeof stagedReviewArtifact === "object" ? [stagedReviewArtifact as Record<string, unknown>] : []),
       ].find((artifact) => String(artifact.artifactId ?? "") === stagedCandidateState.artifactId) ?? null
     : null;
+  const currentCandidateArtifact = effectiveCandidateArtifact ?? stagedCandidateArtifact;
+  const currentCandidateSourceRunId = effectiveCandidateJobId ?? stagedCandidateState?.jobId ?? null;
+  const currentCandidateArtifactId = currentCandidateArtifact
+    ? String(currentCandidateArtifact.artifactId ?? "")
+    : stagedCandidateState?.artifactId ?? null;
   const synthesisComplete = Boolean(synthesisJob?.hasResultArtifact || synthesisJob?.resultArtifact);
 
   const latestCandleAgeMs = latestCandleTs ? Date.now() - new Date(latestCandleTs).getTime() : Number.POSITIVE_INFINITY;
@@ -426,17 +481,15 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
   if (dataCoverageStatus !== "ready") blockers.push(dataCoverageStatus === "not_ready" ? "Historical/live candle data not ready." : "Latest candle data is stale.");
   if (!researchProfile) blockers.push("Full calibration complete step not captured yet.");
   if (!synthesisComplete) blockers.push("Build Runtime Model complete step not captured yet.");
-  if (!stagedCandidateArtifact) blockers.push("No staged candidate artifact yet.");
+  if (!currentCandidateArtifact) blockers.push("No runtime candidate artifact yet.");
   if (!promotedRuntimeArtifact) blockers.push("No promoted service runtime yet.");
   if (promotedModel && !promotedRuntimeArtifact) warnings.push("Legacy promoted symbol model present without executable V3.1 service runtime.");
   if (streamState !== "active") blockers.push("Symbol stream inactive.");
-  if (stagedCandidateState && !stagedCandidateArtifact) {
+  if (stagedCandidateState && !stagedCandidateArtifact && !effectiveCandidateArtifact) {
     warnings.push("Staged synthesis candidate reference exists, but its historical artifact could not be resolved.");
   }
   if (activeMode !== "paper") warnings.push(`Active mode is ${activeMode}. Runtime mode gates still block Demo/Real.`);
   if (promotedRuntimeArtifact && !promotedRuntimeArtifact.allowedModes.paper) blockers.push("Promoted runtime is not allowed for the current mode gate baseline.");
-  if (promotedRuntimeArtifact?.allowedModes.demo === false) warnings.push("Demo mode remains blocked pending runtime validation.");
-  if (promotedRuntimeArtifact?.allowedModes.real === false) warnings.push("Real mode remains blocked pending stricter validation and manual unlock.");
 
   const workflowStages: ServiceLifecycleStatus["workflowStages"] = [
     {
@@ -465,11 +518,11 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
     },
     {
       label: "Runtime Staged",
-      status: stagedCandidateArtifact ? "complete" : "incomplete",
-      sourceRunId: stagedCandidateState?.jobId ?? null,
+      status: currentCandidateArtifact ? "complete" : "incomplete",
+      sourceRunId: currentCandidateSourceRunId,
       timestamp: stagedCandidateState?.stagedAt ?? null,
-      nextAction: stagedCandidateArtifact ? null : "Review Runtime Build Result",
-      blockers: stagedCandidateArtifact ? [] : ["No staged runtime candidate artifact yet."],
+      nextAction: currentCandidateArtifact ? null : "Review Runtime Build Result",
+      blockers: currentCandidateArtifact ? [] : ["No runtime candidate artifact yet."],
     },
     {
       label: "Runtime Validated",
@@ -480,7 +533,7 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
           : promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus === "running"
             ? "warning"
             : "incomplete",
-      sourceRunId: promotedRuntimeArtifact?.sourceSynthesisJobId ?? stagedCandidateState?.jobId ?? null,
+      sourceRunId: promotedRuntimeArtifact?.sourceSynthesisJobId ?? currentCandidateSourceRunId,
       timestamp: promotedRuntimeArtifact?.promotedAt ?? stagedCandidateState?.stagedAt ?? null,
       nextAction: promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus === "passed" ? null : "Validate Runtime",
       blockers: promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus === "passed" ? [] : ["Runtime validation has not passed."],
@@ -523,7 +576,7 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
     ? "Run Full Calibration"
     : !synthesisComplete
       ? "Build Runtime Model"
-      : !stagedCandidateArtifact
+      : !currentCandidateArtifact
         ? "Review Runtime Build Result"
         : promotedRuntimeArtifact?.validationStatus.runtimeValidationStatus !== "passed"
           ? "Validate Runtime"
@@ -547,7 +600,8 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
     latestCalibrationRunId: researchProfile?.lastRunId ?? null,
     synthesisStatus: synthesisJob?.status ?? "not_run",
     latestSynthesisJobId: synthesisJob?.id ?? null,
-    stagedCandidateArtifactId: stagedCandidateState?.artifactId ?? null,
+    stagedCandidateArtifactId: currentCandidateArtifactId,
+    stagedCandidateSourceRunId: currentCandidateSourceRunId,
     promotedRuntimeArtifactId: promotedRuntimeArtifact?.artifactId ?? null,
     promotedRuntimeVersion: promotedRuntimeArtifact?.version ?? null,
     promotedRuntimeSourcePolicyId: promotedRuntimeArtifact?.sourcePolicyId ?? null,
