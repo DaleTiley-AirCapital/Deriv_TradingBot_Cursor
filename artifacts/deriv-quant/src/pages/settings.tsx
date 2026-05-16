@@ -105,6 +105,85 @@ function ToggleRow({ label, field, value, onUpdate, onLabel, offLabel, variant =
 
 // ─── Mode Section ─────────────────────────────────────────────────────────
 
+function SecretRow({ label, field, data, onUpdate }: {
+  label: string;
+  field: string;
+  data: SettingsMap;
+  onUpdate: (k: string, v: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState("");
+  const isSet = bool(data[`${field}_set`]);
+  const needsReset = bool(data[`${field}_needs_reset`]);
+  const maskedValue = data[field] || "";
+  const status = needsReset ? "needs reset" : isSet ? maskedValue || "set" : "not set";
+
+  return (
+    <div className="flex flex-col gap-2 py-1.5 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <span className="text-xs text-muted-foreground">{label}</span>
+        {needsReset && (
+          <p className="mt-0.5 text-[11px] text-amber-300">
+            Stored key came from another environment. Enter a fresh key for codex-dev.
+          </p>
+        )}
+      </div>
+      {editing ? (
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
+          <input
+            className="w-72 max-w-full rounded border border-border bg-muted px-2 py-1 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            type="password"
+            autoComplete="off"
+            placeholder="Paste key"
+            value={val}
+            onChange={(e) => setVal(e.target.value)}
+          />
+          <button
+            className="rounded border border-primary/40 px-2.5 py-1 text-[11px] font-semibold text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!val.trim()}
+            onClick={() => {
+              onUpdate(field, val.trim());
+              setVal("");
+              setEditing(false);
+            }}
+          >
+            Save
+          </button>
+          <button
+            className="rounded border border-border px-2.5 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-muted"
+            onClick={() => { setVal(""); setEditing(false); }}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className={cn(
+            "text-xs font-mono",
+            needsReset ? "text-amber-300" : isSet ? "text-foreground/70" : "text-muted-foreground"
+          )}>
+            {status}
+          </span>
+          <button
+            className="rounded border border-primary/30 px-2.5 py-1 text-[11px] font-semibold text-primary hover:bg-primary/10"
+            onClick={() => setEditing(true)}
+          >
+            {isSet && !needsReset ? "Replace" : "Add key"}
+          </button>
+          {(isSet || needsReset) && (
+            <button
+              className="rounded border border-red-500/30 px-2.5 py-1 text-[11px] font-semibold text-red-300 hover:bg-red-500/10"
+              onClick={() => onUpdate(field, "clear")}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ModeSection({
   mode, label, data, onUpdate,
 }: {
@@ -293,21 +372,12 @@ export default function Settings() {
             </div>
             <div className="px-4 py-3 space-y-2.5">
               {[
-                ["deriv_app_id", "Deriv App ID"],
-                ["deriv_api_token_paper", "API Token — Paper"],
-                ["deriv_api_token_demo", "API Token — Demo"],
-                ["deriv_api_token_real", "API Token — Real"],
-              ].map(([key, label]) => data[key] !== undefined && (
-                <div key={key} className="flex items-center justify-between gap-4 py-0.5">
-                  <span className="text-xs text-muted-foreground">{label}</span>
-                  <span className="text-xs font-mono text-foreground/60">{data[key]?.length > 8 ? `${data[key].slice(0, 4)}…${data[key].slice(-4)}` : data[key] ? "***" : "not set"}</span>
-                </div>
+                ["deriv_api_token_demo", "API Token - Demo"],
+                ["deriv_api_token_real", "API Token - Real"],
+                ["openai_api_key", "OpenAI API Key"],
+              ].map(([key, label]) => (
+                <SecretRow key={key} label={label} field={key} data={data} onUpdate={onUpdate} />
               ))}
-              {!["deriv_api_token_paper","deriv_api_token_demo","deriv_api_token_real"].some(k => data[k]) && (
-                <p className="text-xs text-muted-foreground/60">
-                  API tokens are configured via environment variables. Use the setup wizard to configure tokens.
-                </p>
-              )}
             </div>
           </div>
 
