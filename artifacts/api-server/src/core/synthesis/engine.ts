@@ -3694,27 +3694,52 @@ async function buildReturnAmplificationAnalysis(params: {
       "Objective is capital extraction from detected >=9% CRASH300 crash_expansion moves, not micro-move win-rate optimisation.",
     ],
   };
+  const compactScenarioForAi = (scenario: Record<string, unknown> | null | undefined) => scenario
+    ? {
+        scenarioId: scenario.scenarioId,
+        label: scenario.label,
+        trades: scenario.trades,
+        wins: scenario.wins,
+        losses: scenario.losses,
+        winRate: scenario.winRate,
+        slHitRate: scenario.slHitRate,
+        lifecycleMedianPnlPct: scenario.lifecycleMedianPnlPct,
+        lifecycleAveragePnlPct: scenario.lifecycleAveragePnlPct,
+        lifecycleAverageMonthlyAccountReturnPct: scenario.lifecycleAverageMonthlyAccountReturnPct,
+        lifecycleMfeCaptureRatio: scenario.lifecycleMfeCaptureRatio,
+        targetMoveCoverage: scenario.targetMoveCoverage,
+        lifecycleExitTiming: scenario.lifecycleExitTiming,
+        dynamicExitPlanSummary: scenario.dynamicExitPlanSummary,
+        rejectionReasons: scenario.rejectionReasons,
+      }
+    : null;
+  const compactFamilyStatsForAi = (stats: Record<string, unknown> | null | undefined) => stats
+    ? {
+        totalSimulatedTrades: stats.totalSimulatedTrades,
+        wins: stats.wins,
+        losses: stats.losses,
+        slHits: stats.slHits,
+        winRate: stats.winRate,
+        slHitRate: stats.slHitRate,
+        baseMedianPnlPct: stats.baseMedianPnlPct,
+        baseAveragePnlPct: stats.baseAveragePnlPct,
+        lifecycleMedianPnlPct: stats.lifecycleMedianPnlPct,
+        lifecycleAveragePnlPct: stats.lifecycleAveragePnlPct,
+        mfeDistribution: stats.mfeDistribution,
+        maeDistribution: stats.maeDistribution,
+        tpPotentialDistribution: stats.tpPotentialDistribution,
+        lifecycleExitDistribution: stats.lifecycleExitDistribution,
+        monthlyDistribution: Array.isArray(stats.monthlyDistribution) ? stats.monthlyDistribution.slice(-8) : [],
+      }
+    : null;
   const aiReviewInput = {
     objective: "Given the CRASH300 >=9% crash_expansion target universe, which live-safe trigger/lifecycle rule set maximizes capital extraction while avoiding panic exits and false continuation?",
     targetMoveUniverse: targetLargeMoveReference,
-    bestCapitalExtractionCandidate: bestCapitalExtractionCandidate
-      ? {
-          scenarioId: bestCapitalExtractionCandidate.scenarioId,
-          label: bestCapitalExtractionCandidate.label,
-          trades: bestCapitalExtractionCandidate.trades,
-          targetMoveCoverage: bestCapitalExtractionCandidate.targetMoveCoverage,
-          lifecycleMedianPnlPct: bestCapitalExtractionCandidate.lifecycleMedianPnlPct,
-          lifecycleAveragePnlPct: bestCapitalExtractionCandidate.lifecycleAveragePnlPct,
-          lifecycleAverageMonthlyAccountReturnPct: bestCapitalExtractionCandidate.lifecycleAverageMonthlyAccountReturnPct,
-          lifecycleExitTiming: bestCapitalExtractionCandidate.lifecycleExitTiming,
-          dynamicExitPlanSummary: bestCapitalExtractionCandidate.dynamicExitPlanSummary,
-          rejectionReasons: bestCapitalExtractionCandidate.rejectionReasons,
-        }
-      : null,
+    bestCapitalExtractionCandidate: compactScenarioForAi(bestCapitalExtractionCandidate),
     primaryFamily: {
       familyKey: primaryDeepFamilyAnalysis.familyKey,
-      preLimitFamilyStats,
-      postDailyLimitFamilyStats,
+      preLimitFamilyStats: compactFamilyStatsForAi(preLimitFamilyStats),
+      postDailyLimitFamilyStats: compactScenarioForAi(postDailyLimitFamilyStats),
       answers: primaryDeepFamilyAnalysis.answers,
       topWinnerLoserSeparation: winnerLoserSeparation.slice(0, 10),
       dynamicTpProtectionSummary,
@@ -3743,6 +3768,8 @@ async function buildReturnAmplificationAnalysis(params: {
       lifecycleMedianPnlPct: scenario.lifecycleMedianPnlPct,
       lifecycleAveragePnlPct: scenario.lifecycleAveragePnlPct,
       lifecycleAverageMonthlyAccountReturnPct: scenario.lifecycleAverageMonthlyAccountReturnPct,
+      targetMoveCoverage: scenario.targetMoveCoverage,
+      lifecycleExitTiming: scenario.lifecycleExitTiming,
       rejectionReasons: scenario.rejectionReasons,
     })).slice(0, 12),
     deterministicRulesOnly: true,

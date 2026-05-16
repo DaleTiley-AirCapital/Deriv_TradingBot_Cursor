@@ -202,6 +202,7 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
   const returnAmplification = asRecord(result.returnAmplificationAnalysis);
   const returnSummary = asRecord(returnAmplification.summary);
   const recommendedCandidate = asRecord(returnAmplification.recommendedCandidateConfiguration);
+  const bestCapitalExtractionCandidate = asRecord(resultRecord.bestCapitalExtractionCandidate ?? returnAmplification.bestCapitalExtractionCandidate);
   const bestPolicyArtifact = asRecord(result.bestPolicyArtifact);
   const candidateArtifacts = Array.isArray(job.candidateRuntimeArtifacts) ? job.candidateRuntimeArtifacts : [];
   const blockers: string[] = [];
@@ -245,10 +246,12 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
     lifecycleHoldAndExhaustionAnalysis: resultRecord.lifecycleHoldAndExhaustionAnalysis ?? returnAmplification.lifecycleHoldAndExhaustionAnalysis ?? null,
     aiStrategyReview: resultRecord.aiStrategyReview ?? returnAmplification.aiStrategyReview ?? null,
     candidateFamilyComparison: resultRecord.candidateFamilyComparison ?? returnAmplification.policyComparisonTable ?? [],
-    bestCapitalExtractionCandidate: compactRuntimeBuildScenario(resultRecord.bestCapitalExtractionCandidate ?? returnAmplification.bestCapitalExtractionCandidate),
+    bestCapitalExtractionCandidate: compactRuntimeBuildScenario(bestCapitalExtractionCandidate),
     runtimeArtifactEligibility: resultRecord.runtimeArtifactEligibility ?? returnAmplification.runtimeArtifactEligibility ?? null,
     reviewCandidateRuntimeArtifact: resultRecord.reviewCandidateRuntimeArtifact ?? null,
-    recommendedCandidate: compactRuntimeBuildPolicySummary(bestPolicySummary),
+    recommendedCandidate: Object.keys(bestCapitalExtractionCandidate).length > 0
+      ? compactRuntimeBuildScenario(bestCapitalExtractionCandidate)
+      : compactRuntimeBuildPolicySummary(bestPolicySummary),
     safestBaselineCandidate: compactRuntimeBuildScenario(returnAmplification.safestHighWinPolicy),
     bestRejectedProfitCandidate: compactRuntimeBuildScenario(returnAmplification.bestRejectedProfitPolicy),
     runtimeRuleDraft: result.bestPolicyArtifact ?? null,
