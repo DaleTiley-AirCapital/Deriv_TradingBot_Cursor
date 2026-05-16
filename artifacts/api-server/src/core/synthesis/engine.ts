@@ -2293,6 +2293,50 @@ async function buildReturnAmplificationAnalysis(params: {
   for (const candidate of simulatedCandidates) {
     actualBucketLookup.set(candidate.candidateId, actualMoveBucketForCandidate(candidate, moveById));
   }
+  const targetLargeMoveUniverse = params.dataset.serviceId === "CRASH300"
+    ? params.dataset.moves.filter((move) =>
+        String(move.calibratedBaseFamily ?? "crash_expansion") === "crash_expansion"
+        && Math.abs(Number(move.movePctPoints ?? move.movePct ?? 0)) >= 9
+      )
+    : [];
+  const targetLargeMoveIds = new Set(targetLargeMoveUniverse.map((move) => move.moveId));
+  const targetMovePctValues = targetLargeMoveUniverse
+    .map((move) => Math.abs(Number(move.movePctPoints ?? move.movePct ?? 0)))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const targetHoldBars = targetLargeMoveUniverse
+    .map((move) => Math.max(1, Math.round((Number(move.endTs ?? 0) - Number(move.startTs ?? 0)) / 60)))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const targetMaeValues = targetLargeMoveUniverse
+    .map((move) => Math.abs(Number(move.normalMaeBeforeSuccessPctPoints ?? move.normalMaeBeforeSuccess ?? 0)))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const targetMfeValues = targetLargeMoveUniverse
+    .map((move) => Math.abs(Number(move.realisticMfeAfterEntryPctPoints ?? move.realisticMfeAfterEntry ?? move.movePctPoints ?? move.movePct ?? 0)))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const targetLargeMoveReference = {
+    objective: "capital_extraction_large_move",
+    family: "crash_expansion",
+    minimumMovePct: 9,
+    totalTargetMoves: targetLargeMoveUniverse.length,
+    directionDistribution: countRecord(targetLargeMoveUniverse.map((move) => move.direction)),
+    bucketDistribution: countRecord(targetLargeMoveUniverse.map((move) => bucketLabelFromPctPoints(move.movePctPoints))),
+    medianMovePct: targetMovePctValues.length > 0 ? Number(percentile(targetMovePctValues, 0.5).toFixed(4)) : null,
+    medianHoldMinutes: targetHoldBars.length > 0 ? Number(percentile(targetHoldBars, 0.5).toFixed(2)) : null,
+    p75HoldMinutes: targetHoldBars.length > 0 ? Number(percentile(targetHoldBars, 0.75).toFixed(2)) : null,
+    medianMfePct: targetMfeValues.length > 0 ? Number(percentile(targetMfeValues, 0.5).toFixed(4)) : null,
+    medianMaePct: targetMaeValues.length > 0 ? Number(percentile(targetMaeValues, 0.5).toFixed(4)) : null,
+    source: "detected_moves/calibrated_moves_dynamic_universe",
+  };
+
+  const isLargeMoveCandidate = (item: {
+    candidate: SynthesisRebuiltTriggerCandidateRecord;
+    prediction: { predictedMoveSizeBucket?: string | null };
+    actualEvaluatedBucket?: string | null;
+  }) => {
+    const matchedMoveId = Number(item.candidate.matchedCalibratedMoveId ?? 0);
+    return targetLargeMoveIds.has(matchedMoveId)
+      || returnBucketAtLeast(item.actualEvaluatedBucket, "9_to_10_pct")
+      || returnBucketAtLeast(item.prediction.predictedMoveSizeBucket, "9_to_10_pct");
+  };
 
   const scoreCandidateSimilarity = (
     subject: SynthesisRebuiltTriggerCandidateRecord,
@@ -2516,19 +2560,56 @@ async function buildReturnAmplificationAnalysis(params: {
     const peerProjected = chosenScope.peers.map((peer) => Math.abs(peer.projectedMovePctPoints ?? peer.projectedMovePct ?? 0)).filter((value) => value > 0);
     const peerHoldBars = chosenScope.peers.map((peer) => Math.max(1, Math.round(((peer.exitTs ?? peer.entryTs) - peer.entryTs) / 60))).filter((value) => Number.isFinite(value) && value > 0);
     const conf = Number(prediction?.predictedBucketConfidence ?? 0);
+    const actualBucket = actualBucketLookup.get(candidate.candidateId);
+    const matchedMoveId = Number(candidate.matchedCalibratedMoveId ?? 0);
+    const largeMoveTarget = params.dataset.serviceId === "CRASH300"
+      && (
+        targetLargeMoveIds.has(matchedMoveId)
+        || returnBucketAtLeast(actualBucket, "9_to_10_pct")
+        || returnBucketAtLeast(predictedBucket, "9_to_10_pct")
+      );
     const tpQuantile = conf >= 0.8 ? 0.6 : conf >= 0.6 ? 0.5 : 0.4;
     const slQuantile = conf >= 0.8 ? 0.75 : 0.85;
-    const tpTargetPct = Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerProjected.length > 0 ? peerProjected : peerMfe, tpQuantile)).toFixed(2));
-    const slRiskPct = Number(percentile(peerMae, slQuantile).toFixed(2));
-    const protectionActivationPct = Number(percentile(peerMfe, 0.25).toFixed(2));
-    const dynamicProtectionDistancePct = Number(percentile(peerMae, 0.65).toFixed(2));
-    const runnerAllowed = returnBucketAtLeast(predictedBucket, "9_to_10_pct") && conf >= 0.6;
-    const runnerTargetPct = runnerAllowed ? Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerMfe, 0.75)).toFixed(2)) : null;
+    const baseTpTargetPct = Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerProjected.length > 0 ? peerProjected : peerMfe, tpQuantile)).toFixed(2));
+    const tpTargetPct = largeMoveTarget
+      ? Number(Math.max(
+          9,
+          Math.min(
+            15,
+            percentile(targetMovePctValues.length > 0 ? targetMovePctValues : (peerProjected.length > 0 ? peerProjected : peerMfe), 0.5),
+          ),
+        ).toFixed(2))
+      : baseTpTargetPct;
+    const slRiskPct = Number(Math.max(
+      0.1,
+      largeMoveTarget && targetMaeValues.length > 0
+        ? percentile(targetMaeValues, 0.85)
+        : percentile(peerMae, slQuantile),
+    ).toFixed(2));
+    const protectionActivationPct = Number(Math.max(
+      largeMoveTarget ? 3 : 0.1,
+      largeMoveTarget ? Math.min(5, tpTargetPct * 0.35) : percentile(peerMfe, 0.25),
+    ).toFixed(2));
+    const dynamicProtectionDistancePct = Number(Math.max(
+      largeMoveTarget ? 1.75 : 0.1,
+      largeMoveTarget ? percentile([1.75, 2, slRiskPct * 2], 0.5) : percentile(peerMae, 0.65),
+    ).toFixed(2));
+    const runnerAllowed = largeMoveTarget || (returnBucketAtLeast(predictedBucket, "9_to_10_pct") && conf >= 0.6);
+    const runnerTargetPct = runnerAllowed
+      ? Number((largeMoveTarget
+          ? Math.max(tpTargetPct, percentile(targetMovePctValues.length > 0 ? targetMovePctValues : peerMfe, 0.75))
+          : Math.min(bucketUpperBound(predictedBucket), percentile(peerMfe, 0.75))
+        ).toFixed(2))
+      : null;
     const partialTakeProfitPlan = runnerAllowed
-      ? [{ takePctOfPosition: 0.5, targetPct: Number(Math.min(bucketMidpoint(predictedBucket), percentile(peerMfe, 0.5)).toFixed(2)) }]
+      ? [{ takePctOfPosition: largeMoveTarget ? 0.25 : 0.5, targetPct: Number((largeMoveTarget ? Math.max(3, Math.min(5, tpTargetPct * 0.45)) : Math.min(bucketMidpoint(predictedBucket), percentile(peerMfe, 0.5))).toFixed(2)) }]
       : [];
-    const minHoldBars = peerHoldBars.length > 0 ? Math.max(1, Math.round(percentile(peerHoldBars, 0.25))) : 1;
-    const maxHoldBars = peerHoldBars.length > 0 ? Math.max(2, Math.round(percentile(peerHoldBars, 0.75))) : 6;
+    const minHoldBars = largeMoveTarget && targetHoldBars.length > 0
+      ? Math.max(180, Math.round(percentile(targetHoldBars, 0.25)))
+      : peerHoldBars.length > 0 ? Math.max(1, Math.round(percentile(peerHoldBars, 0.25))) : 1;
+    const maxHoldBars = largeMoveTarget && targetHoldBars.length > 0
+      ? Math.max(minHoldBars + 1, Math.round(percentile(targetHoldBars, 0.9)))
+      : peerHoldBars.length > 0 ? Math.max(2, Math.round(percentile(peerHoldBars, 0.75))) : 6;
     return {
       available: peerMfe.length > 0 && peerMae.length > 0,
       predictedMoveSizeBucket: predictedBucket,
@@ -2551,21 +2632,26 @@ async function buildReturnAmplificationAnalysis(params: {
         protectionActivationPct,
         dynamicProtectionDistancePct,
         protectiveFloorPct: 0,
+        normalPullbackTolerancePct: largeMoveTarget ? dynamicProtectionDistancePct : undefined,
       },
       exitDecisionRules: {
         tp1Pct: partialTakeProfitPlan?.[0]?.targetPct ?? Number(Math.min(bucketMidpoint(predictedBucket), tpTargetPct).toFixed(2)),
         tp2Pct: tpTargetPct,
         runnerTargetPct: runnerTargetPct ?? tpTargetPct,
         exits: ["tp2_hit", "protected_exit", "momentum_failure_exit", "reversal_exit", "time_failure_exit", "hard_sl"],
+        exhaustionConfirmationRequired: largeMoveTarget,
       },
       maturityRules: {
         minHoldBars,
+        expectedMaturityBars: Math.max(minHoldBars + 1, Math.round((minHoldBars + maxHoldBars) / 2)),
         maxHoldBars,
+        noPanicTimeExitBeforeBars: largeMoveTarget ? minHoldBars : undefined,
       },
       derivationNotes: [
         `predicted_bucket=${predictedBucket}`,
         `exit_source=${chosenScope.source}`,
         `peer_count=${chosenScope.peers.length}`,
+        ...(largeMoveTarget ? ["capital_extraction_large_move>=9pct", `target_move_count=${targetLargeMoveUniverse.length}`] : []),
       ],
       widenedFrom: chosenScope.widenedFrom,
       widenedTo: chosenScope.widenedTo,
@@ -2937,6 +3023,25 @@ async function buildReturnAmplificationAnalysis(params: {
       sourceDistribution: countRecord(selected.map((item) => String(item.dynamicExitPlan.tpTargetSource ?? item.dynamicExitPlan.noPredictionReason ?? "unknown"))),
       widenedDistribution: countRecord(selected.map((item) => `${String(item.dynamicExitPlan.widenedFrom ?? "none")}=>${String(item.dynamicExitPlan.widenedTo ?? "none")}`)),
     };
+    const selectedTargetMoveIds = new Set(selected
+      .map((item) => Number(item.candidate.matchedCalibratedMoveId ?? 0))
+      .filter((moveId) => targetLargeMoveIds.has(moveId)));
+    const targetCoveragePct = targetLargeMoveUniverse.length > 0
+      ? Number(((selectedTargetMoveIds.size / targetLargeMoveUniverse.length) * 100).toFixed(2))
+      : 0;
+    const targetLifecycleTrades = lifecycleReplayTrades.filter((trade) => {
+      const candidate = selected.find((item) => item.candidate.candidateId === trade.tradeId)?.candidate ?? null;
+      return candidate ? targetLargeMoveIds.has(Number(candidate.matchedCalibratedMoveId ?? 0)) : false;
+    });
+    const lifecycleExitTimingCounts = countRecord(targetLifecycleTrades.map((trade) => {
+      const candidate = selected.find((item) => item.candidate.candidateId === trade.tradeId)?.candidate ?? null;
+      const move = candidate ? moveById.get(Number(candidate.matchedCalibratedMoveId ?? 0)) ?? null : null;
+      if (!move || trade.lifecycleExitTs == null) return "unknown";
+      const deltaMinutes = (Number(trade.lifecycleExitTs) - Number(move.endTs ?? 0)) / 60;
+      if (deltaMinutes < -30) return "early";
+      if (deltaMinutes > 180) return "late";
+      return "correct_near_detected_exhaustion";
+    }));
     const returnAmplificationBreakdown = {
       targetProfile: isReturnFirstObjective(params.targetProfile) ? "return_first" : "return_amplification",
       winRate: selected.length > 0 ? wins / selected.length : 0,
@@ -3011,6 +3116,13 @@ async function buildReturnAmplificationAnalysis(params: {
       averageAdverseExcursion: selected.length > 0 ? Number(mean(selected.map((item) => Math.abs(Number(item.candidate.maePctPoints ?? item.candidate.maePct ?? 0)))).toFixed(2)) : 0,
       averageHoldBars: selected.length > 0 ? Number(mean(selected.map((item) => Math.max(1, ((item.candidate.exitTs ?? item.candidate.entryTs) - item.candidate.entryTs) / 60))).toFixed(2)) : 0,
       drawdown: effectiveDrawdown,
+      targetMoveCoverage: {
+        targetUniverseCount: targetLargeMoveUniverse.length,
+        capturedTargetMoveCount: selectedTargetMoveIds.size,
+        coveragePct: targetCoveragePct,
+        missedTargetMoveCount: Math.max(0, targetLargeMoveUniverse.length - selectedTargetMoveIds.size),
+      },
+      lifecycleExitTiming: lifecycleExitTimingCounts,
       monthlyBreakdown,
       selectedBucketDistribution: countRecord(selected.map((item) => item.candidate.selectedBucket)),
       predictedBucketDistribution: predictedBucketDistribution.counts,
@@ -3081,6 +3193,33 @@ async function buildReturnAmplificationAnalysis(params: {
       filterNotes: ["exact_final_best_policy_selected_trade_ids"],
     },
     {
+      scenarioId: "capital_extraction_ge9_crash_expansion",
+      label: "Capital extraction >=9% crash expansion",
+      description: "Mandatory large-move target set: candidates mapped to detected CRASH300 crash_expansion moves at or above 9%.",
+      predicate: (item: typeof enrichedCandidates[number]) => targetLargeMoveIds.has(Number(item.candidate.matchedCalibratedMoveId ?? 0)),
+      filterNotes: ["target_universe=crash_expansion", "abs(movePctPoints)>=9", "capital_extraction_large_move"],
+    },
+    {
+      scenarioId: "capital_extraction_ge9_up",
+      label: "Capital extraction >=9% up moves",
+      description: "Direction split for large upward CRASH300 crash_expansion moves.",
+      predicate: (item: typeof enrichedCandidates[number]) => {
+        const move = moveById.get(Number(item.candidate.matchedCalibratedMoveId ?? 0));
+        return Boolean(move && targetLargeMoveIds.has(move.moveId) && move.direction === "up");
+      },
+      filterNotes: ["target_universe=crash_expansion", "abs(movePctPoints)>=9", "direction=up"],
+    },
+    {
+      scenarioId: "capital_extraction_ge9_down",
+      label: "Capital extraction >=9% down moves",
+      description: "Direction split for large downward CRASH300 crash_expansion moves.",
+      predicate: (item: typeof enrichedCandidates[number]) => {
+        const move = moveById.get(Number(item.candidate.matchedCalibratedMoveId ?? 0));
+        return Boolean(move && targetLargeMoveIds.has(move.moveId) && move.direction === "down");
+      },
+      filterNotes: ["target_universe=crash_expansion", "abs(movePctPoints)>=9", "direction=down"],
+    },
+    {
       scenarioId: "bucket_gte_7_to_8",
       label: "Bucket >= 7_to_8_pct",
       description: "Research-only subset of candidates predicted to reach at least the 7-8% move class.",
@@ -3136,8 +3275,8 @@ async function buildReturnAmplificationAnalysis(params: {
     },
     {
       scenarioId: "failed_recovery_short_5_to_6_sell_late_full_family",
-      label: "Failed recovery short 5-6% sell late full family",
-      description: "Mandatory high-volume seed family analysis before daily-limit pruning.",
+      label: "Failed recovery short 5-6% sell late comparison",
+      description: "Comparison-only family retained to prove it does or does not beat the >=9% capital-extraction target.",
       predicate: (item: typeof enrichedCandidates[number]) =>
         item.candidate.runtimeFamily === "failed_recovery_short"
         && item.candidate.triggerTransition === "failed_recovery_break_down"
@@ -3150,7 +3289,7 @@ async function buildReturnAmplificationAnalysis(params: {
         "selectedMoveSizeBucket=5_to_6_pct",
         "direction=sell",
         "offsetCluster=late",
-        "mandatory_high_volume_seed_escalation",
+        "comparison_only:not_priority_target",
       ],
     },
     {
@@ -3180,13 +3319,9 @@ async function buildReturnAmplificationAnalysis(params: {
   ].map((scenario) => buildScenario(scenario));
 
   const targetSeedPredicate = (item: typeof enrichedCandidates[number]) =>
-    item.candidate.runtimeFamily === "failed_recovery_short"
-    && item.candidate.triggerTransition === "failed_recovery_break_down"
-    && item.candidate.selectedMoveSizeBucket === "5_to_6_pct"
-    && item.candidate.direction === "sell"
-    && offsetClusterFromLabel(item.candidate.offsetLabel) === "late";
+    targetLargeMoveIds.has(Number(item.candidate.matchedCalibratedMoveId ?? 0));
   const targetSeedFull = enrichedCandidates.filter(targetSeedPredicate);
-  const targetSeedDailyLimited = scenarios.find((scenario) => scenario.scenarioId === "failed_recovery_short_5_to_6_sell_late_full_family") ?? null;
+  const targetSeedDailyLimited = scenarios.find((scenario) => scenario.scenarioId === "capital_extraction_ge9_crash_expansion") ?? null;
   const summariseCandidateSet = (selected: typeof enrichedCandidates) => {
     const pnl = selected.map((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0));
     const lifecycleTrades = selected
@@ -3218,7 +3353,7 @@ async function buildReturnAmplificationAnalysis(params: {
       lifecycleReplayReport: buildTradeLifecycleReplayReport({
         serviceId: params.dataset.serviceId,
         sourceJobId: null,
-        sourcePolicyId: "failed_recovery_short_5_to_6_sell_late",
+        sourcePolicyId: "capital_extraction_ge9_crash_expansion",
         selected: lifecycleTrades,
       }),
       worstLosingTradeExamples: selected
@@ -3312,18 +3447,22 @@ async function buildReturnAmplificationAnalysis(params: {
   const dynamicTpProtectionSummary = targetSeedDailyLimited?.dynamicExitPlanSummary ?? null;
   const tradeLifecycleManagerReplay = preLimitFamilyStats.lifecycleReplayReport;
   const primaryDeepFamilyAnalysis = {
-    familyKey: "failed_recovery_short|failed_recovery_break_down|5_to_6_pct|sell|late",
-    verdict: "priority_runtime_candidate_family",
+    familyKey: "crash_expansion|abs_move_gte_9_pct|both_directions",
+    verdict: "capital_extraction_target_universe",
+    targetMoveUniverse: targetLargeMoveReference,
     preLimitFamilyStats,
     postDailyLimitFamilyStats,
     winnerLoserSeparation,
     tradeLifecycleManagerReplay,
     dynamicTpProtectionSummary,
     answers: {
-      betterThanTinyBestAbove5: Number(preLimitFamilyStats.totalSimulatedTrades ?? 0) >= 50
-        && Number(preLimitFamilyStats.winRate ?? 0) >= 0.88,
+      targetMoveCount: targetLargeMoveUniverse.length,
+      mappedCandidateCount: targetSeedFull.length,
+      capturesTargetUniverse: Number(((targetSeedDailyLimited?.targetMoveCoverage as Record<string, unknown> | undefined)?.capturedTargetMoveCount ?? 0)) > 0,
+      beatsTinySubsetOnCapitalExtraction: Number(targetSeedDailyLimited?.trades ?? 0) >= 20
+        && Number(targetSeedDailyLimited?.lifecycleAverageMonthlyAccountReturnPct ?? targetSeedDailyLimited?.averageMonthlyAccountReturnPct ?? 0) > 0,
       retains90WinRateAfterDailyLimit: Number(targetSeedDailyLimited?.winRate ?? 0) >= 0.9,
-      capturesFiveToSixPct: Number(targetSeedDailyLimited?.lifecycleMedianPnlPct ?? 0) >= 5,
+      capturesNinePctMedian: Number(targetSeedDailyLimited?.lifecycleMedianPnlPct ?? 0) >= 9,
       lossesAvoidableWithoutDestroyingWinners: winnerLoserSeparation.some((item) =>
         Number((item.falsePositiveImpact as Record<string, unknown>).losersRemoved ?? 0) >= 3
         && Number((item.falsePositiveImpact as Record<string, unknown>).winnersLost ?? 999) <= 14
@@ -3425,8 +3564,36 @@ async function buildReturnAmplificationAnalysis(params: {
   const rebuiltPolicySeedCount = Number(
     ((params.dataset.summary.rebuiltPolicySeedDiagnostics as Record<string, unknown> | undefined)?.rebuiltPolicySeedCount ?? 0),
   );
+  const candidateCoveragePct = (scenario: Record<string, unknown>) =>
+    Number(((scenario.targetMoveCoverage as Record<string, unknown> | undefined)?.coveragePct ?? 0));
+  const candidateCapturedTargetCount = (scenario: Record<string, unknown>) =>
+    Number(((scenario.targetMoveCoverage as Record<string, unknown> | undefined)?.capturedTargetMoveCount ?? 0));
+  const candidateCapitalReturn = (scenario: Record<string, unknown>) =>
+    Number(scenario.lifecycleAverageMonthlyAccountReturnPct ?? scenario.averageMonthlyAccountReturnPct ?? 0);
+  const candidateTradeCount = (scenario: Record<string, unknown>) =>
+    Number(scenario.trades ?? 0);
+  const capitalExtractionScenarios = scenarios.filter((scenario) =>
+    String(scenario.scenarioId ?? "").startsWith("capital_extraction_ge9")
+    || (
+      candidateCapturedTargetCount(scenario) > 0
+      && Number(scenario.lifecycleMedianPnlPct ?? 0) >= 5
+    )
+  );
+  const rankCapitalExtraction = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+    Number(candidateTradeCount(b) >= 20 ? 1 : 0) - Number(candidateTradeCount(a) >= 20 ? 1 : 0)
+    || candidateCapitalReturn(b) - candidateCapitalReturn(a)
+    || Number(b.lifecycleAccountReturnPct ?? b.accountReturnPct ?? 0) - Number(a.lifecycleAccountReturnPct ?? a.accountReturnPct ?? 0)
+    || candidateCoveragePct(b) - candidateCoveragePct(a)
+    || candidateCapturedTargetCount(b) - candidateCapturedTargetCount(a)
+    || Number(b.lifecycleMfeCaptureRatio ?? 0) - Number(a.lifecycleMfeCaptureRatio ?? 0)
+    || Number(b.lifecycleMedianPnlPct ?? 0) - Number(a.lifecycleMedianPnlPct ?? 0)
+    || Number(b.guardrailsPassed ? 1 : 0) - Number(a.guardrailsPassed ? 1 : 0)
+    || Number(b.winRate ?? 0) - Number(a.winRate ?? 0)
+    || Number(a.drawdown ?? Number.POSITIVE_INFINITY) - Number(b.drawdown ?? Number.POSITIVE_INFINITY)
+    || candidateTradeCount(b) - candidateTradeCount(a);
+  const bestCapitalExtractionCandidate = [...capitalExtractionScenarios].sort(rankCapitalExtraction)[0] ?? null;
   const rankedScenarios = [...scenarios].sort((a, b) =>
-    Number((b.scenarioId === "failed_recovery_short_5_to_6_sell_late_full_family") ? 1 : 0) - Number((a.scenarioId === "failed_recovery_short_5_to_6_sell_late_full_family") ? 1 : 0)
+    rankCapitalExtraction(a, b)
     || Number(b.guardrailsPassed ? 1 : 0) - Number(a.guardrailsPassed ? 1 : 0)
     || Number((b.trades ?? 0) >= 50 ? 1 : 0) - Number((a.trades ?? 0) >= 50 ? 1 : 0)
     || Number(b.lifecycleAverageMonthlyAccountReturnPct ?? b.averageMonthlyAccountReturnPct ?? 0) - Number(a.lifecycleAverageMonthlyAccountReturnPct ?? a.averageMonthlyAccountReturnPct ?? 0)
@@ -3445,12 +3612,18 @@ async function buildReturnAmplificationAnalysis(params: {
     || Number(b.profitFactor ?? 0) - Number(a.profitFactor ?? 0)
     || Number(b.lifecycleMedianPnlPct ?? 0) - Number(a.lifecycleMedianPnlPct ?? 0)
   )[0] ?? null;
-  const highVolumeRuntimeCandidate = targetSeedDailyLimited && Number(targetSeedDailyLimited.trades ?? 0) >= 50
-    && Number(targetSeedDailyLimited.winRate ?? 0) >= 0.9
-    && Number(targetSeedDailyLimited.slHitRate ?? 1) <= 0.1
-    ? targetSeedDailyLimited
+  const highVolumeRuntimeCandidate = bestCapitalExtractionCandidate
+    && Number(bestCapitalExtractionCandidate.trades ?? 0) >= 20
+    && candidateCapturedTargetCount(bestCapitalExtractionCandidate) > 0
+    && Number(bestCapitalExtractionCandidate.slHitRate ?? 1) <= 0.15
+    && candidateCapitalReturn(bestCapitalExtractionCandidate) > 0
+    ? bestCapitalExtractionCandidate
     : null;
-  const bestReturnFirstPolicy = highVolumeRuntimeCandidate ?? rankedScenarios.find((scenario) => Boolean(scenario.guardrailsPassed) && Number(scenario.trades ?? 0) >= 50) ?? rankedScenarios.find((scenario) => Boolean(scenario.guardrailsPassed)) ?? null;
+  const bestReturnFirstPolicy = highVolumeRuntimeCandidate
+    ?? bestCapitalExtractionCandidate
+    ?? rankedScenarios.find((scenario) => Boolean(scenario.guardrailsPassed) && Number(scenario.trades ?? 0) >= 50)
+    ?? rankedScenarios.find((scenario) => Boolean(scenario.guardrailsPassed))
+    ?? null;
   const bestRejectedProfitPolicy = [...scenarios]
     .filter((scenario) => !Boolean(scenario.guardrailsPassed))
     .sort((a, b) =>
@@ -3485,7 +3658,7 @@ async function buildReturnAmplificationAnalysis(params: {
         status: highVolumeRuntimeCandidate ? "runtime_artifact_eligible" : "guardrails_passed",
         policy: bestReturnFirstPolicy,
         explanation: highVolumeRuntimeCandidate
-          ? "Selected for final-pass review because failed_recovery_short 5_to_6 sell late is the strongest high-volume runtime family and retains 90%+ win rate after daily limiting."
+          ? `Selected for final-pass review because it is the strongest >=9% crash_expansion capital-extraction candidate, covering ${candidateCapturedTargetCount(highVolumeRuntimeCandidate)} target moves with ${candidateCapitalReturn(highVolumeRuntimeCandidate).toFixed(2)}% lifecycle average monthly return.`
           : `Selected for return_first because it passed swing capture guardrails and delivered ${Number(bestReturnFirstPolicy.lifecycleAverageMonthlyAccountReturnPct ?? 0).toFixed(2)}% average monthly return.`,
       }
     : safestHighWinPolicy
@@ -3501,24 +3674,43 @@ async function buildReturnAmplificationAnalysis(params: {
         };
   const runtimeArtifactEligibility = {
     status: highVolumeRuntimeCandidate ? "runtime_artifact_eligible" : "blocked_with_named_reason",
-    candidateFamily: "failed_recovery_short|failed_recovery_break_down|5_to_6_pct|sell|late",
+    candidateFamily: String(bestCapitalExtractionCandidate?.scenarioId ?? "crash_expansion|abs_move_gte_9_pct"),
     canCreateReviewArtifact: Boolean(highVolumeRuntimeCandidate),
     canAutoStage: false,
     canAutoPromote: false,
     canPromoteRuntimeAfterValidation: Boolean(highVolumeRuntimeCandidate),
     blockers: [
-      ...(highVolumeRuntimeCandidate ? [] : ["high_volume_family_failed_win_or_sl_gate"]),
-      ...(Number(targetSeedDailyLimited?.lifecycleMedianPnlPct ?? 0) >= 5 ? [] : ["lifecycle_capture_below_5pct"]),
-      ...(primaryDeepFamilyAnalysis.answers.lossesAvoidableWithoutDestroyingWinners ? [] : ["losses_not_cleanly_separable_yet"]),
+      ...(targetLargeMoveUniverse.length > 0 ? [] : ["target_ge9_crash_expansion_universe_empty"]),
+      ...(bestCapitalExtractionCandidate ? [] : ["no_capital_extraction_candidate_found"]),
+      ...(highVolumeRuntimeCandidate ? [] : ["best_large_move_candidate_failed_capital_or_risk_gate"]),
+      ...(bestCapitalExtractionCandidate && Number(bestCapitalExtractionCandidate.trades ?? 0) >= 20 ? [] : ["sample_below_20_trades"]),
+      ...(bestCapitalExtractionCandidate && candidateCapturedTargetCount(bestCapitalExtractionCandidate) > 0 ? [] : ["no_ge9_target_moves_captured"]),
+      ...(bestCapitalExtractionCandidate && Number(bestCapitalExtractionCandidate.lifecycleMedianPnlPct ?? 0) >= 5 ? [] : ["lifecycle_capture_below_5pct"]),
       "runtime_mimic_validation_required_before_promotion",
       "manual_validate_runtime_required",
     ],
     warnings: [
       "Review artifact only. No staging, promotion, Demo, Real, or live execution changes are performed by Build Runtime Model.",
+      "Objective is capital extraction from detected >=9% CRASH300 crash_expansion moves, not micro-move win-rate optimisation.",
     ],
   };
   const aiReviewInput = {
-    objective: "Can failed_recovery_short 5_to_6 sell late become a live-safe deterministic runtime, and what filters/lifecycle settings should be validated?",
+    objective: "Given the CRASH300 >=9% crash_expansion target universe, which live-safe trigger/lifecycle rule set maximizes capital extraction while avoiding panic exits and false continuation?",
+    targetMoveUniverse: targetLargeMoveReference,
+    bestCapitalExtractionCandidate: bestCapitalExtractionCandidate
+      ? {
+          scenarioId: bestCapitalExtractionCandidate.scenarioId,
+          label: bestCapitalExtractionCandidate.label,
+          trades: bestCapitalExtractionCandidate.trades,
+          targetMoveCoverage: bestCapitalExtractionCandidate.targetMoveCoverage,
+          lifecycleMedianPnlPct: bestCapitalExtractionCandidate.lifecycleMedianPnlPct,
+          lifecycleAveragePnlPct: bestCapitalExtractionCandidate.lifecycleAveragePnlPct,
+          lifecycleAverageMonthlyAccountReturnPct: bestCapitalExtractionCandidate.lifecycleAverageMonthlyAccountReturnPct,
+          lifecycleExitTiming: bestCapitalExtractionCandidate.lifecycleExitTiming,
+          dynamicExitPlanSummary: bestCapitalExtractionCandidate.dynamicExitPlanSummary,
+          rejectionReasons: bestCapitalExtractionCandidate.rejectionReasons,
+        }
+      : null,
     primaryFamily: {
       familyKey: primaryDeepFamilyAnalysis.familyKey,
       preLimitFamilyStats,
@@ -3688,9 +3880,10 @@ async function buildReturnAmplificationAnalysis(params: {
     recommendedCandidateConfiguration,
     escalatedSeedFamilies: [
       {
-        familyKey: "failed_recovery_short|failed_recovery_break_down|5_to_6_pct|sell|late",
-        escalationReason: "simulatedTrades>=50 winRate>=0.88 slHitRate<=0.15 bucket>=5_to_6_pct",
+        familyKey: "crash_expansion|abs_move_gte_9_pct|both_directions",
+        escalationReason: "mandatory_capital_extraction_target_universe:abs(movePctPoints)>=9",
         priority: "primary",
+        targetMoveUniverse: targetLargeMoveReference,
         preLimit: {
           trades: preLimitFamilyStats.totalSimulatedTrades,
           wins: preLimitFamilyStats.wins,
@@ -3710,7 +3903,44 @@ async function buildReturnAmplificationAnalysis(params: {
             }
           : null,
       },
+      {
+        familyKey: "failed_recovery_short|failed_recovery_break_down|5_to_6_pct|sell|late",
+        escalationReason: "comparison_only:previous_seed_no_longer_priority",
+        priority: "comparison",
+      },
     ],
+    targetMoveUniverse: targetLargeMoveReference,
+    largeMoveCoverage: bestCapitalExtractionCandidate?.targetMoveCoverage ?? {
+      targetUniverseCount: targetLargeMoveUniverse.length,
+      capturedTargetMoveCount: 0,
+      coveragePct: 0,
+      missedTargetMoveCount: targetLargeMoveUniverse.length,
+    },
+    bestCapitalExtractionCandidate,
+    missedTargetMoveAnalysis: {
+      targetUniverseCount: targetLargeMoveUniverse.length,
+      capturedTargetMoveCount: bestCapitalExtractionCandidate ? candidateCapturedTargetCount(bestCapitalExtractionCandidate) : 0,
+      missedTargetMoveCount: Math.max(0, targetLargeMoveUniverse.length - (bestCapitalExtractionCandidate ? candidateCapturedTargetCount(bestCapitalExtractionCandidate) : 0)),
+      missedMoveIds: targetLargeMoveUniverse
+        .filter((move) => {
+          const scenarioIds = bestCapitalExtractionCandidate && Array.isArray(bestCapitalExtractionCandidate.selectedTradeIds)
+            ? new Set((bestCapitalExtractionCandidate.selectedTradeIds as string[]).map((id) => {
+                const item = enrichedCandidates.find((candidate) => candidate.candidate.candidateId === id);
+                return Number(item?.candidate.matchedCalibratedMoveId ?? 0);
+              }))
+            : new Set<number>();
+          return !scenarioIds.has(move.moveId);
+        })
+        .slice(0, 80)
+        .map((move) => move.moveId),
+    },
+    lifecycleHoldAndExhaustionAnalysis: {
+      targetUniverse: targetLargeMoveReference,
+      selectedCandidateExitTiming: bestCapitalExtractionCandidate?.lifecycleExitTiming ?? {},
+      normalPullbackTolerancePct: (bestCapitalExtractionCandidate?.dynamicExitPlanSummary as Record<string, unknown> | undefined)?.dynamicProtectionDistancePct ?? null,
+      noPanicCloseBeforeMinutes: (bestCapitalExtractionCandidate?.dynamicExitPlanSummary as Record<string, unknown> | undefined)?.maturityRules ?? null,
+      interpretation: "Large-move candidates derive maturity from detected >=9% move duration and tolerate normal continuation pullbacks before exhaustion exits.",
+    },
     primaryDeepFamilyAnalysis,
     preLimitFamilyStats,
     postDailyLimitFamilyStats,
@@ -3744,8 +3974,16 @@ async function buildReturnAmplificationAnalysis(params: {
       lifecycleOldAveragePnlPct: baselineLifecycleReplayReport.oldAveragePnlPct,
       lifecycleNewAveragePnlPct: baselineLifecycleReplayReport.lifecycleAveragePnlPct,
       failedRecoveryShortFinalPassAnswers: primaryDeepFamilyAnalysis.answers,
+      largeMoveFinalPassAnswers: {
+        targetMoveCount: targetLargeMoveUniverse.length,
+        selectedScenarioId: bestCapitalExtractionCandidate?.scenarioId ?? null,
+        capturedTargetMoveCount: bestCapitalExtractionCandidate ? candidateCapturedTargetCount(bestCapitalExtractionCandidate) : 0,
+        targetCoveragePct: bestCapitalExtractionCandidate ? candidateCoveragePct(bestCapitalExtractionCandidate) : 0,
+        lifecycleExitTiming: bestCapitalExtractionCandidate?.lifecycleExitTiming ?? {},
+        noLongerPrioritisesFailedRecoveryShort: bestReturnFirstPolicy?.scenarioId !== "failed_recovery_short_5_to_6_sell_late_full_family",
+      },
       recommendedNextStep: recommendedCandidateConfiguration && Number((recommendedCandidateConfiguration as Record<string, unknown>).averageMonthlyAccountReturnPct ?? 0) > 0
-        ? "Review the failed_recovery_short runtime artifact candidate, then run Validate Runtime manually before any Promote Runtime action."
+        ? "Review the CRASH300 >=9% crash_expansion capital-extraction runtime candidate, then run Validate Runtime manually before any Promote Runtime action."
         : "No safe return-first swing policy emerged from the current analysis. Keep the baseline rebuilt policy and continue research.",
     },
   };
@@ -3906,6 +4144,20 @@ function compactReviewCandidateRuntimeArtifactForStorage(value: unknown) {
   };
 }
 
+function compactBestPolicySummaryForStorage(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const summary = value as Record<string, unknown>;
+  const {
+    returnAmplificationAnalysis: _returnAmplificationAnalysis,
+    bestPolicySelectedTrades: _bestPolicySelectedTrades,
+    ...rest
+  } = summary;
+  return {
+    ...rest,
+    compactedForStorage: true,
+  };
+}
+
 function compactBestPolicyArtifactForStorage(value: unknown) {
   if (!value || typeof value !== "object") return value;
   const artifact = value as Record<string, unknown>;
@@ -3998,6 +4250,7 @@ function compactReturnAmplificationAnalysisForStorage(value: unknown) {
     safestHighWinPolicy: compactReturnAmplificationScenarioForStorage(analysis.safestHighWinPolicy),
     bestReturnFirstPolicy: compactReturnAmplificationScenarioForStorage(analysis.bestReturnFirstPolicy),
     bestRejectedProfitPolicy: compactReturnAmplificationScenarioForStorage(analysis.bestRejectedProfitPolicy),
+    bestCapitalExtractionCandidate: compactReturnAmplificationScenarioForStorage(analysis.bestCapitalExtractionCandidate),
     recommendedPolicy: analysis.recommendedPolicy && typeof analysis.recommendedPolicy === "object"
       ? {
           ...(analysis.recommendedPolicy as Record<string, unknown>),
@@ -4025,7 +4278,7 @@ function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): El
     status: result.status,
     resultState: result.resultState,
     targetAchieved: result.targetAchieved,
-    bestPolicySummary: result.bestPolicySummary,
+    bestPolicySummary: compactBestPolicySummaryForStorage(result.bestPolicySummary) as EliteSynthesisPolicySummary | null,
     topPolicySummaries: result.topPolicySummaries.slice(0, 20),
     rejectedPolicySummaries: Array.isArray(result.rejectedPolicySummaries) ? result.rejectedPolicySummaries.slice(0, 80) : [],
     bestPolicyArtifact: compactBestPolicyArtifactForStorage(result.bestPolicyArtifact) as EliteSynthesisPolicyArtifact | null,
@@ -4061,6 +4314,11 @@ function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): El
     dynamicTpProtectionSummary: result.dynamicTpProtectionSummary,
     candidateFamilyComparison: Array.isArray(result.candidateFamilyComparison) ? result.candidateFamilyComparison.slice(0, 20) : [],
     runtimeArtifactEligibility: result.runtimeArtifactEligibility,
+    targetMoveUniverse: result.targetMoveUniverse,
+    largeMoveCoverage: result.largeMoveCoverage,
+    bestCapitalExtractionCandidate: compactReturnAmplificationScenarioForStorage(result.bestCapitalExtractionCandidate),
+    missedTargetMoveAnalysis: result.missedTargetMoveAnalysis,
+    lifecycleHoldAndExhaustionAnalysis: result.lifecycleHoldAndExhaustionAnalysis,
     reviewCandidateRuntimeArtifact: compactReviewCandidateRuntimeArtifactForStorage(result.reviewCandidateRuntimeArtifact),
     resultCompactedForRuntimeBuildStorage: true,
   };
@@ -4759,17 +5017,19 @@ export async function runEliteSynthesisJob(params: {
   const reviewCandidateRuntimeArtifact = finalPassRuntimeArtifactEligibility?.canCreateReviewArtifact
     ? {
         artifactId: `crash300-final-pass-review-${params.jobId}`,
-        artifactType: "crash300_final_pass_runtime_review_candidate",
+        artifactType: "crash300_capital_extraction_runtime_review_candidate",
         mode: "review_only",
         serviceId: params.serviceId,
         generatedAt: nowIso(),
         sourceSynthesisJobId: params.jobId,
-        sourcePolicyId: "failed_recovery_short_5_to_6_sell_late_final_pass",
-        runtimeFamily: "failed_recovery_short",
-        triggerTransition: "failed_recovery_break_down",
-        selectedMoveSizeBucket: "5_to_6_pct",
-        direction: "sell",
-        offsetCluster: "late",
+        sourcePolicyId: String(((returnAmplificationAnalysis as Record<string, unknown>).bestCapitalExtractionCandidate as Record<string, unknown> | undefined)?.scenarioId ?? "capital_extraction_ge9_crash_expansion"),
+        runtimeFamily: "crash_expansion",
+        triggerTransition: "capital_extraction_large_move",
+        selectedMoveSizeBucket: "9_plus_pct",
+        direction: "both",
+        offsetCluster: "detected_move_trigger_offsets",
+        targetMoveUniverse: (returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse ?? null,
+        largeMoveCoverage: (returnAmplificationAnalysis as Record<string, unknown>).largeMoveCoverage ?? null,
         lifecycleManagerRules: ((returnAmplificationAnalysis as Record<string, unknown>).dynamicTpProtectionSummary ?? null),
         deepFamilyAnalysis: (returnAmplificationAnalysis as Record<string, unknown>).primaryDeepFamilyAnalysis ?? null,
         aiStrategyReview: (returnAmplificationAnalysis as Record<string, unknown>).aiStrategyReview ?? null,
@@ -4975,6 +5235,11 @@ export async function runEliteSynthesisJob(params: {
     aiStrategyReview: (returnAmplificationAnalysis as Record<string, unknown>).aiStrategyReview ?? null,
     candidateFamilyComparison: (returnAmplificationAnalysis as Record<string, unknown>).policyComparisonTable ?? [],
     runtimeArtifactEligibility: finalPassRuntimeArtifactEligibility ?? null,
+    targetMoveUniverse: (returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse ?? null,
+    largeMoveCoverage: (returnAmplificationAnalysis as Record<string, unknown>).largeMoveCoverage ?? null,
+    bestCapitalExtractionCandidate: (returnAmplificationAnalysis as Record<string, unknown>).bestCapitalExtractionCandidate ?? null,
+    missedTargetMoveAnalysis: (returnAmplificationAnalysis as Record<string, unknown>).missedTargetMoveAnalysis ?? null,
+    lifecycleHoldAndExhaustionAnalysis: (returnAmplificationAnalysis as Record<string, unknown>).lifecycleHoldAndExhaustionAnalysis ?? null,
     reviewCandidateRuntimeArtifact,
   };
   const storedResult = compactEliteSynthesisResultForStorage(result);
