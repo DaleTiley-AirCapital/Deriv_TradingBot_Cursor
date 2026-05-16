@@ -17,7 +17,7 @@
  *   2. Mode active
  *   3. Symbol enabled for mode
  *   4. Min composite score / confidence gate  ← key parity gate
- *   5. One-open-trade-per-symbol
+ *   5. One-open-trade-per-symbol unless service-runtime compounding is enabled
  *   6. Max concurrent open trades
  *   7. Daily loss limit
  *   8. Weekly loss limit
@@ -52,6 +52,7 @@ export interface AllocatorCoreInput {
 
   // Portfolio state (live: from DB; backtest: approximated from local state)
   openTradeForSymbol: boolean;
+  allowCompounding?: boolean;
   currentOpenCount: number;
   maxOpenTrades: number;     // live: from platformState ${mode}_max_open_trades
 
@@ -102,8 +103,8 @@ export function evaluateSignalAdmission(input: AllocatorCoreInput): AllocatorCor
     );
   }
 
-  // Gate 5: One-open-trade-per-symbol
-  if (input.openTradeForSymbol) {
+  // Gate 5: One-open-trade-per-symbol unless the live allocator is intentionally compounding.
+  if (input.openTradeForSymbol && !input.allowCompounding) {
     return deny(`symbol_already_has_open_position:${input.symbol}`, 5);
   }
 

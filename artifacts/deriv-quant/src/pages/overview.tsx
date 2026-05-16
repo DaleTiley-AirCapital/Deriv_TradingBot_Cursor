@@ -91,6 +91,14 @@ interface ServiceLifecycleStatus {
   promotedRuntimeArtifactId?: string | null;
   promotedRuntimeVersion?: string | null;
   nextRequiredAction?: string | null;
+  latestScannerStatus?: string | null;
+  latestScannerReason?: string | null;
+  latestScannerAt?: string | null;
+}
+
+interface ServiceLifecycleResponse {
+  serviceId: string;
+  serviceLifecycleStatus?: ServiceLifecycleStatus | null;
 }
 
 interface TradeAttributionPosition {
@@ -120,6 +128,12 @@ function formatAge(dateStr: string | null): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function normalizeLifecycleResponse(serviceId: string, response: ServiceLifecycleResponse | ServiceLifecycleStatus): ServiceLifecycleStatus {
+  const maybeWrapped = response as ServiceLifecycleResponse;
+  if (maybeWrapped.serviceLifecycleStatus) return maybeWrapped.serviceLifecycleStatus;
+  return response ? response as ServiceLifecycleStatus : EMPTY_SERVICE_LIFECYCLE(serviceId);
 }
 
 function formatNum(value: number, digits = 2) {
@@ -262,13 +276,9 @@ export default function Overview() {
     queryFn: () =>
       Promise.all(
         ACTIVE_SERVICE_SYMBOLS.map((serviceId) =>
-          apiFetch<ServiceLifecycleStatus>(`api/research/${serviceId}/service-lifecycle`).catch(() => ({
-            serviceId,
-            stagedCandidateArtifactId: null,
-            promotedRuntimeArtifactId: null,
-            promotedRuntimeVersion: null,
-            nextRequiredAction: null,
-          })),
+          apiFetch<ServiceLifecycleResponse | ServiceLifecycleStatus>(`api/research/${serviceId}/service-lifecycle`)
+            .then((response) => normalizeLifecycleResponse(serviceId, response))
+            .catch(() => EMPTY_SERVICE_LIFECYCLE(serviceId)),
         ),
       ),
     refetchInterval: 15_000,
@@ -622,6 +632,12 @@ export default function Overview() {
                 </div>
                 {service.nextRequiredAction && (
                   <div className="text-[10px] text-muted-foreground">Next: {service.nextRequiredAction}</div>
+                )}
+                {service.latestScannerReason && (
+                  <div className="text-[10px] text-muted-foreground">
+                    Scan: {service.latestScannerStatus ?? "unknown"} / {service.latestScannerReason}
+                    {service.latestScannerAt ? ` (${formatAge(service.latestScannerAt)})` : ""}
+                  </div>
                 )}
               </div>
             </div>

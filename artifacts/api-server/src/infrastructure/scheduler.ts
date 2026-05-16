@@ -116,6 +116,32 @@ export function getSchedulerStatus() {
   };
 }
 
+async function recordServiceScanStatus(params: {
+  serviceId: string;
+  symbol: string;
+  status: "blocked" | "skipped" | "candidate_emitted" | "allocator_rejected" | "executed";
+  reason: string;
+  detail?: Record<string, unknown>;
+}): Promise<void> {
+  const now = new Date();
+  const prefix = `${params.serviceId.toUpperCase()}_last_service_scan`;
+  const entries = [
+    { key: `${prefix}_at`, value: now.toISOString() },
+    { key: `${prefix}_status`, value: params.status },
+    { key: `${prefix}_reason`, value: params.reason },
+    { key: `${prefix}_symbol`, value: params.symbol },
+    { key: `${prefix}_detail`, value: JSON.stringify(params.detail ?? {}) },
+  ];
+  await Promise.all(entries.map((entry) =>
+    db.insert(platformStateTable)
+      .values(entry)
+      .onConflictDoUpdate({
+        target: platformStateTable.key,
+        set: { value: entry.value, updatedAt: now },
+      }),
+  ));
+}
+
 /**
  * V3 live scanner — replaces the V2 family-based scanSingleSymbol.
  *
@@ -142,12 +168,14 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     console.log(
       `[V3Scan] ${symbol} | GATE_BLOCKED | reason=${gate.blockedReason ?? "unknown"}${gate.warnings.length ? ` | warnings=${gate.warnings.join(",")}` : ""}`,
     );
+    await recordServiceScanStatus({ serviceId, symbol, status: "blocked", reason: gate.blockedReason ?? "unknown", detail: { warnings: gate.warnings } });
     return;
   }
 
   const activeMode = gate.activeMode;
   if (activeMode !== "paper" && activeMode !== "demo" && activeMode !== "real") {
     console.log(`[V3Scan] ${symbol} | GATE_BLOCKED | reason=active_mode_not_executable(${activeMode})`);
+    await recordServiceScanStatus({ serviceId, symbol, status: "blocked", reason: `active_mode_not_executable(${activeMode})` });
     return;
   }
 
@@ -157,12 +185,14 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     console.log(
       `[V3Scan] ${symbol} | GATE_BLOCKED | reason=${runtimeResolution.blockedReason ?? "promoted_service_runtime_missing"}`,
     );
+    await recordServiceScanStatus({ serviceId, symbol, status: "blocked", reason: runtimeResolution.blockedReason ?? "promoted_service_runtime_missing" });
     return;
   }
 
   const runtimeCalibration = runtimeArtifact.runtimeModelAdapter;
   if (!runtimeCalibration) {
     console.log(`[V3Scan] ${symbol} | GATE_BLOCKED | reason=promoted_service_runtime_missing_runtime_adapter`);
+    await recordServiceScanStatus({ serviceId, symbol, status: "blocked", reason: "promoted_service_runtime_missing_runtime_adapter" });
     return;
   }
 
@@ -173,6 +203,13 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     console.log(
       `[V3Scan] ${symbol} | SKIP | reason=calibrated_scan_cadence_guard(${Math.round((cadenceMs - (nowMs - lastMs)) / 1000)}s_remaining)`,
     );
+    await recordServiceScanStatus({
+      serviceId,
+      symbol,
+      status: "skipped",
+      reason: "calibrated_scan_cadence_guard",
+      detail: { secondsRemaining: Math.round((cadenceMs - (nowMs - lastMs)) / 1000) },
+    });
     return;
   }
   calibratedLastScanMs[symbol] = nowMs;
@@ -180,6 +217,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   const result = await scanSymbolV3(symbol, runtimeCalibration);
   if (result.skipped) {
     console.log(`[V3Scan] ${symbol} | SKIP | reason=${result.skipReason ?? "unknown"}`);
+    await recordServiceScanStatus({ serviceId, symbol, status: "skipped", reason: result.skipReason ?? "unknown" });
     return;
   }
 
@@ -187,6 +225,13 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   if (!coordinatorOutput || !features) {
     const engineCount = engineResults.length;
     console.log(`[V3Scan] ${symbol} | regime=${operationalRegime} | engines=${engineCount} | SKIP=no_coordinator_output`);
+    await recordServiceScanStatus({
+      serviceId,
+      symbol,
+      status: "skipped",
+      reason: "no_coordinator_output",
+      detail: { operationalRegime, regimeConfidence, engineCount },
+    });
     return;
   }
 
@@ -198,6 +243,13 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       console.log(
         `[V3Scan] ${symbol} | SKIP | reason=stale_candle_data(age=${Math.round(ageMs / 1000)}s,cutoff=${Math.round(staleCutoffMs / 1000)}s)`,
       );
+      await recordServiceScanStatus({
+        serviceId,
+        symbol,
+        status: "skipped",
+        reason: "stale_candle_data",
+        detail: { ageSeconds: Math.round(ageMs / 1000), cutoffSeconds: Math.round(staleCutoffMs / 1000) },
+      });
       return;
     }
   }
@@ -245,6 +297,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   });
   if (!builtCandidate) {
     console.log(`[V3Scan] ${symbol} | NO_SERVICE_CANDIDATE | reason=candidate_builder_returned_null`);
+    await recordServiceScanStatus({ serviceId, symbol, status: "skipped", reason: "candidate_builder_returned_null" });
     return;
   }
 
@@ -252,6 +305,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     console.log(
       `[V3Scan] ${symbol} | CANDIDATE_BLOCKED | reason=runtime_setup:${builtCandidate.candidate.runtimeSetup.reason}`,
     );
+    await recordServiceScanStatus({ serviceId, symbol, status: "blocked", reason: `runtime_setup:${builtCandidate.candidate.runtimeSetup.reason}` });
     return;
   }
 
@@ -270,12 +324,20 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   });
 
   console.log(`[V3Scan] ${symbol} | SERVICE_CANDIDATE_EMITTED | candidateId=${candidateId}`);
+  await recordServiceScanStatus({
+    serviceId,
+    symbol,
+    status: "candidate_emitted",
+    reason: "service_candidate_emitted",
+    detail: { candidateId },
+  });
 
   const allocatorDecision = await allocateV3Signal(
     coordinatorOutput,
     activeMode,
     stateMap,
     runtimeCalibration,
+    runtimeArtifact,
   );
   const decisionId = await createAllocatorDecisionRecord({
     candidateId,
@@ -292,6 +354,13 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
     console.log(
       `[V3Scan] ${symbol} | ALLOCATOR_REJECTED | candidateId=${candidateId} | decisionId=${decisionId} | reason=${allocatorDecision.rejectionReason ?? "unknown"}`,
     );
+    await recordServiceScanStatus({
+      serviceId,
+      symbol,
+      status: "allocator_rejected",
+      reason: allocatorDecision.rejectionReason ?? "unknown",
+      detail: { candidateId, decisionId },
+    });
     return;
   }
 
@@ -327,6 +396,13 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   console.log(
     `[V3Exec] ${symbol} | ${activeMode} | service=${serviceId} | candidateId=${candidateId} | decisionId=${decisionId} | tradeId=${tradeId} | alloc=$${allocatorDecision.capitalAmount.toFixed(2)} | EXECUTED`,
   );
+  await recordServiceScanStatus({
+    serviceId,
+    symbol,
+    status: "executed",
+    reason: "trade_opened",
+    detail: { candidateId, decisionId, tradeId, allocation: allocatorDecision.capitalAmount, leverage: allocatorDecision.approvedLeverage },
+  });
 }
 
 async function scheduleStaggeredScan(symbols: string[], staggerMs: number): Promise<void> {

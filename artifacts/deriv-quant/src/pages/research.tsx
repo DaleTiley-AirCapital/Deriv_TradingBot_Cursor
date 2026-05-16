@@ -2032,6 +2032,9 @@ interface ServiceLifecycleStatusUi {
   activeMode: "paper" | "demo" | "real" | "idle" | "multi";
   executionAllowedForActiveMode: boolean;
   allocatorConnected: boolean;
+  latestScannerStatus?: string | null;
+  latestScannerReason?: string | null;
+  latestScannerAt?: string | null;
   nextRequiredAction: string;
   workflowStages?: Array<{
     label: string;
@@ -2193,6 +2196,20 @@ function formatRuntimeDate(value?: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "n/a";
   return date.toLocaleString();
+}
+
+function formatOptionalDecimal(value: unknown, digits = 2): string {
+  if (value == null || value === "") return "not estimated";
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue.toFixed(digits) : "not estimated";
+}
+
+function formatOptionalPct(value: unknown, digits = 2): string {
+  if (value == null || value === "") return "not estimated";
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return "not estimated";
+  const pctValue = numberValue > 0 && numberValue <= 1 ? numberValue * 100 : numberValue;
+  return `${pctValue.toFixed(digits)}%`;
 }
 
 function nativeExpansionType(type?: string | null): boolean {
@@ -5487,6 +5504,7 @@ function RuntimeModelTab({ service }: { service: string }) {
   const stagedRuntimeTpBuckets = extractRuntimeTpBucketEntries(runtime?.stagedModel ?? null);
   const promotedTpModel = asUiRecord(runtime?.promotedModel?.tpModel);
   const stagedTpModel = asUiRecord(runtime?.stagedModel?.tpModel);
+  const promotedExpectedPerformance = asUiRecord(promotedRuntime?.expectedPerformance);
   const runtimeArchetypes = Array.from(new Set([
     ...Object.keys(asUiRecord(promotedTpModel.buckets)).filter((key) => key.includes("|")).map((bucket) => bucket.split("|")[1] ?? bucket),
     ...Object.keys(asUiRecord(stagedTpModel.buckets)).filter((key) => key.includes("|")).map((bucket) => bucket.split("|")[1] ?? bucket),
@@ -5609,10 +5627,10 @@ function RuntimeModelTab({ service }: { service: string }) {
           </div>
           <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">Expected metrics</p>
-            <StatRow label="Trades" value={Number(asUiRecord(promotedRuntime?.expectedPerformance).trades ?? 0)} />
-            <StatRow label="Win rate" value={Number(asUiRecord(promotedRuntime?.expectedPerformance).winRate ?? 0).toFixed(2)} />
-            <StatRow label="SL rate" value={Number(asUiRecord(promotedRuntime?.expectedPerformance).slHitRate ?? 0).toFixed(2)} />
-            <StatRow label="PF" value={Number(asUiRecord(promotedRuntime?.expectedPerformance).profitFactor ?? 0).toFixed(2)} />
+            <StatRow label="Trades" value={formatOptionalDecimal(promotedExpectedPerformance.trades, 0)} />
+            <StatRow label="Win rate" value={formatOptionalPct(promotedExpectedPerformance.winRate)} />
+            <StatRow label="SL rate" value={formatOptionalPct(promotedExpectedPerformance.slHitRate)} />
+            <StatRow label="PF" value={formatOptionalDecimal(promotedExpectedPerformance.profitFactor)} />
           </div>
           <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">Mode gates</p>
@@ -5626,7 +5644,8 @@ function RuntimeModelTab({ service }: { service: string }) {
             <StatRow label="Stream" value={lifecycle?.streamState ?? "inactive"} />
             <StatRow label="Latest candle" value={lifecycle?.latestCandleTs ? formatRuntimeDate(lifecycle.latestCandleTs) : "n/a"} />
             <StatRow label="Allocator" value={lifecycle?.allocatorConnected ? "connected" : "disconnected"} />
-            <StatRow label="Last decision" value={lifecycle?.nextRequiredAction ?? "n/a"} />
+            <StatRow label="Last scanner status" value={lifecycle?.latestScannerStatus ?? "not observed"} />
+            <StatRow label="Last scanner reason" value={lifecycle?.latestScannerReason ?? lifecycle?.nextRequiredAction ?? "n/a"} />
           </div>
         </div>
       </div>
@@ -5662,7 +5681,7 @@ function RuntimeModelTab({ service }: { service: string }) {
           </p>
           {service === "CRASH300" ? (
             <p className="text-xs text-amber-300">
-              CRASH300 service runtime is mode-gated. Paper can execute when active; Demo and Real require separate manual mode permission.
+              CRASH300 is validated for Paper. Demo and Real remain separate manual mode permissions.
             </p>
           ) : null}
           {service === "R_75" ? (

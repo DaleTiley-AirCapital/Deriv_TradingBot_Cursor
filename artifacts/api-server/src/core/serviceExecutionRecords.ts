@@ -98,7 +98,7 @@ export async function createAllocatorDecisionRecord(params: {
   const approvedCapitalAmount = params.allocationDecision.allowed ? params.allocationDecision.capitalAmount : 0;
   const portfolioExposureAfter = portfolioExposureBefore + approvedCapitalAmount;
   const exitPolicy = params.builtCandidate.candidate.exitPolicy;
-  const requestedLeverage = Number((params.builtCandidate.candidate.metadata?.requestedLeverage as number | undefined) ?? 1);
+  const requestedLeverage = Number(params.allocationDecision.requestedLeverage ?? 1);
 
   await db.insert(allocatorDecisionsTable).values({
     decisionId,
@@ -111,16 +111,22 @@ export async function createAllocatorDecisionRecord(params: {
     approvedAllocationPct: params.allocationDecision.allowed ? params.allocationDecision.capitalAllocationPct : 0,
     approvedCapitalAmount,
     requestedLeverage: requestedLeverage > 0 ? requestedLeverage : 1,
-    approvedLeverage: params.allocationDecision.allowed ? requestedLeverage : 0,
+    approvedLeverage: params.allocationDecision.allowed ? params.allocationDecision.approvedLeverage : 0,
     finalTp1Pct: Number(exitPolicy.takeProfitPct ?? 0) || null,
     finalTp2Pct: Number(exitPolicy.trailingArmPct ?? 0) || Number(exitPolicy.takeProfitPct ?? 0) || null,
     finalHardSlPct: Number(exitPolicy.stopLossPct ?? 0) || null,
     lifecyclePlanId: params.lifecyclePlanId,
     executionAllowed: params.allocationDecision.allowed,
     activeMode: params.mode,
-    portfolioExposureBefore,
-    portfolioExposureAfter,
-    warnings: params.allocationDecision.rejectionReason ? [params.allocationDecision.rejectionReason] : [],
+    portfolioExposureBefore: params.allocationDecision.portfolioExposureBefore ?? portfolioExposureBefore,
+    portfolioExposureAfter: params.allocationDecision.portfolioExposureAfter ?? portfolioExposureAfter,
+    warnings: [
+      ...(params.allocationDecision.rejectionReason ? [params.allocationDecision.rejectionReason] : []),
+      "allocator=max_idle_capital_compounding",
+      `drawdown=${params.allocationDecision.actualDrawdownPct.toFixed(2)}pct`,
+      `drawdown_budget=${params.allocationDecision.remainingDrawdownBudgetPct.toFixed(2)}pct`,
+      `leverage=${params.allocationDecision.approvedLeverage.toFixed(2)}x`,
+    ],
     decidedAt: new Date(),
   });
   return decisionId;

@@ -76,6 +76,10 @@ export interface ServiceLifecycleStatus {
   activeMode: "paper" | "demo" | "real" | "idle" | "multi";
   executionAllowedForActiveMode: boolean;
   allocatorConnected: boolean;
+  latestScannerStatus: string | null;
+  latestScannerReason: string | null;
+  latestScannerAt: string | null;
+  latestScannerDetail: Record<string, unknown>;
   nextRequiredAction: string;
   workflowStages: Array<{
     label: string;
@@ -366,10 +370,12 @@ export async function promoteCandidateArtifactToServiceRuntime(serviceId: string
     minHoldRules: selectedPolicy.minHoldRules ?? null,
     cascadeRules: selectedPolicy.cascadeRules ?? null,
     capitalRecommendation: {
-      requestedAllocationPct: 15,
-      maxAllocationPct: 25,
-      leverageAllowed: false,
-      source: "service_runtime_baseline",
+      requestedAllocationPct: 95,
+      maxAllocationPct: 100,
+      leverageAllowed: true,
+      compoundingEnabled: true,
+      safetyFactor: 0.75,
+      source: "max_idle_capital_service_allocator",
     },
     confidenceScoring: {
       reportConsistencyPassed: bool(readiness.reportConsistencyPassed),
@@ -424,6 +430,15 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
 
   const stateMap: Record<string, string> = {};
   for (const row of stateRows) stateMap[row.key] = row.value;
+  const scanPrefix = `${upperServiceId}_last_service_scan`;
+  const latestScannerDetail = (() => {
+    try {
+      const parsed = JSON.parse(stateMap[`${scanPrefix}_detail`] ?? "{}");
+      return asRecord(parsed);
+    } catch {
+      return {};
+    }
+  })();
 
   const latestCandleTs = latestCandleRows[0]?.closeTs
     ? new Date(Number(latestCandleRows[0].closeTs) * 1000).toISOString()
@@ -611,6 +626,10 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
     activeMode,
     executionAllowedForActiveMode,
     allocatorConnected: true,
+    latestScannerStatus: stateMap[`${scanPrefix}_status`] ?? null,
+    latestScannerReason: stateMap[`${scanPrefix}_reason`] ?? null,
+    latestScannerAt: stateMap[`${scanPrefix}_at`] ?? null,
+    latestScannerDetail,
     nextRequiredAction: normalisedNextRequiredAction,
     workflowStages,
     blockers,

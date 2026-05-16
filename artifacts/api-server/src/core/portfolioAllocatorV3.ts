@@ -15,6 +15,7 @@ import type { TradingMode } from "../infrastructure/deriv.js";
 import { getModeCapitalKey, getModeCapitalDefault } from "../infrastructure/deriv.js";
 import { evaluateSignalAdmission, MODE_SCORE_GATES, extractNativeScore } from "./allocatorCore.js";
 import type { LiveCalibrationProfile } from "./calibration/liveCalibrationProfile.js";
+import type { ServicePromotedRuntimeArtifact } from "./serviceRuntimeLifecycle.js";
 
 export interface V3AllocationDecision {
   coordinatorOutput: CoordinatorOutput;
@@ -22,6 +23,14 @@ export interface V3AllocationDecision {
   rejectionReason: string | null;
   capitalAmount: number;
   capitalAllocationPct: number;
+  requestedLeverage: number;
+  approvedLeverage: number;
+  actualDrawdownPct: number;
+  safetyAdjustedMaxDrawdownPct: number;
+  remainingDrawdownBudgetPct: number;
+  portfolioExposureBefore: number;
+  portfolioExposureAfter: number;
+  compoundingEnabled: boolean;
   mode: TradingMode;
   engineName: string;
   direction: "buy" | "sell";
@@ -33,16 +42,67 @@ function getModePrefix(mode: TradingMode): string {
   return mode === "real" ? "real" : mode === "demo" ? "demo" : "paper";
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function numberFrom(value: unknown, fallback: number): number {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function pctValue(value: unknown, fallbackPct: number): number {
+  const raw = numberFrom(value, fallbackPct);
+  return raw > 0 && raw <= 1 ? raw * 100 : raw;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function qualityLeverage(params: {
+  nativeScore: number;
+  confidence: number;
+  projectedMovePct: number;
+  mode: TradingMode;
+  leverageEnabled: boolean;
+}): number {
+  if (!params.leverageEnabled) return 1;
+  const quality = Math.max(params.nativeScore, params.confidence * 100);
+  const movePct = Math.abs(params.projectedMovePct) * 100;
+  const modeCap = params.mode === "paper" ? 2 : params.mode === "demo" ? 1.5 : 1.25;
+  if (quality >= 90 && movePct >= 9) return Math.min(modeCap, 2);
+  if (quality >= 82 && movePct >= 7) return Math.min(modeCap, 1.5);
+  if (quality >= 72 && movePct >= 5) return Math.min(modeCap, 1.25);
+  return 1;
+}
+
 export async function allocateV3Signal(
   coordinatorOutput: CoordinatorOutput,
   mode: TradingMode,
   stateMap: Record<string, string>,
   runtimeCalibration: LiveCalibrationProfile | null = null,
+  runtimeArtifact: ServicePromotedRuntimeArtifact | null = null,
 ): Promise<V3AllocationDecision> {
   const { winner, symbol } = coordinatorOutput;
   const prefix = getModePrefix(mode);
 
-  const base: Omit<V3AllocationDecision, "allowed" | "rejectionReason" | "capitalAmount" | "capitalAllocationPct"> = {
+  const base: Omit<V3AllocationDecision,
+    | "allowed"
+    | "rejectionReason"
+    | "capitalAmount"
+    | "capitalAllocationPct"
+    | "requestedLeverage"
+    | "approvedLeverage"
+    | "actualDrawdownPct"
+    | "safetyAdjustedMaxDrawdownPct"
+    | "remainingDrawdownBudgetPct"
+    | "portfolioExposureBefore"
+    | "portfolioExposureAfter"
+    | "compoundingEnabled"
+  > = {
     coordinatorOutput,
     mode,
     engineName: winner.engineName,
@@ -51,8 +111,25 @@ export async function allocateV3Signal(
     projectedMovePct: winner.projectedMovePct,
   };
 
-  const deny = (reason: string): V3AllocationDecision => ({
-    ...base, allowed: false, rejectionReason: reason, capitalAmount: 0, capitalAllocationPct: 0,
+  const emptyRisk = {
+    requestedLeverage: 1,
+    approvedLeverage: 0,
+    actualDrawdownPct: 0,
+    safetyAdjustedMaxDrawdownPct: 0,
+    remainingDrawdownBudgetPct: 0,
+    portfolioExposureBefore: 0,
+    portfolioExposureAfter: 0,
+    compoundingEnabled: false,
+  };
+
+  const deny = (reason: string, extra: Partial<typeof emptyRisk> = {}): V3AllocationDecision => ({
+    ...base,
+    ...emptyRisk,
+    ...extra,
+    allowed: false,
+    rejectionReason: reason,
+    capitalAmount: 0,
+    capitalAllocationPct: 0,
   });
 
   // ── Stage 1: Fetch all portfolio state from DB ────────────────────────────
@@ -73,6 +150,8 @@ export async function allocateV3Signal(
     .where(and(eq(tradesTable.status, "open"), eq(tradesTable.mode, mode)));
   const maxOpenTrades = parseInt(stateMap[`${prefix}_max_open_trades`] || stateMap["max_open_trades"] || "3");
   const openTradeForSymbol = openTrades.some(t => t.symbol === symbol);
+  const compoundingEnabled = stateMap[`${prefix}_allocator_compounding_enabled`] !== "false"
+    && stateMap["allocator_compounding_enabled"] !== "false";
 
   const closedTrades = await db.select().from(tradesTable)
     .where(and(eq(tradesTable.status, "closed"), eq(tradesTable.mode, mode)));
@@ -89,7 +168,25 @@ export async function allocateV3Signal(
   const maxWeeklyLossPct = parseFloat(stateMap[`${prefix}_max_weekly_loss_pct`] || stateMap["max_weekly_loss_pct"] || "10") / 100;
   const maxDrawdownPct   = parseFloat(stateMap[`${prefix}_max_drawdown_pct`] || stateMap["max_drawdown_pct"] || "15") / 100;
   const unrealisedPnl = openTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  const totalPnl = dailyPnl + unrealisedPnl;
+  const realisedPnl = closedTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  const totalPnl = realisedPnl + unrealisedPnl;
+  const actualDrawdownPct = Math.max(0, (-totalPnl / totalCapital) * 100);
+  const runtimeExpected = asRecord(runtimeArtifact?.expectedPerformance);
+  const runtimeDrawdownPct = pctValue(runtimeExpected.maxDrawdownPct, maxDrawdownPct * 100);
+  const maxDrawdownSourcePct = Math.max(1, Math.min(maxDrawdownPct * 100, runtimeDrawdownPct));
+  const safetyFactor = clamp(
+    numberFrom(
+      stateMap[`${prefix}_allocator_safety_factor`] ?? stateMap["allocator_safety_factor"],
+      mode === "paper" ? 0.75 : mode === "demo" ? 0.65 : 0.5,
+    ),
+    0.1,
+    1,
+  );
+  const safetyAdjustedMaxDrawdownPct = maxDrawdownSourcePct * safetyFactor;
+  const remainingDrawdownBudgetPct = Math.max(0, safetyAdjustedMaxDrawdownPct - actualDrawdownPct);
+  const drawdownCapacityScale = safetyAdjustedMaxDrawdownPct > 0
+    ? clamp(remainingDrawdownBudgetPct / safetyAdjustedMaxDrawdownPct, 0, 1)
+    : 0;
 
   // Use mode-specific gate from allocatorCore (single source of truth) or platformState override
   const modeDefaultGate = MODE_SCORE_GATES[mode as string] ?? 60;
@@ -116,11 +213,12 @@ export async function allocateV3Signal(
     modeEnabled,
     symbolEnabled,
     openTradeForSymbol,
+    allowCompounding: compoundingEnabled,
     currentOpenCount: openTrades.length,
     maxOpenTrades,
     dailyLossLimitBreached: dailyPnl < 0 && Math.abs(dailyPnl) / totalCapital >= maxDailyLossPct,
     weeklyLossLimitBreached: weeklyPnl < 0 && Math.abs(weeklyPnl) / totalCapital >= maxWeeklyLossPct,
-    maxDrawdownBreached: totalPnl < 0 && Math.abs(totalPnl) / totalCapital >= maxDrawdownPct,
+    maxDrawdownBreached: actualDrawdownPct / 100 >= maxDrawdownPct,
     correlatedFamilyCapBreached: false,
     simulationDefaults: [],  // live path — no simulation defaults
   });
@@ -360,25 +458,71 @@ export async function allocateV3Signal(
   }
 
   // ── Capital sizing ─────────────────────────────────────────────────────────
-  // Base on equity_pct_per_trade, scaled by engine confidence
-  const equityPctPerTrade = parseFloat(stateMap[`${prefix}_equity_pct_per_trade`] || stateMap["equity_pct_per_trade"] || "15");
-  const deployedCapital   = openTrades.reduce((s, t) => s + t.size, 0);
-  const maxDeployable     = totalCapital * 0.80;
-  const remaining         = maxDeployable - deployedCapital;
+  // Maximize deployable exposure while respecting drawdown budget, mode safety factor, and service-candidate quality.
+  const targetUtilizationPct = clamp(
+    numberFrom(
+      stateMap[`${prefix}_target_capital_utilization_pct`] ?? stateMap["allocator_target_capital_utilization_pct"],
+      mode === "paper" ? 95 : mode === "demo" ? 90 : 80,
+    ),
+    5,
+    100,
+  );
+  const runtimeCapital = asRecord(runtimeArtifact?.capitalRecommendation);
+  const leverageEnabled = mode === "paper"
+    || runtimeCapital.leverageAllowed === true
+    || stateMap[`${prefix}_allocator_leverage_enabled`] === "true"
+    || stateMap["allocator_leverage_enabled"] === "true";
+  const requestedLeverage = qualityLeverage({
+    nativeScore,
+    confidence: winner.confidence,
+    projectedMovePct: winner.projectedMovePct,
+    mode,
+    leverageEnabled,
+  });
+  const approvedLeverage = requestedLeverage;
+  const deployedCapital = openTrades.reduce((s, t) => s + t.size, 0);
+  const portfolioExposureBefore = deployedCapital;
+  const maxDeployable = totalCapital * (targetUtilizationPct / 100) * approvedLeverage * drawdownCapacityScale;
+  const remaining = maxDeployable - deployedCapital;
 
-  if (remaining <= 0) return deny("80pct_equity_cap_reached");
+  if (remainingDrawdownBudgetPct <= 0) {
+    return deny("drawdown_safety_budget_exhausted", {
+      requestedLeverage,
+      actualDrawdownPct,
+      safetyAdjustedMaxDrawdownPct,
+      remainingDrawdownBudgetPct,
+      portfolioExposureBefore,
+      portfolioExposureAfter: portfolioExposureBefore,
+      compoundingEnabled,
+    });
+  }
+  if (remaining <= 0) {
+    return deny("target_capital_utilization_reached", {
+      requestedLeverage,
+      actualDrawdownPct,
+      safetyAdjustedMaxDrawdownPct,
+      remainingDrawdownBudgetPct,
+      portfolioExposureBefore,
+      portfolioExposureAfter: portfolioExposureBefore,
+      compoundingEnabled,
+    });
+  }
 
-  const confidenceScale = Math.max(0.60, Math.min(1.0, winner.confidence));
-  const utilizationScale = runtimeCalibration
-    ? Math.max(0.75, Math.min(1.25, (runtimeCalibration.expectedCapitalUtilizationPct || 50) / 50))
-    : 1;
-  let size = totalCapital * (equityPctPerTrade / 100) * confidenceScale * utilizationScale;
-  size = Math.min(size, remaining);
-  size = Math.max(size, totalCapital * 0.05);
-
-  if (size > remaining) return deny("insufficient_remaining_capacity");
+  const size = remaining;
+  if (size < totalCapital * 0.02) {
+    return deny("insufficient_remaining_capacity", {
+      requestedLeverage,
+      actualDrawdownPct,
+      safetyAdjustedMaxDrawdownPct,
+      remainingDrawdownBudgetPct,
+      portfolioExposureBefore,
+      portfolioExposureAfter: portfolioExposureBefore,
+      compoundingEnabled,
+    });
+  }
 
   const capitalAllocationPct = (size / totalCapital) * 100;
+  const portfolioExposureAfter = portfolioExposureBefore + size;
 
   return {
     ...base,
@@ -386,5 +530,13 @@ export async function allocateV3Signal(
     rejectionReason: null,
     capitalAmount: size,
     capitalAllocationPct,
+    requestedLeverage,
+    approvedLeverage,
+    actualDrawdownPct,
+    safetyAdjustedMaxDrawdownPct,
+    remainingDrawdownBudgetPct,
+    portfolioExposureBefore,
+    portfolioExposureAfter,
+    compoundingEnabled,
   };
 }
