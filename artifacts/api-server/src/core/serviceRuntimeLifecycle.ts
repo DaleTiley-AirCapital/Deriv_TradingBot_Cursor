@@ -6,7 +6,7 @@ import {
   getPromotedSymbolRuntimeModel,
   type PromotedSymbolRuntimeModel,
 } from "./calibration/promotedSymbolModel.js";
-import { listEliteSynthesisJobs } from "./synthesis/jobs.js";
+import { getEliteSynthesisJob, listEliteSynthesisJobs } from "./synthesis/jobs.js";
 
 export type RuntimeValidationState = "not_run" | "running" | "passed" | "failed";
 
@@ -397,12 +397,15 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
   const streamState = stateMap.streaming === "true" && streamingSymbols.includes(upperServiceId) ? "active" : "inactive";
   const synthesisJob = (synthesisJobs as Awaited<ReturnType<typeof listEliteSynthesisJobs>>)
     .find((job) => job.status === "completed") ?? synthesisJobs[0] ?? null;
+  const stagedCandidateJob = stagedCandidateState?.jobId ? await getEliteSynthesisJob(stagedCandidateState.jobId).catch(() => null) : null;
+  const stagedReviewArtifact = stagedCandidateJob?.resultArtifact?.reviewCandidateRuntimeArtifact;
   const stagedCandidateArtifact = stagedCandidateState
-    ? synthesisJobs
-        .flatMap((job) => job.candidateRuntimeArtifacts)
-        .find((artifact) => String(artifact.artifactId ?? "") === stagedCandidateState.artifactId)
-      ?? null
+    ? [
+        ...(stagedCandidateJob?.candidateRuntimeArtifacts ?? []),
+        ...(stagedReviewArtifact && typeof stagedReviewArtifact === "object" ? [stagedReviewArtifact as Record<string, unknown>] : []),
+      ].find((artifact) => String(artifact.artifactId ?? "") === stagedCandidateState.artifactId) ?? null
     : null;
+  const synthesisComplete = Boolean(synthesisJob?.hasResultArtifact || synthesisJob?.resultArtifact);
 
   const latestCandleAgeMs = latestCandleTs ? Date.now() - new Date(latestCandleTs).getTime() : Number.POSITIVE_INFINITY;
   const dataCoverageStatus: ServiceLifecycleStatus["dataCoverageStatus"] = !latestCandleTs
@@ -422,7 +425,7 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
   const warnings: string[] = [];
   if (dataCoverageStatus !== "ready") blockers.push(dataCoverageStatus === "not_ready" ? "Historical/live candle data not ready." : "Latest candle data is stale.");
   if (!researchProfile) blockers.push("Full calibration complete step not captured yet.");
-  if (!synthesisJob?.resultArtifact) blockers.push("Build Runtime Model complete step not captured yet.");
+  if (!synthesisComplete) blockers.push("Build Runtime Model complete step not captured yet.");
   if (!stagedCandidateArtifact) blockers.push("No staged candidate artifact yet.");
   if (!promotedRuntimeArtifact) blockers.push("No promoted service runtime yet.");
   if (promotedModel && !promotedRuntimeArtifact) warnings.push("Legacy promoted symbol model present without executable V3.1 service runtime.");
@@ -454,11 +457,11 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
     },
     {
       label: "Build Runtime Model",
-      status: synthesisJob?.status === "completed" && synthesisJob.resultArtifact ? "complete" : synthesisJob ? "warning" : "incomplete",
+      status: synthesisJob?.status === "completed" && synthesisComplete ? "complete" : synthesisJob ? "warning" : "incomplete",
       sourceRunId: synthesisJob?.id ?? null,
       timestamp: synthesisJob?.completedAt ?? synthesisJob?.startedAt ?? null,
-      nextAction: synthesisJob?.resultArtifact ? null : "Build Runtime Model",
-      blockers: synthesisJob?.resultArtifact ? [] : ["Build Runtime Model complete step not captured yet."],
+      nextAction: synthesisComplete ? null : "Build Runtime Model",
+      blockers: synthesisComplete ? [] : ["Build Runtime Model complete step not captured yet."],
     },
     {
       label: "Runtime Staged",
@@ -518,7 +521,7 @@ export async function buildServiceLifecycleStatus(serviceId: string): Promise<Se
 
   const normalisedNextRequiredAction = !researchProfile
     ? "Run Full Calibration"
-    : !synthesisJob?.resultArtifact
+    : !synthesisComplete
       ? "Build Runtime Model"
       : !stagedCandidateArtifact
         ? "Review Runtime Build Result"

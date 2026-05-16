@@ -5959,12 +5959,16 @@ function ReportsTab({
   service,
   windowDays,
   forcedTask,
+  initialReportType,
+  initialSynthesisJobId,
   title = "Reports",
   description = "Consolidated read-only exports for the selected symbol service. Backtest-heavy artifacts stay here instead of being scattered through calibration and runtime cards.",
 }: {
   service: string;
   windowDays: number;
   forcedTask?: ReportOption["task"];
+  initialReportType?: string | null;
+  initialSynthesisJobId?: number | null;
   title?: string;
   description?: string;
 }) {
@@ -5987,6 +5991,22 @@ function ReportsTab({
       setReportTask(forcedTask);
     }
   }, [forcedTask]);
+
+  useEffect(() => {
+    if (initialReportType) {
+      const option = REPORT_OPTIONS.find((entry) => entry.value === initialReportType);
+      if (option) {
+        setReportTask(option.task);
+        setReportType(option.value);
+      }
+    }
+  }, [initialReportType]);
+
+  useEffect(() => {
+    if (initialSynthesisJobId) {
+      setSelectedSynthesisJobId(initialSynthesisJobId);
+    }
+  }, [initialSynthesisJobId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -6043,6 +6063,11 @@ function ReportsTab({
     }
     (async () => {
       try {
+        if (selectedOption.value === "runtime-build-result") {
+          const data = await apiFetch(`research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/export/runtime-build-result`) as Record<string, unknown>;
+          if (!cancelled) setSynthesisReportResult(data);
+          return;
+        }
         const data = await apiFetch(`research/${service}/elite-synthesis/jobs/${selectedSynthesisJobId}/result`) as {
           result?: Record<string, unknown> | null;
         };
@@ -6054,7 +6079,7 @@ function ReportsTab({
     return () => {
       cancelled = true;
     };
-  }, [selectedOption.runType, selectedSynthesisJobId, service]);
+  }, [selectedOption.runType, selectedOption.value, selectedSynthesisJobId, service]);
 
   const exportReport = async () => {
     setBusy(true);
@@ -6209,18 +6234,28 @@ function ReportsTab({
     ? synthesisReportResult?.artifactDiagnostics.map((value) => String(value))
     : [];
   const currentStagedCandidate = (synthesisReportResult?.currentStagedCandidate as Record<string, unknown> | undefined) ?? null;
-  const bestPolicySummary = (synthesisReportResult?.bestPolicySummary as Record<string, unknown> | undefined) ?? null;
+  const runtimeBuildProfile = asUiRecord(synthesisReportResult?.buildProfile);
+  const runtimeBuildCandidate = asUiRecord(synthesisReportResult?.recommendedCandidate ?? synthesisReportResult?.bestCapitalExtractionCandidate);
+  const runtimeBuildCoverage = asUiRecord(synthesisReportResult?.largeMoveCoverage ?? synthesisReportResult?.targetMoveCoverage);
+  const runtimeBuildUniverse = asUiRecord(synthesisReportResult?.targetMoveUniverse);
+  const bestPolicySummary = (synthesisReportResult?.bestPolicySummary as Record<string, unknown> | undefined)
+    ?? (Object.keys(runtimeBuildCandidate).length > 0 ? runtimeBuildCandidate : null);
   const bestPolicyReadiness = (synthesisReportResult?.policyArtifactReadiness as Record<string, unknown> | undefined) ?? {};
   const returnAmplificationAnalysis = (synthesisReportResult?.returnAmplificationAnalysis as Record<string, unknown> | undefined) ?? {};
   const returnSummary = (returnAmplificationAnalysis.summary as Record<string, unknown> | undefined) ?? {};
-  const recommendedScenario = (returnAmplificationAnalysis.recommendedCandidateConfiguration as Record<string, unknown> | undefined) ?? null;
+  const recommendedScenario = (returnAmplificationAnalysis.recommendedCandidateConfiguration as Record<string, unknown> | undefined)
+    ?? (Object.keys(runtimeBuildCandidate).length > 0 ? runtimeBuildCandidate : null);
   const safestHighWinPolicy = (returnAmplificationAnalysis.safestHighWinPolicy as Record<string, unknown> | undefined) ?? null;
   const bestReturnFirstPolicy = (returnAmplificationAnalysis.bestReturnFirstPolicy as Record<string, unknown> | undefined) ?? null;
   const bestRejectedProfitPolicy = (returnAmplificationAnalysis.bestRejectedProfitPolicy as Record<string, unknown> | undefined) ?? null;
   const recommendedPolicyMeta = (returnAmplificationAnalysis.recommendedPolicy as Record<string, unknown> | undefined) ?? null;
   const primaryDeepFamilyAnalysis = (returnAmplificationAnalysis.primaryDeepFamilyAnalysis as Record<string, unknown> | undefined) ?? null;
-  const runtimeArtifactEligibility = (returnAmplificationAnalysis.runtimeArtifactEligibility as Record<string, unknown> | undefined) ?? null;
-  const aiStrategyReview = (returnAmplificationAnalysis.aiStrategyReview as Record<string, unknown> | undefined) ?? null;
+  const runtimeArtifactEligibility = (returnAmplificationAnalysis.runtimeArtifactEligibility as Record<string, unknown> | undefined)
+    ?? (synthesisReportResult?.runtimeArtifactEligibility as Record<string, unknown> | undefined)
+    ?? null;
+  const aiStrategyReview = (returnAmplificationAnalysis.aiStrategyReview as Record<string, unknown> | undefined)
+    ?? (synthesisReportResult?.aiStrategyReview as Record<string, unknown> | undefined)
+    ?? null;
   const preLimitFamilyStats = (returnAmplificationAnalysis.preLimitFamilyStats as Record<string, unknown> | undefined) ?? null;
   const postDailyLimitFamilyStats = (returnAmplificationAnalysis.postDailyLimitFamilyStats as Record<string, unknown> | undefined) ?? null;
   const bestLifecycleReturnPct = Number(recommendedScenario?.totalAccountReturnPct ?? recommendedScenario?.accountReturnPct ?? 0);
@@ -6343,10 +6378,10 @@ function ReportsTab({
             <div>
               <p className="text-muted-foreground uppercase tracking-wide">Profile / target</p>
               <p className="mt-1 text-foreground">
-                {searchProfileLabel(String(selectedSynthesisJobMeta?.searchProfile ?? ""))} / {targetProfileLabel(String(selectedSynthesisJobMeta?.targetProfile ?? ""))}
+                {searchProfileLabel(String(selectedSynthesisJobMeta?.searchProfile ?? runtimeBuildProfile.searchProfile ?? ""))} / {targetProfileLabel(String(selectedSynthesisJobMeta?.targetProfile ?? runtimeBuildProfile.targetProfile ?? ""))}
               </p>
               <p className="mt-1 text-[10px] text-muted-foreground">
-                raw: {String(selectedSynthesisJobMeta?.targetProfile ?? "default")} - normalized: {normalizeTargetProfile(String(selectedSynthesisJobMeta?.targetProfile ?? "default"))}
+                raw: {String(selectedSynthesisJobMeta?.targetProfile ?? runtimeBuildProfile.targetProfile ?? "default")} - normalized: {normalizeTargetProfile(String(selectedSynthesisJobMeta?.targetProfile ?? runtimeBuildProfile.targetProfile ?? "default"))}
               </p>
             </div>
             <div>
@@ -6354,8 +6389,8 @@ function ReportsTab({
               <p className="mt-1 text-foreground">{String(artifactStatusMeta?.artifactStatus ?? "unknown").replaceAll("_", " ")}</p>
             </div>
             <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Best policy</p>
-              <p className="mt-1 text-foreground">{String(bestPolicySummary?.policyId ?? "n/a")}</p>
+              <p className="text-muted-foreground uppercase tracking-wide">Best candidate</p>
+              <p className="mt-1 text-foreground">{String(bestPolicySummary?.policyId ?? bestPolicySummary?.scenarioId ?? "n/a")}</p>
             </div>
             <div>
               <p className="text-muted-foreground uppercase tracking-wide">Trades / win / SL</p>
@@ -6364,12 +6399,16 @@ function ReportsTab({
               </p>
             </div>
             <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Base return</p>
-              <p className="mt-1 text-foreground">{Number(bestPolicySummary?.accountReturnPct ?? 0).toFixed(2)}% total</p>
+              <p className="text-muted-foreground uppercase tracking-wide">Lifecycle return</p>
+              <p className="mt-1 text-foreground">{Number(bestPolicySummary?.totalAccountReturnPct ?? bestPolicySummary?.accountReturnPct ?? 0).toFixed(2)}% total</p>
             </div>
             <div>
-              <p className="text-muted-foreground uppercase tracking-wide">Target</p>
-              <p className="mt-1 text-foreground">{Boolean((synthesisReportResult.targetAchievedBreakdown as Record<string, unknown> | undefined)?.finalTargetAchieved) ? "Target achieved" : "Target not achieved"}</p>
+              <p className="text-muted-foreground uppercase tracking-wide">Large move coverage</p>
+              <p className="mt-1 text-foreground">
+                {Object.keys(runtimeBuildCoverage).length > 0
+                  ? `${Number(runtimeBuildCoverage.capturedTargetMoveCount ?? 0)} / ${Number(runtimeBuildCoverage.targetUniverseCount ?? runtimeBuildUniverse.totalTargetMoves ?? 0)} (${Number(runtimeBuildCoverage.coveragePct ?? 0).toFixed(2)}%)`
+                  : Boolean((synthesisReportResult.targetAchievedBreakdown as Record<string, unknown> | undefined)?.finalTargetAchieved) ? "Target achieved" : "Target not achieved"}
+              </p>
             </div>
             <div>
               <p className="text-muted-foreground uppercase tracking-wide">Report consistency</p>
@@ -6510,7 +6549,15 @@ function ReportsTab({
   );
 }
 
-function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string; windowDays: number }) {
+function IntegratedEliteSynthesisCard({
+  service,
+  windowDays,
+  onOpenRunResult,
+}: {
+  service: string;
+  windowDays: number;
+  onOpenRunResult?: (jobId: number) => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -6694,7 +6741,12 @@ function IntegratedEliteSynthesisCard({ service, windowDays }: { service: string
                     {historyJobs.map((job) => {
                       const resultLabel = synthesisResultStateLabel(job);
                       return (
-                        <tr key={job.id} className="border-b border-border/10 last:border-b-0">
+                        <tr
+                          key={job.id}
+                          className="border-b border-border/10 last:border-b-0 cursor-pointer hover:bg-primary/5"
+                          onClick={() => onOpenRunResult?.(job.id)}
+                          title="Open this Build Runtime Model result in Reports"
+                        >
                           <td className="py-2 pr-3 text-foreground font-medium">#{job.id}</td>
                           <td className="px-3 py-2 text-muted-foreground">
                             {searchProfileLabel(job.searchProfile) !== "n/a"
@@ -7176,6 +7228,8 @@ export default function Research() {
   const [sharedWindowDays, setSharedWindowDays] = useState<number>(365);
   const [showAddService, setShowAddService] = useState(false);
   const [customServices, setCustomServices] = useState<string[]>([]);
+  const [reportSynthesisJobId, setReportSynthesisJobId] = useState<number | null>(null);
+  const [reportTypeHint, setReportTypeHint] = useState<string | null>(null);
 
   useEffect(() => {
     setCustomServices(readCustomResearchServices());
@@ -7209,7 +7263,15 @@ export default function Research() {
   const handleSelectService = useCallback((service: string) => {
     setSelectedService(service);
     setActiveTab("data");
+    setReportSynthesisJobId(null);
+    setReportTypeHint(null);
     setShowAddService(false);
+  }, []);
+
+  const openRuntimeBuildReport = useCallback((jobId: number) => {
+    setReportSynthesisJobId(jobId);
+    setReportTypeHint("runtime-build-result");
+    setActiveTab("reports");
   }, []);
 
   const handleAddService = useCallback((service: string) => {
@@ -7325,14 +7387,19 @@ export default function Research() {
       )}
       {activeTab === "synthesis" && (
         <div className="space-y-4">
-          <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} />
+          <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} onOpenRunResult={openRuntimeBuildReport} />
         </div>
       )}
       {activeTab === "runtime" && (
         <RuntimeModelTab service={selectedService} />
       )}
       {activeTab === "reports" && (
-        <ReportsTab service={selectedService} windowDays={sharedWindowDays} />
+        <ReportsTab
+          service={selectedService}
+          windowDays={sharedWindowDays}
+          initialReportType={reportTypeHint}
+          initialSynthesisJobId={reportSynthesisJobId}
+        />
       )}
     </div>
     </CalibrationRunProvider>

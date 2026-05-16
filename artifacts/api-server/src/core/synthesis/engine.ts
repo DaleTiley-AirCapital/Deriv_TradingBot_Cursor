@@ -5306,6 +5306,9 @@ export async function runEliteSynthesisJob(params: {
       validationErrors: result.validationErrors,
     },
     resultArtifact: storedResult,
+    taskStatePatch: {
+      candidateRuntimeArtifacts: reviewCandidateRuntimeArtifact ? [reviewCandidateRuntimeArtifact] : [],
+    },
   });
 
   return result;

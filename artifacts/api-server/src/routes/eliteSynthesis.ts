@@ -68,10 +68,29 @@ function stableChecksum(value: unknown): string {
 }
 
 async function findCandidateRuntimeArtifact(serviceId: string, artifactId: string) {
-  const jobs = await listEliteSynthesisJobs(serviceId, 200);
-  for (const job of jobs) {
-    const artifact = job.candidateRuntimeArtifacts.find((item) => String(item.artifactId ?? "") === artifactId);
+  const summaries = await listEliteSynthesisJobs(serviceId, 200);
+  for (const summary of summaries) {
+    const job = await getEliteSynthesisJob(summary.id);
+    if (!job) continue;
+    const reviewArtifact = job.resultArtifact?.reviewCandidateRuntimeArtifact;
+    const artifacts = [
+      ...job.candidateRuntimeArtifacts,
+      ...(reviewArtifact && typeof reviewArtifact === "object" ? [reviewArtifact as Record<string, unknown>] : []),
+    ];
+    const artifact = artifacts.find((item) => String(item.artifactId ?? "") === artifactId);
     if (artifact) return { job, artifact };
+  }
+  return null;
+}
+
+async function findLatestReviewCandidateRuntimeArtifact(serviceId: string) {
+  const summaries = await listEliteSynthesisJobs(serviceId, 50);
+  for (const summary of summaries) {
+    const job = await getEliteSynthesisJob(summary.id);
+    const artifact = job?.resultArtifact?.reviewCandidateRuntimeArtifact;
+    if (artifact && typeof artifact === "object") return { job, artifact: artifact as Record<string, unknown> };
+    const candidate = job?.candidateRuntimeArtifacts.find((item) => String(item.mode ?? "") === "review_only");
+    if (job && candidate) return { job, artifact: candidate };
   }
   return null;
 }
@@ -1189,18 +1208,32 @@ router.post("/research/:serviceId/runtime-validation/run", async (req, res): Pro
     getSynthesisAdapter(serviceId);
     const stagedState = await readStagedSynthesisCandidateState(serviceId);
     if (!stagedState) {
-      res.status(409).json({
-        error: "Validate Runtime requires a staged runtime candidate for the service.",
-        runtimeValidationResult: null,
+      const latestReview = await findLatestReviewCandidateRuntimeArtifact(serviceId);
+      if (!latestReview) {
+        res.status(409).json({
+          error: "Validate Runtime requires a staged or review runtime candidate for the service.",
+          runtimeValidationResult: null,
+        });
+        return;
+      }
+      const runtimeValidationResult = buildRuntimeValidationResult(serviceId, latestReview.artifact);
+      res.status(202).json({
+        ok: true,
+        serviceId,
+        runtimeValidationResult,
+        note: "Validate Runtime reviewed the latest Build Runtime Model candidate. It did not stage, promote, or change execution mode.",
       });
       return;
     }
-    const located = await findCandidateRuntimeArtifact(serviceId, stagedState.artifactId);
+    let located = await findCandidateRuntimeArtifact(serviceId, stagedState.artifactId);
     if (!located) {
-      res.status(404).json({
-        error: `Staged runtime candidate ${stagedState.artifactId} could not be resolved for ${serviceId}.`,
-      });
-      return;
+      located = await findLatestReviewCandidateRuntimeArtifact(serviceId);
+      if (!located) {
+        res.status(404).json({
+          error: `Staged runtime candidate ${stagedState.artifactId} could not be resolved for ${serviceId}, and no review candidate exists.`,
+        });
+        return;
+      }
     }
     const runtimeValidationResult = buildRuntimeValidationResult(serviceId, located.artifact);
     res.status(202).json({
