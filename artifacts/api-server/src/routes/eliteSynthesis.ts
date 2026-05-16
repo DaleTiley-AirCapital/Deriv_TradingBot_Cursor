@@ -80,6 +80,121 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function pickCompactFields(source: Record<string, unknown>, keys: string[]) {
+  const output: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (source[key] !== undefined) output[key] = source[key];
+  }
+  return output;
+}
+
+function compactRuntimeBuildScenario(value: unknown) {
+  const scenario = asRecord(value);
+  if (!Object.keys(scenario).length) return value ?? null;
+  return pickCompactFields(scenario, [
+    "scenarioId",
+    "policyId",
+    "label",
+    "description",
+    "sourcePool",
+    "runtimeFamily",
+    "triggerTransition",
+    "selectedMoveSizeBucket",
+    "direction",
+    "offsetCluster",
+    "selectedTradeCount",
+    "wins",
+    "losses",
+    "winRate",
+    "slHitRate",
+    "medianPnlPct",
+    "averagePnlPct",
+    "baseMedianPnlPct",
+    "baseAveragePnlPct",
+    "lifecycleMedianPnlPct",
+    "lifecycleAveragePnlPct",
+    "monthlyAccountReturnPct",
+    "maxDrawdownPct",
+    "tradeFrequency",
+    "runtimeMimicReadiness",
+    "liveSafeExpressionStatus",
+    "status",
+    "reasonsSelected",
+    "reasonsRejected",
+    "rejectionReasons",
+    "promotionBlockers",
+    "dynamicExitPlanSummary",
+    "targetAchievedBreakdown",
+    "paperStageability",
+  ]);
+}
+
+function compactRuntimeBuildSummary(value: unknown) {
+  const summary = asRecord(value);
+  if (!Object.keys(summary).length) return value ?? null;
+  return {
+    ...pickCompactFields(summary, [
+      "targetProfileNormalized",
+      "rankingObjective",
+      "guardrailsPassedCount",
+      "topPolicyCount",
+      "anyScenarioMaintains90WinAndLowSl",
+      "anyScenarioReaches50MonthlyReturn",
+      "lifecycleOldMedianPnlPct",
+      "lifecycleNewMedianPnlPct",
+      "lifecycleOldAveragePnlPct",
+      "lifecycleNewAveragePnlPct",
+      "lifecycleReplayImprovedTrades",
+      "policiesWithMedianLifecyclePnlAbove5",
+      "policiesWithMedianLifecyclePnlAbove7",
+      "policiesWithMedianLifecyclePnlAbove9",
+      "closestScenarioTo50MonthlyReturn",
+      "recommendedNextStep",
+      "whyHigherCaptureFailed",
+      "failedRecoveryShortFinalPassAnswers",
+    ]),
+    bestAbove5: compactRuntimeBuildScenario(summary.bestAbove5),
+    bestAbove7: compactRuntimeBuildScenario(summary.bestAbove7),
+    bestAbove9: compactRuntimeBuildScenario(summary.bestAbove9),
+    scenariosMeeting90WinAndLowSl: Array.isArray(summary.scenariosMeeting90WinAndLowSl)
+      ? summary.scenariosMeeting90WinAndLowSl.slice(0, 10).map((entry) => compactRuntimeBuildScenario(entry))
+      : [],
+  };
+}
+
+function compactRuntimeBuildPolicySummary(value: unknown) {
+  const policy = asRecord(value);
+  if (!Object.keys(policy).length) return value ?? null;
+  return pickCompactFields(policy, [
+    "policyId",
+    "serviceId",
+    "symbol",
+    "sourcePool",
+    "runtimeFamily",
+    "triggerTransition",
+    "selectedMoveSizeBucket",
+    "direction",
+    "offsetCluster",
+    "trades",
+    "selectedTradeCount",
+    "wins",
+    "losses",
+    "winRate",
+    "slHitRate",
+    "profitFactor",
+    "objectiveScore",
+    "medianPnlPct",
+    "averagePnlPct",
+    "lifecycleMedianPnlPct",
+    "lifecycleAveragePnlPct",
+    "status",
+    "stageability",
+    "readiness",
+    "blockers",
+    "warnings",
+  ]);
+}
+
 function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, result: EliteSynthesisResult) {
   const resultRecord = result as unknown as Record<string, unknown>;
   const bestPolicySummary = asRecord(result.bestPolicySummary);
@@ -116,7 +231,7 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
     candidateEntryMatrixSummary: resultRecord.candidateEntryMatrixSummary ?? bestPolicyArtifact.entryThresholds ?? null,
     controlSampleSummary: resultRecord.controlSampleSummary ?? null,
     lifecycleSimulationSummary: resultRecord.tradeLifecycleManagerReplay ?? resultRecord.tradeLifecycleReplaySummary ?? recommendedCandidate.dynamicExitPlanSummary ?? null,
-    profitRankingSummary: returnSummary,
+    profitRankingSummary: compactRuntimeBuildSummary(returnSummary),
     candidateLeaderboard: resultRecord.policyLeaderboard ?? resultRecord.bestPolicyCandidates ?? [],
     escalatedSeedFamilies: resultRecord.escalatedSeedFamilies ?? returnAmplification.escalatedSeedFamilies ?? [],
     primaryDeepFamilyAnalysis: resultRecord.primaryDeepFamilyAnalysis ?? returnAmplification.primaryDeepFamilyAnalysis ?? null,
@@ -129,9 +244,9 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
     candidateFamilyComparison: resultRecord.candidateFamilyComparison ?? returnAmplification.policyComparisonTable ?? [],
     runtimeArtifactEligibility: resultRecord.runtimeArtifactEligibility ?? returnAmplification.runtimeArtifactEligibility ?? null,
     reviewCandidateRuntimeArtifact: resultRecord.reviewCandidateRuntimeArtifact ?? null,
-    recommendedCandidate: bestPolicySummary,
-    safestBaselineCandidate: returnAmplification.safestHighWinPolicy ?? null,
-    bestRejectedProfitCandidate: returnAmplification.bestRejectedProfitPolicy ?? null,
+    recommendedCandidate: compactRuntimeBuildPolicySummary(bestPolicySummary),
+    safestBaselineCandidate: compactRuntimeBuildScenario(returnAmplification.safestHighWinPolicy),
+    bestRejectedProfitCandidate: compactRuntimeBuildScenario(returnAmplification.bestRejectedProfitPolicy),
     runtimeRuleDraft: result.bestPolicyArtifact ?? null,
     liveSafeRuleStatus: {
       status: readiness.liveSafeRuleStatus ?? (blockers.length === 0 ? "ready_for_validation" : "blocked"),
