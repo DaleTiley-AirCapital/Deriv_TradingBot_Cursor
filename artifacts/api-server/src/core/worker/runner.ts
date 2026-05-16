@@ -24,6 +24,12 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function compactErrorMessage(error: unknown, maxLength = 800): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (raw.length <= maxLength) return raw;
+  return `${raw.slice(0, maxLength)}... [truncated ${raw.length - maxLength} chars]`;
+}
+
 async function yieldToEventLoop() {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
@@ -434,7 +440,8 @@ export async function runWorkerLoop(params?: {
       await yieldToEventLoop();
       await runWorkerTask(claimed);
     } catch (error) {
-      console.error("[worker] task execution failed:", error instanceof Error ? error.message : error);
+      const compactMessage = compactErrorMessage(error);
+      console.error("[worker] task execution failed:", compactMessage);
       if (claimed) {
         if (error instanceof WorkerJobCancelledError) {
           await finalizeLinkedTaskCancellation(claimed, error).catch(() => {
@@ -461,12 +468,12 @@ export async function runWorkerLoop(params?: {
           status: "failed",
           stage: "failed",
           progressPct: 100,
-          message: error instanceof Error ? error.message : "Worker task failed",
+          message: compactMessage || "Worker task failed",
           heartbeatAt: nowIso(),
           completedAt: nowIso(),
           errorSummary: {
             taskType: claimed.taskType,
-            reason: error instanceof Error ? error.message : String(error),
+            reason: compactMessage,
           },
           resultSummary: {
             taskType: claimed.taskType,

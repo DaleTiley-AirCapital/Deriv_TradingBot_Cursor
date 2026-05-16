@@ -3906,6 +3906,43 @@ function compactReviewCandidateRuntimeArtifactForStorage(value: unknown) {
   };
 }
 
+function compactBestPolicyArtifactForStorage(value: unknown) {
+  if (!value || typeof value !== "object") return value;
+  const artifact = value as Record<string, unknown>;
+  return {
+    policyId: artifact.policyId ?? null,
+    serviceId: artifact.serviceId ?? null,
+    symbol: artifact.symbol ?? null,
+    passNumberSelected: artifact.passNumberSelected ?? null,
+    objectiveScore: artifact.objectiveScore ?? null,
+    selectedBuckets: artifact.selectedBuckets ?? [],
+    selectedMoveSizeBuckets: artifact.selectedMoveSizeBuckets ?? [],
+    selectedRuntimeArchetypes: artifact.selectedRuntimeArchetypes ?? [],
+    selectedTriggerTransitions: artifact.selectedTriggerTransitions ?? [],
+    selectedTriggerDirections: artifact.selectedTriggerDirections ?? [],
+    entryThresholds: artifact.entryThresholds ?? [],
+    entryTimingRules: artifact.entryTimingRules ?? [],
+    noTradeRules: artifact.noTradeRules ?? [],
+    tpRules: artifact.tpRules ?? null,
+    slRules: artifact.slRules ?? null,
+    lifecycleManagerRules: artifact.lifecycleManagerRules ?? null,
+    minHoldRules: artifact.minHoldRules ?? null,
+    leakageAudit: artifact.leakageAudit ?? null,
+    expectedThreeMonthPerformance: artifact.expectedThreeMonthPerformance ?? null,
+    monthlyBreakdown: Array.isArray(artifact.monthlyBreakdown) ? artifact.monthlyBreakdown.slice(-12) : [],
+    lateOffsetSafetyAudit: artifact.lateOffsetSafetyAudit ?? null,
+    calibratedMoveRelationshipSummary: artifact.calibratedMoveRelationshipSummary ?? null,
+    exitDerivationAudit: artifact.exitDerivationAudit ?? null,
+    monthlyStabilityAssessment: artifact.monthlyStabilityAssessment ?? null,
+    bestPolicySelectedTradesSummary: artifact.bestPolicySelectedTradesSummary ?? null,
+    targetAchievedBreakdown: artifact.targetAchievedBreakdown ?? null,
+    strategyGradeReadiness: artifact.strategyGradeReadiness ?? null,
+    policyArtifactReadiness: artifact.policyArtifactReadiness ?? null,
+    bottleneckAnalysis: artifact.bottleneckAnalysis ?? null,
+    compactedForStorage: true,
+  };
+}
+
 function compactDiagnosticsForStorage(value: unknown) {
   if (!value || typeof value !== "object") return value;
   const diagnostics = value as Record<string, unknown>;
@@ -3991,7 +4028,7 @@ function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): El
     bestPolicySummary: result.bestPolicySummary,
     topPolicySummaries: result.topPolicySummaries.slice(0, 20),
     rejectedPolicySummaries: Array.isArray(result.rejectedPolicySummaries) ? result.rejectedPolicySummaries.slice(0, 80) : [],
-    bestPolicyArtifact: result.bestPolicyArtifact,
+    bestPolicyArtifact: compactBestPolicyArtifactForStorage(result.bestPolicyArtifact) as EliteSynthesisPolicyArtifact | null,
     passLogSummary: result.passLogSummary,
     fullPassLog: result.fullPassLog.slice(-24),
     featureDistributions: result.featureDistributions.slice(0, 60),
