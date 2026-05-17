@@ -618,8 +618,8 @@ async function initDb(): Promise<void> {
       ON calibration_family_bucket_profiles (symbol, strategy_family, move_pct_bucket);
   `);
 
-  // Any in-flight calibration pass runs are process-bound and cannot survive a restart.
-  // On boot, mark orphaned "running" rows as failed so the UI never stays stuck forever.
+  // Any legacy in-process calibration pass runs are process-bound and cannot survive a restart.
+  // Worker-owned calibration runs survive API restarts and are requeued by the worker service.
   await db.execute(sql`
     UPDATE calibration_pass_runs
     SET
@@ -641,6 +641,8 @@ async function initDb(): Promise<void> {
         )
       )
     WHERE status = 'running'
+      AND COALESCE(meta_json->>'executionModel', '') <> 'worker_service'
+      AND COALESCE(meta_json->>'queue', '') <> 'worker_service'
   `);
 
   const migrations = [

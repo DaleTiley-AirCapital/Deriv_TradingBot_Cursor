@@ -30,7 +30,6 @@ import {
   moveBehaviorPassesTable,
   moveProgressionArtifactsTable,
   strategyCalibrationProfilesTable,
-  calibrationPassRunsTable,
   type InsertDetectedMoveRow,
 } from "@workspace/db";
 import { eq, and, gte, lte, asc, inArray } from "drizzle-orm";
@@ -113,10 +112,6 @@ export async function clearCalibrationArtifactsForSymbol(symbol: string): Promis
   await safeDeleteForSymbol(
     () => db.delete(moveBehaviorPassesTable).where(eq(moveBehaviorPassesTable.symbol, symbol)),
     "move_behavior_passes",
-  );
-  await safeDeleteForSymbol(
-    () => db.delete(calibrationPassRunsTable).where(eq(calibrationPassRunsTable.symbol, symbol)),
-    "calibration_pass_runs",
   );
   await safeDeleteForSymbol(
     () => db.delete(detectedMovesTable).where(eq(detectedMovesTable.symbol, symbol)),
