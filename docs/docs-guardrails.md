@@ -6,7 +6,6 @@ These guardrails keep docs aligned with runtime behavior.
 
 - Every runtime policy change must update:
   - `docs/current-operating-policy.md`
-  - `replit.md` (if user-facing behavior summary changes)
 - Every route addition/removal must update:
   - `lib/api-spec/openapi.yaml`
   - `docs/api-parity-checklist.md`

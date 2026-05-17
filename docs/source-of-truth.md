@@ -21,9 +21,6 @@ Use this map to avoid doc and implementation drift.
   - `docs/runtime-feeddown-contract.md`
 - Deep strategy doctrine:
   - `.agents/skills/deriv-trading-strategy/SKILL.md`
-- Contextual project state summary:
-  - `replit.md`
-
 ## Architecture Guardrails
 
 - Internal architecture governance:

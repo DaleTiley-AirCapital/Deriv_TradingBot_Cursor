@@ -1,5 +1,4 @@
-import { Crash300SynthesisAdapter, buildUnifiedCrash300Dataset } from "./crash300Adapter.js";
-import { R75SynthesisAdapter, buildUnifiedR75Dataset } from "./r75Adapter.js";
+import { getRuntimeBuildService } from "./services/runtimeBuildRegistry.js";
 import { chatComplete } from "../../infrastructure/openai.js";
 import type { PolicyEvaluationResult, SymbolSynthesisAdapter, SynthesisRebuiltTriggerCandidateRecord, UnifiedSynthesisDataset } from "./adapter.js";
 import {
@@ -2315,8 +2314,9 @@ async function buildReturnAmplificationAnalysis(params: {
   for (const candidate of simulatedCandidates) {
     actualBucketLookup.set(candidate.candidateId, actualMoveBucketForCandidate(candidate, moveById));
   }
-  const targetFamily = params.dataset.serviceId === "CRASH300" ? "crash_expansion" : "all_r75_calibrated_families";
-  const targetMinimumMovePct = params.dataset.serviceId === "CRASH300" ? 9 : 5;
+  const runtimeBuildService = getRuntimeBuildService(params.dataset.serviceId);
+  const targetFamily = runtimeBuildService.targetFamilyLabel;
+  const targetMinimumMovePct = runtimeBuildService.targetMinimumMovePct;
   const targetLargeMoveUniverse = params.dataset.moves.filter((move) => {
     const family = String(move.calibratedBaseFamily ?? "");
     const familyMatches = params.dataset.serviceId === "CRASH300" ? family === "crash_expansion" : true;
@@ -3218,14 +3218,14 @@ async function buildReturnAmplificationAnalysis(params: {
       filterNotes: ["exact_final_best_policy_selected_trade_ids"],
     },
     {
-      scenarioId: "capital_extraction_ge9_crash_expansion",
+      scenarioId: `capital_extraction_gte_${targetMinimumMovePct}_${targetFamily}`,
       label: `Capital extraction >=${targetMinimumMovePct}% target universe`,
       description: `Mandatory large-move target set: candidates mapped to detected ${params.dataset.serviceId} ${targetFamily} moves at or above ${targetMinimumMovePct}%.`,
       predicate: (item: typeof enrichedCandidates[number]) => targetLargeMoveIds.has(Number(item.candidate.matchedCalibratedMoveId ?? 0)),
       filterNotes: [`target_universe=${targetFamily}`, `abs(movePctPoints)>=${targetMinimumMovePct}`, "capital_extraction_large_move"],
     },
     {
-      scenarioId: "capital_extraction_ge9_up",
+      scenarioId: `capital_extraction_gte_${targetMinimumMovePct}_up`,
       label: `Capital extraction >=${targetMinimumMovePct}% up moves`,
       description: `Direction split for large upward ${params.dataset.serviceId} target moves.`,
       predicate: (item: typeof enrichedCandidates[number]) => {
@@ -3235,7 +3235,7 @@ async function buildReturnAmplificationAnalysis(params: {
       filterNotes: [`target_universe=${targetFamily}`, `abs(movePctPoints)>=${targetMinimumMovePct}`, "direction=up"],
     },
     {
-      scenarioId: "capital_extraction_ge9_down",
+      scenarioId: `capital_extraction_gte_${targetMinimumMovePct}_down`,
       label: `Capital extraction >=${targetMinimumMovePct}% down moves`,
       description: `Direction split for large downward ${params.dataset.serviceId} target moves.`,
       predicate: (item: typeof enrichedCandidates[number]) => {
@@ -3346,7 +3346,7 @@ async function buildReturnAmplificationAnalysis(params: {
   const targetSeedPredicate = (item: typeof enrichedCandidates[number]) =>
     targetLargeMoveIds.has(Number(item.candidate.matchedCalibratedMoveId ?? 0));
   const targetSeedFull = enrichedCandidates.filter(targetSeedPredicate);
-  const targetSeedDailyLimited = scenarios.find((scenario) => scenario.scenarioId === "capital_extraction_ge9_crash_expansion") ?? null;
+  const targetSeedDailyLimited = scenarios.find((scenario) => scenario.scenarioId === `capital_extraction_gte_${targetMinimumMovePct}_${targetFamily}`) ?? null;
   const summariseCandidateSet = (selected: typeof enrichedCandidates) => {
     const pnl = selected.map((item) => Number(item.candidate.pnlPctPoints ?? item.candidate.pnlPct ?? 0));
     const lifecycleTrades = selected
@@ -3378,7 +3378,7 @@ async function buildReturnAmplificationAnalysis(params: {
       lifecycleReplayReport: buildTradeLifecycleReplayReport({
         serviceId: params.dataset.serviceId,
         sourceJobId: null,
-        sourcePolicyId: "capital_extraction_ge9_crash_expansion",
+        sourcePolicyId: `capital_extraction_gte_${targetMinimumMovePct}_${targetFamily}`,
         selected: lifecycleTrades,
       }),
       worstLosingTradeExamples: selected
@@ -3472,7 +3472,7 @@ async function buildReturnAmplificationAnalysis(params: {
   const dynamicTpProtectionSummary = targetSeedDailyLimited?.dynamicExitPlanSummary ?? null;
   const tradeLifecycleManagerReplay = preLimitFamilyStats.lifecycleReplayReport;
   const primaryDeepFamilyAnalysis = {
-    familyKey: "crash_expansion|abs_move_gte_9_pct|both_directions",
+    familyKey: `${targetFamily}|abs_move_gte_${targetMinimumMovePct}_pct|both_directions`,
     verdict: "capital_extraction_target_universe",
     targetMoveUniverse: targetLargeMoveReference,
     preLimitFamilyStats,
@@ -3598,7 +3598,7 @@ async function buildReturnAmplificationAnalysis(params: {
   const candidateTradeCount = (scenario: Record<string, unknown>) =>
     Number(scenario.trades ?? 0);
   const capitalExtractionScenarios = scenarios.filter((scenario) =>
-    String(scenario.scenarioId ?? "").startsWith("capital_extraction_ge9")
+    String(scenario.scenarioId ?? "").startsWith("capital_extraction_gte_")
     || (
       candidateCapturedTargetCount(scenario) > 0
       && Number(scenario.lifecycleMedianPnlPct ?? 0) >= 5
@@ -3932,7 +3932,7 @@ async function buildReturnAmplificationAnalysis(params: {
     recommendedCandidateConfiguration,
     escalatedSeedFamilies: [
       {
-        familyKey: "crash_expansion|abs_move_gte_9_pct|both_directions",
+        familyKey: `${targetFamily}|abs_move_gte_${targetMinimumMovePct}_pct|both_directions`,
         escalationReason: "mandatory_capital_extraction_target_universe:abs(movePctPoints)>=9",
         priority: "primary",
         targetMoveUniverse: targetLargeMoveReference,
@@ -4377,9 +4377,7 @@ function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): El
 }
 
 export function getSynthesisAdapter(serviceId: string): SymbolSynthesisAdapter {
-  if (serviceId === "CRASH300") return new Crash300SynthesisAdapter();
-  if (serviceId === "R_75") return new R75SynthesisAdapter();
-  throw new Error(`Elite synthesis adapter missing for service ${serviceId}.`);
+  return getRuntimeBuildService(serviceId).createAdapter();
 }
 
 export async function buildUnifiedSynthesisDatasetForService(params: {
@@ -4392,13 +4390,8 @@ export async function buildUnifiedSynthesisDatasetForService(params: {
   onProgress?: (update: { stage: EliteSynthesisStage; progressPct: number; message: string }) => Promise<void> | void;
   assertNotCancelled?: () => Promise<void> | void;
 }): Promise<UnifiedSynthesisDataset> {
-  if (params.serviceId === "CRASH300") {
-    return buildUnifiedCrash300Dataset(params);
-  }
-  if (params.serviceId === "R_75") {
-    return buildUnifiedR75Dataset(params);
-  }
-  throw new Error(`Runtime build dataset adapter missing for service ${params.serviceId}.`);
+  const service = getRuntimeBuildService(params.serviceId);
+  return service.buildDataset(params);
 }
 
 export async function runEliteSynthesisJob(params: {
@@ -5095,7 +5088,7 @@ export async function runEliteSynthesisJob(params: {
         serviceId: params.serviceId,
         generatedAt: nowIso(),
         sourceSynthesisJobId: params.jobId,
-        sourcePolicyId: String(((returnAmplificationAnalysis as Record<string, unknown>).bestCapitalExtractionCandidate as Record<string, unknown> | undefined)?.scenarioId ?? "capital_extraction_ge9_crash_expansion"),
+        sourcePolicyId: String(((returnAmplificationAnalysis as Record<string, unknown>).bestCapitalExtractionCandidate as Record<string, unknown> | undefined)?.scenarioId ?? "capital_extraction_gte_target_universe"),
         runtimeFamily: String(((returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse as Record<string, unknown> | undefined)?.family ?? (params.serviceId === "CRASH300" ? "crash_expansion" : "r75_capital_extraction")),
         triggerTransition: "capital_extraction_large_move",
         selectedMoveSizeBucket: params.serviceId === "CRASH300" ? "9_plus_pct" : "5_plus_pct",
