@@ -1,8 +1,8 @@
 import { Router, type IRouter, type Response } from "express";
 import { backgroundDb, candlesTable, db, platformStateTable } from "@workspace/db";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
-import { buildUnifiedCrash300Dataset } from "../core/synthesis/crash300Adapter.js";
 import {
+  buildUnifiedSynthesisDatasetForService,
   buildTradeLifecycleReplayReportFromStoredTrades,
   getSynthesisAdapter,
 } from "../core/synthesis/engine.js";
@@ -618,7 +618,8 @@ router.get("/research/:serviceId/elite-synthesis/dataset-summary", async (req, r
     const windowDays = Math.max(7, Number(req.query.windowDays ?? 90));
     const endTs = Number(req.query.endTs ?? Math.floor(Date.now() / 1000));
     const startTs = Number(req.query.startTs ?? Math.max(0, endTs - windowDays * 86400));
-    const dataset = await buildUnifiedCrash300Dataset({
+    const dataset = await buildUnifiedSynthesisDatasetForService({
+      serviceId,
       calibrationRunId: req.query.calibrationRunId == null ? null : Number(req.query.calibrationRunId),
       backtestRunId: req.query.backtestRunId == null ? null : Number(req.query.backtestRunId),
       startTs,
