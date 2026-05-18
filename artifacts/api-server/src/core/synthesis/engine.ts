@@ -1254,15 +1254,20 @@ export function buildLifecycleExitPlan(params: {
   candidate: LifecycleReplayCandidateInput;
   dynamicExitPlan: Record<string, unknown> | null | undefined;
   expectedMovePct: number;
+  serviceId?: string;
 }): LifecycleExitPlan {
+  const isR75 = params.serviceId === "R_75" || String(params.candidate.candidateId ?? "").startsWith("r75-");
   const candidateTp = Math.abs(safeNumber(params.candidate.projectedMovePctPoints ?? params.candidate.projectedMovePct, 0));
-  const hardSlPct = Math.max(0.1, Math.abs(safeNumber(params.dynamicExitPlan?.slRiskPct ?? params.candidate.slPctPoints ?? params.candidate.slPct, 0.5)));
+  const hardSlPct = Math.max(
+    isR75 ? 1.75 : 0.1,
+    Math.abs(safeNumber(params.dynamicExitPlan?.slRiskPct ?? params.candidate.slPctPoints ?? params.candidate.slPct, isR75 ? 2 : 0.5)),
+  );
   const dynamicProtectionDistancePct = Math.max(0.1, Math.abs(safeNumber(
     params.dynamicExitPlan?.dynamicProtectionDistancePct
     ?? params.dynamicExitPlan?.trailingDistancePct
     ?? params.candidate.trailingDistancePctPoints
     ?? params.candidate.trailingDistancePct,
-    0.35,
+    isR75 ? 1.75 : 0.35,
   )));
   const tp2Pct = Math.max(
     0.2,
@@ -1282,7 +1287,7 @@ export function buildLifecycleExitPlan(params: {
   );
   const tp1Pct = Math.max(0.15, Math.min(tp2Pct, derivedTp1));
   const protectionActivationPct = Math.max(
-    0.1,
+    isR75 ? Math.min(2.5, Math.max(1.5, tp1Pct * 0.55)) : 0.1,
     Math.min(tp1Pct, safeNumber(params.dynamicExitPlan?.protectionActivationPct ?? params.dynamicExitPlan?.trailingActivationPct, tp1Pct * 0.8)),
   );
   const minHoldBars = Math.max(1, Math.round(safeNumber(params.dynamicExitPlan?.minHoldBars ?? params.candidate.minHoldBars, 2)));
@@ -2587,36 +2592,47 @@ async function buildReturnAmplificationAnalysis(params: {
     const actualBucket = actualBucketLookup.get(candidate.candidateId);
     const matchedMoveId = Number(candidate.matchedCalibratedMoveId ?? 0);
     const largeMoveTarget = params.dataset.serviceId === "CRASH300"
-      && (
+      ? (
         targetLargeMoveIds.has(matchedMoveId)
         || returnBucketAtLeast(actualBucket, "9_to_10_pct")
         || returnBucketAtLeast(predictedBucket, "9_to_10_pct")
-      );
+      )
+      : params.dataset.serviceId === "R_75"
+        ? (
+            targetLargeMoveIds.has(matchedMoveId)
+            || returnBucketAtLeast(actualBucket, targetMinimumBucket)
+            || returnBucketAtLeast(predictedBucket, targetMinimumBucket)
+          )
+        : targetLargeMoveIds.has(matchedMoveId);
     const tpQuantile = conf >= 0.8 ? 0.6 : conf >= 0.6 ? 0.5 : 0.4;
     const slQuantile = conf >= 0.8 ? 0.75 : 0.85;
     const baseTpTargetPct = Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerProjected.length > 0 ? peerProjected : peerMfe, tpQuantile)).toFixed(2));
+    const largeMoveMinimumTargetPct = params.dataset.serviceId === "CRASH300" ? 9 : targetMinimumMovePct;
+    const largeMoveMaxTargetPct = params.dataset.serviceId === "CRASH300" ? 15 : Math.max(8, percentile(targetMovePctValues.length > 0 ? targetMovePctValues : peerMfe, 0.85));
     const tpTargetPct = largeMoveTarget
       ? Number(Math.max(
-          9,
+          largeMoveMinimumTargetPct,
           Math.min(
-            15,
+            largeMoveMaxTargetPct,
             percentile(targetMovePctValues.length > 0 ? targetMovePctValues : (peerProjected.length > 0 ? peerProjected : peerMfe), 0.5),
           ),
         ).toFixed(2))
       : baseTpTargetPct;
     const slRiskPct = Number(Math.max(
-      0.1,
+      largeMoveTarget && params.dataset.serviceId === "R_75" ? 1.75 : 0.1,
       largeMoveTarget && targetMaeValues.length > 0
         ? percentile(targetMaeValues, 0.85)
-        : percentile(peerMae, slQuantile),
+        : largeMoveTarget && params.dataset.serviceId === "R_75"
+          ? percentile([1.75, 2, Math.max(...peerMae, 0) * 2, tpTargetPct * 0.3], 0.5)
+          : percentile(peerMae, slQuantile),
     ).toFixed(2));
     const protectionActivationPct = Number(Math.max(
-      largeMoveTarget ? 3 : 0.1,
-      largeMoveTarget ? Math.min(5, tpTargetPct * 0.35) : percentile(peerMfe, 0.25),
+      largeMoveTarget ? (params.dataset.serviceId === "R_75" ? 1.5 : 3) : 0.1,
+      largeMoveTarget ? Math.min(params.dataset.serviceId === "R_75" ? 3.5 : 5, tpTargetPct * 0.4) : percentile(peerMfe, 0.25),
     ).toFixed(2));
     const dynamicProtectionDistancePct = Number(Math.max(
-      largeMoveTarget ? 1.75 : 0.1,
-      largeMoveTarget ? percentile([1.75, 2, slRiskPct * 2], 0.5) : percentile(peerMae, 0.65),
+      largeMoveTarget ? (params.dataset.serviceId === "R_75" ? 1.5 : 1.75) : 0.1,
+      largeMoveTarget ? percentile([params.dataset.serviceId === "R_75" ? 1.5 : 1.75, 2, slRiskPct * 1.35], 0.5) : percentile(peerMae, 0.65),
     ).toFixed(2));
     const runnerAllowed = largeMoveTarget || (returnBucketAtLeast(predictedBucket, "9_to_10_pct") && conf >= 0.6);
     const runnerTargetPct = runnerAllowed
@@ -2626,7 +2642,7 @@ async function buildReturnAmplificationAnalysis(params: {
         ).toFixed(2))
       : null;
     const partialTakeProfitPlan = runnerAllowed
-      ? [{ takePctOfPosition: largeMoveTarget ? 0.25 : 0.5, targetPct: Number((largeMoveTarget ? Math.max(3, Math.min(5, tpTargetPct * 0.45)) : Math.min(bucketMidpoint(predictedBucket), percentile(peerMfe, 0.5))).toFixed(2)) }]
+      ? [{ takePctOfPosition: largeMoveTarget ? 0.25 : 0.5, targetPct: Number((largeMoveTarget ? Math.max(params.dataset.serviceId === "R_75" ? 2.5 : 3, Math.min(params.dataset.serviceId === "R_75" ? 4 : 5, tpTargetPct * 0.45)) : Math.min(bucketMidpoint(predictedBucket), percentile(peerMfe, 0.5))).toFixed(2)) }]
       : [];
     const minHoldBars = largeMoveTarget && targetHoldBars.length > 0
       ? Math.max(180, Math.round(percentile(targetHoldBars, 0.25)))
@@ -2675,7 +2691,7 @@ async function buildReturnAmplificationAnalysis(params: {
         `predicted_bucket=${predictedBucket}`,
         `exit_source=${chosenScope.source}`,
         `peer_count=${chosenScope.peers.length}`,
-        ...(largeMoveTarget ? ["capital_extraction_large_move>=9pct", `target_move_count=${targetLargeMoveUniverse.length}`] : []),
+        ...(largeMoveTarget ? [`capital_extraction_large_move>=${targetMinimumMovePct}pct`, `target_move_count=${targetLargeMoveUniverse.length}`] : []),
       ],
       widenedFrom: chosenScope.widenedFrom,
       widenedTo: chosenScope.widenedTo,
@@ -2744,6 +2760,7 @@ async function buildReturnAmplificationAnalysis(params: {
           candidate: item.candidate,
           dynamicExitPlan: item.dynamicExitPlan,
           expectedMovePct,
+          serviceId: params.dataset.serviceId,
         }),
         serviceId: params.dataset.serviceId,
         sourceJobId: null,
