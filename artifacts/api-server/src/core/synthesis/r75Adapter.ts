@@ -1,5 +1,5 @@
-import { db, calibrationPassRunsTable, candlesTable, detectedMovesTable } from "@workspace/db";
-import { and, asc, between, desc, eq } from "drizzle-orm";
+import { db, calibrationPassRunsTable, candlesTable, detectedMovesTable, moveFamilyInferencesTable } from "@workspace/db";
+import { and, asc, between, desc, eq, inArray } from "drizzle-orm";
 import type {
   PolicyEvaluationResult,
   SynthesisControlRecord,
@@ -66,7 +66,15 @@ function moveBucketFromPctPoints(pctPoints: number): string {
 }
 
 function runtimeFamilyFromMove(row: Record<string, unknown>): string {
-  const candidate = String(row.strategyFamilyCandidate ?? row.moveType ?? "unknown");
+  const candidate = String(
+    row.strategyFamilyCandidate
+    ?? row.calibratedBaseFamily
+    ?? row.phaseDerivedFamily
+    ?? row.family
+    ?? row.moveFamily
+    ?? row.moveType
+    ?? "unknown",
+  ).toLowerCase();
   if (candidate === "reversal" || candidate === "continuation" || candidate === "breakout") return candidate;
   return "unknown";
 }
@@ -225,8 +233,18 @@ function candidateFromMove(
   const selectedMoveSizeBucket = move.calibratedMoveSizeBucket;
   const runtimeFamily = move.calibratedBaseFamily;
   const triggerTransition = triggerTransitionFor(runtimeFamily, direction);
-  const eligible = entryPrice > 0 && exitPrice > 0 && runtimeFamily !== "unknown" && pnlPctPoints > 0;
-  const slRiskPct = Math.max(1, Math.abs(percentile([Math.abs(maePctPoints), move.movePctPoints * 0.22], 0.5)));
+  const eligible = entryPrice > 0 && exitPrice > 0 && runtimeFamily !== "unknown";
+  const slRiskPct = Math.max(0.75, Math.min(Math.abs(maePctPoints) * 1.15 || 0.75, move.movePctPoints * 0.3));
+  const exitReason = pnlPctPoints > 0
+    ? "detected_move_end"
+    : Math.abs(maePctPoints) >= slRiskPct
+      ? "sl_hit"
+      : "adverse_move";
+  const rejectionReasons = [
+    ...(entryPrice > 0 ? [] : ["missing_entry_price"]),
+    ...(exitPrice > 0 ? [] : ["missing_exit_price"]),
+    ...(runtimeFamily !== "unknown" ? [] : ["unknown_runtime_family"]),
+  ];
   return {
     kind: "rebuilt_trigger_candidate",
     candidateId: `r75-${move.moveId}-${offsetLabel}-${direction}`,
@@ -274,12 +292,12 @@ function candidateFromMove(
     mfePctPoints,
     maePct: maePctPoints,
     maePctPoints,
-    exitReason: pnlPctPoints > 0 ? "detected_move_end" : "adverse_move",
+    exitReason,
     simulatedTrade: eligible,
     eligible,
-    rejectReason: eligible ? null : "non_positive_or_missing_move_capture",
-    noTradeReason: eligible ? null : "non_positive_or_missing_move_capture",
-    rejectionReasons: eligible ? [] : ["non_positive_or_missing_move_capture"],
+    rejectReason: eligible ? null : rejectionReasons.join(","),
+    noTradeReason: eligible ? null : rejectionReasons.join(","),
+    rejectionReasons,
     exitRuleSource: "r75_detected_move_path",
     liveSafeFeatures: {
       ...move.liveSafeFeatures,
@@ -354,7 +372,23 @@ export class R75SynthesisAdapter implements SymbolSynthesisAdapter {
         between(detectedMovesTable.startTs, params.startTs, params.endTs),
       ))
       .orderBy(asc(detectedMovesTable.startTs));
-    return (rows as unknown as Record<string, unknown>[]).map(mapDetectedMove);
+    const moveIds = rows.map((row) => Number(row.id)).filter((id) => Number.isInteger(id));
+    const inferenceRows = moveIds.length > 0
+      ? await db
+          .select()
+          .from(moveFamilyInferencesTable)
+          .where(and(
+            eq(moveFamilyInferencesTable.symbol, SERVICE_ID),
+            inArray(moveFamilyInferencesTable.moveId, moveIds),
+          ))
+      : [];
+    const inferredFamilyByMoveId = new Map(
+      inferenceRows.map((row) => [Number(row.moveId), String(row.strategyFamily ?? "unknown")]),
+    );
+    return (rows as unknown as Record<string, unknown>[]).map((row) => mapDetectedMove({
+      ...row,
+      strategyFamilyCandidate: inferredFamilyByMoveId.get(Number(row.id)) ?? row.strategyFamilyCandidate,
+    }));
   }
 
   async loadRuntimeModel() {

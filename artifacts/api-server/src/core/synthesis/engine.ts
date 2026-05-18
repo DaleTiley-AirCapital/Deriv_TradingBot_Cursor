@@ -2349,6 +2349,7 @@ async function buildReturnAmplificationAnalysis(params: {
     medianMaePct: targetMaeValues.length > 0 ? Number(percentile(targetMaeValues, 0.5).toFixed(4)) : null,
     source: `${params.dataset.serviceId}:detected_moves/calibrated_moves_dynamic_universe`,
   };
+  const targetMinimumBucket = bucketLabelFromPctPoints(targetMinimumMovePct) ?? "5_to_6_pct";
 
   const isLargeMoveCandidate = (item: {
     candidate: SynthesisRebuiltTriggerCandidateRecord;
@@ -2357,8 +2358,8 @@ async function buildReturnAmplificationAnalysis(params: {
   }) => {
     const matchedMoveId = Number(item.candidate.matchedCalibratedMoveId ?? 0);
     return targetLargeMoveIds.has(matchedMoveId)
-      || returnBucketAtLeast(item.actualEvaluatedBucket, "9_to_10_pct")
-      || returnBucketAtLeast(item.prediction.predictedMoveSizeBucket, "9_to_10_pct");
+      || returnBucketAtLeast(item.actualEvaluatedBucket, targetMinimumBucket)
+      || returnBucketAtLeast(item.prediction.predictedMoveSizeBucket, targetMinimumBucket);
   };
 
   const scoreCandidateSimilarity = (
@@ -3209,6 +3210,61 @@ async function buildReturnAmplificationAnalysis(params: {
   };
 
   const baselineSelected = enrichedCandidates.filter((item) => baselineSelectedIds.has(item.candidate.candidateId));
+  const r75FamilyBucketScenarioConfigs = params.dataset.serviceId === "R_75"
+    ? (() => {
+        const combos = new Map<string, {
+          family: string;
+          bucket: string;
+          direction?: "up" | "down";
+          moveCount: number;
+        }>();
+        const addCombo = (family: string, bucket: string, direction?: "up" | "down") => {
+          const key = `${family}|${bucket}|${direction ?? "all"}`;
+          const combo = combos.get(key) ?? { family, bucket, direction, moveCount: 0 };
+          combo.moveCount += 1;
+          combos.set(key, combo);
+        };
+        for (const move of targetLargeMoveUniverse) {
+          const family = String(move.calibratedBaseFamily ?? move.phaseDerivedFamily ?? "unknown");
+          const bucket = String(move.calibratedMoveSizeBucket ?? move.phaseDerivedBucket ?? "unknown");
+          if (!["breakout", "reversal", "continuation"].includes(family)) continue;
+          const direction = move.direction === "down" ? "down" : "up";
+          addCombo(family, "all");
+          addCombo(family, "all", direction);
+          if (bucket !== "unknown") {
+            addCombo(family, bucket);
+            addCombo(family, bucket, direction);
+          }
+        }
+        return [...combos.values()]
+          .filter((combo) => combo.moveCount >= 2)
+          .sort((a, b) =>
+            b.moveCount - a.moveCount
+            || ["breakout", "reversal", "continuation"].indexOf(a.family) - ["breakout", "reversal", "continuation"].indexOf(b.family)
+          )
+          .map((combo) => ({
+            scenarioId: `r75_${combo.family}_${combo.bucket}${combo.direction ? `_${combo.direction}` : ""}_capital_extraction`,
+            label: `R_75 ${combo.family}${combo.bucket === "all" ? "" : ` ${combo.bucket}`}${combo.direction ? ` ${combo.direction}` : ""}`,
+            description: `R_75 family/bucket capital extraction candidate over ${combo.moveCount} detected >=${targetMinimumMovePct}% moves.`,
+            predicate: (item: typeof enrichedCandidates[number]) => {
+              const move = moveById.get(Number(item.candidate.matchedCalibratedMoveId ?? 0));
+              if (!move || !targetLargeMoveIds.has(move.moveId)) return false;
+              const family = String(move.calibratedBaseFamily ?? move.phaseDerivedFamily ?? "unknown");
+              const bucket = String(move.calibratedMoveSizeBucket ?? move.phaseDerivedBucket ?? "unknown");
+              if (family !== combo.family) return false;
+              if (combo.bucket !== "all" && bucket !== combo.bucket) return false;
+              return combo.direction ? move.direction === combo.direction : true;
+            },
+            filterNotes: [
+              "r75_family_bucket_capital_extraction",
+              `runtimeFamily=${combo.family}`,
+              ...(combo.bucket === "all" ? ["moveSizeBucket=all>=5"] : [`moveSizeBucket=${combo.bucket}`]),
+              ...(combo.direction ? [`moveDirection=${combo.direction}`] : []),
+              `detectedMoveCount=${combo.moveCount}`,
+            ],
+          }));
+      })()
+    : [];
   const scenarios = [
     {
       scenarioId: "baseline_current_best",
@@ -3244,6 +3300,7 @@ async function buildReturnAmplificationAnalysis(params: {
       },
       filterNotes: [`target_universe=${targetFamily}`, `abs(movePctPoints)>=${targetMinimumMovePct}`, "direction=down"],
     },
+    ...r75FamilyBucketScenarioConfigs,
     {
       scenarioId: "bucket_gte_7_to_8",
       label: "Bucket >= 7_to_8_pct",
@@ -3597,12 +3654,13 @@ async function buildReturnAmplificationAnalysis(params: {
     Number(scenario.lifecycleAverageMonthlyAccountReturnPct ?? scenario.averageMonthlyAccountReturnPct ?? 0);
   const candidateTradeCount = (scenario: Record<string, unknown>) =>
     Number(scenario.trades ?? 0);
+  const candidateLifecycleCapturePassed = (scenario: Record<string, unknown>) =>
+    Number(scenario.lifecycleMedianPnlPct ?? 0) >= 5
+    && Number(scenario.lifecycleAveragePnlPct ?? 0) >= 5
+    && Number(scenario.lifecycleMfeCaptureRatio ?? 0) > 0;
   const capitalExtractionScenarios = scenarios.filter((scenario) =>
     String(scenario.scenarioId ?? "").startsWith("capital_extraction_gte_")
-    || (
-      candidateCapturedTargetCount(scenario) > 0
-      && Number(scenario.lifecycleMedianPnlPct ?? 0) >= 5
-    )
+    || String(scenario.scenarioId ?? "").startsWith("r75_")
   );
   const rankCapitalExtraction = (a: Record<string, unknown>, b: Record<string, unknown>) =>
     Number(candidateTradeCount(b) >= 20 ? 1 : 0) - Number(candidateTradeCount(a) >= 20 ? 1 : 0)
@@ -3616,7 +3674,15 @@ async function buildReturnAmplificationAnalysis(params: {
     || Number(b.winRate ?? 0) - Number(a.winRate ?? 0)
     || Number(a.drawdown ?? Number.POSITIVE_INFINITY) - Number(b.drawdown ?? Number.POSITIVE_INFINITY)
     || candidateTradeCount(b) - candidateTradeCount(a);
-  const bestCapitalExtractionCandidate = [...capitalExtractionScenarios].sort(rankCapitalExtraction)[0] ?? null;
+  const familyCapitalExtractionScenarios = params.dataset.serviceId === "R_75"
+    ? capitalExtractionScenarios.filter((scenario) => String(scenario.scenarioId ?? "").startsWith("r75_"))
+    : capitalExtractionScenarios;
+  const rankedCapitalExtractionScenarios = [...(familyCapitalExtractionScenarios.length > 0 ? familyCapitalExtractionScenarios : capitalExtractionScenarios)].sort(rankCapitalExtraction);
+  const bestCapitalExtractionCandidate = rankedCapitalExtractionScenarios.find((scenario) =>
+    candidateLifecycleCapturePassed(scenario)
+    && candidateTradeCount(scenario) >= 20
+    && candidateCapitalReturn(scenario) > 0
+  ) ?? rankedCapitalExtractionScenarios[0] ?? null;
   const rankedScenarios = [...scenarios].sort((a, b) =>
     rankCapitalExtraction(a, b)
     || Number(b.guardrailsPassed ? 1 : 0) - Number(a.guardrailsPassed ? 1 : 0)
@@ -3630,6 +3696,12 @@ async function buildReturnAmplificationAnalysis(params: {
     || Number(a.drawdown ?? Number.POSITIVE_INFINITY) - Number(b.drawdown ?? Number.POSITIVE_INFINITY)
     || Number(b.trades ?? 0) - Number(a.trades ?? 0)
   );
+  const comparisonRankedScenarios = params.dataset.serviceId === "R_75"
+    ? [
+        ...rankedCapitalExtractionScenarios,
+        ...rankedScenarios.filter((scenario) => !rankedCapitalExtractionScenarios.some((ranked) => ranked.scenarioId === scenario.scenarioId)),
+      ]
+    : rankedScenarios;
   const recommendedCandidateConfiguration = rankedScenarios[0] ?? null;
   const safestHighWinPolicy = [...scenarios].sort((a, b) =>
     Number(b.winRate ?? 0) - Number(a.winRate ?? 0)
@@ -3642,6 +3714,7 @@ async function buildReturnAmplificationAnalysis(params: {
     && candidateCapturedTargetCount(bestCapitalExtractionCandidate) > 0
     && Number(bestCapitalExtractionCandidate.slHitRate ?? 1) <= 0.15
     && candidateCapitalReturn(bestCapitalExtractionCandidate) > 0
+    && candidateLifecycleCapturePassed(bestCapitalExtractionCandidate)
     ? bestCapitalExtractionCandidate
     : null;
   const bestReturnFirstPolicy = highVolumeRuntimeCandidate
@@ -3851,7 +3924,7 @@ async function buildReturnAmplificationAnalysis(params: {
       };
     }
   })();
-  const policyComparisonTable = rankedScenarios.map((scenario) => ({
+  const policyComparisonTable = comparisonRankedScenarios.map((scenario) => ({
     policyId: String(scenario.scenarioId ?? "unknown"),
     runtimeFamily: String(scenario.runtimeFamily ?? "unknown"),
     triggerTransition: String(scenario.triggerTransition ?? "unknown"),
@@ -4138,11 +4211,15 @@ function compactTradeLifecycleReplayReportForStorage(report: unknown) {
 function compactReturnAmplificationScenarioForStorage(scenario: unknown) {
   if (!scenario || typeof scenario !== "object") return scenario;
   const entry = scenario as Record<string, unknown>;
+  const selectedTradeIds = Array.isArray(entry.selectedTradeIds) ? entry.selectedTradeIds : [];
   return {
     ...entry,
     monthlyBreakdown: Array.isArray(entry.monthlyBreakdown) ? entry.monthlyBreakdown.slice(-12) : [],
     tradeLifecycleReplayReport: compactTradeLifecycleReplayReportForStorage(entry.tradeLifecycleReplayReport),
     exampleSelectedTrades: Array.isArray(entry.exampleSelectedTrades) ? entry.exampleSelectedTrades.slice(0, 5) : [],
+    selectedTradeIds: selectedTradeIds.slice(0, 80),
+    selectedTradeIdsTotal: selectedTradeIds.length,
+    selectedTradeIdsTruncated: selectedTradeIds.length > 80,
   };
 }
 
@@ -4298,6 +4375,9 @@ function compactReturnAmplificationAnalysisForStorage(value: unknown) {
       : [],
     scenarioPolicies: Array.isArray(analysis.scenarioPolicies)
       ? analysis.scenarioPolicies.map((scenario) => compactReturnAmplificationScenarioForStorage(scenario))
+      : [],
+    policyComparisonTable: Array.isArray(analysis.policyComparisonTable)
+      ? analysis.policyComparisonTable.slice(0, 40).map((scenario) => compactReturnAmplificationScenarioForStorage(scenario))
       : [],
     safestHighWinPolicy: compactReturnAmplificationScenarioForStorage(analysis.safestHighWinPolicy),
     bestReturnFirstPolicy: compactReturnAmplificationScenarioForStorage(analysis.bestReturnFirstPolicy),
@@ -5346,7 +5426,9 @@ export async function runEliteSynthesisJob(params: {
     },
     resultArtifact: storedResult,
     taskStatePatch: {
-      candidateRuntimeArtifacts: reviewCandidateRuntimeArtifact ? [reviewCandidateRuntimeArtifact] : [],
+      candidateRuntimeArtifacts: reviewCandidateRuntimeArtifact
+        ? [compactReviewCandidateRuntimeArtifactForStorage(reviewCandidateRuntimeArtifact)]
+        : [],
     },
   });
 
