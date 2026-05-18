@@ -3375,7 +3375,7 @@ async function buildReturnAmplificationAnalysis(params: {
     {
       scenarioId: "failed_recovery_short_5_to_6_sell_late_full_family",
       label: "Failed recovery short 5-6% sell late comparison",
-      description: "Comparison-only family retained to prove it does or does not beat the >=9% capital-extraction target.",
+      description: `Comparison-only family retained to prove it does or does not beat the >=${targetMinimumMovePct}% capital-extraction target.`,
       predicate: (item: typeof enrichedCandidates[number]) =>
         item.candidate.runtimeFamily === "failed_recovery_short"
         && item.candidate.triggerTransition === "failed_recovery_break_down"
@@ -4023,7 +4023,7 @@ async function buildReturnAmplificationAnalysis(params: {
     escalatedSeedFamilies: [
       {
         familyKey: `${targetFamily}|abs_move_gte_${targetMinimumMovePct}_pct|both_directions`,
-        escalationReason: "mandatory_capital_extraction_target_universe:abs(movePctPoints)>=9",
+        escalationReason: `mandatory_capital_extraction_target_universe:abs(movePctPoints)>=${targetMinimumMovePct}`,
         priority: "primary",
         targetMoveUniverse: targetLargeMoveReference,
         preLimit: {
@@ -4081,7 +4081,7 @@ async function buildReturnAmplificationAnalysis(params: {
       selectedCandidateExitTiming: bestCapitalExtractionCandidate?.lifecycleExitTiming ?? {},
       normalPullbackTolerancePct: (bestCapitalExtractionCandidate?.dynamicExitPlanSummary as Record<string, unknown> | undefined)?.dynamicProtectionDistancePct ?? null,
       noPanicCloseBeforeMinutes: (bestCapitalExtractionCandidate?.dynamicExitPlanSummary as Record<string, unknown> | undefined)?.maturityRules ?? null,
-      interpretation: "Large-move candidates derive maturity from detected >=9% move duration and tolerate normal continuation pullbacks before exhaustion exits.",
+      interpretation: `Large-move candidates derive maturity from detected >=${targetMinimumMovePct}% move duration and tolerate normal continuation pullbacks before exhaustion exits.`,
     },
     primaryDeepFamilyAnalysis,
     preLimitFamilyStats,
@@ -4218,7 +4218,23 @@ function compactTradeLifecycleReplayReportForStorage(report: unknown) {
       ]),
   );
   return {
-    ...replay,
+    serviceId: replay.serviceId ?? null,
+    sourceJobId: replay.sourceJobId ?? null,
+    sourcePolicyId: replay.sourcePolicyId ?? null,
+    tradeCount: replay.tradeCount ?? 0,
+    oldMedianPnlPct: replay.oldMedianPnlPct ?? 0,
+    oldAveragePnlPct: replay.oldAveragePnlPct ?? 0,
+    lifecycleMedianPnlPct: replay.lifecycleMedianPnlPct ?? 0,
+    lifecycleAveragePnlPct: replay.lifecycleAveragePnlPct ?? 0,
+    oldMfeCaptureRatio: replay.oldMfeCaptureRatio ?? 0,
+    lifecycleMfeCaptureRatio: replay.lifecycleMfeCaptureRatio ?? 0,
+    oldTotalAccountReturnPct: replay.oldTotalAccountReturnPct ?? 0,
+    lifecycleTotalAccountReturnPct: replay.lifecycleTotalAccountReturnPct ?? 0,
+    oldAverageMonthlyReturnPct: replay.oldAverageMonthlyReturnPct ?? 0,
+    lifecycleAverageMonthlyReturnPct: replay.lifecycleAverageMonthlyReturnPct ?? 0,
+    improvedTradeCount: replay.improvedTradeCount ?? 0,
+    worsenedTradeCount: replay.worsenedTradeCount ?? 0,
+    exitReasonDistribution: replay.exitReasonDistribution ?? {},
     compactedForStorage: true,
     examples: compactExamples,
     trades: [],
@@ -4230,7 +4246,48 @@ function compactReturnAmplificationScenarioForStorage(scenario: unknown) {
   const entry = scenario as Record<string, unknown>;
   const selectedTradeIds = Array.isArray(entry.selectedTradeIds) ? entry.selectedTradeIds : [];
   return {
-    ...entry,
+    scenarioId: entry.scenarioId ?? null,
+    label: entry.label ?? null,
+    description: entry.description ?? null,
+    sourcePool: entry.sourcePool ?? null,
+    trades: entry.trades ?? 0,
+    wins: entry.wins ?? 0,
+    losses: entry.losses ?? 0,
+    winRate: entry.winRate ?? 0,
+    slHits: entry.slHits ?? 0,
+    slHitRate: entry.slHitRate ?? 0,
+    profitFactor: entry.profitFactor ?? 0,
+    summedTradePnl: entry.summedTradePnl ?? 0,
+    accountReturnPct: entry.accountReturnPct ?? 0,
+    averageMonthlyAccountReturnPct: entry.averageMonthlyAccountReturnPct ?? 0,
+    lifecycleAccountReturnPct: entry.lifecycleAccountReturnPct ?? 0,
+    lifecycleAverageMonthlyAccountReturnPct: entry.lifecycleAverageMonthlyAccountReturnPct ?? 0,
+    lifecycleMedianPnlPct: entry.lifecycleMedianPnlPct ?? 0,
+    lifecycleAveragePnlPct: entry.lifecycleAveragePnlPct ?? 0,
+    lifecycleMfeCaptureRatio: entry.lifecycleMfeCaptureRatio ?? 0,
+    medianMfePct: entry.medianMfePct ?? 0,
+    medianHoldMinutes: entry.medianHoldMinutes ?? 0,
+    runtimeFamily: entry.runtimeFamily ?? null,
+    triggerTransition: entry.triggerTransition ?? null,
+    bucket: entry.bucket ?? null,
+    direction: entry.direction ?? null,
+    offsetCluster: entry.offsetCluster ?? null,
+    scalpLike: entry.scalpLike ?? false,
+    guardrailsPassed: entry.guardrailsPassed ?? false,
+    rejectionReasons: Array.isArray(entry.rejectionReasons) ? entry.rejectionReasons.slice(0, 12) : [],
+    rankingScore: entry.rankingScore ?? 0,
+    targetMoveCoverage: entry.targetMoveCoverage ?? null,
+    lifecycleExitTiming: entry.lifecycleExitTiming ?? null,
+    dynamicExitPlanSummary: entry.dynamicExitPlanSummary ?? null,
+    paperStageability: entry.paperStageability ?? null,
+    targetAchievedBreakdown: entry.targetAchievedBreakdown ?? null,
+    capitalAllocationScenarios: entry.capitalAllocationScenarios ?? null,
+    cascadeScenarios: entry.cascadeScenarios ?? null,
+    selectedBucketDistribution: entry.selectedBucketDistribution ?? {},
+    predictedBucketDistribution: entry.predictedBucketDistribution ?? {},
+    actualEvaluatedBucketDistribution: entry.actualEvaluatedBucketDistribution ?? {},
+    reasonsSelected: Array.isArray(entry.reasonsSelected) ? entry.reasonsSelected.slice(0, 12) : [],
+    reasonsRejected: Array.isArray(entry.reasonsRejected) ? entry.reasonsRejected.slice(0, 12) : [],
     monthlyBreakdown: Array.isArray(entry.monthlyBreakdown) ? entry.monthlyBreakdown.slice(-12) : [],
     tradeLifecycleReplayReport: compactTradeLifecycleReplayReportForStorage(entry.tradeLifecycleReplayReport),
     exampleSelectedTrades: Array.isArray(entry.exampleSelectedTrades) ? entry.exampleSelectedTrades.slice(0, 5) : [],
@@ -4341,6 +4398,52 @@ function compactBestPolicyArtifactForStorage(value: unknown) {
   };
 }
 
+function compactRuntimeBuildValueForStorage(value: unknown, keyHint = "", depth = 0): unknown {
+  if (value == null || typeof value !== "object") return value;
+  if (keyHint === "exitDecisionTrace") return [];
+  if (depth > 10) return "[compacted-depth-limit]";
+  if (Array.isArray(value)) {
+    if (keyHint === "trades") return [];
+    const limit = keyHint === "candidatePredictions" ? 60 : keyHint === "selectedTradeIds" ? 120 : 200;
+    return value
+      .slice(0, limit)
+      .map((item) => compactRuntimeBuildValueForStorage(item, keyHint, depth + 1));
+  }
+
+  const record = value as Record<string, unknown>;
+  if (Array.isArray(record.exitDecisionTrace)) {
+    return compactLifecycleReplayTradeForStorage(record);
+  }
+  if (
+    Array.isArray(record.trades)
+    && record.examples
+    && (
+      "lifecycleMedianPnlPct" in record
+      || "lifecycleAveragePnlPct" in record
+      || "lifecycleMfeCaptureRatio" in record
+    )
+  ) {
+    return compactTradeLifecycleReplayReportForStorage(record);
+  }
+
+  const compacted: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    if (child === undefined) continue;
+    if (key === "exitDecisionTrace") {
+      compacted[key] = [];
+      continue;
+    }
+    if (key === "trades" && Array.isArray(child)) {
+      compacted[key] = [];
+      compacted.tradesCompactedForStorage = true;
+      compacted.tradesOriginalCount = child.length;
+      continue;
+    }
+    compacted[key] = compactRuntimeBuildValueForStorage(child, key, depth + 1);
+  }
+  return compacted;
+}
+
 function compactDiagnosticsForStorage(value: unknown) {
   if (!value || typeof value !== "object") return value;
   const diagnostics = value as Record<string, unknown>;
@@ -4421,7 +4524,7 @@ function compactReturnAmplificationAnalysisForStorage(value: unknown) {
 }
 
 function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): EliteSynthesisResult {
-  return {
+  return compactRuntimeBuildValueForStorage({
     jobId: result.jobId,
     serviceId: result.serviceId,
     status: result.status,
@@ -4470,7 +4573,7 @@ function compactEliteSynthesisResultForStorage(result: EliteSynthesisResult): El
     lifecycleHoldAndExhaustionAnalysis: result.lifecycleHoldAndExhaustionAnalysis,
     reviewCandidateRuntimeArtifact: compactReviewCandidateRuntimeArtifactForStorage(result.reviewCandidateRuntimeArtifact),
     resultCompactedForRuntimeBuildStorage: true,
-  };
+  }) as EliteSynthesisResult;
 }
 
 export function getSynthesisAdapter(serviceId: string): SymbolSynthesisAdapter {
@@ -5444,7 +5547,7 @@ export async function runEliteSynthesisJob(params: {
     resultArtifact: storedResult,
     taskStatePatch: {
       candidateRuntimeArtifacts: reviewCandidateRuntimeArtifact
-        ? [compactReviewCandidateRuntimeArtifactForStorage(reviewCandidateRuntimeArtifact)]
+        ? [compactRuntimeBuildValueForStorage(compactReviewCandidateRuntimeArtifactForStorage(reviewCandidateRuntimeArtifact))]
         : [],
     },
   });
