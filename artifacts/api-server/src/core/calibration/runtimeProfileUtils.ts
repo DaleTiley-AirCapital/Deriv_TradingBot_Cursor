@@ -281,6 +281,34 @@ export function evaluateRuntimeEntryEvidence(params: {
     const engineName = params.winner.engineName;
     const formula = runtimeFormula(params);
     const setupOverride = engineRuntimeSetupOverride(formula, engineName);
+    const allowedEngines = Array.isArray(setupOverride["allowedEngines"])
+      ? setupOverride["allowedEngines"].map((value) => String(value)).filter(Boolean)
+      : [];
+    if (allowedEngines.length > 0 && !allowedEngines.includes(engineName)) {
+      return {
+        allowed: false,
+        reason: `runtime_r75_engine_not_selected_by_build:${engineName}`,
+        leadInShape,
+        qualityBand,
+        matchedBucketKey: selectedBucket.key,
+        evidenceScore: 0,
+        weakComponents: [`engine:${engineName}<${allowedEngines.join("|")}`],
+      };
+    }
+    const allowedDirections = Array.isArray(setupOverride["allowedDirections"])
+      ? setupOverride["allowedDirections"].map((value) => String(value).toLowerCase()).filter(Boolean)
+      : [];
+    if (allowedDirections.length > 0 && !allowedDirections.includes(params.winner.direction)) {
+      return {
+        allowed: false,
+        reason: `runtime_r75_direction_not_selected_by_build:${params.winner.direction}`,
+        leadInShape,
+        qualityBand,
+        matchedBucketKey: selectedBucket.key,
+        evidenceScore: 0,
+        weakComponents: [`direction:${params.winner.direction}<${allowedDirections.join("|")}`],
+      };
+    }
     const minNativeScore = runtimeNumber(setupOverride, "minNativeScore");
     const minConfidence = runtimeNumber(setupOverride, "minConfidence");
     const minExpectedMovePct = runtimeNumber(setupOverride, "minExpectedMovePct");

@@ -236,6 +236,20 @@ function triggerThreshold(model: LiveCalibrationProfile): number {
   return clamp01(Number(model.recommendedScoreGates?.paper ?? 60) / 100);
 }
 
+function formulaArray(model: LiveCalibrationProfile, key: string): string[] {
+  const formula = model.formulaOverride && typeof model.formulaOverride === "object"
+    ? (model.formulaOverride as Record<string, unknown>)
+    : {};
+  const direct = formula[key];
+  if (Array.isArray(direct)) return direct.map((value) => String(value).toLowerCase()).filter(Boolean);
+  const crash300 = formula["crash300"];
+  if (crash300 && typeof crash300 === "object") {
+    const nested = (crash300 as Record<string, unknown>)[key];
+    if (Array.isArray(nested)) return nested.map((value) => String(value).toLowerCase()).filter(Boolean);
+  }
+  return [];
+}
+
 function maxContextAgeBars(model: LiveCalibrationProfile, context: Crash300ContextSnapshot): number {
   const override = readFormulaNumber(model, ["maxContextAgeBars"], NaN);
   if (Number.isFinite(override) && override > 0) return Math.round(override);
@@ -711,6 +725,26 @@ export async function evaluateCrash300Runtime(
 
   const selectedFamily = selectedFamilyScore(familyCandidates, derivedFamily, contextSnapshot);
   const direction = triggerSnapshot.triggerDirection;
+  const allowedDirections = formulaArray(runtimeCalibration, "allowedDirections");
+  if (allowedDirections.length > 0 && !allowedDirections.includes(direction)) {
+    invalidateEpoch(runtimeState);
+    return failDecision({
+      runtimeCalibration,
+      direction,
+      family: derivedFamily,
+      context: contextSnapshot,
+      trigger: triggerSnapshot,
+      setupMatch: selectedFamily.score,
+      confidence: selectedFamily.score * 0.6,
+      componentScoreMap: componentScores(contextSnapshot, triggerSnapshot, derivedFamily),
+      thresholdSource: thresholdOrigin,
+      familySource: "phase_derived_trigger_semantics",
+      familyDirection: familySemantics.familyDirection,
+      candidateDirection: direction,
+      failReasons: [`runtime_direction_not_selected_by_build:${direction}`],
+      candidateProduced: false,
+    });
+  }
   const bucketResolution = resolveCrash300RuntimeBucketForFamily({
     runtimeCalibration,
     family: derivedFamily,

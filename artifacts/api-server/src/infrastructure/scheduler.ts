@@ -150,19 +150,52 @@ function stableHash(value: string): string {
   return Math.abs(hash).toString(36);
 }
 
+function runtimeModelRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function runtimeNumberAt(runtimeCalibration: LiveCalibrationProfile, paths: string[][]): number | null {
+  const root = runtimeCalibration as unknown as Record<string, unknown>;
+  for (const path of paths) {
+    let cursor: unknown = root;
+    for (const part of path) cursor = runtimeModelRecord(cursor)[part];
+    const value = Number(cursor);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return null;
+}
+
+function runtimeServiceCandidateCooldownMs(
+  runtimeCalibration: LiveCalibrationProfile,
+  stateMap: Record<string, string>,
+  serviceId: string,
+): number {
+  const buildCooldownMinutes = runtimeNumberAt(runtimeCalibration, [
+    ["formulaOverride", "runtimeSetup", "candidateEmissionCooldownMinutes"],
+    ["formulaOverride", "crash300", "candidateEmissionCooldownMinutes"],
+    ["formulaOverride", "candidateEmissionCooldownMinutes"],
+  ]);
+  if (buildCooldownMinutes != null) return Math.max(60_000, buildCooldownMinutes * 60_000);
+
+  const prefix = serviceId.toLowerCase();
+  const configuredHours = Number(
+    stateMap[`${prefix}_allocator_cascade_interval_hours`] ?? stateMap["allocator_cascade_interval_hours"] ?? 1,
+  );
+  return Math.max(60_000, (Number.isFinite(configuredHours) ? configuredHours : 1) * 60 * 60_000);
+}
+
 async function reserveServiceCandidateEmission(params: {
   serviceId: string;
   stateMap: Record<string, string>;
+  runtimeCalibration: LiveCalibrationProfile;
   runtimeArtifactId: string;
   engineName: string;
   direction: "buy" | "sell";
   setupSignature: string;
 }): Promise<{ allowed: boolean; reason: string; cooldownMs: number }> {
-  const prefix = params.serviceId.toLowerCase();
-  const configuredHours = Number(
-    params.stateMap[`${prefix}_allocator_cascade_interval_hours`] ?? params.stateMap["allocator_cascade_interval_hours"] ?? 1,
-  );
-  const cooldownMs = Math.max(60_000, (Number.isFinite(configuredHours) ? configuredHours : 1) * 60 * 60_000);
+  const cooldownMs = runtimeServiceCandidateCooldownMs(params.runtimeCalibration, params.stateMap, params.serviceId);
   const signature = `${params.runtimeArtifactId}|${params.engineName}|${params.direction}|${params.setupSignature}`;
   const key = `${params.serviceId.toUpperCase()}_service_candidate_emission_${stableHash(signature)}`;
   const now = new Date();
@@ -360,6 +393,7 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
   const emissionReservation = await reserveServiceCandidateEmission({
     serviceId,
     stateMap,
+    runtimeCalibration,
     runtimeArtifactId: runtimeArtifact.artifactId,
     engineName: winner.engineName,
     direction: coordinatorOutput.resolvedDirection,

@@ -5282,6 +5282,8 @@ export async function runEliteSynthesisJob(params: {
     ((returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse as Record<string, unknown> | undefined)?.minimumMovePct
     ?? (params.serviceId === "CRASH300" ? 5 : 5),
   );
+  const reviewBestCandidate = (returnAmplificationAnalysis as Record<string, unknown>).bestCapitalExtractionCandidate as Record<string, unknown> | undefined;
+  const reviewCandidateDirection = String(reviewBestCandidate?.direction ?? "").toLowerCase();
   const reviewCandidateRuntimeArtifact = finalPassRuntimeArtifactEligibility?.canCreateReviewArtifact
     ? {
         artifactId: `${String(params.serviceId).toLowerCase()}-runtime-build-review-${params.jobId}`,
@@ -5290,11 +5292,11 @@ export async function runEliteSynthesisJob(params: {
         serviceId: params.serviceId,
         generatedAt: nowIso(),
         sourceSynthesisJobId: params.jobId,
-        sourcePolicyId: String(((returnAmplificationAnalysis as Record<string, unknown>).bestCapitalExtractionCandidate as Record<string, unknown> | undefined)?.scenarioId ?? "capital_extraction_gte_target_universe"),
+        sourcePolicyId: String(reviewBestCandidate?.scenarioId ?? "capital_extraction_gte_target_universe"),
         runtimeFamily: String(((returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse as Record<string, unknown> | undefined)?.family ?? (params.serviceId === "CRASH300" ? "crash_expansion" : "r75_capital_extraction")),
         triggerTransition: "capital_extraction_large_move",
         selectedMoveSizeBucket: `${reviewTargetMinimumMovePct}_plus_pct`,
-        direction: "both",
+        direction: reviewCandidateDirection === "buy" || reviewCandidateDirection === "sell" ? reviewCandidateDirection : "both",
         offsetCluster: "detected_move_trigger_offsets",
         targetMoveUniverse: (returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse ?? null,
         largeMoveCoverage: (returnAmplificationAnalysis as Record<string, unknown>).largeMoveCoverage ?? null,

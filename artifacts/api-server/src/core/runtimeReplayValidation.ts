@@ -42,7 +42,23 @@ function topEntries(map: Record<string, number>, label: "reason" | "engine", lim
     .map(([key, count]) => ({ [label]: key, count })) as Array<{ reason: string; count: number }> & Array<{ engine: string; count: number }>;
 }
 
+function runtimeNumberAt(adapter: Record<string, unknown>, paths: string[][]): number | null {
+  for (const path of paths) {
+    let cursor: unknown = adapter;
+    for (const part of path) cursor = asRuntimeRecord(cursor)[part];
+    const value = Number(cursor);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return null;
+}
+
 function candidateCooldownBars(adapter: Record<string, unknown>): number {
+  const buildDerivedCooldownMinutes = runtimeNumberAt(adapter, [
+    ["formulaOverride", "runtimeSetup", "candidateEmissionCooldownMinutes"],
+    ["formulaOverride", "crash300", "candidateEmissionCooldownMinutes"],
+    ["formulaOverride", "candidateEmissionCooldownMinutes"],
+  ]);
+  if (buildDerivedCooldownMinutes != null) return Math.max(60, Math.round(buildDerivedCooldownMinutes));
   const trailingModel = asRuntimeRecord(adapter["trailingModel"]);
   const holdProfile = asRuntimeRecord(adapter["holdProfile"]);
   const maturityRules = asRuntimeRecord(holdProfile["maturityRules"]);

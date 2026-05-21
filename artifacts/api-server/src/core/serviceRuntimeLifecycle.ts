@@ -161,7 +161,9 @@ function buildCrash300RuntimeAdapter(
   const selectedPolicy = selectedPolicyFromArtifact(artifact);
   const expectedPerformance = expectedPerformanceFromArtifact(artifact);
   const exitAudit = asRecord(artifact.exitDerivationAudit);
-  const direction = String(selectedPolicy.direction ?? "sell").toLowerCase() === "buy" ? "buy" : "sell";
+  const direction = String(selectedPolicy.direction ?? "").toLowerCase() === "buy" || String(selectedPolicy.direction ?? "").toLowerCase() === "sell"
+    ? String(selectedPolicy.direction).toLowerCase() as "buy" | "sell"
+    : inferredRuntimeDirection(serviceId, artifact);
   const directionKey = direction === "buy" ? "up" : "down";
   const sourceRunId = readNumeric(artifact.sourceSynthesisJobId) ?? 0;
   const tradeCount = Math.max(1, readNumeric(expectedPerformance.trades) ?? 1);
@@ -174,6 +176,7 @@ function buildCrash300RuntimeAdapter(
   const coverage = asRecord(artifact.largeMoveCoverage);
   const coveragePct = readNumeric(coverage.coveragePct) ?? 0;
   const coverageFraction = coveragePct > 1 ? coveragePct / 100 : coveragePct;
+  const candidateEmissionCooldownMinutes = buildDerivedCandidateCooldownMinutes({ artifact, trades: tradeCount });
   const buildDerivedContextThreshold = Math.max(
     0.56,
     Math.min(0.6, coverageFraction > 0 ? 0.5 + coverageFraction * 0.11 : 0.58),
@@ -184,12 +187,17 @@ function buildCrash300RuntimeAdapter(
       contextMatchThreshold: Number(buildDerivedContextThreshold.toFixed(2)),
       triggerStrengthThreshold: Number(buildDerivedTriggerThreshold.toFixed(2)),
       maxContextAgeBars: 240,
+      allowedDirections: [direction],
+      candidateEmissionCooldownMinutes,
       liveSafeTriggerExpressionRequired: true,
       sourcePolicyId: String(artifact.sourcePolicyId ?? ""),
       thresholdDerivation: {
         source: "runtime_build_selected_family_replay",
         previousFallbackWouldUseWinRate: Number(confidenceMultiplier.toFixed(2)),
         coveragePct,
+        selectedDirection: direction,
+        selectedTrades: tradeCount,
+        candidateEmissionCooldownMinutes,
         rationale: "Use thresholds from the captured build family instead of rebuilding live context gates from a fallback win-rate default.",
       },
     },
@@ -324,6 +332,62 @@ function selectedPolicyFromArtifact(artifact: Record<string, unknown>): Record<s
   };
 }
 
+function inferredRuntimeDirection(
+  serviceId: string,
+  artifact: Record<string, unknown>,
+): "buy" | "sell" {
+  const rawDirection = String(artifact.direction ?? "").toLowerCase();
+  if (rawDirection === "buy" || rawDirection === "sell") return rawDirection;
+
+  const sourcePolicyId = String(artifact.sourcePolicyId ?? "").toLowerCase();
+  const runtimeFamily = String(artifact.runtimeFamily ?? "").toLowerCase();
+
+  if (serviceId.toUpperCase() === "CRASH300") {
+    if (sourcePolicyId.includes("down") || sourcePolicyId.includes("short") || sourcePolicyId.includes("sell")) return "sell";
+    if (sourcePolicyId.includes("lifecycle_capture") || runtimeFamily.includes("post_crash_recovery")) return "buy";
+    return "buy";
+  }
+
+  if (serviceId.toUpperCase() === "R_75") {
+    if (sourcePolicyId.includes("reversal") || sourcePolicyId.includes("sell")) return "sell";
+    if (sourcePolicyId.includes("breakout") || sourcePolicyId.includes("continuation") || sourcePolicyId.includes("buy")) return "buy";
+    return "buy";
+  }
+
+  return "buy";
+}
+
+function selectedR75Engines(sourcePolicyId: string): string[] {
+  const source = sourcePolicyId.toLowerCase();
+  const engines: string[] = [];
+  if (source.includes("breakout")) engines.push("r75_breakout_engine");
+  if (source.includes("reversal")) engines.push("r75_reversal_engine");
+  if (source.includes("continuation")) engines.push("r75_continuation_engine");
+  return engines.length > 0
+    ? engines
+    : ["r75_breakout_engine", "r75_reversal_engine", "r75_continuation_engine"];
+}
+
+function buildDerivedCandidateCooldownMinutes(params: {
+  artifact: Record<string, unknown>;
+  trades: number;
+  fallbackWindowDays?: number;
+}): number {
+  const targetUniverse = asRecord(params.artifact.targetMoveUniverse);
+  const coverage = asRecord(params.artifact.largeMoveCoverage);
+  const totalTargets = readNumeric(targetUniverse.totalTargetMoves) ?? readNumeric(coverage.targetUniverseCount) ?? 0;
+  const medianHoldMinutes = readNumeric(targetUniverse.medianHoldMinutes) ?? 0;
+  const p75HoldMinutes = readNumeric(targetUniverse.p75HoldMinutes) ?? 0;
+  const generatedAt = Date.parse(String(params.artifact.generatedAt ?? ""));
+  const windowDays = Number.isFinite(generatedAt)
+    ? Math.max(30, params.fallbackWindowDays ?? 180)
+    : Math.max(30, params.fallbackWindowDays ?? 180);
+  const tradeEquivalentCount = Math.max(1, Math.min(params.trades, totalTargets > 0 ? totalTargets : params.trades));
+  const averageIntervalMinutes = (windowDays * 24 * 60) / tradeEquivalentCount;
+  const holdFloorMinutes = Math.max(medianHoldMinutes, p75HoldMinutes * 0.5, 60);
+  return Math.round(Math.max(60, Math.min(7 * 24 * 60, Math.max(averageIntervalMinutes * 0.5, holdFloorMinutes))));
+}
+
 function percentileValue(
   source: Record<string, unknown>,
   key: string,
@@ -340,6 +404,7 @@ function buildR75RuntimeAdapter(
 ): PromotedSymbolRuntimeModel {
   const selectedPolicy = selectedPolicyFromArtifact(artifact);
   const expectedPerformance = expectedPerformanceFromArtifact(artifact);
+  const sourcePolicyId = String(artifact.sourcePolicyId ?? selectedPolicy.sourcePolicyId ?? "");
   const targetUniverse = asRecord(artifact.targetMoveUniverse);
   const lifecycleRules = asRecord(
     artifact.lifecycleManagerRules ?? artifact.dynamicTpProtectionSummary ?? artifact.dynamicExitPlanSummary,
@@ -354,6 +419,9 @@ function buildR75RuntimeAdapter(
   const maturityRules = asRecord(lifecycleRules.maturityRules);
   const minHoldBars = readNumeric(asRecord(maturityRules.minHoldBars).p50) ?? 120;
   const trades = Math.max(1, readNumeric(expectedPerformance.trades) ?? readNumeric(coverage.capturedTargetMoveCount) ?? 1);
+  const selectedDirection = inferredRuntimeDirection(serviceId, artifact);
+  const allowedEngines = selectedR75Engines(sourcePolicyId);
+  const candidateEmissionCooldownMinutes = buildDerivedCandidateCooldownMinutes({ artifact, trades });
   const captured = readNumeric(coverage.capturedTargetMoveCount) ?? trades;
   const totalTargets = readNumeric(coverage.targetUniverseCount) ?? captured;
   const tradesPerMonth = Math.max(1, Math.round(trades / 9));
@@ -418,16 +486,22 @@ function buildR75RuntimeAdapter(
     },
     formulaOverride: {
       objective: "r75_multi_family_capital_extraction",
-      sourcePolicyId: String(artifact.sourcePolicyId ?? selectedPolicy.sourcePolicyId ?? ""),
+      sourcePolicyId,
       runtimeSetup: {
         componentGateMode: "build_selected_rules",
-        minNativeScore: 55,
-        minConfidence: 0.58,
+        allowedEngines,
+        allowedDirections: [selectedDirection],
+        candidateEmissionCooldownMinutes,
+        minNativeScore: 60,
+        minConfidence: 0.65,
         minExpectedMovePct: Math.max(0.05, fallbackTargetPct / 100),
         thresholdDerivation: {
           source: "runtime_build_selected_trades",
           selectedTrades: trades,
-          rationale: "Build Runtime Model already selected the 105 trade family. Live setup admission should require the same capital-extraction readiness, not hard 55-point component defaults that were not part of the build pass.",
+          selectedDirection,
+          allowedEngines,
+          candidateEmissionCooldownMinutes,
+          rationale: "Build Runtime Model selected a specific trade-equivalent family. Live setup admission must use that family, direction, and cadence instead of accepting every R_75 native engine with broad confidence.",
         },
       },
       engines: {
