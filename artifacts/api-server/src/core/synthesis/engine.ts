@@ -78,6 +78,71 @@ function uniqueStrings(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
 }
 
+function volatilityRuntimeEngineForFamily(family: unknown): string | null {
+  const normalized = String(family ?? "").toLowerCase();
+  if (normalized === "breakout") return "r75_breakout_engine";
+  if (normalized === "reversal") return "r75_reversal_engine";
+  if (normalized === "continuation") return "r75_continuation_engine";
+  return null;
+}
+
+function buildVolatilityRuntimeContractsFromPolicyTable(
+  serviceId: string,
+  policyComparisonTable: Array<Record<string, unknown>>,
+) {
+  if (serviceId.toUpperCase() !== "R_75") return [];
+
+  const byFamily = new Map<string, Record<string, unknown>>();
+  for (const scenario of policyComparisonTable) {
+    if (!Boolean(scenario.guardrailsPassed)) continue;
+    const runtimeFamily = String(scenario.runtimeFamily ?? "").toLowerCase();
+    const engineName = volatilityRuntimeEngineForFamily(runtimeFamily);
+    if (!engineName) continue;
+
+    const scenarioId = String(scenario.scenarioId ?? "");
+    if (!scenarioId.includes("_all_capital_extraction")) continue;
+    if (scenarioId.includes("_all_up_") || scenarioId.includes("_all_down_")) continue;
+
+    const direction = String(scenario.direction ?? "").toLowerCase();
+    if (direction !== "buy" && direction !== "sell") continue;
+
+    const trades = asFiniteNumber(scenario.trades) ?? 0;
+    if (trades < 20) continue;
+
+    const existing = byFamily.get(runtimeFamily);
+    const existingScore = asFiniteNumber(existing?.rankingScore) ?? -Infinity;
+    const score = asFiniteNumber(scenario.rankingScore) ?? -Infinity;
+    if (existing && existingScore >= score) continue;
+
+    byFamily.set(runtimeFamily, {
+      contractId: `${engineName}:${direction}`,
+      scenarioId,
+      policyId: scenarioId,
+      runtimeFamily,
+      engineName,
+      direction,
+      trades,
+      wins: asFiniteNumber(scenario.wins) ?? null,
+      losses: asFiniteNumber(scenario.losses) ?? null,
+      winRate: asFiniteNumber(scenario.winRate) ?? null,
+      slHitRate: asFiniteNumber(scenario.slHitRate) ?? null,
+      lifecycleMedianPnlPct: asFiniteNumber(scenario.lifecycleMedianPnlPct) ?? null,
+      lifecycleAveragePnlPct: asFiniteNumber(scenario.lifecycleAveragePnlPct) ?? null,
+      lifecycleMfeCaptureRatio: asFiniteNumber(scenario.lifecycleMfeCaptureRatio) ?? null,
+      averageMonthlyAccountReturnPct: asFiniteNumber(scenario.averageMonthlyAccountReturnPct) ?? null,
+      rankingScore: score,
+      targetMoveCoverage: scenario.targetMoveCoverage ?? null,
+      dynamicExitPlanSummary: scenario.dynamicExitPlanSummary ?? null,
+      guardrailsPassed: true,
+    });
+  }
+
+  const familyOrder = ["breakout", "reversal", "continuation"];
+  return familyOrder
+    .map((family) => byFamily.get(family))
+    .filter((contract): contract is Record<string, unknown> => Boolean(contract));
+}
+
 function dominantString(values: Array<string | null | undefined>, fallback = "unknown") {
   const counts = new Map<string, number>();
   for (const value of values) {
@@ -5282,6 +5347,10 @@ export async function runEliteSynthesisJob(params: {
     ((returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse as Record<string, unknown> | undefined)?.minimumMovePct
     ?? (params.serviceId === "CRASH300" ? 5 : 5),
   );
+  const reviewPolicyComparisonTable = Array.isArray((returnAmplificationAnalysis as Record<string, unknown>).policyComparisonTable)
+    ? ((returnAmplificationAnalysis as Record<string, unknown>).policyComparisonTable as Array<Record<string, unknown>>)
+    : [];
+  const selectedRuntimeContracts = buildVolatilityRuntimeContractsFromPolicyTable(params.serviceId, reviewPolicyComparisonTable);
   const reviewBestCandidate = (returnAmplificationAnalysis as Record<string, unknown>).bestCapitalExtractionCandidate as Record<string, unknown> | undefined;
   const reviewCandidateDirection = String(reviewBestCandidate?.direction ?? "").toLowerCase();
   const reviewCandidateRuntimeArtifact = finalPassRuntimeArtifactEligibility?.canCreateReviewArtifact
@@ -5297,6 +5366,7 @@ export async function runEliteSynthesisJob(params: {
         triggerTransition: "capital_extraction_large_move",
         selectedMoveSizeBucket: `${reviewTargetMinimumMovePct}_plus_pct`,
         direction: reviewCandidateDirection === "buy" || reviewCandidateDirection === "sell" ? reviewCandidateDirection : "both",
+        selectedRuntimeContracts,
         offsetCluster: "detected_move_trigger_offsets",
         targetMoveUniverse: (returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse ?? null,
         largeMoveCoverage: (returnAmplificationAnalysis as Record<string, unknown>).largeMoveCoverage ?? null,
@@ -5317,9 +5387,7 @@ export async function runEliteSynthesisJob(params: {
   const normalizedTargetProfile = normalizedEliteTargetProfile(targetProfile);
   const recommendedPolicy = (returnAmplificationAnalysis as Record<string, unknown>).recommendedPolicy as Record<string, unknown> | null;
   const bestReturnFirstPolicy = (returnAmplificationAnalysis as Record<string, unknown>).bestReturnFirstPolicy as Record<string, unknown> | null;
-  const policyComparisonTable = Array.isArray((returnAmplificationAnalysis as Record<string, unknown>).policyComparisonTable)
-    ? ((returnAmplificationAnalysis as Record<string, unknown>).policyComparisonTable as Array<Record<string, unknown>>)
-    : [];
+  const policyComparisonTable = reviewPolicyComparisonTable;
   const guardrailsPassedCount = policyComparisonTable.filter((scenario) => Boolean(scenario.guardrailsPassed)).length;
   const resolvedResultState: EliteSynthesisResultState = targetAchieved(bestPolicySummary, targetProfile)
     ? "completed_target_achieved"
@@ -5508,6 +5576,7 @@ export async function runEliteSynthesisJob(params: {
     targetMoveUniverse: (returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse ?? null,
     largeMoveCoverage: (returnAmplificationAnalysis as Record<string, unknown>).largeMoveCoverage ?? null,
     bestCapitalExtractionCandidate: (returnAmplificationAnalysis as Record<string, unknown>).bestCapitalExtractionCandidate ?? null,
+    selectedRuntimeContracts,
     missedTargetMoveAnalysis: (returnAmplificationAnalysis as Record<string, unknown>).missedTargetMoveAnalysis ?? null,
     lifecycleHoldAndExhaustionAnalysis: (returnAmplificationAnalysis as Record<string, unknown>).lifecycleHoldAndExhaustionAnalysis ?? null,
     reviewCandidateRuntimeArtifact,

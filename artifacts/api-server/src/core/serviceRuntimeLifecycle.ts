@@ -111,6 +111,10 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
 }
 
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
+}
+
 function serviceRuntimeKey(serviceId: string): string {
   return `promoted_service_runtime_${serviceId.toUpperCase()}`;
 }
@@ -368,6 +372,121 @@ function selectedR75Engines(sourcePolicyId: string): string[] {
     : ["r75_breakout_engine", "r75_reversal_engine", "r75_continuation_engine"];
 }
 
+type R75RuntimeContract = {
+  contractId: string;
+  scenarioId: string;
+  policyId: string;
+  runtimeFamily: string;
+  engineName: string;
+  direction: "buy" | "sell";
+  trades: number;
+  wins: number | null;
+  losses: number | null;
+  winRate: number | null;
+  slHitRate: number | null;
+  lifecycleMedianPnlPct: number | null;
+  lifecycleAveragePnlPct: number | null;
+  lifecycleMfeCaptureRatio: number | null;
+  averageMonthlyAccountReturnPct: number | null;
+  rankingScore: number | null;
+  targetMoveCoverage: unknown;
+  dynamicExitPlanSummary: unknown;
+  guardrailsPassed: boolean;
+};
+
+function r75EngineForFamily(family: unknown): string | null {
+  const normalized = String(family ?? "").toLowerCase();
+  if (normalized === "breakout") return "r75_breakout_engine";
+  if (normalized === "reversal") return "r75_reversal_engine";
+  if (normalized === "continuation") return "r75_continuation_engine";
+  return null;
+}
+
+function normalizeR75Direction(value: unknown): "buy" | "sell" | null {
+  const direction = String(value ?? "").toLowerCase();
+  return direction === "buy" || direction === "sell" ? direction : null;
+}
+
+function normalizeR75RuntimeContracts(
+  value: unknown,
+): R75RuntimeContract[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((raw): R75RuntimeContract | null => {
+      const source = asRecord(raw);
+      const runtimeFamily = String(source.runtimeFamily ?? "").toLowerCase();
+      const engineName = String(source.engineName ?? r75EngineForFamily(runtimeFamily) ?? "");
+      const direction = normalizeR75Direction(source.direction);
+      const trades = readNumeric(source.trades) ?? 0;
+      if (!engineName || !direction || trades <= 0) return null;
+      const policyId = String(source.policyId ?? source.scenarioId ?? `${engineName}:${direction}`);
+      return {
+        contractId: String(source.contractId ?? `${engineName}:${direction}`),
+        scenarioId: String(source.scenarioId ?? policyId),
+        policyId,
+        runtimeFamily,
+        engineName,
+        direction,
+        trades,
+        wins: readNumeric(source.wins),
+        losses: readNumeric(source.losses),
+        winRate: readNumeric(source.winRate),
+        slHitRate: readNumeric(source.slHitRate),
+        lifecycleMedianPnlPct: readNumeric(source.lifecycleMedianPnlPct),
+        lifecycleAveragePnlPct: readNumeric(source.lifecycleAveragePnlPct),
+        lifecycleMfeCaptureRatio: readNumeric(source.lifecycleMfeCaptureRatio),
+        averageMonthlyAccountReturnPct: readNumeric(source.averageMonthlyAccountReturnPct),
+        rankingScore: readNumeric(source.rankingScore),
+        targetMoveCoverage: source.targetMoveCoverage ?? null,
+        dynamicExitPlanSummary: source.dynamicExitPlanSummary ?? null,
+        guardrailsPassed: bool(source.guardrailsPassed, true),
+      };
+    })
+    .filter((contract): contract is R75RuntimeContract => Boolean(contract));
+}
+
+function r75RuntimeContractsFromArtifact(
+  artifact: Record<string, unknown>,
+  sourcePolicyId: string,
+  serviceId: string,
+): R75RuntimeContract[] {
+  const fromArtifact = normalizeR75RuntimeContracts(artifact.selectedRuntimeContracts);
+  if (fromArtifact.length > 0) return fromArtifact;
+
+  const expectedPerformance = expectedPerformanceFromArtifact(artifact);
+  const coverage = asRecord(artifact.largeMoveCoverage);
+  const trades = Math.max(1, readNumeric(expectedPerformance.trades) ?? readNumeric(coverage.capturedTargetMoveCount) ?? 1);
+  const direction = inferredRuntimeDirection(serviceId, artifact);
+  return selectedR75Engines(sourcePolicyId).map((engineName) => {
+    const runtimeFamily = engineName.includes("reversal")
+      ? "reversal"
+      : engineName.includes("continuation")
+        ? "continuation"
+        : "breakout";
+    return {
+      contractId: `${engineName}:${direction}`,
+      scenarioId: sourcePolicyId || `${engineName}:${direction}`,
+      policyId: sourcePolicyId || `${engineName}:${direction}`,
+      runtimeFamily,
+      engineName,
+      direction,
+      trades,
+      wins: readNumeric(expectedPerformance.wins),
+      losses: readNumeric(expectedPerformance.losses),
+      winRate: readNumeric(expectedPerformance.winRate),
+      slHitRate: readNumeric(expectedPerformance.slHitRate),
+      lifecycleMedianPnlPct: null,
+      lifecycleAveragePnlPct: null,
+      lifecycleMfeCaptureRatio: null,
+      averageMonthlyAccountReturnPct: null,
+      rankingScore: null,
+      targetMoveCoverage: null,
+      dynamicExitPlanSummary: null,
+      guardrailsPassed: true,
+    };
+  });
+}
+
 function buildDerivedCandidateCooldownMinutes(params: {
   artifact: Record<string, unknown>;
   trades: number;
@@ -418,9 +537,21 @@ function buildR75RuntimeAdapter(
   const protectionDistancePct = percentileValue(lifecycleRules, "dynamicProtectionDistancePct", "p50", 2);
   const maturityRules = asRecord(lifecycleRules.maturityRules);
   const minHoldBars = readNumeric(asRecord(maturityRules.minHoldBars).p50) ?? 120;
-  const trades = Math.max(1, readNumeric(expectedPerformance.trades) ?? readNumeric(coverage.capturedTargetMoveCount) ?? 1);
+  const selectedRuntimeContracts = r75RuntimeContractsFromArtifact(artifact, sourcePolicyId, serviceId);
+  const contractTradeCount = selectedRuntimeContracts.reduce((sum, contract) => sum + Math.max(0, contract.trades), 0);
+  const trades = Math.max(1, contractTradeCount || readNumeric(expectedPerformance.trades) || readNumeric(coverage.capturedTargetMoveCount) || 1);
   const selectedDirection = inferredRuntimeDirection(serviceId, artifact);
-  const allowedEngines = selectedR75Engines(sourcePolicyId);
+  const allowedEngines = uniqueStrings(selectedRuntimeContracts.map((contract) => contract.engineName));
+  const allowedDirections = uniqueStrings(selectedRuntimeContracts.map((contract) => contract.direction));
+  const allowedEngineDirections = selectedRuntimeContracts.map((contract) => ({
+    engineName: contract.engineName,
+    direction: contract.direction,
+    runtimeFamily: contract.runtimeFamily,
+    policyId: contract.policyId,
+    trades: contract.trades,
+    winRate: contract.winRate,
+    lifecycleMedianPnlPct: contract.lifecycleMedianPnlPct,
+  }));
   const candidateEmissionCooldownMinutes = buildDerivedCandidateCooldownMinutes({ artifact, trades });
   const captured = readNumeric(coverage.capturedTargetMoveCount) ?? trades;
   const totalTargets = readNumeric(coverage.targetUniverseCount) ?? captured;
@@ -490,7 +621,9 @@ function buildR75RuntimeAdapter(
       runtimeSetup: {
         componentGateMode: "build_selected_rules",
         allowedEngines,
-        allowedDirections: [selectedDirection],
+        allowedDirections,
+        allowedEngineDirections,
+        selectedRuntimeContracts,
         candidateEmissionCooldownMinutes,
         minNativeScore: 60,
         minConfidence: 0.65,
@@ -499,9 +632,12 @@ function buildR75RuntimeAdapter(
           source: "runtime_build_selected_trades",
           selectedTrades: trades,
           selectedDirection,
+          selectedRuntimeContracts,
           allowedEngines,
+          allowedDirections,
+          allowedEngineDirections,
           candidateEmissionCooldownMinutes,
-          rationale: "Build Runtime Model selected a specific trade-equivalent family. Live setup admission must use that family, direction, and cadence instead of accepting every R_75 native engine with broad confidence.",
+          rationale: "Build Runtime Model selected explicit R_75 volatility family contracts. Live setup admission must match an engine+direction contract and cadence instead of accepting every R_75 native engine with broad confidence.",
         },
       },
       engines: {

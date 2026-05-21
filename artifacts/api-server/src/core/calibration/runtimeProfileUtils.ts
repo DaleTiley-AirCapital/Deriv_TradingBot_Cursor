@@ -281,6 +281,37 @@ export function evaluateRuntimeEntryEvidence(params: {
     const engineName = params.winner.engineName;
     const formula = runtimeFormula(params);
     const setupOverride = engineRuntimeSetupOverride(formula, engineName);
+    const allowedEngineDirections = Array.isArray(setupOverride["allowedEngineDirections"])
+      ? setupOverride["allowedEngineDirections"]
+          .map((value) => {
+            if (typeof value === "string") {
+              const [engine, direction] = value.split(":");
+              return { engineName: engine, direction: String(direction ?? "").toLowerCase() };
+            }
+            const record = asPlainRecord(value);
+            return {
+              engineName: String(record.engineName ?? ""),
+              direction: String(record.direction ?? "").toLowerCase(),
+            };
+          })
+          .filter((value) => value.engineName && (value.direction === "buy" || value.direction === "sell"))
+      : [];
+    if (allowedEngineDirections.length > 0) {
+      const matchedPair = allowedEngineDirections.some((value) =>
+        value.engineName === engineName && value.direction === params.winner.direction
+      );
+      if (!matchedPair) {
+        return {
+          allowed: false,
+          reason: `runtime_r75_engine_direction_not_selected_by_build:${engineName}:${params.winner.direction}`,
+          leadInShape,
+          qualityBand,
+          matchedBucketKey: selectedBucket.key,
+          evidenceScore: 0,
+          weakComponents: [`engineDirection:${engineName}:${params.winner.direction}<${allowedEngineDirections.map((value) => `${value.engineName}:${value.direction}`).join("|")}`],
+        };
+      }
+    }
     const allowedEngines = Array.isArray(setupOverride["allowedEngines"])
       ? setupOverride["allowedEngines"].map((value) => String(value)).filter(Boolean)
       : [];
