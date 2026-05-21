@@ -343,6 +343,7 @@ async function buildRuntimeValidationResult(serviceId: string, artifact: Record<
     topRuntimeSetupBlockers: [],
     topValidEngines: [],
     emittedExamples: [],
+    duplicateExamples: [],
     blockedExamples: [],
     minimumRequiredEmissions: 1,
     notes: ["Runtime replay failed; validation is blocked until replay can prove candidate emission."],

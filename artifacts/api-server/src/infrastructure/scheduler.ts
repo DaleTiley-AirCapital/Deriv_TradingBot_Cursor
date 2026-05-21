@@ -142,6 +142,54 @@ async function recordServiceScanStatus(params: {
   ));
 }
 
+function stableHash(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+async function reserveServiceCandidateEmission(params: {
+  serviceId: string;
+  stateMap: Record<string, string>;
+  runtimeArtifactId: string;
+  engineName: string;
+  direction: "buy" | "sell";
+  setupSignature: string;
+}): Promise<{ allowed: boolean; reason: string; cooldownMs: number }> {
+  const prefix = params.serviceId.toLowerCase();
+  const configuredHours = Number(
+    params.stateMap[`${prefix}_allocator_cascade_interval_hours`] ?? params.stateMap["allocator_cascade_interval_hours"] ?? 1,
+  );
+  const cooldownMs = Math.max(60_000, (Number.isFinite(configuredHours) ? configuredHours : 1) * 60 * 60_000);
+  const signature = `${params.runtimeArtifactId}|${params.engineName}|${params.direction}|${params.setupSignature}`;
+  const key = `${params.serviceId.toUpperCase()}_service_candidate_emission_${stableHash(signature)}`;
+  const now = new Date();
+  const existing = await db.select({ value: platformStateTable.value })
+    .from(platformStateTable)
+    .where(eq(platformStateTable.key, key))
+    .limit(1);
+  const previousAt = existing[0]?.value ? new Date(existing[0].value) : null;
+  const ageMs = previousAt && Number.isFinite(previousAt.getTime())
+    ? now.getTime() - previousAt.getTime()
+    : Number.POSITIVE_INFINITY;
+  if (ageMs < cooldownMs) {
+    return {
+      allowed: false,
+      reason: `duplicate_candidate_cooldown:${(ageMs / 3_600_000).toFixed(2)}h<${(cooldownMs / 3_600_000).toFixed(2)}h`,
+      cooldownMs,
+    };
+  }
+  await db.insert(platformStateTable)
+    .values({ key, value: now.toISOString() })
+    .onConflictDoUpdate({
+      target: platformStateTable.key,
+      set: { value: now.toISOString(), updatedAt: now },
+    });
+  return { allowed: true, reason: "candidate_emission_reserved", cooldownMs };
+}
+
 /**
  * V3 live scanner — replaces the V2 family-based scanSingleSymbol.
  *
@@ -306,6 +354,31 @@ async function scanSingleSymbolV3(symbol: string, stateMap: Record<string, strin
       `[V3Scan] ${symbol} | CANDIDATE_BLOCKED | reason=runtime_setup:${builtCandidate.candidate.runtimeSetup.reason}`,
     );
     await recordServiceScanStatus({ serviceId, symbol, status: "blocked", reason: `runtime_setup:${builtCandidate.candidate.runtimeSetup.reason}` });
+    return;
+  }
+
+  const emissionReservation = await reserveServiceCandidateEmission({
+    serviceId,
+    stateMap,
+    runtimeArtifactId: runtimeArtifact.artifactId,
+    engineName: winner.engineName,
+    direction: coordinatorOutput.resolvedDirection,
+    setupSignature: builtCandidate.setupSignature,
+  });
+  if (!emissionReservation.allowed) {
+    console.log(`[V3Scan] ${symbol} | SKIP | reason=${emissionReservation.reason}`);
+    await recordServiceScanStatus({
+      serviceId,
+      symbol,
+      status: "skipped",
+      reason: emissionReservation.reason,
+      detail: {
+        engineName: winner.engineName,
+        direction: coordinatorOutput.resolvedDirection,
+        setupSignature: builtCandidate.setupSignature,
+        cooldownMs: emissionReservation.cooldownMs,
+      },
+    });
     return;
   }
 

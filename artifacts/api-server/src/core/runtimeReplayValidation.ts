@@ -25,6 +25,7 @@ export type RuntimeReplayValidationResult = {
   topRuntimeSetupBlockers: Array<{ reason: string; count: number }>;
   topValidEngines: Array<{ engine: string; count: number }>;
   emittedExamples: Array<Record<string, unknown>>;
+  duplicateExamples: Array<Record<string, unknown>>;
   blockedExamples: Array<Record<string, unknown>>;
   minimumRequiredEmissions: number;
   notes: string[];
@@ -39,6 +40,21 @@ function topEntries(map: Record<string, number>, label: "reason" | "engine", lim
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([key, count]) => ({ [label]: key, count })) as Array<{ reason: string; count: number }> & Array<{ engine: string; count: number }>;
+}
+
+function candidateCooldownBars(adapter: Record<string, unknown>): number {
+  const trailingModel = asRuntimeRecord(adapter["trailingModel"]);
+  const holdProfile = asRuntimeRecord(adapter["holdProfile"]);
+  const maturityRules = asRuntimeRecord(holdProfile["maturityRules"]);
+  const minHoldBars = Number(asRuntimeRecord(maturityRules["minHoldBars"])["p50"]);
+  if (Number.isFinite(minHoldBars) && minHoldBars > 0) return Math.max(60, Math.round(minHoldBars));
+  const minHoldMinutes = Number(trailingModel["minHoldMinutesBeforeTrail"]);
+  if (Number.isFinite(minHoldMinutes) && minHoldMinutes > 0) return Math.max(60, Math.round(minHoldMinutes));
+  return 60;
+}
+
+function asRuntimeRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 async function loadStateMap(): Promise<Record<string, string>> {
@@ -107,6 +123,7 @@ export async function validateRuntimeReplay(params: {
       topRuntimeSetupBlockers: [],
       topValidEngines: [],
       emittedExamples: [],
+      duplicateExamples: [],
       blockedExamples: [],
       minimumRequiredEmissions,
       notes: ["Runtime replay could not run because no runtime adapter was available."],
@@ -120,7 +137,10 @@ export async function validateRuntimeReplay(params: {
   const setupBlockers: Record<string, number> = {};
   const validEngines: Record<string, number> = {};
   const emittedExamples: Array<Record<string, unknown>> = [];
+  const duplicateExamples: Array<Record<string, unknown>> = [];
   const blockedExamples: Array<Record<string, unknown>> = [];
+  const cooldownBars = candidateCooldownBars(adapter as unknown as Record<string, unknown>);
+  const lastAcceptedBySetup = new Map<string, number>();
 
   for (let i = start; i < candles.length; i += 1) {
     const slice = candles.slice(Math.max(0, i - lookbackBars + 1), i + 1);
@@ -213,6 +233,24 @@ export async function validateRuntimeReplay(params: {
       }
       continue;
     }
+    increment(counts, "raw_candidate_bars");
+    const setupKey = `${serviceId}|${winner.engineName}|${winner.direction}|${built.setupSignature}`;
+    const lastAcceptedIndex = lastAcceptedBySetup.get(setupKey);
+    if (lastAcceptedIndex != null && (i - lastAcceptedIndex) < cooldownBars) {
+      increment(counts, "duplicate_candidate_bar");
+      if (duplicateExamples.length < 8) {
+        duplicateExamples.push({
+          ts: new Date(Number(candles[i]?.closeTs ?? 0) * 1000).toISOString(),
+          engine: winner.engineName,
+          direction: winner.direction,
+          setupSignature: built.setupSignature,
+          barsSinceAccepted: i - lastAcceptedIndex,
+          cooldownBars,
+        });
+      }
+      continue;
+    }
+    lastAcceptedBySetup.set(setupKey, i);
     increment(counts, "candidate_would_emit");
     increment(validEngines, `emit:${winner.engineName}`);
     if (emittedExamples.length < 8) {
@@ -223,6 +261,8 @@ export async function validateRuntimeReplay(params: {
         confidence: Number(winner.confidence.toFixed(3)),
         expectedMovePct: Number(winner.projectedMovePct.toFixed(4)),
         setupReason: setup.reason,
+        setupSignature: built.setupSignature,
+        cooldownBars,
       });
     }
   }
@@ -242,11 +282,13 @@ export async function validateRuntimeReplay(params: {
     topRuntimeSetupBlockers: topEntries(setupBlockers, "reason"),
     topValidEngines: topEntries(validEngines, "engine"),
     emittedExamples,
+    duplicateExamples,
     blockedExamples,
     minimumRequiredEmissions,
     notes: [
       "Replay is read-only and does not stage, promote, allocate, or open trades.",
-      "Validate Runtime requires at least one recent historical runtime candidate emission to prove the live scanner can use the promoted rules.",
+      "Raw candidate bars are de-duplicated by setup and runtime hold/cascade window before they count as trade-equivalent candidate emissions.",
+      "Validate Runtime requires at least one recent historical trade-equivalent runtime candidate emission to prove the live scanner can use the promoted rules.",
     ],
   };
 }
