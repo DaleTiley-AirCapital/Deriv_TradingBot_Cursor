@@ -62,6 +62,12 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function hoursSince(date: Date | string | null | undefined): number {
+  if (!date) return Number.POSITIVE_INFINITY;
+  const ts = date instanceof Date ? date.getTime() : new Date(date).getTime();
+  return Number.isFinite(ts) ? Math.max(0, (Date.now() - ts) / 3_600_000) : Number.POSITIVE_INFINITY;
+}
+
 function qualityLeverage(params: {
   nativeScore: number;
   confidence: number;
@@ -149,7 +155,8 @@ export async function allocateV3Signal(
   const openTrades = await db.select().from(tradesTable)
     .where(and(eq(tradesTable.status, "open"), eq(tradesTable.mode, mode)));
   const maxOpenTrades = parseInt(stateMap[`${prefix}_max_open_trades`] || stateMap["max_open_trades"] || "3");
-  const openTradeForSymbol = openTrades.some(t => t.symbol === symbol);
+  const sameSymbolOpenTrades = openTrades.filter(t => t.symbol === symbol);
+  const openTradeForSymbol = sameSymbolOpenTrades.length > 0;
   const compoundingEnabled = stateMap[`${prefix}_allocator_compounding_enabled`] !== "false"
     && stateMap["allocator_compounding_enabled"] !== "false";
 
@@ -508,7 +515,53 @@ export async function allocateV3Signal(
     });
   }
 
-  const size = remaining;
+  const cascadeIntervalHours = clamp(
+    numberFrom(
+      stateMap[`${prefix}_allocator_cascade_interval_hours`] ?? stateMap["allocator_cascade_interval_hours"],
+      1,
+    ),
+    0,
+    24,
+  );
+  const newestSameSymbolAgeHours = sameSymbolOpenTrades.length > 0
+    ? Math.min(...sameSymbolOpenTrades.map((trade) => hoursSince(trade.entryTs)))
+    : Number.POSITIVE_INFINITY;
+  if (sameSymbolOpenTrades.length > 0 && newestSameSymbolAgeHours < cascadeIntervalHours) {
+    return deny(`cascade_interval_wait:${newestSameSymbolAgeHours.toFixed(2)}h<${cascadeIntervalHours.toFixed(2)}h`, {
+      requestedLeverage,
+      approvedLeverage,
+      actualDrawdownPct,
+      safetyAdjustedMaxDrawdownPct,
+      remainingDrawdownBudgetPct,
+      portfolioExposureBefore,
+      portfolioExposureAfter: portfolioExposureBefore,
+      compoundingEnabled,
+    });
+  }
+
+  const baseSlicePct = clamp(
+    numberFrom(
+      stateMap[`${prefix}_equity_pct_per_trade`] ?? stateMap["equity_pct_per_trade"],
+      mode === "paper" ? 30 : mode === "demo" ? 20 : 15,
+    ),
+    1,
+    100,
+  );
+  const secondSlicePct = clamp(
+    numberFrom(
+      stateMap[`${prefix}_allocator_second_cascade_pct`] ?? stateMap["allocator_second_cascade_pct"],
+      mode === "paper" ? 40 : mode === "demo" ? 30 : 20,
+    ),
+    1,
+    100,
+  );
+  const slicePct = sameSymbolOpenTrades.length === 0
+    ? baseSlicePct
+    : sameSymbolOpenTrades.length === 1
+      ? secondSlicePct
+      : Math.max(0, targetUtilizationPct - ((deployedCapital / totalCapital) * 100));
+  const requestedSize = totalCapital * (slicePct / 100) * approvedLeverage * drawdownCapacityScale;
+  const size = Math.min(remaining, requestedSize);
   if (size < totalCapital * 0.02) {
     return deny("insufficient_remaining_capacity", {
       requestedLeverage,

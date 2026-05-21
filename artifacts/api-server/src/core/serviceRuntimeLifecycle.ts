@@ -171,12 +171,27 @@ function buildCrash300RuntimeAdapter(
   const trailingActivationPct = Math.max(0.1, readNumeric(exitAudit.derivedTrailingActivationPct) ?? 2);
   const trailingDistancePct = Math.max(0.1, readNumeric(exitAudit.derivedTrailingDistancePct) ?? 1);
   const confidenceMultiplier = Math.max(0.85, Math.min(1.15, (readNumeric(expectedPerformance.winRate) ?? 0.8)));
+  const coverage = asRecord(artifact.largeMoveCoverage);
+  const coveragePct = readNumeric(coverage.coveragePct) ?? 0;
+  const coverageFraction = coveragePct > 1 ? coveragePct / 100 : coveragePct;
+  const buildDerivedContextThreshold = Math.max(
+    0.56,
+    Math.min(0.6, coverageFraction > 0 ? 0.5 + coverageFraction * 0.11 : 0.58),
+  );
+  const buildDerivedTriggerThreshold = Math.max(0.3, Math.min(0.35, buildDerivedContextThreshold - 0.25));
   const formulaOverride = {
     crash300: {
-      contextMatchThreshold: Math.max(0.55, Math.min(0.95, Number(confidenceMultiplier.toFixed(2)))),
-      triggerStrengthThreshold: Math.max(0.55, Math.min(0.95, Number((confidenceMultiplier - 0.03).toFixed(2)))),
+      contextMatchThreshold: Number(buildDerivedContextThreshold.toFixed(2)),
+      triggerStrengthThreshold: Number(buildDerivedTriggerThreshold.toFixed(2)),
+      maxContextAgeBars: 240,
       liveSafeTriggerExpressionRequired: true,
       sourcePolicyId: String(artifact.sourcePolicyId ?? ""),
+      thresholdDerivation: {
+        source: "runtime_build_selected_family_replay",
+        previousFallbackWouldUseWinRate: Number(confidenceMultiplier.toFixed(2)),
+        coveragePct,
+        rationale: "Use thresholds from the captured build family instead of rebuilding live context gates from a fallback win-rate default.",
+      },
     },
   };
   return {
@@ -309,6 +324,135 @@ function selectedPolicyFromArtifact(artifact: Record<string, unknown>): Record<s
   };
 }
 
+function percentileValue(
+  source: Record<string, unknown>,
+  key: string,
+  percentile: "p25" | "p50" | "p75",
+  fallback: number,
+): number {
+  const value = readNumeric(asRecord(source[key])[percentile]);
+  return value != null && value > 0 ? value : fallback;
+}
+
+function buildR75RuntimeAdapter(
+  artifact: Record<string, unknown>,
+  serviceId: string,
+): PromotedSymbolRuntimeModel {
+  const selectedPolicy = selectedPolicyFromArtifact(artifact);
+  const expectedPerformance = expectedPerformanceFromArtifact(artifact);
+  const targetUniverse = asRecord(artifact.targetMoveUniverse);
+  const lifecycleRules = asRecord(
+    artifact.lifecycleManagerRules ?? artifact.dynamicTpProtectionSummary ?? artifact.dynamicExitPlanSummary,
+  );
+  const coverage = asRecord(artifact.largeMoveCoverage);
+  const targetPct = percentileValue(lifecycleRules, "tp2Pct", "p50", readNumeric(targetUniverse.medianMovePct) ?? 6);
+  const fallbackTargetPct = Math.max(5, targetPct);
+  const runnerTargetPct = percentileValue(lifecycleRules, "runnerTargetPct", "p50", Math.max(fallbackTargetPct, 8));
+  const hardSlPct = percentileValue(lifecycleRules, "hardSlPct", "p75", 2);
+  const protectionActivationPct = percentileValue(lifecycleRules, "protectionActivationPct", "p50", 2.5);
+  const protectionDistancePct = percentileValue(lifecycleRules, "dynamicProtectionDistancePct", "p50", 2);
+  const maturityRules = asRecord(lifecycleRules.maturityRules);
+  const minHoldBars = readNumeric(asRecord(maturityRules.minHoldBars).p50) ?? 120;
+  const trades = Math.max(1, readNumeric(expectedPerformance.trades) ?? readNumeric(coverage.capturedTargetMoveCount) ?? 1);
+  const captured = readNumeric(coverage.capturedTargetMoveCount) ?? trades;
+  const totalTargets = readNumeric(coverage.targetUniverseCount) ?? captured;
+  const tradesPerMonth = Math.max(1, Math.round(trades / 9));
+  const buckets: Record<string, { targetPct: number; count: number }> = {
+    "all|all|all": { targetPct: fallbackTargetPct, count: trades },
+    "up|all|all": { targetPct: fallbackTargetPct, count: Math.max(1, Math.round(trades / 2)) },
+    "down|all|all": { targetPct: fallbackTargetPct, count: Math.max(1, Math.round(trades / 2)) },
+    "all|trending|all": { targetPct: runnerTargetPct, count: trades },
+    "all|expanding|all": { targetPct: runnerTargetPct, count: trades },
+    "all|ranging|all": { targetPct: fallbackTargetPct, count: trades },
+    "all|compressing|all": { targetPct: Math.max(5, fallbackTargetPct * 0.9), count: trades },
+  };
+
+  return {
+    symbol: serviceId,
+    source: "promoted_symbol_model",
+    sourceRunId: readNumeric(artifact.sourceSynthesisJobId) ?? 0,
+    promotedAt: new Date().toISOString(),
+    suggestedAt: String(artifact.generatedAt ?? new Date().toISOString()),
+    recommendedScanIntervalSeconds: tradesPerMonth >= 20 ? 60 : tradesPerMonth >= 10 ? 120 : 180,
+    recommendedScoreGates: {
+      paper: 60,
+      demo: 70,
+      real: 80,
+    },
+    expectedTradesPerMonth: tradesPerMonth,
+    expectedCapitalUtilizationPct: Math.max(25, Math.min(95, (captured / Math.max(1, totalTargets)) * 100)),
+    confidenceMultiplier: 1,
+    projectedMoveMultiplier: Number(Math.max(1, Math.min(1.6, fallbackTargetPct / 5)).toFixed(2)),
+    holdProfile: {
+      source: "service_promoted_runtime",
+      objective: "r75_multi_family_capital_extraction",
+      targetMoveUniverse: {
+        minimumMovePct: targetUniverse.minimumMovePct ?? 5,
+        medianHoldMinutes: targetUniverse.medianHoldMinutes ?? null,
+        p75HoldMinutes: targetUniverse.p75HoldMinutes ?? null,
+      },
+      lifecycleManagerModel: lifecycleRules.lifecycleManagerModel ?? "trade_lifecycle_manager_v1",
+      maturityRules,
+    },
+    tpModel: {
+      targetPct: fallbackTargetPct,
+      fallbackTargetPct,
+      runnerTargetPct,
+      bucketSource: "service_promoted_runtime",
+      bucketSelection: "direction_leadin_quality",
+      dynamicByQualityLeadIn: true,
+      rationale: "Derived from R_75 >=5% multi-family capital extraction runtime build.",
+      buckets,
+    },
+    slModel: {
+      maxInitialRiskPct: hardSlPct,
+      source: "service_promoted_runtime",
+      protectionActivationPct,
+    },
+    trailingModel: {
+      activationProfitPct: protectionActivationPct,
+      trailingDistancePct: protectionDistancePct,
+      minHoldMinutesBeforeTrail: Math.max(1, Math.round(minHoldBars)),
+      source: "service_promoted_runtime",
+      lifecycleManagerModel: lifecycleRules.lifecycleManagerModel ?? "trade_lifecycle_manager_v1",
+    },
+    formulaOverride: {
+      objective: "r75_multi_family_capital_extraction",
+      sourcePolicyId: String(artifact.sourcePolicyId ?? selectedPolicy.sourcePolicyId ?? ""),
+      runtimeSetup: {
+        componentGateMode: "build_selected_rules",
+        minNativeScore: 55,
+        minConfidence: 0.58,
+        minExpectedMovePct: Math.max(0.05, fallbackTargetPct / 100),
+        thresholdDerivation: {
+          source: "runtime_build_selected_trades",
+          selectedTrades: trades,
+          rationale: "Build Runtime Model already selected the 105 trade family. Live setup admission should require the same capital-extraction readiness, not hard 55-point component defaults that were not part of the build pass.",
+        },
+      },
+      engines: {
+        r75_reversal_engine: { minGate: 55, componentGateMode: "build_selected_rules" },
+        r75_continuation_engine: { minGate: 58, componentGateMode: "build_selected_rules" },
+        r75_breakout_engine: { minGate: 60, componentGateMode: "build_selected_rules" },
+      },
+    },
+    entryModel: "r75_multi_family_breakout_reversal_continuation",
+    confirmationWindow: "12h",
+    buildPriority: "high",
+    researchStatus: "runtime_candidate",
+  };
+}
+
+export function buildRuntimeModelAdapterForService(
+  serviceId: string,
+  artifact: Record<string, unknown>,
+): PromotedSymbolRuntimeModel | null {
+  const upperServiceId = serviceId.toUpperCase();
+  if (upperServiceId === "CRASH300") return buildCrash300RuntimeAdapter(artifact, upperServiceId);
+  if (upperServiceId === "R_75") return buildR75RuntimeAdapter(artifact, upperServiceId);
+  return null;
+}
+
 function expectedPerformanceFromArtifact(artifact: Record<string, unknown>): Record<string, unknown> {
   const expectedPerformance = asRecord(artifact.expectedPerformance);
   if (Object.keys(expectedPerformance).length > 0) return expectedPerformance;
@@ -327,7 +471,7 @@ function expectedPerformanceFromArtifact(artifact: Record<string, unknown>): Rec
 }
 
 export async function promoteCandidateArtifactToServiceRuntime(serviceId: string, artifact: Record<string, unknown>): Promise<ServicePromotedRuntimeArtifact> {
-  const adapter = serviceId === "CRASH300" ? buildCrash300RuntimeAdapter(artifact, serviceId) : null;
+  const adapter = buildRuntimeModelAdapterForService(serviceId, artifact);
 
   const selectedPolicy = selectedPolicyFromArtifact(artifact);
   const readiness = asRecord(artifact.policyArtifactReadiness);

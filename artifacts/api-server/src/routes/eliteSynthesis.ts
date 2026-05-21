@@ -29,6 +29,7 @@ import {
   writePromotedServiceRuntimeArtifact,
   writeStagedSynthesisCandidateState,
 } from "../core/serviceRuntimeLifecycle.js";
+import { validateRuntimeReplay, type RuntimeReplayValidationResult } from "../core/runtimeReplayValidation.js";
 
 const router: IRouter = Router();
 
@@ -312,7 +313,7 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
   };
 }
 
-function buildRuntimeValidationResult(serviceId: string, artifact: Record<string, unknown>) {
+async function buildRuntimeValidationResult(serviceId: string, artifact: Record<string, unknown>) {
   const artifactId = String(artifact.artifactId ?? "");
   const readiness = asRecord(artifact.readiness);
   const eligibility = asRecord(artifact.runtimeArtifactEligibility);
@@ -321,13 +322,39 @@ function buildRuntimeValidationResult(serviceId: string, artifact: Record<string
     "runtime_mimic_validation_required_before_promotion",
     "manual_validate_runtime_required",
   ].includes(blocker));
-  const validationPassed = hardBlockers.length === 0 && Boolean(
+  const contractPassed = hardBlockers.length === 0 && Boolean(
     eligibility.canPromoteRuntimeAfterValidation
       ?? eligibility.canCreateReviewArtifact
       ?? readiness.canPromoteRuntime
       ?? readiness.requiresManualValidateRuntime,
   );
-  const blockers = validationPassed ? [] : hardBlockers.length > 0 ? hardBlockers : ["runtime_candidate_not_eligible_for_promotion"];
+  const replayResult: RuntimeReplayValidationResult = await validateRuntimeReplay({
+    serviceId,
+    candidateArtifact: artifact,
+    requestedPoints: 5_000,
+    minimumRequiredEmissions: 1,
+  }).catch((err) => ({
+    status: "blocked",
+    serviceId,
+    artifactId,
+    replayWindow: { requestedPoints: 5_000, evaluatedPoints: 0, lookbackBars: 1_600 },
+    counts: { replay_error: 1 },
+    topFailReasons: [{ reason: err instanceof Error ? err.message : String(err), count: 1 }],
+    topRuntimeSetupBlockers: [],
+    topValidEngines: [],
+    emittedExamples: [],
+    blockedExamples: [],
+    minimumRequiredEmissions: 1,
+    notes: ["Runtime replay failed; validation is blocked until replay can prove candidate emission."],
+  }));
+  const replayPassed = replayResult.status === "passed";
+  const validationPassed = contractPassed && replayPassed;
+  const blockers = validationPassed
+    ? []
+    : [
+        ...(hardBlockers.length > 0 ? hardBlockers : contractPassed ? [] : ["runtime_candidate_not_eligible_for_promotion"]),
+        ...(replayPassed ? [] : ["runtime_replay_emitted_no_candidates"]),
+      ];
   return {
     artifactName: `runtime_validation_result_${serviceId}_${Date.now()}.json`,
     stagedCandidateId: artifactId,
@@ -346,8 +373,9 @@ function buildRuntimeValidationResult(serviceId: string, artifact: Record<string
       source: "internal parity stage",
     },
     triggerValidationResult: {
-      status: validationPassed ? "passed" : "not_run",
+      status: validationPassed ? "passed" : "blocked",
       source: "internal runtime trigger validation stage",
+      runtimeReplay: replayResult,
     },
     phantomNoiseResult: {
       status: validationPassed ? "passed" : "not_run",
@@ -368,6 +396,7 @@ function buildRuntimeValidationResult(serviceId: string, artifact: Record<string
     warnings: [
       "This validation action is consolidated over existing diagnostic stages and does not change live execution.",
       "Promotion remains a separate explicit service-level action.",
+      "Runtime replay is read-only and proves whether recent candles would emit service candidates before allocator involvement.",
     ],
     canPromoteRuntime: validationPassed,
   };
@@ -1230,7 +1259,7 @@ router.post("/research/:serviceId/runtime-validation/run", async (req, res): Pro
         });
         return;
       }
-      const runtimeValidationResult = buildRuntimeValidationResult(serviceId, latestReview.artifact);
+      const runtimeValidationResult = await buildRuntimeValidationResult(serviceId, latestReview.artifact);
       const promotedRuntime = await readPromotedServiceRuntimeArtifact(serviceId);
       if (promotedRuntime && runtimeValidationResult.validationStatus === "passed") {
         await writePromotedServiceRuntimeArtifact({
@@ -1262,7 +1291,12 @@ router.post("/research/:serviceId/runtime-validation/run", async (req, res): Pro
         return;
       }
     }
-    const runtimeValidationResult = buildRuntimeValidationResult(serviceId, located.artifact);
+    const latestReview = await findLatestReviewCandidateRuntimeArtifact(serviceId);
+    const stagedArtifactId = String(stagedState.artifactId ?? "");
+    if (latestReview && /paper-candidate/i.test(stagedArtifactId)) {
+      located = latestReview;
+    }
+    const runtimeValidationResult = await buildRuntimeValidationResult(serviceId, located.artifact);
     const promotedRuntime = await readPromotedServiceRuntimeArtifact(serviceId);
     if (promotedRuntime && runtimeValidationResult.validationStatus === "passed") {
       await writePromotedServiceRuntimeArtifact({

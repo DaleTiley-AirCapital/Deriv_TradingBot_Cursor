@@ -2591,24 +2591,20 @@ async function buildReturnAmplificationAnalysis(params: {
     const conf = Number(prediction?.predictedBucketConfidence ?? 0);
     const actualBucket = actualBucketLookup.get(candidate.candidateId);
     const matchedMoveId = Number(candidate.matchedCalibratedMoveId ?? 0);
-    const largeMoveTarget = params.dataset.serviceId === "CRASH300"
+    const largeMoveTarget = params.dataset.serviceId === "CRASH300" || params.dataset.serviceId === "R_75"
       ? (
-        targetLargeMoveIds.has(matchedMoveId)
-        || returnBucketAtLeast(actualBucket, "9_to_10_pct")
-        || returnBucketAtLeast(predictedBucket, "9_to_10_pct")
-      )
-      : params.dataset.serviceId === "R_75"
-        ? (
-            targetLargeMoveIds.has(matchedMoveId)
-            || returnBucketAtLeast(actualBucket, targetMinimumBucket)
-            || returnBucketAtLeast(predictedBucket, targetMinimumBucket)
-          )
-        : targetLargeMoveIds.has(matchedMoveId);
+          targetLargeMoveIds.has(matchedMoveId)
+          || returnBucketAtLeast(actualBucket, targetMinimumBucket)
+          || returnBucketAtLeast(predictedBucket, targetMinimumBucket)
+        )
+      : targetLargeMoveIds.has(matchedMoveId);
     const tpQuantile = conf >= 0.8 ? 0.6 : conf >= 0.6 ? 0.5 : 0.4;
     const slQuantile = conf >= 0.8 ? 0.75 : 0.85;
     const baseTpTargetPct = Number(Math.min(bucketUpperBound(predictedBucket), percentile(peerProjected.length > 0 ? peerProjected : peerMfe, tpQuantile)).toFixed(2));
-    const largeMoveMinimumTargetPct = params.dataset.serviceId === "CRASH300" ? 9 : targetMinimumMovePct;
-    const largeMoveMaxTargetPct = params.dataset.serviceId === "CRASH300" ? 15 : Math.max(8, percentile(targetMovePctValues.length > 0 ? targetMovePctValues : peerMfe, 0.85));
+    const largeMoveMinimumTargetPct = targetMinimumMovePct;
+    const largeMoveMaxTargetPct = params.dataset.serviceId === "CRASH300"
+      ? Math.max(9, percentile(targetMovePctValues.length > 0 ? targetMovePctValues : peerMfe, 0.85))
+      : Math.max(8, percentile(targetMovePctValues.length > 0 ? targetMovePctValues : peerMfe, 0.85));
     const tpTargetPct = largeMoveTarget
       ? Number(Math.max(
           largeMoveMinimumTargetPct,
@@ -2740,7 +2736,7 @@ async function buildReturnAmplificationAnalysis(params: {
     const predictedBucket = String(item.prediction.predictedMoveSizeBucket ?? "");
     return selectedBucket.includes("10_plus_pct")
       || moveSizeBucket.includes("10_plus_pct")
-      || returnBucketAtLeast(predictedBucket, "9_to_10_pct");
+      || returnBucketAtLeast(predictedBucket, targetMinimumBucket);
   };
 
   const lifecycleReplayByCandidateId = new Map<string, TradeLifecycleReplayTradeResult>();
@@ -3675,10 +3671,12 @@ async function buildReturnAmplificationAnalysis(params: {
     Number(scenario.lifecycleMedianPnlPct ?? 0) >= 5
     && Number(scenario.lifecycleAveragePnlPct ?? 0) >= 5
     && Number(scenario.lifecycleMfeCaptureRatio ?? 0) > 0;
-  const capitalExtractionScenarios = scenarios.filter((scenario) =>
-    String(scenario.scenarioId ?? "").startsWith("capital_extraction_gte_")
-    || String(scenario.scenarioId ?? "").startsWith("r75_")
-  );
+  const capitalExtractionScenarios = scenarios.filter((scenario) => {
+    const scenarioId = String(scenario.scenarioId ?? "");
+    return scenarioId.startsWith("capital_extraction_gte_")
+      || scenarioId.startsWith("lifecycle_capture_gte_")
+      || scenarioId.startsWith("r75_");
+  });
   const rankCapitalExtraction = (a: Record<string, unknown>, b: Record<string, unknown>) =>
     Number(candidateTradeCount(b) >= 20 ? 1 : 0) - Number(candidateTradeCount(a) >= 20 ? 1 : 0)
     || candidateCapitalReturn(b) - candidateCapitalReturn(a)
@@ -5280,6 +5278,10 @@ export async function runEliteSynthesisJob(params: {
     heartbeatAt: nowIso(),
   });
   const finalPassRuntimeArtifactEligibility = (returnAmplificationAnalysis as Record<string, unknown>).runtimeArtifactEligibility as Record<string, unknown> | undefined;
+  const reviewTargetMinimumMovePct = Number(
+    ((returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse as Record<string, unknown> | undefined)?.minimumMovePct
+    ?? (params.serviceId === "CRASH300" ? 5 : 5),
+  );
   const reviewCandidateRuntimeArtifact = finalPassRuntimeArtifactEligibility?.canCreateReviewArtifact
     ? {
         artifactId: `${String(params.serviceId).toLowerCase()}-runtime-build-review-${params.jobId}`,
@@ -5291,7 +5293,7 @@ export async function runEliteSynthesisJob(params: {
         sourcePolicyId: String(((returnAmplificationAnalysis as Record<string, unknown>).bestCapitalExtractionCandidate as Record<string, unknown> | undefined)?.scenarioId ?? "capital_extraction_gte_target_universe"),
         runtimeFamily: String(((returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse as Record<string, unknown> | undefined)?.family ?? (params.serviceId === "CRASH300" ? "crash_expansion" : "r75_capital_extraction")),
         triggerTransition: "capital_extraction_large_move",
-        selectedMoveSizeBucket: params.serviceId === "CRASH300" ? "9_plus_pct" : "5_plus_pct",
+        selectedMoveSizeBucket: `${reviewTargetMinimumMovePct}_plus_pct`,
         direction: "both",
         offsetCluster: "detected_move_trigger_offsets",
         targetMoveUniverse: (returnAmplificationAnalysis as Record<string, unknown>).targetMoveUniverse ?? null,

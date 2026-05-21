@@ -34,7 +34,7 @@ const SERVICES: Record<string, RuntimeBuildService> = {
     serviceId: CRASH300_RUNTIME_BUILD_SERVICE_ID,
     createAdapter: createCrash300SynthesisAdapter,
     buildDataset: buildCrash300RuntimeBuildDataset,
-    targetMinimumMovePct: 9,
+    targetMinimumMovePct: 5,
     targetFamilyLabel: "crash_expansion",
   },
   [R75_RUNTIME_BUILD_SERVICE_ID]: {
@@ -55,4 +55,3 @@ export function getRuntimeBuildService(serviceId: string): RuntimeBuildService {
 export function listRuntimeBuildServiceIds(): string[] {
   return Object.keys(SERVICES);
 }
-

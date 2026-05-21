@@ -7046,9 +7046,17 @@ export default function Research() {
   const [sharedWindowDays, setSharedWindowDays] = useState<number>(365);
   const [showAddService, setShowAddService] = useState(false);
   const [customServices, setCustomServices] = useState<string[]>([]);
+  const [serviceTransition, setServiceTransition] = useState<{ active: boolean; service: string }>({ active: false, service: "R_75" });
+  const serviceTransitionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setCustomServices(readCustomResearchServices());
+  }, []);
+
+  useEffect(() => () => {
+    if (serviceTransitionTimerRef.current) {
+      window.clearTimeout(serviceTransitionTimerRef.current);
+    }
   }, []);
 
   const serviceSelectorOptions = useMemo(() => {
@@ -7077,10 +7085,19 @@ export default function Research() {
   }, [selectedService, serviceSelectorOptions]);
 
   const handleSelectService = useCallback((service: string) => {
+    if (serviceTransitionTimerRef.current) {
+      window.clearTimeout(serviceTransitionTimerRef.current);
+    }
+    if (service !== selectedService) {
+      setServiceTransition({ active: true, service });
+      serviceTransitionTimerRef.current = window.setTimeout(() => {
+        setServiceTransition((current) => current.service === service ? { ...current, active: false } : current);
+      }, 700);
+    }
     setSelectedService(service);
     setActiveTab("data");
     setShowAddService(false);
-  }, []);
+  }, [selectedService]);
 
   const handleAddService = useCallback((service: string) => {
     setCustomServices((prev) => {
@@ -7117,7 +7134,7 @@ export default function Research() {
           <span className="text-xs text-muted-foreground uppercase tracking-wide">Service Selector</span>
           <select
             value={selectedService}
-            onChange={(e) => setSelectedService(e.target.value)}
+            onChange={(e) => handleSelectService(e.target.value)}
             className="w-full text-xs bg-background border border-border/50 rounded px-2 py-2 text-foreground focus:outline-none focus:border-primary/50"
           >
             {serviceSelectorOptions.map((option) => (
@@ -7158,52 +7175,72 @@ export default function Research() {
         />
       )}
 
-      <ServicePipelinePanel service={selectedService} onJumpToTab={setActiveTab} />
-      <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
-      <ActiveWorkerTasksCard service={selectedService} />
-
-      <div className="flex items-center gap-0.5 border-b border-border/30">
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors",
-              activeTab === tab.id
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border/50"
-            )}
-          >
-            {tab.icon}
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === "data" && (
-        <DataCoverageTab service={selectedService} />
-      )}
-      {activeTab === "calibration" && (
-        <MoveCalibrationTab
-          domain="active"
-          windowDays={sharedWindowDays}
-          lockedSymbol={selectedService}
-          hideReportsActions
-          showAdvancedDiagnostics={false}
-          showIntegratedEliteSynthesis={false}
-        />
-      )}
-      {activeTab === "synthesis" && (
-        <div className="space-y-4">
-          <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} />
+      {serviceTransition.active && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="rounded-lg border border-primary/40 bg-card px-5 py-4 shadow-xl">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              <div>
+                <p className="text-sm font-semibold text-foreground">Loading {getSymbolLabel(serviceTransition.service)}</p>
+                <p className="text-xs text-muted-foreground">Refreshing selected service data.</p>
+              </div>
+            </div>
+          </div>
         </div>
       )}
-      {activeTab === "runtime" && (
-        <RuntimeModelTab service={selectedService} />
-      )}
-      {activeTab === "reports" && (
-        <ReportsTab service={selectedService} windowDays={sharedWindowDays} />
-      )}
+
+      <div
+        key={selectedService}
+        aria-busy={serviceTransition.active}
+        className={cn("space-y-5", serviceTransition.active && "pointer-events-none select-none opacity-50")}
+      >
+        <ServicePipelinePanel service={selectedService} onJumpToTab={setActiveTab} />
+        <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
+        <ActiveWorkerTasksCard service={selectedService} />
+
+        <div className="flex items-center gap-0.5 border-b border-border/30">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors",
+                activeTab === tab.id
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-border/50"
+              )}
+            >
+              {tab.icon}
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === "data" && (
+          <DataCoverageTab service={selectedService} />
+        )}
+        {activeTab === "calibration" && (
+          <MoveCalibrationTab
+            domain="active"
+            windowDays={sharedWindowDays}
+            lockedSymbol={selectedService}
+            hideReportsActions
+            showAdvancedDiagnostics={false}
+            showIntegratedEliteSynthesis={false}
+          />
+        )}
+        {activeTab === "synthesis" && (
+          <div className="space-y-4">
+            <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} />
+          </div>
+        )}
+        {activeTab === "runtime" && (
+          <RuntimeModelTab service={selectedService} />
+        )}
+        {activeTab === "reports" && (
+          <ReportsTab service={selectedService} windowDays={sharedWindowDays} />
+        )}
+      </div>
     </div>
     </CalibrationRunProvider>
   );
