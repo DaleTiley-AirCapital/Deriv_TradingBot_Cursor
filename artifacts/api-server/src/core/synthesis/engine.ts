@@ -99,8 +99,8 @@ function buildVolatilityRuntimeContractsFromPolicyTable(
     const engineName = volatilityRuntimeEngineForFamily(runtimeFamily);
     if (!engineName) continue;
 
-    const scenarioId = String(scenario.scenarioId ?? "");
-    if (!scenarioId.includes("_all_capital_extraction")) continue;
+    const scenarioId = String(scenario.scenarioId ?? scenario.policyId ?? "");
+    if (scenarioId && !scenarioId.includes("_all_capital_extraction")) continue;
     if (scenarioId.includes("_all_up_") || scenarioId.includes("_all_down_")) continue;
 
     const direction = String(scenario.direction ?? "").toLowerCase();

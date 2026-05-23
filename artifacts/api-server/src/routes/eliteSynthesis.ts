@@ -101,6 +101,83 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function finiteNumber(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function volatilityEngineForFamily(family: unknown): string | null {
+  const normalized = String(family ?? "").toLowerCase();
+  if (normalized === "breakout") return "r75_breakout_engine";
+  if (normalized === "reversal") return "r75_reversal_engine";
+  if (normalized === "continuation") return "r75_continuation_engine";
+  return null;
+}
+
+function deriveSelectedRuntimeContracts(serviceId: string, source: unknown) {
+  if (serviceId.toUpperCase() !== "R_75") return [];
+  if (!Array.isArray(source)) return [];
+
+  const alreadyContracts = source
+    .map((item) => asRecord(item))
+    .filter((item) => item.engineName && item.direction && item.trades);
+  if (alreadyContracts.length > 0) {
+    return alreadyContracts.map((item) => ({
+      contractId: item.contractId ?? `${String(item.engineName)}:${String(item.direction)}`,
+      policyId: item.policyId ?? item.scenarioId ?? null,
+      runtimeFamily: item.runtimeFamily ?? null,
+      engineName: item.engineName,
+      direction: item.direction,
+      trades: item.trades,
+      wins: item.wins ?? null,
+      losses: item.losses ?? null,
+      winRate: item.winRate ?? null,
+      slHitRate: item.slHitRate ?? null,
+      lifecycleMedianPnlPct: item.lifecycleMedianPnlPct ?? null,
+      rankingScore: item.rankingScore ?? null,
+    }));
+  }
+
+  const byFamily = new Map<string, Record<string, unknown>>();
+  for (const raw of source) {
+    const scenario = asRecord(raw);
+    if (!Boolean(scenario.guardrailsPassed)) continue;
+    const runtimeFamily = String(scenario.runtimeFamily ?? "").toLowerCase();
+    const engineName = volatilityEngineForFamily(runtimeFamily);
+    if (!engineName) continue;
+    const policyId = String(scenario.policyId ?? scenario.scenarioId ?? "");
+    if (policyId && !policyId.includes("_all_capital_extraction")) continue;
+    if (policyId.includes("_all_up_") || policyId.includes("_all_down_")) continue;
+    const direction = String(scenario.direction ?? "").toLowerCase();
+    if (direction !== "buy" && direction !== "sell") continue;
+    const trades = finiteNumber(scenario.trades) ?? 0;
+    if (trades < 20) continue;
+    const existing = byFamily.get(runtimeFamily);
+    if (existing && (finiteNumber(existing.rankingScore) ?? -Infinity) >= (finiteNumber(scenario.rankingScore) ?? -Infinity)) continue;
+    byFamily.set(runtimeFamily, {
+      contractId: `${engineName}:${direction}`,
+      policyId: policyId || null,
+      runtimeFamily,
+      engineName,
+      direction,
+      trades,
+      wins: finiteNumber(scenario.wins),
+      losses: finiteNumber(scenario.losses),
+      winRate: finiteNumber(scenario.winRate),
+      slHitRate: finiteNumber(scenario.slHitRate),
+      lifecycleMedianPnlPct: finiteNumber(scenario.lifecycleMedianPnlPct),
+      rankingScore: finiteNumber(scenario.rankingScore),
+    });
+  }
+  return ["breakout", "reversal", "continuation"]
+    .map((family) => byFamily.get(family))
+    .filter(Boolean);
+}
+
+function firstNonEmptyArray(...values: unknown[]) {
+  return values.find((value) => Array.isArray(value) && value.length > 0) ?? [];
+}
+
 function pickCompactFields(source: Record<string, unknown>, keys: string[]) {
   const output: Record<string, unknown> = {};
   for (const key of keys) {
@@ -231,6 +308,16 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
   const bestCapitalExtractionCandidate = asRecord(resultRecord.bestCapitalExtractionCandidate ?? returnAmplification.bestCapitalExtractionCandidate);
   const bestPolicyArtifact = asRecord(result.bestPolicyArtifact);
   const candidateArtifacts = Array.isArray(job.candidateRuntimeArtifacts) ? job.candidateRuntimeArtifacts : [];
+  const selectedRuntimeContracts = deriveSelectedRuntimeContracts(
+    serviceId,
+    firstNonEmptyArray(
+      resultRecord.selectedRuntimeContracts,
+      asRecord(resultRecord.reviewCandidateRuntimeArtifact).selectedRuntimeContracts,
+      returnAmplification.selectedRuntimeContracts,
+      returnAmplification.policyComparisonTable,
+      resultRecord.candidateFamilyComparison,
+    ),
+  );
   const blockers: string[] = [];
   if (readiness.reportConsistencyPassed === false) blockers.push("report_consistency_failed");
   if (readiness.selectedTradesExportPassed === false) blockers.push("selected_trades_export_failed");
@@ -273,6 +360,7 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
     aiStrategyReview: resultRecord.aiStrategyReview ?? returnAmplification.aiStrategyReview ?? null,
     candidateFamilyComparison: resultRecord.candidateFamilyComparison ?? returnAmplification.policyComparisonTable ?? [],
     bestCapitalExtractionCandidate: compactRuntimeBuildScenario(bestCapitalExtractionCandidate),
+    selectedRuntimeContracts,
     runtimeArtifactEligibility: resultRecord.runtimeArtifactEligibility ?? returnAmplification.runtimeArtifactEligibility ?? null,
     reviewCandidateRuntimeArtifact: resultRecord.reviewCandidateRuntimeArtifact ?? null,
     recommendedCandidate: Object.keys(bestCapitalExtractionCandidate).length > 0

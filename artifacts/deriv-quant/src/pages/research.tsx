@@ -6288,6 +6288,11 @@ function RuntimeBuildRunDetails({ result }: { result: Record<string, unknown> })
   const exitTiming = asUiRecord(lifecycle.selectedCandidateExitTiming ?? candidate.lifecycleExitTiming);
   const dynamicPlan = asUiRecord(candidate.dynamicExitPlanSummary ?? result.dynamicTpProtectionSummary);
   const aiReview = asUiRecord(result.aiStrategyReview);
+  const runtimeContracts = Array.isArray(result.selectedRuntimeContracts)
+    ? result.selectedRuntimeContracts.map(asUiRecord)
+    : Array.isArray(asUiRecord(result.reviewCandidateRuntimeArtifact).selectedRuntimeContracts)
+      ? (asUiRecord(result.reviewCandidateRuntimeArtifact).selectedRuntimeContracts as unknown[]).map(asUiRecord)
+      : [];
   const blockers = Array.isArray(eligibility.blockers) ? eligibility.blockers.map(String) : [];
   const warnings = Array.isArray(result.warnings) ? result.warnings.map(String) : [];
   const trades = Number(candidate.trades ?? candidate.selectedTradeCount ?? 0);
@@ -6327,6 +6332,26 @@ function RuntimeBuildRunDetails({ result }: { result: Record<string, unknown> })
       {warnings.length > 0 && (
         <div className="rounded-md border border-border/30 bg-background/30 px-3 py-2 text-muted-foreground">
           {warnings.join(" ")}
+        </div>
+      )}
+      {runtimeContracts.length > 0 && (
+        <div className="rounded-md border border-emerald-500/20 bg-emerald-500/8 px-3 py-2">
+          <p className="font-medium text-emerald-100">Runtime contracts</p>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+            {runtimeContracts.map((contract, index) => (
+              <div key={`${String(contract.engineName ?? "contract")}-${index}`} className="rounded-md border border-border/30 bg-background/30 px-2 py-2">
+                <p className="text-foreground font-semibold">
+                  {String(contract.runtimeFamily ?? "family")} / {String(contract.direction ?? "n/a")}
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  {String(contract.engineName ?? "n/a")} · {Number(contract.trades ?? 0)} trades · {(Number(contract.winRate ?? 0) * 100).toFixed(2)}% WR
+                </p>
+                <p className="text-muted-foreground">
+                  {Number(contract.lifecycleMedianPnlPct ?? 0).toFixed(2)}% median lifecycle PnL
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
