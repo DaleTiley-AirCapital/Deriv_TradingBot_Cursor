@@ -2,7 +2,7 @@
 
 ## Definition
 
-Runtime feeddown compiles symbol-specific research/calibration/parity artifacts into a staged or promoted runtime model consumed by that symbol service.
+Runtime feeddown compiles symbol-specific research, calibration, build, and validation artifacts into a staged or promoted runtime model consumed by that symbol service.
 
 ## Contract Requirements
 
@@ -17,15 +17,15 @@ Each symbol runtime feeddown implementation must:
 
 ## Lifecycle Semantics
 
-- `Stage` compiles and stores staged runtime model.
-- `Promote` activates a staged runtime model for runtime usage.
+- `Build Runtime Model` creates a review runtime candidate.
+- `Validate Runtime` proves the staged/review candidate can behave live-safely.
+- `Promote Runtime` activates the validated runtime model for service usage.
 - Runtime behavior changes only on promote.
 
-Milestone 1 note:
+V3.2 note:
 
-- This document defines required behavior.
-- Milestone 1 only scaffolds contracts and service modules.
-- Lifecycle behavior cutover and stricter endpoint semantics are future milestones.
+- `CRASH300` and `R_75` use promoted service runtime artifacts on codex-dev.
+- `BOOM300` and `R_100` must follow the same service-level build, validation, and promotion workflow before candidate emission is enabled.
 
 ## Error Semantics
 

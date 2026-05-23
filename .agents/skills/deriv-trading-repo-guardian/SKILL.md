@@ -27,9 +27,25 @@ app/            — routing, app wiring, dependency composition
 
 ---
 
+## V3.2 Current Operating Override
+
+The live path now runs on promoted service-runtime contracts. V3 native engines still provide symbol feature/engine evidence, but the promoted service runtime decides whether that evidence may become a service candidate.
+
+Current promoted/scanning services on codex-dev:
+
+- `CRASH300`
+- `R_75`
+
+`BOOM300` and `R_100` remain registered roadmap services until their own Build Runtime Model, Validate Runtime, and Promote Runtime workflows complete.
+
+Allocator rejection is portfolio-level only: capital capacity, exposure, drawdown, cascade timing, active mode permission, duplicate cooldown, or explicit safety blockers. Do not reintroduce generic confidence or composite-score rejection for candidates emitted by a promoted service runtime.
+
+Research, validation replay, paper, demo, and live must share the same promoted service-runtime contract for candidate admission and lifecycle settings.
+
+---
 ## V3 Live Architecture (current — as of Task #106)
 
-**The live path runs exclusively on V3 native-engine scoring. There is no V2 shared scoring path in the live system.**
+Historical note: this section describes the prior V3 native-engine scoring layer. It remains useful for engine file orientation, but V3.2 service-runtime contracts override it for current live candidate admission. There is no V2 shared scoring path in the live system.
 `strategies.ts` / `signalRouter.ts` / `scoring.ts` are BACKTEST-ONLY — not called in live scan.
 
 ### 8 Symbol-Native Engines

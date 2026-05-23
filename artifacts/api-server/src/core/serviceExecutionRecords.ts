@@ -32,7 +32,8 @@ export async function createServiceCandidateRecord(
     : null;
   const candidateId = `${context.serviceId.toLowerCase()}-candidate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const confidence = Number(metadata.confidence ?? winner.confidence ?? 0);
-  const setupMatch = Number(metadata.setupMatch ?? metadata.runtimeSetupMatch ?? 0);
+  const runtimeSetup = context.builtCandidate.candidate.runtimeSetup;
+  const setupMatch = Number(metadata.setupMatch ?? metadata.runtimeSetupMatch ?? runtimeSetup.evidenceScore ?? 0);
   const triggerStrengthScore = Number(metadata.triggerStrengthScore ?? 0);
   const expectedMovePct = Number(metadata.expectedMovePct ?? winner.projectedMovePct ?? 0);
   const direction = winner.direction;
@@ -72,9 +73,15 @@ export async function createServiceCandidateRecord(
       ? Math.max(5, Math.min(90, Number((confidence * 100).toFixed(2))))
       : null,
     requestedLeverage: requestedLeverage > 0 ? requestedLeverage : 1,
-    liveSafeFeatures: featureSnapshot,
+    liveSafeFeatures: featureSnapshot ?? {
+      runtimeSetupReason: runtimeSetup.reason,
+      runtimeSetupWeakComponents: runtimeSetup.weakComponents,
+      runtimeMatchedBucketKey: runtimeSetup.matchedBucketKey,
+      runtimeLeadInShape: runtimeSetup.leadInShape,
+      runtimeQualityBand: runtimeSetup.qualityBand,
+    },
     warnings: context.gate.warnings,
-    blockers: [],
+    blockers: runtimeSetup.allowed ? [] : [runtimeSetup.reason],
     emissionGate: context.gate,
     executionStatus: "emitted",
   });

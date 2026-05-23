@@ -2073,6 +2073,7 @@ interface ServicePromotedRuntimeUi {
     demo?: boolean;
     real?: boolean;
   };
+  runtimeModelAdapter?: RuntimeSymbolModelUi | Record<string, unknown> | null;
 }
 
 interface ResearchDataStatusUi {
@@ -2536,7 +2537,6 @@ function MoveCalibrationTab({
   const [movesExpanded, setMovesExpanded] = useState(false);
 
   const [scope, setScope] = useState<"detect" | "passes" | "full">("full");
-  const [runElapsed, setRunElapsed] = useState(0);
   const prevCalibStatusRef = useRef<string | undefined>(undefined);
   const [showDebugTools, setShowDebugTools] = useState(false);
   const [preflight, setPreflight] = useState<{
@@ -2748,16 +2748,6 @@ function MoveCalibrationTab({
     setMoveTypeFilter(strategyFamily);
     loadDomains(symbol, strategyFamily);
   }, [strategyFamily]);
-
-  useEffect(() => {
-    if (!detecting && !passForThisSymbol) {
-      setRunElapsed(0);
-      return;
-    }
-    setRunElapsed(0);
-    const id = setInterval(() => setRunElapsed(s => s + 1), 1000);
-    return () => clearInterval(id);
-  }, [detecting, passForThisSymbol]);
 
   useEffect(() => {
     const st = calibRun.status?.status;
@@ -3445,28 +3435,12 @@ function MoveCalibrationTab({
           </button>
         </div>
 
-        {/* Elapsed timer */}
-        {(detecting || passForThisSymbol) && runElapsed > 0 && (
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground flex-wrap">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            Elapsed: <strong className="text-foreground font-mono">{formatDurationCompact(runElapsed)}</strong>
-          </div>
-        )}
-
         <div className="rounded-lg border border-border/40 bg-muted/10 p-3 space-y-2">
           {(() => {
-            const currentStage = (passStatus?.metaJson as { stage?: string } | null)?.stage;
-            const reconcileRunning = passStatus?.status === "running" && currentStage === "Data Integrity";
-            const readinessLabel = reconcileRunning
-              ? "running reconcile"
-              : preflight?.readyForCalibration
-                ? "healthy"
-                : "reconcile required";
-            const readinessClass = reconcileRunning
-              ? "text-sky-300 border-sky-500/30 bg-sky-500/10"
-              : preflight?.readyForCalibration
-                ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
-                : "text-amber-300 border-amber-500/30 bg-amber-500/10";
+            const readinessLabel = preflight?.readyForCalibration ? "healthy" : "reconcile required";
+            const readinessClass = preflight?.readyForCalibration
+              ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
+              : "text-amber-300 border-amber-500/30 bg-amber-500/10";
             return (
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-foreground">Calibration Readiness</span>
@@ -3548,96 +3522,6 @@ function MoveCalibrationTab({
         )}
 
         {passErr && <ErrorBox msg={passErr} />}
-
-        {passStatus && (
-          <div className={cn(
-            "rounded-lg border p-3 space-y-1.5",
-            passStatus.status === "completed" ? "bg-green-500/10 border-green-500/20" :
-            passStatus.status === "cancelled" ? "bg-amber-500/10 border-amber-500/20" :
-            passStatus.status === "failed"    ? "bg-red-500/10 border-red-500/20" :
-            "bg-primary/5 border-primary/20"
-          )}>
-            <div className="flex items-center gap-2">
-              {passForThisSymbol && passStatus?.status === "running" && (
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-              )}
-              {passStatus.status === "completed" && <CheckCircle className="w-3.5 h-3.5 text-green-400" />}
-              {passStatus.status === "cancelled" && <XCircle className="w-3.5 h-3.5 text-amber-300" />}
-              {passStatus.status === "failed"    && <XCircle    className="w-3.5 h-3.5 text-red-400"   />}
-              <span className="text-xs font-semibold text-foreground">
-                {passStatus.status === "running"   ? "Calibration running" :
-                 passStatus.status === "completed" ? "Calibration completed" :
-                 passStatus.status === "cancelled" ? "Calibration cancelled" :
-                 passStatus.status === "failed"    ? "Pass run failed" :
-                 `Status: ${passStatus.status}`}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {["Data Integrity", "Move Detection", "Deterministic Enrichment", "Family Inference", "Bucket Model Synthesis", "Research Profile Complete"].map((stage) => {
-                const currentStage = (passStatus.metaJson as { stage?: string } | null)?.stage ?? "";
-                const isActive = currentStage === stage;
-                const isDone = ["Research Profile Complete"].includes(stage)
-                  ? passStatus.status === "completed"
-                  : false;
-                return (
-                  <span
-                    key={stage}
-                    className={cn(
-                      "text-[10px] px-1.5 py-0.5 rounded border",
-                      isDone
-                        ? "text-emerald-300 border-emerald-500/30 bg-emerald-500/10"
-                        : isActive
-                          ? "text-primary border-primary/40 bg-primary/10"
-                          : "text-muted-foreground border-border/30 bg-background/40"
-                    )}
-                  >
-                    {stage}
-                  </span>
-                );
-              })}
-            </div>
-            <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-              {passStatus.totalMoves    != null && <span>Total: <strong className="text-foreground">{passStatus.totalMoves}</strong></span>}
-              {passStatus.processedMoves != null && <span>Processed: <strong className="text-foreground">{passStatus.processedMoves}</strong></span>}
-              {passStatus.failedMoves   != null && (
-                <span title="Number of pass-level errors recorded (same move can count more than once only if multiple passes error)">
-                  Pass errors: <strong className="text-foreground">{passStatus.failedMoves}</strong>
-                </span>
-              )}
-              {passStatus.passName                  && <span>Pass: <strong className="text-foreground">{passStatus.passName}</strong></span>}
-              {(passStatus.metaJson as { progress?: { remainingMoves?: number } } | null)?.progress?.remainingMoves != null &&
-                passStatus.status === "running" && (
-                <span>Queue left: <strong className="text-foreground">{(passStatus.metaJson as { progress?: { remainingMoves?: number } }).progress?.remainingMoves}</strong></span>
-              )}
-            </div>
-            {passStatus.status === "running" &&
-              (passStatus.metaJson as { progress?: { label?: string } } | null)?.progress?.label && (
-              <p className="text-[11px] font-mono text-primary">
-                {(passStatus.metaJson as { progress?: { label?: string } }).progress?.label}
-              </p>
-            )}
-            {(() => {
-              const mj = passStatus.metaJson as { failure?: { kind?: string; moveId?: number; pass?: string; error?: string; hint?: string } } | null;
-              const f = mj?.failure;
-              if (!f || passStatus.status === "running") return null;
-              return (
-                <div className="rounded border border-amber-500/25 bg-amber-500/5 p-2 text-[11px] text-amber-100/90 space-y-1">
-                  <p className="font-semibold text-amber-200">Run stopped  {f.kind ?? "failure"}</p>
-                  {typeof f.moveId === "number" && <p className="font-mono">move id {f.moveId}{typeof f.pass === "string" ? `  ${f.pass}` : ""}</p>}
-                  {typeof f.error === "string" && <p className="font-mono text-red-300/95 whitespace-pre-wrap">{f.error}</p>}
-                  {typeof f.hint === "string" && <p className="text-muted-foreground">{f.hint}</p>}
-                </div>
-              );
-            })()}
-            {passStatus.errorSummary != null && (
-              <p className="text-[11px] text-red-400 font-mono whitespace-pre-wrap break-all">
-                {typeof passStatus.errorSummary === "string"
-                  ? passStatus.errorSummary
-                  : JSON.stringify(passStatus.errorSummary, null, 2)}
-              </p>
-            )}
-          </div>
-        )}
 
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3 space-y-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -4894,6 +4778,19 @@ function ActiveWorkerTasksCard({ service }: { service: string }) {
   const bestSlRate = Number(primaryJob?.taskState?.bestSummary && (primaryJob.taskState.bestSummary as Record<string, unknown>).bestSlRate);
   const bestProfitFactor = Number(primaryJob?.taskState?.bestSummary && (primaryJob.taskState.bestSummary as Record<string, unknown>).bestProfitFactor);
   const bestTradeCount = Number(primaryJob?.taskState?.bestSummary && (primaryJob.taskState.bestSummary as Record<string, unknown>).bestTradeCount);
+  const stageKey = String(primaryJob?.stage ?? "").toLowerCase();
+  const workerWaitingForClaim = Boolean(primaryJob && ["queued", "starting"].includes(stageKey) && primaryJob.progressPct <= 5);
+  const hasPassProgress = maxPasses > 0;
+  const heartbeatMs = primaryJob?.heartbeatAt ? Date.now() - new Date(primaryJob.heartbeatAt).getTime() : 0;
+  const heartbeatStale = Boolean(primaryJob?.status === "running" && heartbeatMs > 2 * 60 * 1000);
+  const workerStatusText = primaryJob
+    ? workerWaitingForClaim
+      ? `${primaryJob.status} / waiting for worker`
+      : `${primaryJob.status} / ${primaryJob.stage.replace(/_/g, " ")}`
+    : "";
+  const workerProgressWidth = workerWaitingForClaim
+    ? "32%"
+    : `${Math.min(100, Math.max(0, Number(primaryJob?.progressPct ?? 0)))}%`;
 
   return (
     <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-4 space-y-3">
@@ -4929,12 +4826,22 @@ function ActiveWorkerTasksCard({ service }: { service: string }) {
         <>
           <div className="space-y-2">
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span className="truncate">{primaryJob.message ?? primaryJob.stage.replace(/_/g, " ")}</span>
-              <span className="font-mono text-cyan-200">{primaryJob.progressPct}%</span>
+              <span className="truncate">
+                {workerWaitingForClaim ? "Waiting for worker to claim task" : primaryJob.message ?? primaryJob.stage.replace(/_/g, " ")}
+              </span>
+              {!workerWaitingForClaim && <span className="font-mono text-cyan-200">{primaryJob.progressPct}%</span>}
             </div>
             <div className="h-2 overflow-hidden rounded bg-background/80">
-              <div className="h-full bg-cyan-400 transition-all duration-300" style={{ width: `${primaryJob.progressPct}%` }} />
+              <div
+                className={cn("h-full bg-cyan-400 transition-all duration-300", workerWaitingForClaim && "animate-pulse")}
+                style={{ width: workerProgressWidth }}
+              />
             </div>
+            {heartbeatStale && (
+              <p className="text-[11px] text-amber-200">
+                Worker heartbeat is stale. The worker will requeue this task if it cannot safely continue.
+              </p>
+            )}
             {cancellationRequested && (
               <p className="text-[11px] text-amber-200">
                 Cancellation requested. The worker is waiting for a safe checkpoint before marking this task fully cancelled.
@@ -4942,15 +4849,17 @@ function ActiveWorkerTasksCard({ service }: { service: string }) {
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-[11px]">
+          <div className={cn("grid grid-cols-1 gap-3 text-[11px]", hasPassProgress ? "md:grid-cols-4" : "md:grid-cols-3")}>
             <div className="rounded-lg border border-border/30 bg-background/40 p-3">
               <p className="text-muted-foreground uppercase tracking-wide">Status / Stage</p>
-              <p className="mt-1 font-mono text-foreground">{primaryJob.status} / {primaryJob.stage.replace(/_/g, " ")}</p>
+              <p className="mt-1 font-mono text-foreground">{workerStatusText}</p>
             </div>
-            <div className="rounded-lg border border-border/30 bg-background/40 p-3">
-              <p className="text-muted-foreground uppercase tracking-wide">Pass</p>
-              <p className="mt-1 font-mono text-foreground">{maxPasses > 0 ? `${currentPass}/${maxPasses}` : "n/a"}</p>
-            </div>
+            {hasPassProgress && (
+              <div className="rounded-lg border border-border/30 bg-background/40 p-3">
+                <p className="text-muted-foreground uppercase tracking-wide">Pass</p>
+                <p className="mt-1 font-mono text-foreground">{currentPass}/{maxPasses}</p>
+              </div>
+            )}
             <div className="rounded-lg border border-border/30 bg-background/40 p-3">
               <p className="text-muted-foreground uppercase tracking-wide">Heartbeat</p>
               <p className="mt-1 font-mono text-foreground">{heartbeatAgeLabel(primaryJob.heartbeatAt)}</p>
@@ -5498,11 +5407,13 @@ function RuntimeModelTab({ service }: { service: string }) {
       : service === "BOOM300"
         ? "boom_family"
         : "service-specific";
-  const promotedBuckets = extractCalibratedBucketEntries(runtime?.promotedModel ?? null);
+  const promotedRuntimeModelAdapter = promotedRuntime?.runtimeModelAdapter ?? null;
+  const promotedBucketSourceModel = promotedRuntimeModelAdapter ?? runtime?.promotedModel ?? null;
+  const promotedBuckets = extractCalibratedBucketEntries(promotedBucketSourceModel);
   const stagedBuckets = extractCalibratedBucketEntries(runtime?.stagedModel ?? null);
-  const promotedRuntimeTpBuckets = extractRuntimeTpBucketEntries(runtime?.promotedModel ?? null);
+  const promotedRuntimeTpBuckets = extractRuntimeTpBucketEntries(promotedBucketSourceModel);
   const stagedRuntimeTpBuckets = extractRuntimeTpBucketEntries(runtime?.stagedModel ?? null);
-  const promotedTpModel = asUiRecord(runtime?.promotedModel?.tpModel);
+  const promotedTpModel = asUiRecord(asUiRecord(promotedBucketSourceModel).tpModel);
   const stagedTpModel = asUiRecord(runtime?.stagedModel?.tpModel);
   const promotedExpectedPerformance = asUiRecord(promotedRuntime?.expectedPerformance);
   const runtimeArchetypes = Array.from(new Set([
@@ -6380,6 +6291,13 @@ function RuntimeBuildRunDetails({ result }: { result: Record<string, unknown> })
   const exitTiming = asUiRecord(lifecycle.selectedCandidateExitTiming ?? candidate.lifecycleExitTiming);
   const dynamicPlan = asUiRecord(candidate.dynamicExitPlanSummary ?? result.dynamicTpProtectionSummary);
   const aiReview = asUiRecord(result.aiStrategyReview);
+  const runtimeContracts = Array.isArray(result.selectedRuntimeContracts)
+    ? result.selectedRuntimeContracts.map(asUiRecord)
+    : Array.isArray(asUiRecord(result.reviewCandidateRuntimeArtifact).selectedRuntimeContracts)
+      ? (asUiRecord(result.reviewCandidateRuntimeArtifact).selectedRuntimeContracts as unknown[]).map(asUiRecord)
+      : [];
+  const runtimeContractTrades = runtimeContracts.reduce((sum, contract) => sum + Number(contract.trades ?? 0), 0);
+  const runtimeContractFamilies = runtimeContracts.map((contract) => `${String(contract.runtimeFamily ?? "family")}/${String(contract.direction ?? "n/a")}`);
   const blockers = Array.isArray(eligibility.blockers) ? eligibility.blockers.map(String) : [];
   const warnings = Array.isArray(result.warnings) ? result.warnings.map(String) : [];
   const trades = Number(candidate.trades ?? candidate.selectedTradeCount ?? 0);
@@ -6396,8 +6314,11 @@ function RuntimeBuildRunDetails({ result }: { result: Record<string, unknown> })
         <StatRow label="Build run" value={`#${String(result.buildRunId ?? "n/a")}`} />
         <StatRow label="Profile / target" value={`${searchProfileLabel(String(profile.searchProfile ?? ""))} / ${targetProfileLabel(String(profile.targetProfile ?? ""))}`} />
         <StatRow label="Target universe" value={`${Number(universe.totalTargetMoves ?? 0)} ${String(universe.family ?? "target")} >= ${Number(universe.minimumMovePct ?? 0)}%`} />
-        <StatRow label="Large move coverage" value={`${Number(coverage.capturedTargetMoveCount ?? 0)} / ${Number(coverage.targetUniverseCount ?? universe.totalTargetMoves ?? 0)} (${Number(coverage.coveragePct ?? 0).toFixed(2)}%)`} />
-        <StatRow label="Best candidate" value={String(candidate.scenarioId ?? candidate.policyId ?? "n/a")} />
+        <StatRow label={runtimeContracts.length > 1 ? "Best single-family coverage" : "Large move coverage"} value={`${Number(coverage.capturedTargetMoveCount ?? 0)} / ${Number(coverage.targetUniverseCount ?? universe.totalTargetMoves ?? 0)} (${Number(coverage.coveragePct ?? 0).toFixed(2)}%)`} />
+        {runtimeContracts.length > 1 && (
+          <StatRow label="Runtime contract set" value={`${runtimeContracts.length} families / ${runtimeContractTrades} trade equivalents`} />
+        )}
+        <StatRow label={runtimeContracts.length > 1 ? "Best single-family candidate" : "Best candidate"} value={String(candidate.scenarioId ?? candidate.policyId ?? "n/a")} />
         <StatRow label="Trades / wins / losses" value={`${trades} / ${wins} / ${losses}`} />
         <StatRow label="Win / SL" value={`${(Number(candidate.winRate ?? 0) * 100).toFixed(2)}% / ${(Number(candidate.slHitRate ?? 0) * 100).toFixed(2)}%`} />
         <StatRow label="Lifecycle return" value={`${lifecycleTotal.toFixed(2)}% total / ${lifecycleMonthly.toFixed(2)}% monthly`} />
@@ -6419,6 +6340,31 @@ function RuntimeBuildRunDetails({ result }: { result: Record<string, unknown> })
       {warnings.length > 0 && (
         <div className="rounded-md border border-border/30 bg-background/30 px-3 py-2 text-muted-foreground">
           {warnings.join(" ")}
+        </div>
+      )}
+      {runtimeContracts.length > 0 && (
+        <div className="rounded-md border border-emerald-500/20 bg-emerald-500/8 px-3 py-2">
+          <p className="font-medium text-emerald-100">Runtime contracts</p>
+          {runtimeContractFamilies.length > 0 && (
+            <p className="mt-1 text-muted-foreground">
+              Volatility runtime will gate exact engine/direction contracts: {runtimeContractFamilies.join(", ")}.
+            </p>
+          )}
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+            {runtimeContracts.map((contract, index) => (
+              <div key={`${String(contract.engineName ?? "contract")}-${index}`} className="rounded-md border border-border/30 bg-background/30 px-2 py-2">
+                <p className="text-foreground font-semibold">
+                  {String(contract.runtimeFamily ?? "family")} / {String(contract.direction ?? "n/a")}
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  {String(contract.engineName ?? "n/a")} · {Number(contract.trades ?? 0)} trades · {(Number(contract.winRate ?? 0) * 100).toFixed(2)}% WR
+                </p>
+                <p className="text-muted-foreground">
+                  {Number(contract.lifecycleMedianPnlPct ?? 0).toFixed(2)}% median lifecycle PnL
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -7133,14 +7079,22 @@ function AdvancedDiagnosticsTab({ service, windowDays }: { service: string; wind
 //  Main Page 
 
 export default function Research() {
-  const [selectedService, setSelectedService] = useState<string>("CRASH300");
+  const [selectedService, setSelectedService] = useState<string>("R_75");
   const [activeTab, setActiveTab] = useState<ResearchTabId>("data");
   const [sharedWindowDays, setSharedWindowDays] = useState<number>(365);
   const [showAddService, setShowAddService] = useState(false);
   const [customServices, setCustomServices] = useState<string[]>([]);
+  const [serviceTransition, setServiceTransition] = useState<{ active: boolean; service: string }>({ active: false, service: "R_75" });
+  const serviceTransitionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setCustomServices(readCustomResearchServices());
+  }, []);
+
+  useEffect(() => () => {
+    if (serviceTransitionTimerRef.current) {
+      window.clearTimeout(serviceTransitionTimerRef.current);
+    }
   }, []);
 
   const serviceSelectorOptions = useMemo(() => {
@@ -7165,14 +7119,23 @@ export default function Research() {
 
   useEffect(() => {
     if (serviceSelectorOptions.some((option) => option.symbol === selectedService)) return;
-    setSelectedService(serviceSelectorOptions[0]?.symbol ?? "CRASH300");
+    setSelectedService(serviceSelectorOptions[0]?.symbol ?? "R_75");
   }, [selectedService, serviceSelectorOptions]);
 
   const handleSelectService = useCallback((service: string) => {
+    if (serviceTransitionTimerRef.current) {
+      window.clearTimeout(serviceTransitionTimerRef.current);
+    }
+    if (service !== selectedService) {
+      setServiceTransition({ active: true, service });
+      serviceTransitionTimerRef.current = window.setTimeout(() => {
+        setServiceTransition((current) => current.service === service ? { ...current, active: false } : current);
+      }, 700);
+    }
     setSelectedService(service);
     setActiveTab("data");
     setShowAddService(false);
-  }, []);
+  }, [selectedService]);
 
   const handleAddService = useCallback((service: string) => {
     setCustomServices((prev) => {
@@ -7209,7 +7172,7 @@ export default function Research() {
           <span className="text-xs text-muted-foreground uppercase tracking-wide">Service Selector</span>
           <select
             value={selectedService}
-            onChange={(e) => setSelectedService(e.target.value)}
+            onChange={(e) => handleSelectService(e.target.value)}
             className="w-full text-xs bg-background border border-border/50 rounded px-2 py-2 text-foreground focus:outline-none focus:border-primary/50"
           >
             {serviceSelectorOptions.map((option) => (
@@ -7250,52 +7213,72 @@ export default function Research() {
         />
       )}
 
-      <ServicePipelinePanel service={selectedService} onJumpToTab={setActiveTab} />
-      <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
-      <ActiveWorkerTasksCard service={selectedService} />
-
-      <div className="flex items-center gap-0.5 border-b border-border/30">
-        {tabs.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors",
-              activeTab === tab.id
-                ? "border-primary text-primary"
-                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border/50"
-            )}
-          >
-            {tab.icon}
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === "data" && (
-        <DataCoverageTab service={selectedService} />
-      )}
-      {activeTab === "calibration" && (
-        <MoveCalibrationTab
-          domain="active"
-          windowDays={sharedWindowDays}
-          lockedSymbol={selectedService}
-          hideReportsActions
-          showAdvancedDiagnostics={false}
-          showIntegratedEliteSynthesis={false}
-        />
-      )}
-      {activeTab === "synthesis" && (
-        <div className="space-y-4">
-          <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} />
+      {serviceTransition.active && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="rounded-lg border border-primary/40 bg-card px-5 py-4 shadow-xl">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              <div>
+                <p className="text-sm font-semibold text-foreground">Loading {getSymbolLabel(serviceTransition.service)}</p>
+                <p className="text-xs text-muted-foreground">Refreshing selected service data.</p>
+              </div>
+            </div>
+          </div>
         </div>
       )}
-      {activeTab === "runtime" && (
-        <RuntimeModelTab service={selectedService} />
-      )}
-      {activeTab === "reports" && (
-        <ReportsTab service={selectedService} windowDays={sharedWindowDays} />
-      )}
+
+      <div
+        key={selectedService}
+        aria-busy={serviceTransition.active}
+        className={cn("space-y-5", serviceTransition.active && "pointer-events-none select-none opacity-50")}
+      >
+        <ServicePipelinePanel service={selectedService} onJumpToTab={setActiveTab} />
+        <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
+        <ActiveWorkerTasksCard service={selectedService} />
+
+        <div className="flex items-center gap-0.5 border-b border-border/30">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors",
+                activeTab === tab.id
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-border/50"
+              )}
+            >
+              {tab.icon}
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === "data" && (
+          <DataCoverageTab service={selectedService} />
+        )}
+        {activeTab === "calibration" && (
+          <MoveCalibrationTab
+            domain="active"
+            windowDays={sharedWindowDays}
+            lockedSymbol={selectedService}
+            hideReportsActions
+            showAdvancedDiagnostics={false}
+            showIntegratedEliteSynthesis={false}
+          />
+        )}
+        {activeTab === "synthesis" && (
+          <div className="space-y-4">
+            <IntegratedEliteSynthesisCard service={selectedService} windowDays={sharedWindowDays} />
+          </div>
+        )}
+        {activeTab === "runtime" && (
+          <RuntimeModelTab service={selectedService} />
+        )}
+        {activeTab === "reports" && (
+          <ReportsTab service={selectedService} windowDays={sharedWindowDays} />
+        )}
+      </div>
     </div>
     </CalibrationRunProvider>
   );

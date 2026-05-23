@@ -129,6 +129,29 @@ function calibratedComponentScore(winner: EngineResult, key: string): number | n
   return asFiniteNumber(components[key]);
 }
 
+function runtimeFormula(params: { runtimeCalibration?: LiveCalibrationProfile | null }): Record<string, unknown> {
+  return asPlainRecord(params.runtimeCalibration?.formulaOverride);
+}
+
+function runtimeNumber(source: Record<string, unknown>, key: string): number | null {
+  return asFiniteNumber(source[key]);
+}
+
+function engineRuntimeSetupOverride(
+  formula: Record<string, unknown>,
+  engineName: string,
+): Record<string, unknown> {
+  const runtimeSetup = asPlainRecord(formula["runtimeSetup"]);
+  const r75RuntimeSetup = asPlainRecord(formula["r75RuntimeSetup"]);
+  const engines = asPlainRecord(formula["engines"]);
+  const engineOverride = asPlainRecord(engines[engineName]);
+  return {
+    ...runtimeSetup,
+    ...r75RuntimeSetup,
+    ...engineOverride,
+  };
+}
+
 export function evaluateRuntimeEntryEvidence(params: {
   symbol: string;
   direction: "buy" | "sell";
@@ -245,6 +268,174 @@ export function evaluateRuntimeEntryEvidence(params: {
     return {
       allowed: true,
       reason: `runtime_calibrated_setup_matched:${selectedBucket.key}`,
+      leadInShape,
+      qualityBand,
+      matchedBucketKey: selectedBucket.key,
+      evidenceScore,
+      weakComponents: [],
+    };
+  }
+
+  if (params.symbol === "R_75") {
+    const components = asPlainRecord(params.winner.metadata?.["componentScores"]);
+    const engineName = params.winner.engineName;
+    const formula = runtimeFormula(params);
+    const setupOverride = engineRuntimeSetupOverride(formula, engineName);
+    const allowedEngineDirections = Array.isArray(setupOverride["allowedEngineDirections"])
+      ? setupOverride["allowedEngineDirections"]
+          .map((value) => {
+            if (typeof value === "string") {
+              const [engine, direction] = value.split(":");
+              return { engineName: engine, direction: String(direction ?? "").toLowerCase() };
+            }
+            const record = asPlainRecord(value);
+            return {
+              engineName: String(record.engineName ?? ""),
+              direction: String(record.direction ?? "").toLowerCase(),
+            };
+          })
+          .filter((value) => value.engineName && (value.direction === "buy" || value.direction === "sell"))
+      : [];
+    if (allowedEngineDirections.length > 0) {
+      const matchedPair = allowedEngineDirections.some((value) =>
+        value.engineName === engineName && value.direction === params.winner.direction
+      );
+      if (!matchedPair) {
+        return {
+          allowed: false,
+          reason: `runtime_r75_engine_direction_not_selected_by_build:${engineName}:${params.winner.direction}`,
+          leadInShape,
+          qualityBand,
+          matchedBucketKey: selectedBucket.key,
+          evidenceScore: 0,
+          weakComponents: [`engineDirection:${engineName}:${params.winner.direction}<${allowedEngineDirections.map((value) => `${value.engineName}:${value.direction}`).join("|")}`],
+        };
+      }
+    }
+    const allowedEngines = Array.isArray(setupOverride["allowedEngines"])
+      ? setupOverride["allowedEngines"].map((value) => String(value)).filter(Boolean)
+      : [];
+    if (allowedEngines.length > 0 && !allowedEngines.includes(engineName)) {
+      return {
+        allowed: false,
+        reason: `runtime_r75_engine_not_selected_by_build:${engineName}`,
+        leadInShape,
+        qualityBand,
+        matchedBucketKey: selectedBucket.key,
+        evidenceScore: 0,
+        weakComponents: [`engine:${engineName}<${allowedEngines.join("|")}`],
+      };
+    }
+    const allowedDirections = Array.isArray(setupOverride["allowedDirections"])
+      ? setupOverride["allowedDirections"].map((value) => String(value).toLowerCase()).filter(Boolean)
+      : [];
+    if (allowedDirections.length > 0 && !allowedDirections.includes(params.winner.direction)) {
+      return {
+        allowed: false,
+        reason: `runtime_r75_direction_not_selected_by_build:${params.winner.direction}`,
+        leadInShape,
+        qualityBand,
+        matchedBucketKey: selectedBucket.key,
+        evidenceScore: 0,
+        weakComponents: [`direction:${params.winner.direction}<${allowedDirections.join("|")}`],
+      };
+    }
+    const minNativeScore = runtimeNumber(setupOverride, "minNativeScore");
+    const minConfidence = runtimeNumber(setupOverride, "minConfidence");
+    const minExpectedMovePct = runtimeNumber(setupOverride, "minExpectedMovePct");
+    const expectedMovePct = asFiniteNumber(params.winner.metadata?.["expectedMovePct"])
+      ?? asFiniteNumber(params.winner.projectedMovePct)
+      ?? 0;
+    const confidence = asFiniteNumber(params.winner.confidence) ?? 0;
+    const gateWeakComponents = [
+      ...(minNativeScore != null && params.nativeScore < minNativeScore
+        ? [`nativeScore:${params.nativeScore}<${minNativeScore}`]
+        : []),
+      ...(minConfidence != null && confidence < minConfidence
+        ? [`confidence:${Number(confidence.toFixed(3))}<${minConfidence}`]
+        : []),
+      ...(minExpectedMovePct != null && expectedMovePct < minExpectedMovePct
+        ? [`expectedMovePct:${Number(expectedMovePct.toFixed(4))}<${minExpectedMovePct}`]
+        : []),
+    ];
+    if (gateWeakComponents.length > 0) {
+      return {
+        allowed: false,
+        reason: `runtime_r75_promoted_setup_weak:${gateWeakComponents.join(",")}`,
+        leadInShape,
+        qualityBand,
+        matchedBucketKey: selectedBucket.key,
+        evidenceScore: 0,
+        weakComponents: gateWeakComponents,
+      };
+    }
+
+    const componentGateMode = String(setupOverride["componentGateMode"] ?? "strict_components");
+    const configuredComponentThresholds = asPlainRecord(setupOverride["componentThresholds"]);
+    const thresholds: Record<string, number> = Object.keys(configuredComponentThresholds).length > 0
+      ? Object.fromEntries(Object.entries(configuredComponentThresholds)
+          .map(([key, value]) => [key, Number(value)])
+          .filter(([, value]) => Number.isFinite(value))) as Record<string, number>
+      : componentGateMode === "build_selected_rules"
+        ? {}
+        :
+      engineName === "r75_reversal_engine"
+        ? {
+            rangeExtremity: 55,
+            reversalConfirmation: 55,
+            stretchDeviationQuality: 55,
+            structureQuality: 55,
+            entryEfficiency: 55,
+            expectedMoveSufficiency: 55,
+          }
+        : engineName === "r75_breakout_engine"
+          ? {
+              boundaryPressure: 55,
+              breakStrength: 55,
+              expansionQuality: 55,
+              retestAcceptanceQuality: 55,
+              entryEfficiency: 55,
+              expectedMoveSufficiency: 55,
+            }
+          : engineName === "r75_continuation_engine"
+            ? {
+                trendQuality: 55,
+                pullbackQuality: 55,
+                slopeAlignment: 55,
+                structureContinuity: 55,
+                entryEfficiency: 55,
+                expectedMoveSufficiency: 55,
+          }
+        : {};
+
+    const scored = Object.entries(thresholds).map(([key, min]) => ({
+      key,
+      min,
+      value: asFiniteNumber(components[key]),
+    }));
+    const weakComponents = scored
+      .filter(({ value, min }) => value == null || value < min)
+      .map(({ key, value, min }) => `${key}:${value ?? "missing"}<${min}`);
+
+    if (weakComponents.length > 0) {
+      return {
+        allowed: false,
+        reason: `runtime_r75_promoted_setup_weak:${weakComponents.join(",")}`,
+        leadInShape,
+        qualityBand,
+        matchedBucketKey: selectedBucket.key,
+        evidenceScore: 0,
+        weakComponents,
+      };
+    }
+
+    const evidenceScore = scored.length > 0
+      ? scored.reduce((sum, item) => sum + (item.value ?? 0), 0) / scored.length
+      : Math.max(params.nativeScore, confidence * 100);
+
+    return {
+      allowed: true,
+      reason: `runtime_r75_promoted_setup_matched:${engineName}:${selectedBucket.key}`,
       leadInShape,
       qualityBand,
       matchedBucketKey: selectedBucket.key,

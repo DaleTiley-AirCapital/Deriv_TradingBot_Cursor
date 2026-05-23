@@ -32,6 +32,18 @@ function decryptSecret(stored: string): string {
   return decrypted;
 }
 
+function tryDecryptSecret(stored: string): { value: string; readable: boolean } {
+  if (!stored) return { value: "", readable: true };
+  try {
+    return { value: decryptSecret(stored), readable: true };
+  } catch (err) {
+    console.warn("[Settings] Stored API secret could not be decrypted in this environment; mark it for reset.", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { value: "", readable: false };
+  }
+}
+
 const ACTIVE_TRADING_SYMBOLS_DEFAULT = "CRASH300,BOOM300,R_75,R_100";
 const ALL_STRATEGIES_DEFAULT = "trend_continuation,mean_reversion,spike_cluster_recovery,swing_exhaustion,trendline_breakout";
 
@@ -121,9 +133,10 @@ router.get("/settings", async (_req, res): Promise<void> => {
 
   for (const key of API_KEY_KEYS) {
     const raw = stateMap[key] || "";
-    const decrypted = raw ? decryptSecret(raw) : "";
-    settings[key] = maskSecret(decrypted);
-    settings[`${key}_set`] = raw ? "true" : "false";
+    const decrypted = tryDecryptSecret(raw);
+    settings[key] = maskSecret(decrypted.value);
+    settings[`${key}_set`] = raw && decrypted.readable ? "true" : "false";
+    settings[`${key}_needs_reset`] = raw && !decrypted.readable ? "true" : "false";
   }
 
   const tradingMode = stateMap["mode"] || "idle";

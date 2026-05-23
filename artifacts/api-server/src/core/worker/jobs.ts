@@ -342,15 +342,6 @@ export async function claimNextWorkerJob(taskTypes?: WorkerTaskType[]): Promise<
     ? sql`AND task_type IN (${sql.join(allowed.map((taskType) => sql`${taskType}`), sql`, `)})`
     : sql``;
   const result = await db.execute(sql`
-    WITH next_job AS (
-      SELECT id
-      FROM worker_jobs
-      WHERE status = 'queued'
-      ${typeFilter}
-      ORDER BY created_at ASC
-      FOR UPDATE SKIP LOCKED
-      LIMIT 1
-    )
     UPDATE worker_jobs
     SET
       status = 'running',
@@ -358,7 +349,15 @@ export async function claimNextWorkerJob(taskTypes?: WorkerTaskType[]): Promise<
       started_at = COALESCE(started_at, now()),
       heartbeat_at = now(),
       updated_at = now()
-    WHERE id IN (SELECT id FROM next_job)
+    WHERE id = (
+      SELECT id
+      FROM worker_jobs
+      WHERE status = 'queued'
+      ${typeFilter}
+      ORDER BY created_at ASC
+      LIMIT 1
+    )
+    AND status = 'queued'
     RETURNING *
   `);
   return hydrateWorkerJobRow(result.rows?.[0] as Record<string, unknown> | undefined);

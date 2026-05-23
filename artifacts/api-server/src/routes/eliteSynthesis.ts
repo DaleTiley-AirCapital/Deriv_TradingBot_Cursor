@@ -1,8 +1,8 @@
 import { Router, type IRouter, type Response } from "express";
 import { backgroundDb, candlesTable, db, platformStateTable } from "@workspace/db";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
-import { buildUnifiedCrash300Dataset } from "../core/synthesis/crash300Adapter.js";
 import {
+  buildUnifiedSynthesisDatasetForService,
   buildTradeLifecycleReplayReportFromStoredTrades,
   getSynthesisAdapter,
 } from "../core/synthesis/engine.js";
@@ -29,6 +29,7 @@ import {
   writePromotedServiceRuntimeArtifact,
   writeStagedSynthesisCandidateState,
 } from "../core/serviceRuntimeLifecycle.js";
+import { validateRuntimeReplay, type RuntimeReplayValidationResult } from "../core/runtimeReplayValidation.js";
 
 const router: IRouter = Router();
 
@@ -98,6 +99,83 @@ async function findLatestReviewCandidateRuntimeArtifact(serviceId: string) {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function finiteNumber(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function volatilityEngineForFamily(family: unknown): string | null {
+  const normalized = String(family ?? "").toLowerCase();
+  if (normalized === "breakout") return "r75_breakout_engine";
+  if (normalized === "reversal") return "r75_reversal_engine";
+  if (normalized === "continuation") return "r75_continuation_engine";
+  return null;
+}
+
+function deriveSelectedRuntimeContracts(serviceId: string, source: unknown) {
+  if (serviceId.toUpperCase() !== "R_75") return [];
+  if (!Array.isArray(source)) return [];
+
+  const alreadyContracts = source
+    .map((item) => asRecord(item))
+    .filter((item) => item.engineName && item.direction && item.trades);
+  if (alreadyContracts.length > 0) {
+    return alreadyContracts.map((item) => ({
+      contractId: item.contractId ?? `${String(item.engineName)}:${String(item.direction)}`,
+      policyId: item.policyId ?? item.scenarioId ?? null,
+      runtimeFamily: item.runtimeFamily ?? null,
+      engineName: item.engineName,
+      direction: item.direction,
+      trades: item.trades,
+      wins: item.wins ?? null,
+      losses: item.losses ?? null,
+      winRate: item.winRate ?? null,
+      slHitRate: item.slHitRate ?? null,
+      lifecycleMedianPnlPct: item.lifecycleMedianPnlPct ?? null,
+      rankingScore: item.rankingScore ?? null,
+    }));
+  }
+
+  const byFamily = new Map<string, Record<string, unknown>>();
+  for (const raw of source) {
+    const scenario = asRecord(raw);
+    if (!Boolean(scenario.guardrailsPassed)) continue;
+    const runtimeFamily = String(scenario.runtimeFamily ?? "").toLowerCase();
+    const engineName = volatilityEngineForFamily(runtimeFamily);
+    if (!engineName) continue;
+    const policyId = String(scenario.policyId ?? scenario.scenarioId ?? "");
+    if (policyId && !policyId.includes("_all_capital_extraction")) continue;
+    if (policyId.includes("_all_up_") || policyId.includes("_all_down_")) continue;
+    const direction = String(scenario.direction ?? "").toLowerCase();
+    if (direction !== "buy" && direction !== "sell") continue;
+    const trades = finiteNumber(scenario.trades) ?? 0;
+    if (trades < 20) continue;
+    const existing = byFamily.get(runtimeFamily);
+    if (existing && (finiteNumber(existing.rankingScore) ?? -Infinity) >= (finiteNumber(scenario.rankingScore) ?? -Infinity)) continue;
+    byFamily.set(runtimeFamily, {
+      contractId: `${engineName}:${direction}`,
+      policyId: policyId || null,
+      runtimeFamily,
+      engineName,
+      direction,
+      trades,
+      wins: finiteNumber(scenario.wins),
+      losses: finiteNumber(scenario.losses),
+      winRate: finiteNumber(scenario.winRate),
+      slHitRate: finiteNumber(scenario.slHitRate),
+      lifecycleMedianPnlPct: finiteNumber(scenario.lifecycleMedianPnlPct),
+      rankingScore: finiteNumber(scenario.rankingScore),
+    });
+  }
+  return ["breakout", "reversal", "continuation"]
+    .map((family) => byFamily.get(family))
+    .filter(Boolean);
+}
+
+function firstNonEmptyArray(...values: unknown[]) {
+  return values.find((value) => Array.isArray(value) && value.length > 0) ?? [];
 }
 
 function pickCompactFields(source: Record<string, unknown>, keys: string[]) {
@@ -230,6 +308,16 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
   const bestCapitalExtractionCandidate = asRecord(resultRecord.bestCapitalExtractionCandidate ?? returnAmplification.bestCapitalExtractionCandidate);
   const bestPolicyArtifact = asRecord(result.bestPolicyArtifact);
   const candidateArtifacts = Array.isArray(job.candidateRuntimeArtifacts) ? job.candidateRuntimeArtifacts : [];
+  const selectedRuntimeContracts = deriveSelectedRuntimeContracts(
+    serviceId,
+    firstNonEmptyArray(
+      resultRecord.selectedRuntimeContracts,
+      asRecord(resultRecord.reviewCandidateRuntimeArtifact).selectedRuntimeContracts,
+      returnAmplification.selectedRuntimeContracts,
+      returnAmplification.policyComparisonTable,
+      resultRecord.candidateFamilyComparison,
+    ),
+  );
   const blockers: string[] = [];
   if (readiness.reportConsistencyPassed === false) blockers.push("report_consistency_failed");
   if (readiness.selectedTradesExportPassed === false) blockers.push("selected_trades_export_failed");
@@ -272,6 +360,7 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
     aiStrategyReview: resultRecord.aiStrategyReview ?? returnAmplification.aiStrategyReview ?? null,
     candidateFamilyComparison: resultRecord.candidateFamilyComparison ?? returnAmplification.policyComparisonTable ?? [],
     bestCapitalExtractionCandidate: compactRuntimeBuildScenario(bestCapitalExtractionCandidate),
+    selectedRuntimeContracts,
     runtimeArtifactEligibility: resultRecord.runtimeArtifactEligibility ?? returnAmplification.runtimeArtifactEligibility ?? null,
     reviewCandidateRuntimeArtifact: resultRecord.reviewCandidateRuntimeArtifact ?? null,
     recommendedCandidate: Object.keys(bestCapitalExtractionCandidate).length > 0
@@ -312,7 +401,7 @@ function buildRuntimeBuildResult(serviceId: string, job: EliteSynthesisJobRow, r
   };
 }
 
-function buildRuntimeValidationResult(serviceId: string, artifact: Record<string, unknown>) {
+async function buildRuntimeValidationResult(serviceId: string, artifact: Record<string, unknown>) {
   const artifactId = String(artifact.artifactId ?? "");
   const readiness = asRecord(artifact.readiness);
   const eligibility = asRecord(artifact.runtimeArtifactEligibility);
@@ -321,13 +410,40 @@ function buildRuntimeValidationResult(serviceId: string, artifact: Record<string
     "runtime_mimic_validation_required_before_promotion",
     "manual_validate_runtime_required",
   ].includes(blocker));
-  const validationPassed = hardBlockers.length === 0 && Boolean(
+  const contractPassed = hardBlockers.length === 0 && Boolean(
     eligibility.canPromoteRuntimeAfterValidation
       ?? eligibility.canCreateReviewArtifact
       ?? readiness.canPromoteRuntime
       ?? readiness.requiresManualValidateRuntime,
   );
-  const blockers = validationPassed ? [] : hardBlockers.length > 0 ? hardBlockers : ["runtime_candidate_not_eligible_for_promotion"];
+  const replayResult: RuntimeReplayValidationResult = await validateRuntimeReplay({
+    serviceId,
+    candidateArtifact: artifact,
+    requestedPoints: 5_000,
+    minimumRequiredEmissions: 1,
+  }).catch((err) => ({
+    status: "blocked",
+    serviceId,
+    artifactId,
+    replayWindow: { requestedPoints: 5_000, evaluatedPoints: 0, lookbackBars: 1_600 },
+    counts: { replay_error: 1 },
+    topFailReasons: [{ reason: err instanceof Error ? err.message : String(err), count: 1 }],
+    topRuntimeSetupBlockers: [],
+    topValidEngines: [],
+    emittedExamples: [],
+    duplicateExamples: [],
+    blockedExamples: [],
+    minimumRequiredEmissions: 1,
+    notes: ["Runtime replay failed; validation is blocked until replay can prove candidate emission."],
+  }));
+  const replayPassed = replayResult.status === "passed";
+  const validationPassed = contractPassed && replayPassed;
+  const blockers = validationPassed
+    ? []
+    : [
+        ...(hardBlockers.length > 0 ? hardBlockers : contractPassed ? [] : ["runtime_candidate_not_eligible_for_promotion"]),
+        ...(replayPassed ? [] : ["runtime_replay_emitted_no_candidates"]),
+      ];
   return {
     artifactName: `runtime_validation_result_${serviceId}_${Date.now()}.json`,
     stagedCandidateId: artifactId,
@@ -346,8 +462,9 @@ function buildRuntimeValidationResult(serviceId: string, artifact: Record<string
       source: "internal parity stage",
     },
     triggerValidationResult: {
-      status: validationPassed ? "passed" : "not_run",
+      status: validationPassed ? "passed" : "blocked",
       source: "internal runtime trigger validation stage",
+      runtimeReplay: replayResult,
     },
     phantomNoiseResult: {
       status: validationPassed ? "passed" : "not_run",
@@ -368,6 +485,7 @@ function buildRuntimeValidationResult(serviceId: string, artifact: Record<string
     warnings: [
       "This validation action is consolidated over existing diagnostic stages and does not change live execution.",
       "Promotion remains a separate explicit service-level action.",
+      "Runtime replay is read-only and proves whether recent candles would emit service candidates before allocator involvement.",
     ],
     canPromoteRuntime: validationPassed,
   };
@@ -618,7 +736,8 @@ router.get("/research/:serviceId/elite-synthesis/dataset-summary", async (req, r
     const windowDays = Math.max(7, Number(req.query.windowDays ?? 90));
     const endTs = Number(req.query.endTs ?? Math.floor(Date.now() / 1000));
     const startTs = Number(req.query.startTs ?? Math.max(0, endTs - windowDays * 86400));
-    const dataset = await buildUnifiedCrash300Dataset({
+    const dataset = await buildUnifiedSynthesisDatasetForService({
+      serviceId,
       calibrationRunId: req.query.calibrationRunId == null ? null : Number(req.query.calibrationRunId),
       backtestRunId: req.query.backtestRunId == null ? null : Number(req.query.backtestRunId),
       startTs,
@@ -1229,7 +1348,7 @@ router.post("/research/:serviceId/runtime-validation/run", async (req, res): Pro
         });
         return;
       }
-      const runtimeValidationResult = buildRuntimeValidationResult(serviceId, latestReview.artifact);
+      const runtimeValidationResult = await buildRuntimeValidationResult(serviceId, latestReview.artifact);
       const promotedRuntime = await readPromotedServiceRuntimeArtifact(serviceId);
       if (promotedRuntime && runtimeValidationResult.validationStatus === "passed") {
         await writePromotedServiceRuntimeArtifact({
@@ -1261,7 +1380,12 @@ router.post("/research/:serviceId/runtime-validation/run", async (req, res): Pro
         return;
       }
     }
-    const runtimeValidationResult = buildRuntimeValidationResult(serviceId, located.artifact);
+    const latestReview = await findLatestReviewCandidateRuntimeArtifact(serviceId);
+    const stagedArtifactId = String(stagedState.artifactId ?? "");
+    if (latestReview && /paper-candidate/i.test(stagedArtifactId)) {
+      located = latestReview;
+    }
+    const runtimeValidationResult = await buildRuntimeValidationResult(serviceId, located.artifact);
     const promotedRuntime = await readPromotedServiceRuntimeArtifact(serviceId);
     if (promotedRuntime && runtimeValidationResult.validationStatus === "passed") {
       await writePromotedServiceRuntimeArtifact({

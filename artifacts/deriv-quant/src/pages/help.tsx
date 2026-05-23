@@ -182,7 +182,7 @@ export default function Help() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-foreground">
-            {data?.name ?? "Deriv Trading - Long Hold V3.1"}
+            {data?.name ?? "Deriv Trading - Long Hold V3.2"}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Shared trading platform with independent symbol services and a portfolio allocator.
@@ -226,11 +226,11 @@ export default function Help() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card
             title="Per-service sequence"
-            body="Full Calibration -> Review calibration runs -> Stage Research Model -> Promote Runtime -> Run parity and trigger validation -> Run backtests -> Export reports -> Run integrated elite synthesis -> Stage a paper-only candidate when it is ready."
+            body="Data Coverage -> Full Calibration -> Build Runtime Model -> Validate Runtime -> Promote Runtime -> Stream / Monitor. Reports remain read-only exports and diagnostics stay internal to Build Runtime Model or Validate Runtime."
           />
           <Card
             title="Current handover"
-            body="CRASH300 is preserved as the V3.1 paper-only baseline candidate while symbol-service optimisation moves next to R_75, then BOOM300, then R_100 after full calibration."
+            body="CRASH300 and R_75 are the current promoted/scanning services on codex-dev. BOOM300 and R_100 stay registered until their own runtime build, validation, and promotion workflows are completed."
           />
         </div>
       </Section>
@@ -260,7 +260,7 @@ export default function Help() {
             { page: "Overview", path: "/", desc: "Global system state, streaming health, allocator and portfolio snapshot, and active service summary." },
             { page: "Engine Decisions", path: "/decisions", desc: "Selected service decisions, candidate or rejection status, fail reasons, allocator outcomes, and runtime evidence." },
             { page: "Trades", path: "/trades", desc: "Service-filtered open and closed trades plus attribution, with allocator and symbol-service fields separated." },
-            { page: "Research", path: "/research", desc: "Per-service calibration, runtime model, reports, backtests, worker jobs, and integrated elite synthesis exports. CRASH300 V3.1 baseline artifacts remain visible here and are not live-approved." },
+            { page: "Research", path: "/research", desc: "Per-service data coverage, calibration, Build Runtime Model, Validate Runtime, Promote Runtime, read-only reports, and worker job status." },
             { page: "Data", path: "/data", desc: "Streaming state, candle coverage, exports, and runtime diagnostics. Historical feature snapshots stay diagnostic only." },
             { page: "Settings", path: "/settings", desc: "Global controls only: kill switch, mode activation, promoted runtime profile toggle, capital, exposure, open positions, and drawdown protection." },
           ].map((item) => (
@@ -279,19 +279,19 @@ export default function Help() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card
             title="What a Trade Candidate owns"
-            body="Symbol, direction, runtime family or archetype, calibrated base family, bucket, entry reason, quality or elite score, confidence, TP, SL, trailing policy, candidate expiry, and model source or version."
+            body="Symbol, direction, runtime family or archetype, calibrated base family, bucket, entry reason, runtime evidence, TP1, TP2 or runner target, hard SL, protection policy, candidate expiry, and model source or version."
           />
           <Card
             title="What the allocator owns"
             body="Cross-service candidate ranking, available capital, max total exposure, max per-symbol exposure, max per-trade exposure, max open positions, and portfolio-level drawdown or risk gates."
           />
           <Card
-            title="Paper candidate caution"
-            body="A staged synthesis candidate is paper-only unless runtime mimic validation, demo validation, and a later manual promotion all pass. Staging does not enable live trading."
+            title="Promotion caution"
+            body="A review runtime candidate cannot trade until Validate Runtime passes and Promote Runtime is run manually. Promotion is service-level; Paper, Demo, and Real are mode gates."
           />
           <Card
-            title="R_75 next"
-            body="R_75 is the next active optimisation target and uses the Volatility Series template: trend continuation, breakout continuation, pullback continuation, and gated mean reversion only if calibration supports it."
+            title="R_75 volatility runtime"
+            body="R_75 uses the Volatility Series template across breakout, reversal, and continuation research families. The promoted runtime may be narrower than the full build search when validation selects specific engine/direction contracts."
           />
         </div>
       </Section>
@@ -299,7 +299,7 @@ export default function Help() {
       <Section title="Exports" icon={Download}>
         <Card
           title="Download behavior"
-          body="Heavy JSON exports live under the Research reports flow. Current CRASH300 synthesis, selected-trades, and return-amplification exports are V3.1 baseline research artifacts only and are not live-approved."
+          body="Heavy JSON exports live under the Research reports flow. Build and validation artifacts are read-only evidence; they do not change runtime behavior until Validate Runtime and Promote Runtime complete."
         />
       </Section>
 

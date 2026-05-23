@@ -28,24 +28,23 @@ Research
   Service selector
   Service status summary
   Tabs
-    Calibration & Research
-    Reports
+    Data & Coverage
+    Calibration
+    Build Runtime Model
     Runtime Model
-    Validation Reports
-    Validation Reports
+    Reports
 ```
 
 ## Workflow Intent
 
 Normal workflow:
 
-1. Full Calibration
-2. Generate or Stage Research Model
+1. Data Coverage
+2. Full Calibration
 3. Build Runtime Model
-4. Review Candidate Runtime Policy
-5. Promote Candidate Runtime
-6. Validate Runtime
-7. Review Reports
+4. Validate Runtime
+5. Promote Runtime
+6. Stream / Monitor
 
 Advanced diagnostics:
 
@@ -76,8 +75,9 @@ Preferred wording:
 - trade candidate
 - portfolio allocator
 - capital / exposure / risk gates
-- integrated elite synthesis
-- candidate runtime policy
+- Build Runtime Model
+- candidate runtime artifact
+- validated service runtime
 
 ## Reports Placement
 
@@ -103,7 +103,7 @@ Engine Decisions should show:
 - rejection reason
 - trigger/archetype
 - calibrated family and bucket
-- TP / SL / trailing policy
+- TP / SL / protection / lifecycle policy
 - allocator result
 - model source and version
 
@@ -114,4 +114,4 @@ Trades should show:
 - selected service or all services
 - service decision fields
 - allocator/capital fields separately
-- no stale native-score admission language
+- no stale native-score or confidence-threshold admission language for service-runtime candidates

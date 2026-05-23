@@ -424,10 +424,15 @@ export async function runWorkerLoop(params?: {
 
   // Keep the queue healthy if Railway restarts the worker.
   await requeueStaleRunningWorkerJobs(staleMs);
+  let lastStaleSweepAt = Date.now();
 
   for (;;) {
     let claimed: WorkerJobRow | null = null;
     try {
+      if (Date.now() - lastStaleSweepAt >= Math.min(staleMs, 30_000)) {
+        await requeueStaleRunningWorkerJobs(staleMs);
+        lastStaleSweepAt = Date.now();
+      }
       claimed = await claimNextWorkerJob(params?.taskTypes);
       if (!claimed) {
         await new Promise((resolve) => setTimeout(resolve, pollMs));
