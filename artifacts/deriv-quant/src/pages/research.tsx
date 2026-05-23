@@ -6293,6 +6293,8 @@ function RuntimeBuildRunDetails({ result }: { result: Record<string, unknown> })
     : Array.isArray(asUiRecord(result.reviewCandidateRuntimeArtifact).selectedRuntimeContracts)
       ? (asUiRecord(result.reviewCandidateRuntimeArtifact).selectedRuntimeContracts as unknown[]).map(asUiRecord)
       : [];
+  const runtimeContractTrades = runtimeContracts.reduce((sum, contract) => sum + Number(contract.trades ?? 0), 0);
+  const runtimeContractFamilies = runtimeContracts.map((contract) => `${String(contract.runtimeFamily ?? "family")}/${String(contract.direction ?? "n/a")}`);
   const blockers = Array.isArray(eligibility.blockers) ? eligibility.blockers.map(String) : [];
   const warnings = Array.isArray(result.warnings) ? result.warnings.map(String) : [];
   const trades = Number(candidate.trades ?? candidate.selectedTradeCount ?? 0);
@@ -6309,8 +6311,11 @@ function RuntimeBuildRunDetails({ result }: { result: Record<string, unknown> })
         <StatRow label="Build run" value={`#${String(result.buildRunId ?? "n/a")}`} />
         <StatRow label="Profile / target" value={`${searchProfileLabel(String(profile.searchProfile ?? ""))} / ${targetProfileLabel(String(profile.targetProfile ?? ""))}`} />
         <StatRow label="Target universe" value={`${Number(universe.totalTargetMoves ?? 0)} ${String(universe.family ?? "target")} >= ${Number(universe.minimumMovePct ?? 0)}%`} />
-        <StatRow label="Large move coverage" value={`${Number(coverage.capturedTargetMoveCount ?? 0)} / ${Number(coverage.targetUniverseCount ?? universe.totalTargetMoves ?? 0)} (${Number(coverage.coveragePct ?? 0).toFixed(2)}%)`} />
-        <StatRow label="Best candidate" value={String(candidate.scenarioId ?? candidate.policyId ?? "n/a")} />
+        <StatRow label={runtimeContracts.length > 1 ? "Best single-family coverage" : "Large move coverage"} value={`${Number(coverage.capturedTargetMoveCount ?? 0)} / ${Number(coverage.targetUniverseCount ?? universe.totalTargetMoves ?? 0)} (${Number(coverage.coveragePct ?? 0).toFixed(2)}%)`} />
+        {runtimeContracts.length > 1 && (
+          <StatRow label="Runtime contract set" value={`${runtimeContracts.length} families / ${runtimeContractTrades} trade equivalents`} />
+        )}
+        <StatRow label={runtimeContracts.length > 1 ? "Best single-family candidate" : "Best candidate"} value={String(candidate.scenarioId ?? candidate.policyId ?? "n/a")} />
         <StatRow label="Trades / wins / losses" value={`${trades} / ${wins} / ${losses}`} />
         <StatRow label="Win / SL" value={`${(Number(candidate.winRate ?? 0) * 100).toFixed(2)}% / ${(Number(candidate.slHitRate ?? 0) * 100).toFixed(2)}%`} />
         <StatRow label="Lifecycle return" value={`${lifecycleTotal.toFixed(2)}% total / ${lifecycleMonthly.toFixed(2)}% monthly`} />
@@ -6337,6 +6342,11 @@ function RuntimeBuildRunDetails({ result }: { result: Record<string, unknown> })
       {runtimeContracts.length > 0 && (
         <div className="rounded-md border border-emerald-500/20 bg-emerald-500/8 px-3 py-2">
           <p className="font-medium text-emerald-100">Runtime contracts</p>
+          {runtimeContractFamilies.length > 0 && (
+            <p className="mt-1 text-muted-foreground">
+              Volatility runtime will gate exact engine/direction contracts: {runtimeContractFamilies.join(", ")}.
+            </p>
+          )}
           <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
             {runtimeContracts.map((contract, index) => (
               <div key={`${String(contract.engineName ?? "contract")}-${index}`} className="rounded-md border border-border/30 bg-background/30 px-2 py-2">
