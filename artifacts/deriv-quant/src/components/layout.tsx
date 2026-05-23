@@ -528,10 +528,10 @@ function MobileLayout({ children, location, tradingControls }: { children: React
               key={tab.name}
               href={tab.href}
               onClick={() => setShowMore(false)}
-              className="flex-1 flex flex-col items-center gap-1 py-2 relative"
+              className="min-w-0 flex-1 flex flex-col items-center gap-1 py-2 relative"
             >
-              <tab.icon className={cn("w-5 h-5", isActiveLink ? "text-primary" : "text-muted-foreground")} />
-              <span className={cn("text-[9.5px] font-medium", isActiveLink ? "text-primary" : "text-muted-foreground")}>
+              <tab.icon className={cn("size-5 shrink-0", isActiveLink ? "text-primary" : "text-muted-foreground")} />
+              <span className={cn("max-w-full px-0.5 text-center text-[9.5px] font-medium leading-tight", isActiveLink ? "text-primary" : "text-muted-foreground")}>
                 {tab.name}
               </span>
               {isActiveLink && <span className="absolute bottom-0 w-5 h-0.5 bg-primary rounded-t-full" />}
@@ -542,10 +542,10 @@ function MobileLayout({ children, location, tradingControls }: { children: React
         {/* More button */}
         <button
           onClick={() => setShowMore((s) => !s)}
-          className="flex-1 flex flex-col items-center gap-1 py-2 relative"
+          className="min-w-0 flex-1 flex flex-col items-center gap-1 py-2 relative"
         >
-          <MoreHorizontal className={cn("w-5 h-5", (isMoreActive || showMore) ? "text-primary" : "text-muted-foreground")} />
-          <span className={cn("text-[9.5px] font-medium", (isMoreActive || showMore) ? "text-primary" : "text-muted-foreground")}>
+          <MoreHorizontal className={cn("size-5 shrink-0", (isMoreActive || showMore) ? "text-primary" : "text-muted-foreground")} />
+          <span className={cn("max-w-full px-0.5 text-center text-[9.5px] font-medium leading-tight", (isMoreActive || showMore) ? "text-primary" : "text-muted-foreground")}>
             More
           </span>
         </button>
