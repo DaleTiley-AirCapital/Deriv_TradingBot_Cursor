@@ -20,6 +20,7 @@ import {
 import { ACTIVE_SERVICE_SYMBOLS, getSymbolLabel } from "@/lib/symbolCatalog";
 
 const BASE = import.meta.env.BASE_URL || "/";
+const LIVE_TICK_STALE_MS = 120_000;
 
 function apiFetch<T>(path: string): Promise<T> {
   return fetch(`${BASE}${path.replace(/^\//, "")}`).then((response) => {
@@ -83,6 +84,7 @@ interface SymbolDiagnostic {
   symbol: string;
   streamingState: string;
   lastTick?: number | null;
+  lastTickTs?: number | null;
 }
 
 interface ServiceLifecycleStatus {
@@ -128,6 +130,10 @@ function formatAge(dateStr: string | null): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function diagnosticLastTickMs(entry: SymbolDiagnostic): number | null {
+  return entry.lastTickTs ?? entry.lastTick ?? null;
 }
 
 function normalizeLifecycleResponse(serviceId: string, response: ServiceLifecycleResponse | ServiceLifecycleStatus): ServiceLifecycleStatus {
@@ -298,7 +304,10 @@ export default function Overview() {
   const streamingSymbolData = (dataStatus?.symbols ?? []).filter((entry) =>
     streamingSymbols.some((stream) => stream.symbol === entry.symbol),
   );
-  const staleStreamingSymbols = streamingSymbolData.filter((entry) => entry.status === "stale" || entry.status === "no_data");
+  const staleLiveStreams = streamingSymbols.filter((entry) => {
+    const lastTickMs = diagnosticLastTickMs(entry);
+    return !lastTickMs || Date.now() - lastTickMs > LIVE_TICK_STALE_MS;
+  });
   const lifecycleCards: ServiceLifecycleStatus[] = serviceLifecycles ?? ACTIVE_SERVICE_SYMBOLS.map((serviceId) => EMPTY_SERVICE_LIFECYCLE(serviceId));
   const promotedServiceCount = lifecycleCards.filter((entry) => Boolean(entry.promotedRuntimeArtifactId)).length;
   const stagedServiceCount = lifecycleCards.filter((entry) => Boolean(entry.stagedCandidateArtifactId)).length;
@@ -308,7 +317,7 @@ export default function Overview() {
   if (overview?.killSwitchActive) warnings.push("Kill switch is active - all new signals are being rejected.");
   if (overview && !overview.streamingOnline) warnings.push("Tick streaming is offline - candles may not update in real time.");
   if (overview?.scannerRunning === false) warnings.push("Signal scanner is not running - no new decisions will be logged.");
-  if (staleStreamingSymbols.length > 0) warnings.push(`${staleStreamingSymbols.length} streaming symbol(s) have stale candle data: ${staleStreamingSymbols.map((entry) => entry.symbol).join(", ")}.`);
+  if (staleLiveStreams.length > 0) warnings.push(`${staleLiveStreams.length} streaming symbol(s) have stale live ticks: ${staleLiveStreams.map((entry) => entry.symbol).join(", ")}.`);
   if (portfolio?.suggestWithdrawal) warnings.push(`Capital has grown above the withdrawal threshold ($${portfolio.withdrawalThreshold.toLocaleString()}) - consider extracting profits.`);
   if (promotedServiceCount === 0) warnings.push("No promoted service runtimes are active. Candidate emission is disabled and no new trades can open.");
   if (legacyOpenTrades.length > 0) warnings.push(`${legacyOpenTrades.length} open trade(s) still use legacy pre-V3.1 attribution and were not opened through the current service-runtime allocator path.`);
@@ -575,7 +584,11 @@ export default function Overview() {
                       <span className="tabular-nums"><span className="text-foreground font-medium">{symbolData.count5m.toLocaleString()}</span> M5</span>
                       <span className="tabular-nums text-muted-foreground/70">{totalMillions}M total</span>
                       {symbolData.newestDate && <span className="text-muted-foreground/70">newest: {formatAge(symbolData.newestDate)}</span>}
-                      {liveDiagnostic?.lastTick && <span className="text-muted-foreground/70">tick: {formatAge(new Date(liveDiagnostic.lastTick).toISOString())}</span>}
+                      {liveDiagnostic && diagnosticLastTickMs(liveDiagnostic) && (
+                        <span className="text-muted-foreground/70">
+                          tick: {formatAge(new Date(diagnosticLastTickMs(liveDiagnostic) as number).toISOString())}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <span className={cn(
