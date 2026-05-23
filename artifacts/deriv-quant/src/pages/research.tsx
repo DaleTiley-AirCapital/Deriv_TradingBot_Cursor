@@ -859,7 +859,7 @@ function SymbolBacktestSection({ result }: { result: V3Result }) {
   const startingCapitalUsd = s.capitalModel?.startingCapitalUsd ?? 600;
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       {/* Summary grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <SummaryCard label="Trades" value={String(s.tradeCount)} sub={`${s.winCount}W / ${s.lossCount}L`} />
@@ -3252,7 +3252,7 @@ function MoveCalibrationTab({
     <div className="space-y-5">
 
       {/*  Controls  */}
-      <div className="rounded-xl border border-border/50 bg-card p-4 space-y-3">
+      <div className="min-w-0 rounded-xl border border-border/50 bg-card p-4 space-y-3">
         {/* Scope row */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Calibration Controls</h3>
@@ -5858,26 +5858,26 @@ function DataCoverageTab({ service }: { service: string }) {
             {getSymbolLabel(service)}
           </span>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 text-[11px]">
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+        <div className="grid min-w-0 grid-cols-1 gap-3 text-[11px] md:grid-cols-5">
+          <div className="min-w-0 rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">Coverage status</p>
-            <p className="font-mono text-foreground">{lifecycle?.dataCoverageStatus ?? serviceRow?.status ?? (dataLoading ? "loading" : "unknown")}</p>
+            <p className="break-words font-mono text-foreground">{lifecycle?.dataCoverageStatus ?? serviceRow?.status ?? (dataLoading ? "loading" : "unknown")}</p>
           </div>
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+          <div className="min-w-0 rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">Latest candle</p>
-            <p className="font-mono text-foreground">{lifecycle?.latestCandleTs ? formatRuntimeDate(lifecycle.latestCandleTs) : "n/a"}</p>
+            <p className="break-words font-mono text-foreground">{lifecycle?.latestCandleTs ? formatRuntimeDate(lifecycle.latestCandleTs) : "n/a"}</p>
           </div>
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+          <div className="min-w-0 rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">1m candles</p>
-            <p className="font-mono text-foreground">{serviceRow?.count1m?.toLocaleString() ?? "0"}</p>
+            <p className="break-words font-mono text-foreground">{serviceRow?.count1m?.toLocaleString() ?? "0"}</p>
           </div>
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+          <div className="min-w-0 rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">5m candles</p>
-            <p className="font-mono text-foreground">{serviceRow?.count5m?.toLocaleString() ?? "0"}</p>
+            <p className="break-words font-mono text-foreground">{serviceRow?.count5m?.toLocaleString() ?? "0"}</p>
           </div>
-          <div className="rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
+          <div className="min-w-0 rounded-lg border border-border/30 bg-background/40 p-3 space-y-1">
             <p className="text-muted-foreground uppercase tracking-wide">Freshness</p>
-            <p className="font-mono text-foreground">{staleLabel}</p>
+            <p className="break-words font-mono text-foreground">{staleLabel}</p>
           </div>
         </div>
         <div className="rounded-lg border border-border/30 bg-muted/10 p-3 text-[11px] text-muted-foreground">
@@ -7156,7 +7156,7 @@ export default function Research() {
 
   return (
     <CalibrationRunProvider>
-    <div className="p-6 space-y-5 max-w-6xl">
+    <div className="w-full max-w-6xl min-w-0 space-y-5 overflow-hidden p-4 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
           <FlaskConical className="w-6 h-6 text-primary" />
@@ -7230,26 +7230,26 @@ export default function Research() {
       <div
         key={selectedService}
         aria-busy={serviceTransition.active}
-        className={cn("space-y-5", serviceTransition.active && "pointer-events-none select-none opacity-50")}
+        className={cn("min-w-0 space-y-5", serviceTransition.active && "pointer-events-none select-none opacity-50")}
       >
         <ServicePipelinePanel service={selectedService} onJumpToTab={setActiveTab} />
         <ServiceStatusSummary service={selectedService} windowDays={sharedWindowDays} />
         <ActiveWorkerTasksCard service={selectedService} />
 
-        <div className="flex items-center gap-0.5 border-b border-border/30">
+        <div className="grid min-w-0 grid-cols-5 gap-0.5 border-b border-border/30">
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={cn(
-                "flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors",
+                "min-w-0 border-b-2 px-1 py-2 text-center text-[10px] font-medium leading-tight transition-colors sm:flex sm:items-center sm:justify-center sm:gap-1.5 sm:px-3 sm:text-xs",
                 activeTab === tab.id
                   ? "border-primary text-primary"
                   : "border-transparent text-muted-foreground hover:text-foreground hover:border-border/50"
               )}
             >
-              {tab.icon}
-              {tab.label}
+              <span className="mx-auto mb-0.5 flex size-3.5 shrink-0 items-center justify-center sm:mx-0 sm:mb-0">{tab.icon}</span>
+              <span className="block break-words">{tab.label}</span>
             </button>
           ))}
         </div>
