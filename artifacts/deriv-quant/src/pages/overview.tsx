@@ -623,19 +623,19 @@ export default function Overview() {
             {legacyOpenTrades.length > 0 ? " Legacy open trades remain visible until they close or are reset." : ""}
           </div>
         )}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 min-[430px]:grid-cols-2 sm:grid-cols-4 gap-3">
           {lifecycleCards.map((service) => (
-            <div key={service.serviceId} className="rounded-lg border border-border/40 bg-muted/10 p-3">
-              <div className="flex items-center gap-1.5 mb-1.5">
+            <div key={service.serviceId} className="min-w-0 rounded-lg border border-border/40 bg-muted/10 p-3">
+              <div className="flex min-w-0 items-center gap-1.5 mb-1.5">
                 {service.promotedRuntimeArtifactId
                   ? <ArrowUpRight className="w-3.5 h-3.5 text-green-400" />
                   : service.stagedCandidateArtifactId
                     ? <Activity className="w-3.5 h-3.5 text-amber-400" />
                     : <ArrowDownRight className="w-3.5 h-3.5 text-muted-foreground" />}
-                <span className="text-xs font-mono font-bold text-foreground">{service.serviceId}</span>
+                <span className="min-w-0 break-words text-xs font-mono font-bold text-foreground">{service.serviceId}</span>
               </div>
-              <div className="text-[10px] text-muted-foreground mb-1.5">{getSymbolLabel(service.serviceId)}</div>
-              <div className="space-y-0.5">
+              <div className="mb-1.5 break-words text-[10px] text-muted-foreground">{getSymbolLabel(service.serviceId)}</div>
+              <div className="space-y-0.5 break-words">
                 <div className="text-[10px] text-muted-foreground">
                   {service.promotedRuntimeArtifactId
                     ? `Promoted runtime ${service.promotedRuntimeVersion ?? ""}`.trim()
@@ -647,7 +647,7 @@ export default function Overview() {
                   <div className="text-[10px] text-muted-foreground">Next: {service.nextRequiredAction}</div>
                 )}
                 {service.latestScannerReason && (
-                  <div className="text-[10px] text-muted-foreground">
+                  <div className="text-[10px] text-muted-foreground [overflow-wrap:anywhere]">
                     Scan: {service.latestScannerStatus ?? "unknown"} / {service.latestScannerReason}
                     {service.latestScannerAt ? ` (${formatAge(service.latestScannerAt)})` : ""}
                   </div>
