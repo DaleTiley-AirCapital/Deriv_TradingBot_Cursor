@@ -140,6 +140,11 @@ function formatPnl(value: number | null | undefined) {
   };
 }
 
+function formatFractionPct(value: number | null | undefined, digits = 0) {
+  if (value == null || !Number.isFinite(value)) return "-";
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
 function exitReasonLabel(reason: string | null | undefined): { text: string; cls: string } {
   if (!reason) return { text: "-", cls: "text-muted-foreground" };
   const value = reason.toLowerCase();
@@ -271,7 +276,7 @@ function OpenPositionRow({ pos }: { pos: OpenPosition }) {
             <h4 className="flex items-center gap-1.5 text-xs font-semibold text-foreground"><Zap className="h-3.5 w-3.5 text-primary" /> Why Opened</h4>
             <div className="space-y-1.5 text-xs">
               <div className="flex justify-between"><span className="text-muted-foreground">Strategy</span><StrategyLabel name={pos.strategyName} /></div>
-              {pos.confidence != null && <div className="flex justify-between"><span className="text-muted-foreground">Confidence score</span><span className="font-semibold text-foreground">{Math.round(pos.confidence)}</span></div>}
+              {pos.confidence != null && <div className="flex justify-between"><span className="text-muted-foreground">Runtime evidence</span><span className="font-semibold text-foreground">{formatFractionPct(pos.confidence)}</span></div>}
               <div className="flex justify-between"><span className="text-muted-foreground">Entry time</span><span className="tabular-nums font-medium">{formatTs(pos.entryTs)}</span></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Size allocated</span><span className="tabular-nums font-medium">${pos.size.toFixed(2)}</span></div>
             </div>
@@ -360,7 +365,7 @@ function ClosedTradeRow({ t }: { t: ClosedTrade }) {
             <div className="grid grid-cols-1 gap-4 text-xs sm:grid-cols-3">
               <div className="space-y-1">
                 <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Entry Context</p>
-                {t.confidence != null && <div className="flex justify-between"><span className="text-muted-foreground">Confidence score</span><span className="font-semibold text-foreground">{Math.round(t.confidence)}</span></div>}
+                {t.confidence != null && <div className="flex justify-between"><span className="text-muted-foreground">Runtime evidence</span><span className="font-semibold text-foreground">{formatFractionPct(t.confidence)}</span></div>}
                 <div className="flex justify-between"><span className="text-muted-foreground">Strategy</span><StrategyLabel name={t.strategyName} /></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Mode</span><ModeChip mode={t.mode} /></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Size allocated</span><span className="tabular-nums">${t.size.toFixed(2)}</span></div>

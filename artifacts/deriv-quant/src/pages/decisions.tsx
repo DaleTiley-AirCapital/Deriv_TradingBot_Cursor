@@ -146,6 +146,11 @@ function formatPct(value: number | null | undefined, digits = 2) {
   return `${value.toFixed(digits)}%`;
 }
 
+function formatFractionPct(value: number | null | undefined, digits = 2) {
+  if (value == null || !Number.isFinite(value)) return "-";
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
 function formatRatio(value: number | null | undefined, digits = 2) {
   if (value == null || !Number.isFinite(value)) return "-";
   return value.toFixed(digits);
@@ -232,7 +237,7 @@ function AllocatorDecisionRow({ entry }: { entry: AllocatorFeedEntry }) {
         <div className="min-w-0">
           <div className="truncate text-xs text-foreground">{humanize(candidate?.predictedMoveSizeBucket ?? candidate?.runtimeFamily ?? "-")}</div>
           <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-            expected move {formatPct(candidate?.expectedMovePct)} - confidence {formatPct((candidate?.confidence ?? null) != null ? (candidate?.confidence ?? 0) * 100 : null, 0)}
+            expected move {formatFractionPct(candidate?.expectedMovePct)} - runtime evidence {formatFractionPct(candidate?.confidence, 0)}
           </div>
         </div>
 
@@ -269,10 +274,10 @@ function AllocatorDecisionRow({ entry }: { entry: AllocatorFeedEntry }) {
               <DetailRow label="Lifecycle plan" value={candidate?.lifecyclePlanId ?? "not emitted"} />
               <DetailRow label="Trigger transition" value={humanize(candidate?.triggerTransition)} />
               <DetailRow label="Predicted bucket" value={humanize(candidate?.predictedMoveSizeBucket)} />
-              <DetailRow label="Expected move" value={formatPct(candidate?.expectedMovePct)} />
-              <DetailRow label="Confidence" value={formatPct((candidate?.confidence ?? null) != null ? (candidate?.confidence ?? 0) * 100 : null, 0)} />
-              <DetailRow label="Setup match" value={formatPct((candidate?.setupMatch ?? null) != null ? (candidate?.setupMatch ?? 0) * 100 : null, 0)} />
-              <DetailRow label="Trigger strength" value={formatPct((candidate?.triggerStrengthScore ?? null) != null ? (candidate?.triggerStrengthScore ?? 0) * 100 : null, 0)} />
+              <DetailRow label="Expected move" value={formatFractionPct(candidate?.expectedMovePct)} />
+              <DetailRow label="Runtime evidence" value={formatFractionPct(candidate?.confidence, 0)} />
+              <DetailRow label="Setup match" value={formatFractionPct(candidate?.setupMatch, 0)} />
+              <DetailRow label="Trigger strength" value={formatFractionPct(candidate?.triggerStrengthScore, 0)} />
             </div>
           </div>
 
@@ -286,7 +291,7 @@ function AllocatorDecisionRow({ entry }: { entry: AllocatorFeedEntry }) {
               <DetailRow label="Capital amount" value={formatMoney(decision.approvedCapitalAmount)} />
               <DetailRow label="Requested leverage" value={decision.requestedLeverage ? `${decision.requestedLeverage.toFixed(2)}x` : "none"} />
               <DetailRow label="Approved leverage" value={decision.approvedLeverage ? `${decision.approvedLeverage.toFixed(2)}x` : "none"} />
-              <DetailRow label="TP1 / TP2 / SL" value={`${formatPct(decision.finalTp1Pct)} / ${formatPct(decision.finalTp2Pct)} / ${formatPct(decision.finalHardSlPct)}`} />
+              <DetailRow label="TP1 / TP2 / SL" value={`${formatFractionPct(decision.finalTp1Pct)} / ${formatFractionPct(decision.finalTp2Pct)} / ${formatFractionPct(decision.finalHardSlPct)}`} />
               <DetailRow label="Exposure before" value={formatMoney(decision.portfolioExposureBefore)} />
               <DetailRow label="Exposure after" value={formatMoney(decision.portfolioExposureAfter)} />
             </div>
