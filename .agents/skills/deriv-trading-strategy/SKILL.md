@@ -24,11 +24,11 @@ description: Complete trading strategy research, philosophy, and calibration dat
 - **NEVER reduce TP targets** — the system targets the full move, not partial captures
 
 ### Exit Hierarchy (NO time-based exits)
-1. **TP hit** — primary exit, targeting full 50-200%+ moves
-2. **SL hit** — 1:5 R:R derived from TP
-3. **ATR-proportional trailing stop** — safety net, activates only after reaching 30% of TP target distance; trail distance is instrument-aware and phase-scaled (not a fixed % of profit)
+1. **TP / runner target hit** - primary capital-extraction exit
+2. **Hard SL hit** - initial invalidation and capital protection
+3. **Trade Lifecycle Manager protected exit** - protection activation, protected floor, TP1 protection, TP2/runner management, continuation score, reversal pressure, momentum failure, and time/progress failure when validated by the runtime model
 
-There is **NO 72-hour time exit**. Research shows trades hold 9-44 days. The trailing stop handles profit protection. Trades stay open until TP, SL, or trailing stop closes them.
+There is **NO 72-hour panic exit**. Trades stay open until TP/runner, hard SL, or a validated lifecycle exhaustion/protected-exit rule closes them. Historical low-level trailing fields may still exist for compatibility, but user-facing reports should describe lifecycle/protection logic rather than a fixed trailing-stop strategy.
 
 ### Capital Turnover
 - Trade full capital at least 1-2x per month
@@ -56,11 +56,11 @@ All other symbols are for data collection and research only.
 
 ### Critical Mandates — NEVER VIOLATE
 1. TP targets 50-200%+ full spike magnitude — NEVER reduce
-2. Trailing stop is SAFETY NET ONLY — activates after 30% of TP target reached; trail uses ATR×multiplier (not fixed % of profit)
+2. Protection is SAFETY NET ONLY - activates after meaningful progress; protected floor distance is instrument-aware and runtime-derived
 3. Never use ATR-based TP/SL exits — all exits from market structure and spike magnitude
 4. Use 1500+ candle structural windows for swing levels, VWAP, pivots, Fibonacci
 5. Strategy directionality: **CRASH → BUY** after swing low. **BOOM → SELL** after swing high.
-6. No time-based forced exits — the trailing stop handles profit protection
+6. No time-based panic exits - the Trade Lifecycle Manager handles profit protection and exhaustion
 7. Each strategy must be calibrated PER SYMBOL — no universal static thresholds
 
 ---
@@ -278,9 +278,9 @@ trailingSL = entry × (1 + trailPct)         # for buy
 ```
 
 ### Exit Priority (NO time exits)
-1. **TP hit** (primary) — targeting full 50-200%+ moves
-2. **SL hit** — 1:5 R:R derived from TP
-3. **ATR-proportional trailing stop** — activates after 30% of TP target reached
+1. **TP / runner target hit** - primary capital-extraction exit
+2. **Hard SL hit** - initial invalidation and capital protection
+3. **Trade Lifecycle Manager protected exit** - protection activation, protected floor, TP1 protection, TP2/runner management, continuation score, reversal pressure, momentum failure, and time/progress failure when validated by the runtime model
 
 ### Position Sizing
 - Size = equity × `equity_pct_per_trade` × clamp(confidence, 0.5, 1.0)

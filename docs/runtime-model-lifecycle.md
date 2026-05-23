@@ -17,17 +17,17 @@ Runtime behavior may only change when a symbol model is explicitly **promoted**.
 
 - Produced by move calibration, stored pass results, research profiling, or backtest diagnostics.
 - Can recommend:
-  - scoring bands
+  - runtime contract gates
   - entry maturity windows
   - scan cadence
-  - TP / SL / trailing policy
+  - TP1, TP2/runner, hard SL, protection floor, and lifecycle manager policy
   - formula overrides
 - Must be treated as research output only.
 
 ### 2. Staged
 
-- A suggested model can be staged for review.
-- Staging is still non-runtime and non-trading.
+- A suggested model can be staged for review after Build Runtime Model produces a review artifact.
+- Staging is still non-promoted and does not enable execution by itself.
 - Backtests may compare against staged models, but staged models must not become live implicitly.
 
 ### 3. Promoted
@@ -37,7 +37,7 @@ Runtime behavior may only change when a symbol model is explicitly **promoted**.
   - demo trading
   - real trading
   - live/backtest parity runs that are intended to mirror runtime
-- Promotion must be explicit and traceable to a source calibration / research run.
+- Promotion must be explicit and traceable to a source Build Runtime Model and Validate Runtime result.
 
 ## Ownership By Layer
 
@@ -46,9 +46,9 @@ Runtime behavior may only change when a symbol model is explicitly **promoted**.
 - Converts calibration and research output into a symbol-native runtime specification.
 - Stores the promoted runtime model as the only approved runtime source.
 - Owns:
-  - score gates
+  - runtime contract gates
   - cadence
-  - entry/hold/trail/TP/SL model values
+  - entry, hold, TP1, TP2/runner, hard SL, protection, and lifecycle model values
   - engine formula override payloads
 
 ### Engine
@@ -64,8 +64,9 @@ Runtime behavior may only change when a symbol model is explicitly **promoted**.
 
 ### Allocator
 
-- Applies mode-specific admission and capital logic.
-- May consume promoted model gates, but must not source research output directly.
+- Applies mode-specific permission, capital, exposure, drawdown, cascade, and portfolio logic.
+- Must not re-score a service candidate that already came from a promoted service runtime.
+- Must not source research output directly.
 
 ## Non-Negotiable Guardrails
 

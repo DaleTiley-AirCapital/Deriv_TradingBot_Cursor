@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define a clean ownership split between shared platform infrastructure and symbol-specific trading services.
+Define the V3.2 ownership split between shared platform infrastructure and symbol-specific trading services.
 
 Canonical runtime wording:
 
@@ -12,45 +12,69 @@ Canonical runtime wording:
 
 Shared platform owns:
 
-- UI shells: Overview, Engine Decisions, Trades, Research, Data, Settings, Help
-- Shared API contracts and route handlers
-- Shared DB infrastructure and persistence adapters
-- Shared Deriv connectivity and market data ingestion
-- Shared logging and operational health/status
-- Shared portfolio allocator/capital gatekeeper
-- Shared orchestration flow adapters for live, backtest, and parity modes
+- UI shells: Overview, Allocator Decisions, Trades, Research, Data, Settings, Help
+- shared API infrastructure and route registration
+- shared DB infrastructure and persistence adapters
+- shared Deriv connectivity and market data ingestion
+- shared logging and operational health/status
+- worker queue execution for heavy research jobs
+- portfolio allocator/capital gatekeeper
 
 Shared platform must not encode symbol-specific strategy beliefs.
-It also must not present native-score or composite-score language as the active admission source.
+It must not present native-score, composite-score, or generic confidence-threshold language as the active admission source for promoted service-runtime candidates.
 
 ## Symbol Service Responsibilities
 
 Each symbol service owns:
 
-- Symbol-specific model shape
-- Runtime feeddown validation/compilation for that symbol
-- Symbol-specific deterministic feature interpretation
-- Runtime evaluation decision object
-- TradeCandidate construction
-- Position management policy application for that symbol
-- Symbol parity/backtest adapters that use the same runtime evaluation flow
-- Service-specific research, reports, and runtime-model presentation
+- symbol-specific model shape
+- runtime feeddown validation/compilation for that symbol
+- symbol-specific deterministic feature interpretation
+- runtime evaluation decision object
+- trade candidate construction
+- runtime contract/admission policy
+- Trade Lifecycle Manager policy
+- service-specific research, Build Runtime Model, validation, reports, and runtime-model presentation
 
-Milestone 1 state:
+## Current Service State
 
-- `CRASH300` service is scaffolded and marked enabled in solo registry mode.
-- `BOOM300`, `R_75`, and `R_100` are scaffolded and disabled with explicit `service_not_enabled` errors.
-- Existing runtime execution path is unchanged in Milestone 1.
+- `CRASH300`: active implementation, runtime-model driven, promoted on codex-dev
+- `R_75`: active volatility-series implementation, runtime-model driven, promoted on codex-dev
+- `BOOM300`: registered service awaiting its own runtime build/validation/promotion
+- `R_100`: registered service awaiting its own runtime build/validation/promotion
 
-## Service Registry Policy
+Unsupported services must be displayed as unavailable or requiring setup, not silently routed through another service.
 
-Registry is the source of symbol-service availability.
+## Runtime Rules
 
-- Solo mode default: only `CRASH300` enabled.
-- Disabled services must fail loudly when invoked.
-- No silent fallback to legacy paths inside symbol-service scaffold methods.
+- live, validation, replay, and parity must use the same promoted service-runtime contract when intended to mirror runtime
+- no silent fallbacks for missing promoted runtime models, missing buckets, or missing exit policies
+- rolling windows/context diagnostics must not create trades by themselves
+- a valid runtime trigger/archetype match is required for candidate emission
+- allocator approval is portfolio-level only: capital, exposure, drawdown, cascade timing, and mode gates
 
-## Cutover Policy
+## Research and Runtime Ownership
 
-Milestone 1 does not migrate active trading behavior.
-Future milestones will cut over live/backtest/parity routing to shared runtime flow plus symbol services.
+Each symbol service follows:
+
+1. Data Coverage
+2. Full Calibration
+3. Build Runtime Model
+4. Validate Runtime
+5. Promote Runtime
+6. Stream / Monitor
+
+Build Runtime Model consumes service-owned research data, evaluates complete runtime candidates, and returns a review runtime artifact. It does not auto-promote and it does not alter live runtime behavior by itself.
+
+Candidate runtime promotion is service-level and manual:
+
+1. Build Runtime Model returns a review runtime artifact
+2. Validate Runtime must pass
+3. Promote Runtime activates `promoted_service_runtime_<SERVICE>`
+4. the existing promoted runtime remains unchanged until explicit manual promotion
+
+Runtime mimic rules:
+
+- must use live-safe rules only
+- must not use calibrated move ids, selected trade ids, move-start timestamps, or move-end timestamps as live rules
+- must not use realised pnl, future MFE/MAE, or exit reason as live inputs

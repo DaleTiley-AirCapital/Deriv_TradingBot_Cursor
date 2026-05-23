@@ -1,12 +1,13 @@
-# CRASH300 Symbol Service (Milestone 1 Scaffold)
+# CRASH300 Symbol Service
 
 Status:
 
-- Service contract scaffold exists.
-- Runtime logic is not migrated in Milestone 1.
-- Fail-loud behavior is intentional for non-implemented operations.
+- Active service-runtime implementation.
+- Build Runtime Model, Validate Runtime, Promote Runtime, Stream / Monitor are the operator workflow.
+- Promoted runtime artifacts are the only source of candidate-emission rules.
 
-Behavior policy in Milestone 1:
+Behavior policy:
 
-- CRASH300 is enabled in solo-mode registry but not yet cut over into active runtime path.
-- BOOM300, R_75, and R_100 are scaffolded as disabled services with explicit service_not_enabled errors.
+- CRASH300 emits service candidates only when the promoted runtime contract matches the live-safe context and trigger.
+- The allocator must not re-score CRASH300 candidates; it owns capital, exposure, drawdown, cascade, and mode gates.
+- Reports should describe exits through the Trade Lifecycle Manager, not fixed trailing-stop language.

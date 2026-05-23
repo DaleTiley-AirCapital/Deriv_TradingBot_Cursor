@@ -1,6 +1,6 @@
-# Operator Runbook (Local Docker)
+# V3.2 Operator Runbook
 
-This runbook is for local operation of the full app stack.
+This runbook is for local operation of the full app stack and for the current V3.2 service-runtime deployment pattern.
 
 ## Prerequisites
 
@@ -47,12 +47,37 @@ Notes:
 - Container status:
   - `docker ps`
 
+## Runtime Health Checks
+
+Use these read-only endpoints to confirm the active V3.2 services are scanning:
+
+- `GET /api/diagnostics/symbols`
+  - expected: active streaming symbols have `streaming: true`, fresh `lastTickTs`, and `stale: false`
+- `GET /api/research/CRASH300/service-lifecycle`
+  - expected: promoted runtime present, validation passed, stream active, allocator connected
+- `GET /api/research/R_75/service-lifecycle`
+  - expected: promoted runtime present, validation passed, stream active, allocator connected
+- `GET /api/trade/allocator-feed?limit=20`
+  - expected: recent allocator rows only when a promoted service emits a candidate
+- `GET /api/trade/positions`
+  - expected: open paper positions when allocator approval and execution succeed
+
+Scanner skip reasons such as cadence guard, no coordinator output, duplicate-candidate cooldown, or runtime contract mismatch are normal monitoring states. They are not outages by themselves.
+
 ## Key Environment Variables
 
 - `PORT` (required by API server)
 - `DATABASE_URL` (required)
 - Optional for AI features:
   - `openai_api_key` is usually stored in platform settings (not process env in normal flow)
+
+## Current Trading Semantics
+
+- Build Runtime Model creates a review runtime candidate. It does not trade, stage by itself, or promote.
+- Validate Runtime is the manual validation gate before promotion.
+- Promote Runtime activates the service runtime for the selected service.
+- Symbol services decide whether a candle is a valid candidate.
+- The allocator does not re-score service candidates; it allocates capital, applies exposure/drawdown/cascade limits, and checks active mode permission.
 
 ## Common Issues
 

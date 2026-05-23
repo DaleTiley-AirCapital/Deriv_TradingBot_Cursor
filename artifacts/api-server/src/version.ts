@@ -1,6 +1,6 @@
-export const APP_VERSION = process.env.APP_VERSION ?? "3.1.0";
-export const APP_NAME = "Deriv Trading - Long Hold V3.1";
-export const LAST_UPDATED = "2026-05-09";
+export const APP_VERSION = process.env.APP_VERSION ?? "3.2.0";
+export const APP_NAME = "Deriv Trading - Long Hold V3.2";
+export const LAST_UPDATED = "2026-05-23";
 export const DEPLOYED_AT = process.env.DEPLOYED_AT ?? new Date().toISOString();
 export const DEPLOYMENT_ID = process.env.RAILWAY_DEPLOYMENT_ID ?? null;
 export const GIT_COMMIT_SHA = process.env.GIT_COMMIT_SHA ?? process.env.RAILWAY_GIT_COMMIT_SHA ?? null;
@@ -14,6 +14,18 @@ export interface ReleaseEntry {
 }
 
 export const RELEASES: ReleaseEntry[] = [
+  {
+    version: "3.2.0",
+    date: "2026-05-23",
+    title: "V3.2 service-runtime promotion and allocator handoff",
+    changes: [
+      "CRASH300 and R_75 run as promoted service runtimes on codex-dev with Validate Runtime and Promote Runtime as the manual gates",
+      "Build Runtime Model is the single runtime-build workflow; internal synthesis names remain implementation details only",
+      "Allocator acts as capital, exposure, drawdown, cascade, and mode gatekeeper instead of re-scoring promoted service candidates",
+      "Overview streaming health now uses live tick timestamps rather than historical candle freshness",
+      "Help and operator docs now describe the current V3.2 workflow and Trade Lifecycle Manager language",
+    ],
+  },
   {
     version: "3.1.0",
     date: "2026-05-09",

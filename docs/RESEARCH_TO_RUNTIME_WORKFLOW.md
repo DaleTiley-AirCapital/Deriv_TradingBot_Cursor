@@ -1,4 +1,4 @@
-# V3.1 Research To Runtime Workflow
+# V3.2 Research To Runtime Workflow
 
 ## Visible Workflow
 
@@ -15,7 +15,7 @@ Do not add a new top-level Research button for an internal diagnostic. If a capa
 
 ## Build Runtime Model
 
-Build Runtime Model replaces the old integrated synthesis action as the user-facing runtime-building task. It may keep existing internal function and endpoint names temporarily, but UI and docs must call it Build Runtime Model.
+Build Runtime Model is the user-facing runtime-building task. Some internal endpoints still use historical synthesis naming, but UI and docs must call the workflow Build Runtime Model.
 
 Internal stages:
 
@@ -34,7 +34,9 @@ Internal stages:
 
 The consolidated output contract is `runtime_build_result_<SERVICE>_<RUN>.json`. It is an artifact over existing calibration, synthesis, backtest, and platform-state data. It must not create tables, promote runtime, enable execution modes, or auto-stage a candidate.
 
-Final-pass CRASH300 steering is data-led. Build Runtime Model escalates high-volume promising seed families before tiny perfect subsets, with `failed_recovery_short | failed_recovery_break_down | 5_to_6_pct | sell | late` as the current primary family when it satisfies volume, win-rate, and SL gates. The build result reports pre-limit family stats, post-daily-limit stats, winner-vs-loser separation, Trade Lifecycle Manager replay, dynamic TP/protection settings, AI Strategy Review status, candidate-family comparison, and runtime artifact eligibility.
+CRASH300 steering is data-led and currently targets capturable moves with at least 5 percent potential, including the 5-9 percent population as well as larger crash-expansion moves. The build result reports target universe coverage, missed target moves, Trade Lifecycle Manager replay, dynamic TP/protection settings, AI Strategy Review status, candidate-family comparison, and runtime artifact eligibility.
+
+R_75 steering is volatility-series specific. Build Runtime Model evaluates breakout, reversal, and continuation families over the calibrated >=5 percent move universe, then promotes only the runtime contracts that pass deterministic validation. The full build search can cover more families than the narrowed promoted runtime contract; that distinction must be visible in reports.
 
 Reports describe exits as the Trade Lifecycle Manager: protection activation, protected floor, TP1, TP2/runner target, lifecycle state, continuation score, reversal pressure, momentum failure exit, time/progress failure exit, and protected exit. Historical low-level fields may be read for compatibility, but new user-facing reports must not present a fixed trailing-stop strategy.
 
@@ -52,6 +54,7 @@ Internal stages:
 - allocator visibility/provenance check
 - lifecycle monitor validation
 - mode-gate safety check
+- recent-candle candidate replay to confirm the promoted runtime can emit only matching live-safe candidates
 
 The consolidated output contract is `runtime_validation_result_<SERVICE>_<RUN>.json`. It must not promote runtime, enable Paper/Demo/Real, or alter live or allocator execution behavior.
 

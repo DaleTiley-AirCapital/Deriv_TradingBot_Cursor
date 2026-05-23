@@ -10,10 +10,8 @@ Use this map to avoid doc and implementation drift.
   - `docs/runtime-model-lifecycle.md`
 - Symbol-service architecture and ownership boundaries:
   - `docs/symbol-service-architecture.md`
-  - `docs/SYMBOL_SERVICE_ARCHITECTURE.md`
 - Service UI structure and selected-service research workflow:
   - `docs/RESEARCH_TO_RUNTIME_WORKFLOW.md`
-  - `docs/V3_1_RESEARCH_WORKFLOW_AUDIT.md`
   - `docs/SERVICE_UI_STRUCTURE.md`
 - CRASH300 service-specific implementation notes:
   - `docs/CRASH300_SERVICE_README.md`
@@ -55,10 +53,13 @@ Use this map to avoid doc and implementation drift.
 
 ## Runtime Model Ownership
 
-- Suggested research outputs:
-  - `symbol_research_profiles`
+- Build runtime outputs:
+  - `runtime_build_result_<SERVICE>_<RUN>.json`
+  - review runtime artifacts such as `<service>-runtime-build-review-<run>`
+- Validation outputs:
+  - `runtime_validation_result_<SERVICE>_<RUN>.json`
 - Staged runtime owner:
-  - `platform_state` staged symbol model entries and `staged_synthesis_candidate_<SERVICE>` references
+  - service-level staged runtime candidate entries in `platform_state`
 - Promoted runtime owner for trading behavior:
   - `platform_state` `promoted_service_runtime_<SERVICE>` entries
 - Rule:
@@ -74,7 +75,6 @@ When changing behavior:
 4. Update parity/runbook docs if externally visible behavior changed.
 5. Do not leave conflicting threshold statements unresolved.
 
-## Milestone 1 Note
+## V3.2 Note
 
-Milestone 1 introduces symbol-service scaffolding and contracts only.
-No scheduler, allocator, trade, or live/backtest behavior cutover is performed in this milestone.
+`CRASH300` and `R_75` are live service-runtime implementations on codex-dev. `BOOM300` and `R_100` remain registered roadmap services until their own Build Runtime Model, Validate Runtime, and Promote Runtime workflows are completed.

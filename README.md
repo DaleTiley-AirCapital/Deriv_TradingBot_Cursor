@@ -1,6 +1,6 @@
 # Forex-Bot-Deriv
 
-Deriv synthetic-indices swing trading platform focused on high-conviction, long-hold execution.
+Deriv synthetic-indices symbol-service trading platform focused on promoted-runtime execution and portfolio-level capital allocation.
 
 ## Documentation Index
 
@@ -18,8 +18,11 @@ Start here for the current operating state and source-of-truth ownership:
 - Frontend: React + Vite
 - Backend: Express + TypeScript
 - DB: PostgreSQL + Drizzle
-- Live trading path: V3 symbol-native engines
-- Active symbols: `CRASH300`, `BOOM300`, `R_75`, `R_100`
+- Current app line: V3.2 service-runtime workflow
+- Live trading path: promoted symbol-service runtimes emit complete service candidates
+- Allocator role: capital, exposure, drawdown, cascade timing, and mode gates only
+- Active promoted/scanning services on codex-dev: `CRASH300`, `R_75`
+- Registered service roadmap: `CRASH300`, `BOOM300`, `R_75`, `R_100`
 
 ## Fast Start (Local Docker)
 

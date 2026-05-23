@@ -1,14 +1,15 @@
 # Current Operating Policy
 
-This document is the canonical snapshot of the current runtime operating policy.
+This document is the canonical V3.2 snapshot of the current runtime operating policy.
 It separates live operating values from historical and calibration-analysis values.
 
 ## Product Intent
 
 - High-conviction swing trading, not scalping.
 - TP-first trade management targeting large moves.
-- Live path is moving to symbol-service runtime ownership.
-- Active symbols only: `CRASH300`, `BOOM300`, `R_75`, `R_100`.
+- Live path uses symbol-service runtime ownership.
+- Current promoted/scanning services: `CRASH300` and `R_75`.
+- Registered active-service roadmap: `CRASH300`, `BOOM300`, `R_75`, `R_100`.
 
 ## Current Global Operating Controls
 
@@ -29,17 +30,18 @@ Global settings should not be used to present symbol-specific score thresholds o
 ## Symbol-Service Runtime Policy
 
 - symbol services own feature snapshots, trigger/archetype detection, bucket derivation, candidate emission, and trade-management policies
-- the allocator owns only capital, exposure, and portfolio risk gates
+- promoted runtime artifacts are the only source of paper/demo/real candidate rules
+- the allocator owns only capital, exposure, drawdown, cascade timing, mode gates, and portfolio risk gates
 - frontend surfaces selected service state and must not calculate trade admission logic
 - no native-score or composite-score wording should be treated as current decision logic
 
 ## Architecture Transition Snapshot
 
-- `artifacts/api-server/src/symbol-services/*` is the canonical service layer
-- CRASH300 is the active reference implementation
-- BOOM300, `R_75`, and `R_100` are scaffolded into the same service model
-- rolling-window/watch diagnostics are not the active CRASH300 admission source
-- `context + fresh 1m trigger + promoted runtime model` is the active CRASH300 admission pattern
+- `artifacts/api-server/src/symbol-services/*` is the service boundary for symbol-owned contracts
+- `CRASH300` and `R_75` have promoted service runtime artifacts on codex-dev
+- `BOOM300` and `R_100` remain registered service roadmap items until their runtime models are built, validated, and promoted
+- rolling-window/watch diagnostics are not the active admission source
+- `live-safe context + trigger/archetype match + promoted runtime model` is the current admission pattern
 
 ## Runtime Model Promotion Guardrail
 
@@ -50,8 +52,9 @@ Global settings should not be used to present symbol-specific score thresholds o
 
 ## Non-Negotiable Behavior Constraints
 
-- No time-based forced exits.
-- TP is primary exit; trailing is safety net.
+- No time-based panic exits.
+- TP1/TP2/runner and protection floors are managed by the Trade Lifecycle Manager.
+- Historical low-level trailing fields may still exist for compatibility, but user-facing reports should describe protection activation, protected exits, and lifecycle exhaustion.
 - No shared generic scoring fallback for live.
 - No fallback logic preserving superseded behavior.
 - No silent fallback for missing promoted runtime models, missing buckets, or missing exit-policy data.
@@ -61,7 +64,6 @@ Global settings should not be used to present symbol-specific score thresholds o
 - `README.md`
 - `docs/source-of-truth.md`
 - `docs/symbol-service-architecture.md`
-- `docs/SYMBOL_SERVICE_ARCHITECTURE.md`
 - `docs/RESEARCH_TO_RUNTIME_WORKFLOW.md`
 - `docs/SERVICE_UI_STRUCTURE.md`
 - `docs/CRASH300_SERVICE_README.md`
