@@ -549,7 +549,7 @@ export default function Trades() {
   };
 
   return (
-    <div className="max-w-7xl space-y-6 p-6">
+    <div className="w-full max-w-7xl min-w-0 space-y-6 p-4 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Trade Lifecycle</h1>
@@ -580,12 +580,12 @@ export default function Trades() {
         <div className="rounded-xl border border-border/50 bg-card p-4"><p className="mb-1.5 flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground"><TrendingDown className="h-3 w-3" /> Realised P&amp;L</p><p className={cn("text-2xl font-bold tabular-nums", totalPnl >= 0 ? "text-green-400" : "text-red-400")}>{totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)}</p></div>
       </div>
 
-      <div className="flex gap-1 border-b border-border/50">
+      <div className="grid grid-cols-3 gap-1 border-b border-border/50 sm:flex">
         {tabs.map((item) => (
           <button
             key={item.id}
             onClick={() => setTab(item.id)}
-            className={cn("flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-xs font-medium whitespace-nowrap transition-colors", tab === item.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:border-border/50 hover:text-foreground")}
+            className={cn("min-w-0 border-b-2 px-1.5 py-2.5 text-center text-xs font-medium leading-tight transition-colors sm:flex sm:items-center sm:gap-1.5 sm:px-4 sm:text-left", tab === item.id ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:border-border/50 hover:text-foreground")}
           >
             {item.label}
             {item.count != null && item.count > 0 && <span className="tabular-nums text-muted-foreground/70">({item.count})</span>}
@@ -600,8 +600,8 @@ export default function Trades() {
               {legacyOpenPositions.length} open trade(s) were not opened through the current V3.1 service-runtime allocator path and are shown here as legacy attribution.
             </div>
           )}
-          <div className="flex items-center gap-3">
-            <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)} className="rounded-md border border-border/50 bg-card px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
+          <div className="flex min-w-0 items-center gap-3">
+            <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)} className="w-full max-w-full rounded-md border border-border/50 bg-card px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none sm:w-auto">
               <option value="all">All Services</option>
               {ACTIVE_SERVICE_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol} - {getSymbolLabel(symbol)}</option>)}
             </select>
@@ -622,12 +622,12 @@ export default function Trades() {
 
       {tab === "closed" && (
         <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)} className="rounded-md border border-border/50 bg-card px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
+          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+            <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)} className="w-full max-w-full rounded-md border border-border/50 bg-card px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none sm:w-auto">
               <option value="all">All Services</option>
               {ACTIVE_SERVICE_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol} - {getSymbolLabel(symbol)}</option>)}
             </select>
-            <select value={modeFilter} onChange={(event) => setModeFilter(event.target.value)} className="rounded-md border border-border/50 bg-card px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none">
+            <select value={modeFilter} onChange={(event) => setModeFilter(event.target.value)} className="w-full max-w-full rounded-md border border-border/50 bg-card px-2.5 py-1.5 text-xs text-foreground focus:border-primary/50 focus:outline-none sm:w-auto">
               <option value="">All Modes</option>
               <option value="paper">Paper</option>
               <option value="demo">Demo</option>
