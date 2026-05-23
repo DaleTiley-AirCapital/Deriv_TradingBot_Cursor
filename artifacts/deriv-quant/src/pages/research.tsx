@@ -2073,6 +2073,7 @@ interface ServicePromotedRuntimeUi {
     demo?: boolean;
     real?: boolean;
   };
+  runtimeModelAdapter?: RuntimeSymbolModelUi | Record<string, unknown> | null;
 }
 
 interface ResearchDataStatusUi {
@@ -5406,11 +5407,13 @@ function RuntimeModelTab({ service }: { service: string }) {
       : service === "BOOM300"
         ? "boom_family"
         : "service-specific";
-  const promotedBuckets = extractCalibratedBucketEntries(runtime?.promotedModel ?? null);
+  const promotedRuntimeModelAdapter = promotedRuntime?.runtimeModelAdapter ?? null;
+  const promotedBucketSourceModel = promotedRuntimeModelAdapter ?? runtime?.promotedModel ?? null;
+  const promotedBuckets = extractCalibratedBucketEntries(promotedBucketSourceModel);
   const stagedBuckets = extractCalibratedBucketEntries(runtime?.stagedModel ?? null);
-  const promotedRuntimeTpBuckets = extractRuntimeTpBucketEntries(runtime?.promotedModel ?? null);
+  const promotedRuntimeTpBuckets = extractRuntimeTpBucketEntries(promotedBucketSourceModel);
   const stagedRuntimeTpBuckets = extractRuntimeTpBucketEntries(runtime?.stagedModel ?? null);
-  const promotedTpModel = asUiRecord(runtime?.promotedModel?.tpModel);
+  const promotedTpModel = asUiRecord(asUiRecord(promotedBucketSourceModel).tpModel);
   const stagedTpModel = asUiRecord(runtime?.stagedModel?.tpModel);
   const promotedExpectedPerformance = asUiRecord(promotedRuntime?.expectedPerformance);
   const runtimeArchetypes = Array.from(new Set([
