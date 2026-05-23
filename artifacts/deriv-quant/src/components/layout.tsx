@@ -121,11 +121,7 @@ function useTradingControls() {
     : null;
   const realLoginId = realAccount?.loginid || null;
 
-  const realBalance = accountInfo?.connected && accountInfo.balance != null
-    ? `${accountInfo.currency || "USD"} ${accountInfo.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    : null;
-
-  return { paperActive, demoActive, realActive, isTrading, toggling, stopping, toggleMode, stopTrades, realBalance, demoBalance, demoLoginId, realBalanceStr, realLoginId };
+  return { paperActive, demoActive, realActive, isTrading, toggling, stopping, toggleMode, stopTrades, demoBalance, demoLoginId, realBalanceStr, realLoginId };
 }
 
 type TradingControls = ReturnType<typeof useTradingControls>;
@@ -360,7 +356,7 @@ function TabletLayout({ children, location, tradingControls }: { children: React
 
         <div className="border-l border-border/50 px-4 py-2 text-right shrink-0">
           <p className="text-[9px] text-muted-foreground uppercase tracking-widest">Real Balance</p>
-          <p className="text-sm font-bold text-foreground font-mono mt-0.5">{tradingControls.realBalance || "—"}</p>
+          <p className="text-sm font-bold text-foreground font-mono mt-0.5">{tradingControls.realBalanceStr || "—"}</p>
         </div>
       </header>
 
