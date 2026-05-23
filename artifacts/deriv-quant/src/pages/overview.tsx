@@ -623,7 +623,7 @@ export default function Overview() {
             {legacyOpenTrades.length > 0 ? " Legacy open trades remain visible until they close or are reset." : ""}
           </div>
         )}
-        <div className="grid grid-cols-1 min-[430px]:grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           {lifecycleCards.map((service) => (
             <div key={service.serviceId} className="min-w-0 rounded-lg border border-border/40 bg-muted/10 p-3">
               <div className="flex min-w-0 items-center gap-1.5 mb-1.5">
@@ -647,7 +647,10 @@ export default function Overview() {
                   <div className="text-[10px] text-muted-foreground">Next: {service.nextRequiredAction}</div>
                 )}
                 {service.latestScannerReason && (
-                  <div className="text-[10px] text-muted-foreground [overflow-wrap:anywhere]">
+                  <div
+                    className="max-w-full break-words text-[10px] text-muted-foreground"
+                    style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+                  >
                     Scan: {service.latestScannerStatus ?? "unknown"} / {service.latestScannerReason}
                     {service.latestScannerAt ? ` (${formatAge(service.latestScannerAt)})` : ""}
                   </div>
