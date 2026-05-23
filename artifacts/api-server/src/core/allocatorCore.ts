@@ -44,6 +44,7 @@ export interface AllocatorCoreInput {
   // Mode
   mode: "paper" | "demo" | "real";
   minScoreGate: number;      // from MODE_SCORE_GATES[mode]; may be overridden by platformState
+  skipScoreGate?: boolean;   // promoted service runtimes already performed runtime-specific admission
 
   // Mode-level controls (live: from platformState; backtest: true = assumed active)
   killSwitchActive: boolean;
@@ -94,13 +95,15 @@ export function evaluateSignalAdmission(input: AllocatorCoreInput): AllocatorCor
   // Gate 3: Symbol enabled for mode
   if (!input.symbolEnabled) return deny(`symbol_${input.symbol}_not_enabled_for_${input.mode}`, 3);
 
-  // Gate 4: Min score / confidence (primary quality gate — same for live and backtest)
-  const minConfidence = input.minScoreGate / 100;
-  if (input.nativeScore < input.minScoreGate || input.confidence < minConfidence) {
-    return deny(
-      `score_below_gate:score=${input.nativeScore}<${input.minScoreGate},conf=${input.confidence.toFixed(3)}<${minConfidence.toFixed(3)}`,
-      4,
-    );
+  // Gate 4: Legacy/native score gate. Service runtimes have already admitted the candidate.
+  if (!input.skipScoreGate) {
+    const minConfidence = input.minScoreGate / 100;
+    if (input.nativeScore < input.minScoreGate || input.confidence < minConfidence) {
+      return deny(
+        `score_below_gate:score=${input.nativeScore}<${input.minScoreGate},conf=${input.confidence.toFixed(3)}<${minConfidence.toFixed(3)}`,
+        4,
+      );
+    }
   }
 
   // Gate 5: One-open-trade-per-symbol unless the live allocator is intentionally compounding.

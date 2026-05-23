@@ -204,6 +204,7 @@ export async function allocateV3Signal(
   // extractNativeScore is the shared extractor used by both live and backtest so
   // gate-4 score comparisons are identical in both paths.
   const nativeScore = extractNativeScore(winner, coordinatorOutput.coordinatorConfidence);
+  const serviceRuntimeAdmission = runtimeArtifact != null;
 
   // ── Stage 2: Core admission check via shared evaluator ────────────────────
   // evaluateSignalAdmission enforces the same gate order as the live allocator.
@@ -216,6 +217,7 @@ export async function allocateV3Signal(
     confidence: winner.confidence,
     mode: mode as "paper" | "demo" | "real",
     minScoreGate: minScore,
+    skipScoreGate: serviceRuntimeAdmission,
     killSwitchActive: stateMap["kill_switch"] === "true",
     modeEnabled,
     symbolEnabled,
