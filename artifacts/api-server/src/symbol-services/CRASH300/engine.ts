@@ -291,28 +291,74 @@ function selectedFamilyScore(
   candidates: Crash300FamilyCandidate[],
   family: Crash300PhaseDerivedFamily,
   context: Crash300ContextSnapshot,
+  trigger: Crash300SemanticTriggerSnapshot,
 ): Crash300FamilyCandidate {
   const matched = candidates.find((candidate) => candidate.family === family);
   if (matched) return matched;
-  const reversalScore = clamp01(
-    context.crashRecencyScore * 0.25 +
-      context.recoveryQualityScore * 0.2 +
-      context.compressionToExpansionScore * 0.15 +
-      clamp01((0.02 - context.priceVsEma20Pct) / 0.04) * 0.15 +
-      clamp01((context.priceDistanceFromLastCrashLowPct ?? 0) / 0.08) * 0.25,
-  );
+  if (family === "bear_trap_reversal_up") {
+    const reclaimFit = trigger.reclaimConfirmed ? 1 : 0;
+    const adverseImpulseFit = trigger.adverseImpulseBeforeTrigger ? 1 : 0;
+    const recoveryFit = clamp01(context.recoveryQualityScore);
+    const runwayFit = clamp01(context.compressionToExpansionScore);
+    const priceOffCrashLow = clamp01((context.priceDistanceFromLastCrashLowPct ?? 0) / 0.08);
+    const reversalScore = clamp01(
+      reclaimFit * 0.25 +
+        adverseImpulseFit * 0.15 +
+        recoveryFit * 0.25 +
+        runwayFit * 0.15 +
+        priceOffCrashLow * 0.2,
+    );
+    return {
+      family,
+      direction: "buy",
+      leadInShape: leadInShapeFromContext(context),
+      score: reversalScore,
+      components: {
+        reclaimFit: reclaimFit * 100,
+        adverseImpulseFit: adverseImpulseFit * 100,
+        recoveryQualityScore: recoveryFit * 100,
+        compressionToExpansionScore: runwayFit * 100,
+        priceDistanceFromLastCrashLowPct: priceOffCrashLow * 100,
+      },
+    };
+  }
+  if (family === "bull_trap_reversal_down") {
+    const breakFit = trigger.compressionBreakDown || trigger.failedRecoveryBreakDown ? 1 : 0;
+    const adverseImpulseFit = trigger.adverseImpulseBeforeTrigger ? 1 : 0;
+    const failedRecoveryFit = clamp01(
+      (context.recoveryPullbackDepthPct / 0.03) * 0.4 +
+        clamp01(context.recoveryFailedBreakCount60 / 8) * 0.35 +
+        clamp01((0.55 - context.recoveryQualityScore) / 0.55) * 0.25,
+    );
+    const rangeExpansionFit = clamp01(context.rangeExpansionScore15);
+    const priceBelowEmaFit = clamp01((0.02 - context.priceVsEma20Pct) / 0.04);
+    const reversalScore = clamp01(
+      breakFit * 0.25 +
+        adverseImpulseFit * 0.15 +
+        failedRecoveryFit * 0.25 +
+        rangeExpansionFit * 0.15 +
+        priceBelowEmaFit * 0.2,
+    );
+    return {
+      family,
+      direction: "sell",
+      leadInShape: leadInShapeFromContext(context),
+      score: reversalScore,
+      components: {
+        breakFit: breakFit * 100,
+        adverseImpulseFit: adverseImpulseFit * 100,
+        failedRecoveryFit: failedRecoveryFit * 100,
+        rangeExpansionScore15: rangeExpansionFit * 100,
+        priceVsEma20Pct: priceBelowEmaFit * 100,
+      },
+    };
+  }
   return {
-    family: family === "bull_trap_reversal_down" ? "bull_trap_reversal_down" : "bear_trap_reversal_up",
-    direction: family === "bull_trap_reversal_down" ? "sell" : "buy",
+    family: "unknown" as Crash300RuntimeFamily,
+    direction: "buy",
     leadInShape: leadInShapeFromContext(context),
-    score: reversalScore,
-    components: {
-      crashRecencyScore: context.crashRecencyScore * 100,
-      recoveryQualityScore: context.recoveryQualityScore * 100,
-      compressionToExpansionScore: context.compressionToExpansionScore * 100,
-      priceVsEma20Pct: clamp01((0.02 - Math.abs(context.priceVsEma20Pct)) / 0.04) * 100,
-      priceDistanceFromLastCrashLowPct: clamp01((context.priceDistanceFromLastCrashLowPct ?? 0) / 0.08) * 100,
-    },
+    score: 0,
+    components: {},
   };
 }
 
@@ -723,8 +769,27 @@ export async function evaluateCrash300Runtime(
     });
   }
 
-  const selectedFamily = selectedFamilyScore(familyCandidates, derivedFamily, contextSnapshot);
+  const selectedFamily = selectedFamilyScore(familyCandidates, derivedFamily, contextSnapshot, triggerSnapshot);
   const direction = triggerSnapshot.triggerDirection;
+  if (selectedFamily.score < ctxThreshold) {
+    invalidateEpoch(runtimeState);
+    return failDecision({
+      runtimeCalibration,
+      direction,
+      family: derivedFamily,
+      context: contextSnapshot,
+      trigger: triggerSnapshot,
+      setupMatch: selectedFamily.score,
+      confidence: selectedFamily.score * 0.6,
+      componentScoreMap: componentScores(contextSnapshot, triggerSnapshot, derivedFamily),
+      thresholdSource: thresholdOrigin,
+      familySource: "phase_derived_trigger_semantics",
+      familyDirection: familySemantics.familyDirection,
+      candidateDirection: direction,
+      failReasons: ["selected_family_below_model_threshold"],
+      candidateProduced: false,
+    });
+  }
   const allowedDirections = formulaArray(runtimeCalibration, "allowedDirections");
   if (allowedDirections.length > 0 && !allowedDirections.includes(direction)) {
     invalidateEpoch(runtimeState);
