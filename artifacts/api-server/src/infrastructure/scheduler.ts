@@ -89,6 +89,8 @@ let currentIntervalMs = DEFAULT_SCAN_INTERVAL_MS;
 let staggeredScanActive = false;
 let staggerSymbolIndex = 0;
 let staggerTimerHandle: ReturnType<typeof setTimeout> | null = null;
+let staggerSymbolsSignature = "";
+let staggerIntervalMs = 0;
 
 let lastScanTime: Date | null = null;
 let lastScanSymbol: string | null = null;
@@ -567,6 +569,8 @@ async function scanCycle(): Promise<void> {
     if (killSwitch || !streamingActive) {
       if (staggeredScanActive) {
         staggeredScanActive = false;
+        staggerSymbolsSignature = "";
+        staggerIntervalMs = 0;
         if (staggerTimerHandle) { clearTimeout(staggerTimerHandle); staggerTimerHandle = null; }
       }
       return;
@@ -581,23 +585,38 @@ async function scanCycle(): Promise<void> {
           clearTimeout(staggerTimerHandle);
           staggerTimerHandle = null;
         }
+        staggerSymbolsSignature = "";
+        staggerIntervalMs = 0;
       }
       return;
     }
 
     const staggerSeconds = parseInt(stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS));
     const staggerMs = Math.max(staggerSeconds * 1000, 1000);
+    const symbolsSignature = symbols.join(",");
+
+    if (
+      staggeredScanActive &&
+      (symbolsSignature !== staggerSymbolsSignature || staggerMs !== staggerIntervalMs)
+    ) {
+      if (staggerTimerHandle) {
+        clearTimeout(staggerTimerHandle);
+        staggerTimerHandle = null;
+      }
+      staggeredScanActive = false;
+      staggerSymbolIndex = 0;
+      console.log(
+        `[Scheduler] Restarting staggered scan: symbols=${symbolsSignature || "none"}, interval=${staggerMs / 1000}s`,
+      );
+    }
 
     if (!staggeredScanActive) {
       staggeredScanActive = true;
       staggerSymbolIndex = 0;
+      staggerSymbolsSignature = symbolsSignature;
+      staggerIntervalMs = staggerMs;
       console.log(`[Scheduler] Starting staggered scan: ${symbols.length} symbols, ${staggerSeconds}s apart`);
       scheduleStaggeredScan(symbols, staggerMs).catch(console.error);
-    } else {
-      const newStaggerMs = Math.max(parseInt(stateMap["scan_stagger_seconds"] || String(DEFAULT_STAGGER_SECONDS)) * 1000, 1000);
-      if (newStaggerMs !== staggerMs) {
-        console.log(`[Scheduler] Stagger interval updated to ${newStaggerMs / 1000}s`);
-      }
     }
   } catch (err) {
     console.error("[Scheduler] Scan error:", formatDbErr(err));
@@ -1003,6 +1022,8 @@ export function stopScheduler(): void {
     console.log("[Scheduler] Weekly analyser stopped.");
   }
   staggeredScanActive = false;
+  staggerSymbolsSignature = "";
+  staggerIntervalMs = 0;
   if (staggerTimerHandle) {
     clearTimeout(staggerTimerHandle);
     staggerTimerHandle = null;

@@ -737,6 +737,8 @@ async function initDb(): Promise<void> {
       ('mode',                'idle'),
       ('kill_switch',         'false'),
       ('streaming',           'false'),
+      ('symbol_service_mode', 'multi'),
+      ('symbol_services_enabled', 'CRASH300,R_75'),
       ('disabled_strategies', ''),
       ('min_composite_score', '80'),
       ('paper_min_composite_score', '60'),
