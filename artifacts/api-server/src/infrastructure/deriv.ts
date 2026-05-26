@@ -297,7 +297,7 @@ class DerivClient {
     for (const [api, cfg] of this.apiToConfiguredMap.entries()) {
       if (cfg === configured) return api;
     }
-    return configured;
+    return getApiSymbol(configured);
   }
 
   private async reconnect() {
@@ -383,7 +383,11 @@ class DerivClient {
     if (isSymbolStreamingDisabled(configuredSymbol)) return 0;
     if (!this._authorized) throw new Error("Not authorized");
 
-    const apiSymbol = getApiSymbol(configuredSymbol);
+    let apiSymbol = getApiSymbol(configuredSymbol);
+    if (apiSymbol === configuredSymbol) {
+      const validatedMap = await validateActiveSymbols(true);
+      apiSymbol = validatedMap.get(configuredSymbol)?.apiSymbol ?? configuredSymbol;
+    }
     const candles = await this.getCandleHistoryWithEnd(apiSymbol, 60, Math.max(2, count), undefined, true);
     if (!candles || candles.length === 0) return 0;
 
@@ -452,6 +456,9 @@ class DerivClient {
       throw new Error(`Streaming is disabled for ${configuredSymbol}`);
     }
     if (this.subscribedSymbols.has(configuredSymbol)) return;
+    if (getApiSymbol(configuredSymbol) === configuredSymbol) {
+      await validateActiveSymbols(true);
+    }
     const apiSymbol = this.configuredToApiSymbol(configuredSymbol);
     await this.subscribeToTicks(apiSymbol);
     this.subscribedSymbols.add(configuredSymbol);

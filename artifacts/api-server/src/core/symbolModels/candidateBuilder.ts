@@ -76,25 +76,33 @@ export function buildSymbolTradeCandidate(params: {
       leadInShapeRaw === "expanding" || leadInShapeRaw === "compressing" || leadInShapeRaw === "ranging" || leadInShapeRaw === "trending"
         ? leadInShapeRaw
         : "all";
-    const runtimeSetup = {
-      allowed: decision.valid,
-      reason: decision.failReasons[0] ?? "runtime_model_evidence_matched",
-      leadInShape,
-      qualityBand,
-      matchedBucketKey: runtimeCandidate.moveBucket,
-      evidenceScore: decision.setupMatch,
-      weakComponents: decision.failReasons,
-    };
+    const runtimeSetup = evaluateRuntimeEntryEvidence({
+      symbol: params.symbol,
+      direction: decision.direction!,
+      nativeScore: Math.round(decision.confidence * 100),
+      winner,
+      features: params.features,
+      runtimeCalibration: params.runtimeCalibration,
+      allowedQualityBands: params.allowedQualityBands,
+    });
+    const resolvedRuntimeSetup = runtimeSetup.matchedBucketKey
+      ? runtimeSetup
+      : {
+          ...runtimeSetup,
+          leadInShape,
+          qualityBand,
+          matchedBucketKey: runtimeCandidate.moveBucket,
+        };
     const candidate: SymbolTradeCandidate = {
       symbol: params.symbol,
       engineName: winner.engineName,
       direction: decision.direction!,
       nativeScore: Math.round(decision.confidence * 100),
       confidenceScore: decision.confidence,
-      qualityBand: runtimeSetup.qualityBand,
-      leadInShape: runtimeSetup.leadInShape,
+      qualityBand: resolvedRuntimeSetup.qualityBand,
+      leadInShape: resolvedRuntimeSetup.leadInShape,
       setupSignature,
-      runtimeSetup,
+      runtimeSetup: resolvedRuntimeSetup,
       exitPolicy: {
         source: "promoted_runtime_model",
         takeProfitPrice,
@@ -113,7 +121,7 @@ export function buildSymbolTradeCandidate(params: {
       metadata: {
         scoringSource: winner.metadata?.["crash300ScoringSource"] ?? "promoted_calibrated_runtime_model",
         setupSignature,
-        runtimeSetupReason: runtimeSetup.reason,
+        runtimeSetupReason: resolvedRuntimeSetup.reason,
       },
     };
     return {

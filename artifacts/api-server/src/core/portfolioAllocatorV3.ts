@@ -191,9 +191,6 @@ export async function allocateV3Signal(
   );
   const safetyAdjustedMaxDrawdownPct = maxDrawdownSourcePct * safetyFactor;
   const remainingDrawdownBudgetPct = Math.max(0, safetyAdjustedMaxDrawdownPct - actualDrawdownPct);
-  const drawdownCapacityScale = safetyAdjustedMaxDrawdownPct > 0
-    ? clamp(remainingDrawdownBudgetPct / safetyAdjustedMaxDrawdownPct, 0, 1)
-    : 0;
 
   // Use mode-specific gate from allocatorCore (single source of truth) or platformState override
   const modeDefaultGate = MODE_SCORE_GATES[mode as string] ?? 60;
@@ -467,7 +464,9 @@ export async function allocateV3Signal(
   }
 
   // ── Capital sizing ─────────────────────────────────────────────────────────
-  // Maximize deployable exposure while respecting drawdown budget, mode safety factor, and service-candidate quality.
+  // Maximize deployable exposure. Drawdown remains a hard safety gate via
+  // evaluateSignalAdmission, but it must not shrink valid service-runtime
+  // allocations once the portfolio is still inside the configured limit.
   const targetUtilizationPct = clamp(
     numberFrom(
       stateMap[`${prefix}_target_capital_utilization_pct`] ?? stateMap["allocator_target_capital_utilization_pct"],
@@ -491,20 +490,9 @@ export async function allocateV3Signal(
   const approvedLeverage = requestedLeverage;
   const deployedCapital = openTrades.reduce((s, t) => s + t.size, 0);
   const portfolioExposureBefore = deployedCapital;
-  const maxDeployable = totalCapital * (targetUtilizationPct / 100) * approvedLeverage * drawdownCapacityScale;
+  const maxDeployable = totalCapital * (targetUtilizationPct / 100) * approvedLeverage;
   const remaining = maxDeployable - deployedCapital;
 
-  if (remainingDrawdownBudgetPct <= 0) {
-    return deny("drawdown_safety_budget_exhausted", {
-      requestedLeverage,
-      actualDrawdownPct,
-      safetyAdjustedMaxDrawdownPct,
-      remainingDrawdownBudgetPct,
-      portfolioExposureBefore,
-      portfolioExposureAfter: portfolioExposureBefore,
-      compoundingEnabled,
-    });
-  }
   if (remaining <= 0) {
     return deny("target_capital_utilization_reached", {
       requestedLeverage,
@@ -562,7 +550,7 @@ export async function allocateV3Signal(
     : sameSymbolOpenTrades.length === 1
       ? secondSlicePct
       : Math.max(0, targetUtilizationPct - ((deployedCapital / totalCapital) * 100));
-  const requestedSize = totalCapital * (slicePct / 100) * approvedLeverage * drawdownCapacityScale;
+  const requestedSize = totalCapital * (slicePct / 100) * approvedLeverage;
   const size = Math.min(remaining, requestedSize);
   if (size < totalCapital * 0.02) {
     return deny("insufficient_remaining_capacity", {

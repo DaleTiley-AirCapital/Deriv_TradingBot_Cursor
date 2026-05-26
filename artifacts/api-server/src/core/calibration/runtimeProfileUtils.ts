@@ -152,6 +152,48 @@ function engineRuntimeSetupOverride(
   };
 }
 
+function componentThresholdsForR75Engine(engineName: string): Record<string, number> {
+  if (engineName === "r75_reversal_engine") {
+    return {
+      rangeExtremity: 55,
+      reversalConfirmation: 55,
+      stretchDeviationQuality: 55,
+      structureQuality: 55,
+      entryEfficiency: 55,
+      expectedMoveSufficiency: 55,
+    };
+  }
+  if (engineName === "r75_continuation_engine") {
+    return {
+      trendQuality: 55,
+      pullbackQuality: 55,
+      slopeAlignment: 55,
+      structureContinuity: 55,
+      entryEfficiency: 55,
+      expectedMoveSufficiency: 55,
+    };
+  }
+  if (engineName === "r75_breakout_engine") {
+    return {
+      boundaryPressure: 55,
+      breakStrength: 55,
+      expansionQuality: 55,
+      retestAcceptanceQuality: 55,
+      entryEfficiency: 55,
+      expectedMoveSufficiency: 55,
+    };
+  }
+  return {};
+}
+
+function numericRecord(value: unknown): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(asPlainRecord(value))
+      .map(([key, raw]) => [key, Number(raw)] as const)
+      .filter(([, raw]) => Number.isFinite(raw)),
+  );
+}
+
 export function evaluateRuntimeEntryEvidence(params: {
   symbol: string;
   direction: "buy" | "sell";
@@ -237,10 +279,8 @@ export function evaluateRuntimeEntryEvidence(params: {
 
     const thresholds: Record<string, number> = {
       spikePhaseFit: 58,
-      rangePositionFit: 55,
       developmentWindowFit: 60,
       triggerWindowFit: 60,
-      volatilityExpansionFit: 45,
       runwayFit: 58,
     };
     const scored = Object.entries(thresholds).map(([key, min]) => ({
@@ -341,18 +381,33 @@ export function evaluateRuntimeEntryEvidence(params: {
       };
     }
     const minNativeScore = runtimeNumber(setupOverride, "minNativeScore");
-    const minConfidence = runtimeNumber(setupOverride, "minConfidence");
-    const minExpectedMovePct = runtimeNumber(setupOverride, "minExpectedMovePct");
+    const engineDirectionKey = `${engineName}:${params.winner.direction}`;
+    const runtimeEvidenceByEngineDirection = asPlainRecord(setupOverride["runtimeEvidenceThresholdsByEngineDirection"]);
+    const engineDirectionEvidenceThresholds = asPlainRecord(runtimeEvidenceByEngineDirection[engineDirectionKey]);
+    const minConfidence = runtimeNumber(engineDirectionEvidenceThresholds, "minConfidence")
+      ?? runtimeNumber(setupOverride, "minConfidence");
+    const minSetupMatch = runtimeNumber(engineDirectionEvidenceThresholds, "minSetupMatch");
+    const minTriggerStrengthScore = runtimeNumber(engineDirectionEvidenceThresholds, "minTriggerStrengthScore");
+    const minExpectedMovePct = runtimeNumber(engineDirectionEvidenceThresholds, "minExpectedMovePct")
+      ?? runtimeNumber(setupOverride, "minExpectedMovePct");
     const expectedMovePct = asFiniteNumber(params.winner.metadata?.["expectedMovePct"])
       ?? asFiniteNumber(params.winner.projectedMovePct)
       ?? 0;
     const confidence = asFiniteNumber(params.winner.confidence) ?? 0;
+    const setupMatch = asFiniteNumber(params.winner.regimeFit) ?? asFiniteNumber(params.winner.metadata?.["setupMatch"]) ?? confidence;
+    const triggerStrengthScore = asFiniteNumber(params.winner.metadata?.["triggerStrengthScore"]) ?? 0;
     const gateWeakComponents = [
       ...(minNativeScore != null && params.nativeScore < minNativeScore
         ? [`nativeScore:${params.nativeScore}<${minNativeScore}`]
         : []),
       ...(minConfidence != null && confidence < minConfidence
         ? [`confidence:${Number(confidence.toFixed(3))}<${minConfidence}`]
+        : []),
+      ...(minSetupMatch != null && setupMatch < minSetupMatch
+        ? [`setupMatch:${Number(setupMatch.toFixed(3))}<${minSetupMatch}`]
+        : []),
+      ...(minTriggerStrengthScore != null && triggerStrengthScore < minTriggerStrengthScore
+        ? [`triggerStrengthScore:${Number(triggerStrengthScore.toFixed(3))}<${minTriggerStrengthScore}`]
         : []),
       ...(minExpectedMovePct != null && expectedMovePct < minExpectedMovePct
         ? [`expectedMovePct:${Number(expectedMovePct.toFixed(4))}<${minExpectedMovePct}`]
@@ -371,42 +426,26 @@ export function evaluateRuntimeEntryEvidence(params: {
     }
 
     const componentGateMode = String(setupOverride["componentGateMode"] ?? "strict_components");
-    const configuredComponentThresholds = asPlainRecord(setupOverride["componentThresholds"]);
-    const thresholds: Record<string, number> = Object.keys(configuredComponentThresholds).length > 0
-      ? Object.fromEntries(Object.entries(configuredComponentThresholds)
-          .map(([key, value]) => [key, Number(value)])
-          .filter(([, value]) => Number.isFinite(value))) as Record<string, number>
-      : componentGateMode === "build_selected_rules"
-        ? {}
-        :
-      engineName === "r75_reversal_engine"
-        ? {
-            rangeExtremity: 55,
-            reversalConfirmation: 55,
-            stretchDeviationQuality: 55,
-            structureQuality: 55,
-            entryEfficiency: 55,
-            expectedMoveSufficiency: 55,
-          }
-        : engineName === "r75_breakout_engine"
-          ? {
-              boundaryPressure: 55,
-              breakStrength: 55,
-              expansionQuality: 55,
-              retestAcceptanceQuality: 55,
-              entryEfficiency: 55,
-              expectedMoveSufficiency: 55,
-            }
-          : engineName === "r75_continuation_engine"
-            ? {
-                trendQuality: 55,
-                pullbackQuality: 55,
-                slopeAlignment: 55,
-                structureContinuity: 55,
-                entryEfficiency: 55,
-                expectedMoveSufficiency: 55,
-          }
-        : {};
+    const configuredComponentThresholds = numericRecord(setupOverride["componentThresholds"]);
+    const byEngineDirection = asPlainRecord(setupOverride["componentThresholdsByEngineDirection"]);
+    const engineDirectionThresholds = numericRecord(byEngineDirection[engineDirectionKey]);
+    const thresholds: Record<string, number> = Object.keys(engineDirectionThresholds).length > 0
+      ? engineDirectionThresholds
+      : Object.keys(configuredComponentThresholds).length > 0
+        ? configuredComponentThresholds
+        : componentThresholdsForR75Engine(engineName);
+
+    if (componentGateMode === "build_selected_rules" && Object.keys(thresholds).length === 0) {
+      return {
+        allowed: false,
+        reason: `runtime_r75_component_contract_missing:${engineName}:${params.winner.direction}`,
+        leadInShape,
+        qualityBand,
+        matchedBucketKey: selectedBucket.key,
+        evidenceScore: 0,
+        weakComponents: ["component_contract_missing"],
+      };
+    }
 
     const scored = Object.entries(thresholds).map(([key, min]) => ({
       key,

@@ -379,6 +379,14 @@ type R75RuntimeContract = {
   runtimeFamily: string;
   engineName: string;
   direction: "buy" | "sell";
+  componentThresholds?: Record<string, number>;
+  featureBands?: Record<string, { min: number | null; max: number | null; p25: number | null; p50: number | null; p75: number | null }>;
+  runtimeEvidenceThresholds?: {
+    minConfidence: number | null;
+    minSetupMatch: number | null;
+    minTriggerStrengthScore: number | null;
+    minExpectedMovePct: number | null;
+  };
   trades: number;
   wins: number | null;
   losses: number | null;
@@ -427,6 +435,9 @@ function normalizeR75RuntimeContracts(
         runtimeFamily,
         engineName,
         direction,
+        componentThresholds: numericRecord(source.componentThresholds),
+        featureBands: normalizeFeatureBands(source.featureBands),
+        runtimeEvidenceThresholds: normalizeRuntimeEvidenceThresholds(source.runtimeEvidenceThresholds),
         trades,
         wins: readNumeric(source.wins),
         losses: readNumeric(source.losses),
@@ -443,6 +454,151 @@ function normalizeR75RuntimeContracts(
       };
     })
     .filter((contract): contract is R75RuntimeContract => Boolean(contract));
+}
+
+function numericRecord(value: unknown): Record<string, number> | undefined {
+  const record = asRecord(value);
+  const entries = Object.entries(record)
+    .map(([key, raw]) => [key, Number(raw)] as const)
+    .filter(([, raw]) => Number.isFinite(raw));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizeFeatureBands(value: unknown): R75RuntimeContract["featureBands"] | undefined {
+  const record = asRecord(value);
+  const entries = Object.entries(record).map(([key, raw]) => {
+    const band = asRecord(raw);
+    return [key, {
+      min: readNumeric(band.min),
+      max: readNumeric(band.max),
+      p25: readNumeric(band.p25),
+      p50: readNumeric(band.p50),
+      p75: readNumeric(band.p75),
+    }] as const;
+  });
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function normalizeRuntimeEvidenceThresholds(value: unknown): R75RuntimeContract["runtimeEvidenceThresholds"] | undefined {
+  const record = asRecord(value);
+  const thresholds = {
+    minConfidence: readNumeric(record.minConfidence),
+    minSetupMatch: readNumeric(record.minSetupMatch),
+    minTriggerStrengthScore: readNumeric(record.minTriggerStrengthScore),
+    minExpectedMovePct: readNumeric(record.minExpectedMovePct),
+  };
+  return Object.values(thresholds).some((threshold) => threshold != null) ? thresholds : undefined;
+}
+
+function percentile(sortedValues: number[], p: number): number | null {
+  if (sortedValues.length === 0) return null;
+  const index = Math.max(0, Math.min(sortedValues.length - 1, Math.floor((sortedValues.length - 1) * p)));
+  return sortedValues[index] ?? null;
+}
+
+function numericValues(records: Array<Record<string, unknown>>, key: string): number[] {
+  return records
+    .map((record) => readNumeric(record[key]))
+    .filter((value): value is number => value != null)
+    .sort((a, b) => a - b);
+}
+
+function featureBand(records: Array<Record<string, unknown>>, key: string): { min: number | null; max: number | null; p25: number | null; p50: number | null; p75: number | null } | null {
+  const values = numericValues(records, key);
+  if (values.length === 0) return null;
+  return {
+    min: values[0] ?? null,
+    max: values[values.length - 1] ?? null,
+    p25: percentile(values, 0.25),
+    p50: percentile(values, 0.5),
+    p75: percentile(values, 0.75),
+  };
+}
+
+function defaultR75ComponentThresholds(engineName: string): Record<string, number> {
+  if (engineName === "r75_reversal_engine") {
+    return {
+      rangeExtremity: 55,
+      reversalConfirmation: 55,
+      stretchDeviationQuality: 55,
+      structureQuality: 55,
+      entryEfficiency: 55,
+      expectedMoveSufficiency: 55,
+    };
+  }
+  if (engineName === "r75_continuation_engine") {
+    return {
+      trendQuality: 55,
+      pullbackQuality: 55,
+      slopeAlignment: 55,
+      structureContinuity: 55,
+      entryEfficiency: 55,
+      expectedMoveSufficiency: 55,
+    };
+  }
+  return {
+    boundaryPressure: 55,
+    breakStrength: 55,
+    expansionQuality: 55,
+    retestAcceptanceQuality: 55,
+    entryEfficiency: 55,
+    expectedMoveSufficiency: 55,
+  };
+}
+
+function enrichR75RuntimeContractsFromSelectedTrades(
+  contracts: R75RuntimeContract[],
+  selectedTradesValue: unknown,
+): R75RuntimeContract[] {
+  if (!Array.isArray(selectedTradesValue) || selectedTradesValue.length === 0) {
+    return contracts.map((contract) => ({
+      ...contract,
+      componentThresholds: contract.componentThresholds ?? defaultR75ComponentThresholds(contract.engineName),
+    }));
+  }
+  const selectedTrades = selectedTradesValue
+    .map((trade) => asRecord(trade))
+    .filter((trade) => Object.keys(trade).length > 0);
+  return contracts.map((contract) => {
+    const trades = selectedTrades.filter((trade) => {
+      const family = String(trade.runtimeFamily ?? "").toLowerCase();
+      const direction = String(trade.direction ?? "").toLowerCase();
+      return family === contract.runtimeFamily && direction === contract.direction;
+    });
+    const confidence = numericValues(trades, "confidence");
+    const setupMatch = numericValues(trades, "setupMatch");
+    const triggerStrength = numericValues(trades, "triggerStrengthScore");
+    const expectedMove = numericValues(trades, "tpTargetPct");
+    const featureKeys = [
+      "confidence",
+      "setupMatch",
+      "triggerStrengthScore",
+      "tpTargetPct",
+      "bbWidthRank60",
+      "bbWidthRank240",
+      "atrRank240",
+      "rangeExpansionScore60",
+      "compressionToExpansionScore",
+      "rangeCompressionScore60",
+      "entryOffsetBarsFromMoveStart",
+    ];
+    const featureBands = Object.fromEntries(
+      featureKeys
+        .map((key) => [key, featureBand(trades, key)] as const)
+        .filter((entry): entry is readonly [string, NonNullable<ReturnType<typeof featureBand>>] => Boolean(entry[1])),
+    );
+    return {
+      ...contract,
+      componentThresholds: contract.componentThresholds ?? defaultR75ComponentThresholds(contract.engineName),
+      featureBands: contract.featureBands ?? (Object.keys(featureBands).length > 0 ? featureBands : undefined),
+      runtimeEvidenceThresholds: contract.runtimeEvidenceThresholds ?? {
+        minConfidence: percentile(confidence, 0.1),
+        minSetupMatch: percentile(setupMatch, 0.1),
+        minTriggerStrengthScore: percentile(triggerStrength, 0.1),
+        minExpectedMovePct: percentile(expectedMove, 0.1),
+      },
+    };
+  });
 }
 
 function r75RuntimeContractsFromArtifact(
@@ -537,7 +693,10 @@ function buildR75RuntimeAdapter(
   const protectionDistancePct = percentileValue(lifecycleRules, "dynamicProtectionDistancePct", "p50", 2);
   const maturityRules = asRecord(lifecycleRules.maturityRules);
   const minHoldBars = readNumeric(asRecord(maturityRules.minHoldBars).p50) ?? 120;
-  const selectedRuntimeContracts = r75RuntimeContractsFromArtifact(artifact, sourcePolicyId, serviceId);
+  const selectedRuntimeContracts = enrichR75RuntimeContractsFromSelectedTrades(
+    r75RuntimeContractsFromArtifact(artifact, sourcePolicyId, serviceId),
+    artifact.bestPolicySelectedTrades,
+  );
   const contractTradeCount = selectedRuntimeContracts.reduce((sum, contract) => sum + Math.max(0, contract.trades), 0);
   const trades = Math.max(1, contractTradeCount || readNumeric(expectedPerformance.trades) || readNumeric(coverage.capturedTargetMoveCount) || 1);
   const selectedDirection = inferredRuntimeDirection(serviceId, artifact);
@@ -551,7 +710,28 @@ function buildR75RuntimeAdapter(
     trades: contract.trades,
     winRate: contract.winRate,
     lifecycleMedianPnlPct: contract.lifecycleMedianPnlPct,
+    componentThresholds: contract.componentThresholds,
+    featureBands: contract.featureBands,
+    runtimeEvidenceThresholds: contract.runtimeEvidenceThresholds,
   }));
+  const componentThresholdsByEngineDirection = Object.fromEntries(
+    selectedRuntimeContracts.map((contract) => [
+      `${contract.engineName}:${contract.direction}`,
+      contract.componentThresholds ?? defaultR75ComponentThresholds(contract.engineName),
+    ]),
+  );
+  const runtimeEvidenceThresholdsByEngineDirection = Object.fromEntries(
+    selectedRuntimeContracts.map((contract) => [
+      `${contract.engineName}:${contract.direction}`,
+      contract.runtimeEvidenceThresholds ?? {},
+    ]),
+  );
+  const featureBandsByEngineDirection = Object.fromEntries(
+    selectedRuntimeContracts.map((contract) => [
+      `${contract.engineName}:${contract.direction}`,
+      contract.featureBands ?? {},
+    ]),
+  );
   const candidateEmissionCooldownMinutes = buildDerivedCandidateCooldownMinutes({ artifact, trades });
   const captured = readNumeric(coverage.capturedTargetMoveCount) ?? trades;
   const totalTargets = readNumeric(coverage.targetUniverseCount) ?? captured;
@@ -624,6 +804,9 @@ function buildR75RuntimeAdapter(
         allowedDirections,
         allowedEngineDirections,
         selectedRuntimeContracts,
+        componentThresholdsByEngineDirection,
+        runtimeEvidenceThresholdsByEngineDirection,
+        featureBandsByEngineDirection,
         candidateEmissionCooldownMinutes,
         minNativeScore: 60,
         minConfidence: 0.65,
