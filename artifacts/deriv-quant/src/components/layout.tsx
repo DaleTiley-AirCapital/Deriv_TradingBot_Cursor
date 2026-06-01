@@ -48,6 +48,42 @@ const MOBILE_PRIMARY = NAV_ITEMS.slice(0, 4);
 const MOBILE_MORE    = NAV_ITEMS.slice(4);
 
 type Breakpoint = "mobile" | "tablet" | "desktop";
+type AppEnvironment = "live" | "dev" | "local";
+
+function getAppEnvironment(): AppEnvironment {
+  if (typeof window === "undefined") return "dev";
+  const explicit = String(import.meta.env.VITE_APP_ENV ?? import.meta.env.VITE_ENVIRONMENT ?? "").toLowerCase();
+  if (explicit === "live" || explicit === "production" || explicit === "prod") return "live";
+  if (explicit === "dev" || explicit === "development" || explicit === "codex-dev") return "dev";
+  if (explicit === "local" || explicit === "localhost") return "local";
+
+  const host = window.location.hostname.toLowerCase();
+  if (host.includes("localhost") || host === "127.0.0.1" || host === "::1") return "local";
+  if (host.includes("codex-dev") || host.includes("dev")) return "dev";
+  return "live";
+}
+
+function EnvironmentBadge({ compact = false }: { compact?: boolean }) {
+  const env = getAppEnvironment();
+  const host = typeof window === "undefined" ? "" : window.location.hostname;
+  const label = env === "live" ? "LIVE APP" : env === "local" ? "LOCAL" : "DEV APP";
+  return (
+    <span
+      title={host ? `${label} - ${host}` : label}
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-full border font-bold uppercase tracking-widest whitespace-nowrap",
+        compact ? "px-1.5 py-0.5 text-[8px]" : "px-2 py-0.5 text-[9px]",
+        env === "live"
+          ? "border-destructive/50 bg-destructive/15 text-destructive"
+          : env === "local"
+            ? "border-primary/50 bg-primary/15 text-primary"
+            : "border-cyan-400/50 bg-cyan-400/15 text-cyan-300",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
 
 function useBreakpoint(): Breakpoint {
   const get = (): Breakpoint => {
@@ -216,16 +252,17 @@ function DesktopLayout({ children, location, tradingControls }: { children: Reac
           boxShadow: "2px 0 20px rgba(0,0,0,0.5), inset -1px 0 0 rgba(255,255,255,0.04)",
         }}
       >
-        <div className="h-14 flex items-center px-5 border-b border-border/50">
-          <div className="flex items-center gap-2.5">
+        <div className="h-14 flex items-center justify-between gap-3 px-5 border-b border-border/50">
+          <div className="flex min-w-0 items-center gap-2.5">
             <div className={cn("w-7 h-7 rounded-lg flex items-center justify-center", logoAccent)}>
               <TrendingUp className="w-4 h-4" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h1 className="font-semibold text-sm text-foreground leading-none">Deriv Trading</h1>
               <p className="text-[10px] text-muted-foreground mt-0.5">Long Hold</p>
             </div>
           </div>
+          <EnvironmentBadge />
         </div>
 
         <div className="px-4 py-3 border-b border-border/40 space-y-2.5">
@@ -334,9 +371,12 @@ function TabletLayout({ children, location, tradingControls }: { children: React
         </div>
 
         {/* App name */}
-        <div className="px-4 flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground leading-none">Deriv Trading</p>
-          <p className="text-[10px] text-muted-foreground mt-0.5">Long Hold</p>
+        <div className="px-4 flex flex-1 min-w-0 items-center gap-2">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground leading-none">Deriv Trading</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">Long Hold</p>
+          </div>
+          <EnvironmentBadge compact />
         </div>
 
         <div className="flex items-center gap-2 mr-3 shrink-0">
@@ -450,6 +490,7 @@ function MobileLayout({ children, location, tradingControls }: { children: React
             <p className="text-sm font-semibold text-foreground leading-none truncate">Deriv Trading</p>
             <p className="text-[10px] text-muted-foreground mt-0.5 truncate">Long Hold</p>
           </div>
+          <EnvironmentBadge compact />
         </div>
         <ModeToggleButtons compact controls={tradingControls} />
       </header>
