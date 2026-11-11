@@ -1,6 +1,7 @@
 packages:
   - artifacts/api-server
   - artifacts/deriv-quant
+  - artifacts/runtime-lab
   - lib/*
   - lib/integrations/*
   - scripts
