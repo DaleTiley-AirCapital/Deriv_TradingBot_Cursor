@@ -1,0 +1,18 @@
+ARG PNPM_VERSION=10.33.4
+
+FROM node:24-slim AS runtime-lab
+ARG PNPM_VERSION
+RUN npm install -g pnpm@${PNPM_VERSION}
+WORKDIR /app
+
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY tsconfig.base.json tsconfig.json ./
+COPY scripts/ ./scripts/
+COPY lib/db/ ./lib/db/
+COPY artifacts/runtime-lab/ ./artifacts/runtime-lab/
+
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @workspace/runtime-lab run build
+
+ENV NODE_ENV=production
+CMD ["pnpm", "--filter", "@workspace/runtime-lab", "run", "start"]
